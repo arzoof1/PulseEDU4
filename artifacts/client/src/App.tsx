@@ -53,14 +53,12 @@ interface PbisEntry {
   createdAt: string;
 }
 
-const pbisReasonOptions = [
-  "Respectful",
-  "Responsible",
-  "Safe",
-  "Kind",
-  "On-Task",
-  "Helpful",
-  "Other",
+const pbisOptions: { reason: string; points: number }[] = [
+  { reason: "Respectful", points: 1 },
+  { reason: "Responsible", points: 1 },
+  { reason: "Helpful", points: 2 },
+  { reason: "Leadership", points: 3 },
+  { reason: "Academic Excellence", points: 5 },
 ];
 
 const checkInWithOptions = [
@@ -111,8 +109,7 @@ function App() {
   const [pbisEntries, setPbisEntries] = useState<PbisEntry[]>([]);
   const [pbisStudentId, setPbisStudentId] = useState("");
   const [pbisStudentSearch, setPbisStudentSearch] = useState("");
-  const [pbisReason, setPbisReason] = useState(pbisReasonOptions[0]);
-  const [pbisPoints, setPbisPoints] = useState("1");
+  const [pbisOptionIndex, setPbisOptionIndex] = useState(0);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -178,25 +175,24 @@ function App() {
 
   const handlePbisSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!pbisStudentId || !pbisReason) return;
-    const points = Number(pbisPoints);
-    if (!Number.isFinite(points)) return;
+    if (!pbisStudentId) return;
+    const option = pbisOptions[pbisOptionIndex];
+    if (!option) return;
     try {
       const res = await fetch("/api/pbis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentId: pbisStudentId,
-          reason: pbisReason,
-          points,
+          reason: option.reason,
+          points: option.points,
         }),
       });
       if (!res.ok) throw new Error("Failed to save PBIS entry");
       loadPbis();
       setPbisStudentId("");
       setPbisStudentSearch("");
-      setPbisReason(pbisReasonOptions[0]);
-      setPbisPoints("1");
+      setPbisOptionIndex(0);
     } catch (err) {
       console.error(err);
     }
@@ -1108,28 +1104,20 @@ function App() {
             </div>
             <div style={{ marginBottom: "0.5rem" }}>
               <label>
-                Reason:{" "}
+                PBIS Recognition:{" "}
                 <select
-                  value={pbisReason}
-                  onChange={(e) => setPbisReason(e.target.value)}
+                  value={pbisOptionIndex}
+                  onChange={(e) =>
+                    setPbisOptionIndex(Number(e.target.value))
+                  }
                 >
-                  {pbisReasonOptions.map((r) => (
-                    <option key={r} value={r}>
-                      {r}
+                  {pbisOptions.map((opt, i) => (
+                    <option key={opt.reason} value={i}>
+                      {opt.reason} ({opt.points}{" "}
+                      {opt.points === 1 ? "point" : "points"})
                     </option>
                   ))}
                 </select>
-              </label>
-            </div>
-            <div style={{ marginBottom: "0.5rem" }}>
-              <label>
-                Points:{" "}
-                <input
-                  type="number"
-                  value={pbisPoints}
-                  onChange={(e) => setPbisPoints(e.target.value)}
-                  style={{ width: "5rem" }}
-                />
               </label>
             </div>
             <button type="submit" disabled={!pbisStudentId}>
