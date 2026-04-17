@@ -1,0 +1,69 @@
+Enhance the existing **Accommodations → By Accommodation Roster** workflow to support both individual and bulk logging of accommodation delivery.
+
+Requirements:
+
+* Preserve all current functionality
+* Make only the requested change
+* Keep implementation minimal
+* Keep everything on the existing main page
+* Do not refactor unrelated code
+* Keep UI simple
+* Do not add styling libraries
+
+Important workflow rule:
+
+* Selecting a period and accommodation should only filter/display matching students
+* It should not automatically create any activity records
+
+Add these actions to the filtered roster results:
+
+1. **Per-student action**
+
+* For each student row in the roster results, add a button:
+
+  * **Log Provided**
+* Clicking this should create an accommodation-provided activity record for that specific student only
+
+2. **Bulk action**
+
+* Above the filtered student list, add a button:
+
+  * **Log Provided for All Listed Students**
+* Clicking this should create one accommodation-provided activity record for each student currently shown in the filtered list
+
+Confirmation:
+
+* Before bulk logging, show a simple confirmation message:
+
+  * **“Are all students present? Log this accommodation as provided for all [X] listed students?”**
+* Keep the confirmation simple
+* `[X]` should reflect the number of students currently shown in the filtered list
+
+Stored record should include at minimum:
+
+* studentId
+* student name if needed by current structure
+* accommodation name
+* selected period
+* current staff user
+* timestamp
+
+Display:
+
+* Logged accommodation-provided records should continue to appear in Student Activity/history
+* Keep them clearly labeled
+
+Do not:
+
+* auto-log based on selection alone
+* add editing/deleting yet
+* add compliance reports yet
+* add teacher-specific schedule automation yet
+* change unrelated Hall Pass, PBIS, Tardy, Email, or Support Notes behavior
+
+When finished, tell me:
+
+* which files changed
+* whether I need to restart anything
+* exact steps to test
+* what I should see if it worked

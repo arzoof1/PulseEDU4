@@ -1857,25 +1857,50 @@ function App() {
                     {!rosterAccommodation ? null : rosterStudents.length === 0 ? (
                       <div>No students found for this accommodation</div>
                     ) : (
-                      <ul style={{ margin: 0 }}>
-                        {rosterStudents.map((st) => (
-                          <li key={st.studentId}>
-                            {st.firstName} {st.lastName} ({st.studentId}){" "}
-                            <button
-                              type="button"
-                              onClick={() =>
+                      <>
+                        <div style={{ marginBottom: "0.5rem" }}>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const ok = window.confirm(
+                                `Are all students present? Log this accommodation as provided for all ${rosterStudents.length} listed students?`,
+                              );
+                              if (!ok) return;
+                              const period = rosterPeriod
+                                ? Number(rosterPeriod)
+                                : null;
+                              rosterStudents.forEach((st) =>
                                 logAccommodationProvided(
                                   st.studentId,
                                   rosterAccommodation,
-                                  rosterPeriod ? Number(rosterPeriod) : null,
-                                )
-                              }
-                            >
-                              Log Accommodation Provided
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
+                                  period,
+                                ),
+                              );
+                            }}
+                          >
+                            Log Provided for All Listed Students
+                          </button>
+                        </div>
+                        <ul style={{ margin: 0 }}>
+                          {rosterStudents.map((st) => (
+                            <li key={st.studentId}>
+                              {st.firstName} {st.lastName} ({st.studentId}){" "}
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  logAccommodationProvided(
+                                    st.studentId,
+                                    rosterAccommodation,
+                                    rosterPeriod ? Number(rosterPeriod) : null,
+                                  )
+                                }
+                              >
+                                Log Provided
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      </>
                     )}
                   </>
                 )}
