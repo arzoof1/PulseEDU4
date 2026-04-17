@@ -47,6 +47,7 @@ function App() {
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
 
   const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
   const [originRoom, setOriginRoom] = useState("");
   const [now, setNow] = useState(Date.now());
@@ -112,6 +113,8 @@ function App() {
       }
       setDestination("");
       setOriginRoom("");
+      setSelectedStudentId("");
+      setStudentSearch("");
       loadHallPasses();
     } catch (err) {
       console.error("Failed to create hall pass:", err);
@@ -126,19 +129,93 @@ function App() {
         <div style={{ marginBottom: "0.5rem" }}>
           <label>
             Student:{" "}
-            <select
-              value={selectedStudentId}
-              onChange={(e) => setSelectedStudentId(e.target.value)}
-              required
-            >
-              <option value="">-- select a student --</option>
-              {students.map((s) => (
-                <option key={s.id} value={s.studentId}>
-                  {s.studentId} - {s.firstName} {s.lastName}
-                </option>
-              ))}
-            </select>
+            <input
+              type="text"
+              placeholder="Search by name or ID"
+              value={studentSearch}
+              onChange={(e) => {
+                setStudentSearch(e.target.value);
+                setSelectedStudentId("");
+              }}
+            />
           </label>
+          {selectedStudentId ? (
+            <div style={{ marginTop: "0.25rem" }}>
+              Selected: <strong>{selectedStudentId}</strong>{" "}
+              {(() => {
+                const s = students.find(
+                  (s) => s.studentId === selectedStudentId,
+                );
+                return s ? `- ${s.firstName} ${s.lastName}` : "";
+              })()}{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedStudentId("");
+                  setStudentSearch("");
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          ) : (
+            studentSearch && (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: "0.25rem 0",
+                  border: "1px solid #ccc",
+                  maxWidth: "20rem",
+                }}
+              >
+                {students
+                  .filter((s) => {
+                    const q = studentSearch.toLowerCase();
+                    return (
+                      s.firstName.toLowerCase().includes(q) ||
+                      s.lastName.toLowerCase().includes(q) ||
+                      s.studentId.toLowerCase().includes(q)
+                    );
+                  })
+                  .map((s) => (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "0.25rem 0.5rem",
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => {
+                          setSelectedStudentId(s.studentId);
+                          setStudentSearch(
+                            `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                          );
+                        }}
+                      >
+                        {s.studentId} - {s.firstName} {s.lastName}
+                      </button>
+                    </li>
+                  ))}
+                {students.filter((s) => {
+                  const q = studentSearch.toLowerCase();
+                  return (
+                    s.firstName.toLowerCase().includes(q) ||
+                    s.lastName.toLowerCase().includes(q) ||
+                    s.studentId.toLowerCase().includes(q)
+                  );
+                }).length === 0 && (
+                  <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
+                    No matches
+                  </li>
+                )}
+              </ul>
+            )
+          )}
         </div>
         <div style={{ marginBottom: "0.5rem" }}>
           <label>
