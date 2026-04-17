@@ -84,9 +84,11 @@ function App() {
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
-  const [activeSection, setActiveSection] = useState<"hallPasses" | "tardies">(
-    "hallPasses",
-  );
+  const [activeSection, setActiveSection] = useState<
+    "hallPasses" | "tardies" | "student"
+  >("hallPasses");
+  const [activityStudentId, setActivityStudentId] = useState("");
+  const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -289,6 +291,13 @@ function App() {
           disabled={activeSection === "tardies"}
         >
           Tardy / Check-Ins
+        </button>{" "}
+        <button
+          type="button"
+          onClick={() => setActiveSection("student")}
+          disabled={activeSection === "student"}
+        >
+          Student Activity
         </button>
       </div>
 
@@ -770,6 +779,173 @@ function App() {
         </tbody>
       </table>
       </>)}
+
+      {activeSection === "student" && (
+        <section>
+          <h2>Student Activity</h2>
+          <div style={{ marginBottom: "0.5rem" }}>
+            <label>
+              Student:{" "}
+              <input
+                type="text"
+                placeholder="Search by name or ID"
+                value={activityStudentSearch}
+                onChange={(e) => {
+                  setActivityStudentSearch(e.target.value);
+                  setActivityStudentId("");
+                }}
+              />
+            </label>
+            {activityStudentId ? (
+              <div style={{ marginTop: "0.25rem" }}>
+                Selected: <strong>{activityStudentId}</strong>{" "}
+                {(() => {
+                  const s = students.find(
+                    (s) => s.studentId === activityStudentId,
+                  );
+                  return s ? `- ${s.firstName} ${s.lastName}` : "";
+                })()}{" "}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivityStudentId("");
+                    setActivityStudentSearch("");
+                  }}
+                >
+                  Clear
+                </button>
+              </div>
+            ) : (
+              activityStudentSearch && (
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: "0.25rem 0",
+                    border: "1px solid #ccc",
+                    maxWidth: "20rem",
+                  }}
+                >
+                  {students
+                    .filter((s) => {
+                      const q = activityStudentSearch.toLowerCase();
+                      return (
+                        s.firstName.toLowerCase().includes(q) ||
+                        s.lastName.toLowerCase().includes(q) ||
+                        s.studentId.toLowerCase().includes(q)
+                      );
+                    })
+                    .map((s) => (
+                      <li key={s.id}>
+                        <button
+                          type="button"
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "0.25rem 0.5rem",
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => {
+                            setActivityStudentId(s.studentId);
+                            setActivityStudentSearch(
+                              `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                            );
+                          }}
+                        >
+                          {s.studentId} - {s.firstName} {s.lastName}
+                        </button>
+                      </li>
+                    ))}
+                  {students.filter((s) => {
+                    const q = activityStudentSearch.toLowerCase();
+                    return (
+                      s.firstName.toLowerCase().includes(q) ||
+                      s.lastName.toLowerCase().includes(q) ||
+                      s.studentId.toLowerCase().includes(q)
+                    );
+                  }).length === 0 && (
+                    <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
+                      No matches
+                    </li>
+                  )}
+                </ul>
+              )
+            )}
+          </div>
+
+          {activityStudentId && (
+            <>
+              <h3>Hall Passes</h3>
+              <table
+                border={1}
+                cellPadding={6}
+                style={{ borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr>
+                    <th>teacher</th>
+                    <th>destination</th>
+                    <th>originRoom</th>
+                    <th>status</th>
+                    <th>createdAt</th>
+                    <th>endedAt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {hallPasses
+                    .filter((p) => p.studentId === activityStudentId)
+                    .map((p) => (
+                      <tr key={p.id}>
+                        <td>{p.teacherName}</td>
+                        <td>{p.destination}</td>
+                        <td>{p.originRoom}</td>
+                        <td>{p.status}</td>
+                        <td>{p.createdAt}</td>
+                        <td>{p.endedAt ?? "-"}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+
+              <h3>Tardy / Support Logs</h3>
+              <table
+                border={1}
+                cellPadding={6}
+                style={{ borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr>
+                    <th>entryType</th>
+                    <th>teacherName</th>
+                    <th>period</th>
+                    <th>reason</th>
+                    <th>checkInWith</th>
+                    <th>notes</th>
+                    <th>createdAt</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {tardies
+                    .filter((t) => t.studentId === activityStudentId)
+                    .map((t) => (
+                      <tr key={t.id}>
+                        <td>{t.entryType}</td>
+                        <td>{t.teacherName}</td>
+                        <td>{t.period}</td>
+                        <td>{t.reason}</td>
+                        <td>{t.checkInWith ?? "-"}</td>
+                        <td>{t.notes}</td>
+                        <td>{t.createdAt}</td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </>
+          )}
+        </section>
+      )}
     </div>
   );
 }
