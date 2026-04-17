@@ -7,6 +7,7 @@ import pbisRouter from "./pbis";
 import supportNotesRouter from "./supportNotes";
 import emailRouter from "./email";
 import scheduleRouter from "./schedule";
+import accommodationLogsRouter from "./accommodationLogs";
 
 const router: IRouter = Router();
 
@@ -18,5 +19,6 @@ router.use(pbisRouter);
 router.use(supportNotesRouter);
 router.use(emailRouter);
 router.use(scheduleRouter);
+router.use(accommodationLogsRouter);
 
 export default router;

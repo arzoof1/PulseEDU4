@@ -173,6 +173,16 @@ function App() {
   const [accStudentId, setAccStudentId] = useState("");
   const [rosterPeriod, setRosterPeriod] = useState("");
   const [periodRoster, setPeriodRoster] = useState<Record<string, string[]>>({});
+  const [accommodationLogs, setAccommodationLogs] = useState<
+    {
+      id: number;
+      studentId: string;
+      accommodation: string;
+      period: number | null;
+      staffName: string;
+      createdAt: string;
+    }[]
+  >([]);
   const [emailStatus, setEmailStatus] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
@@ -256,6 +266,8 @@ function App() {
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
 
+    loadAccommodationLogs();
+
     fetch("/api/schedule")
       .then((res) => res.json())
       .then((data: { periodRoster: Record<string, string[]> }) =>
@@ -282,6 +294,38 @@ function App() {
       .then((res) => res.json())
       .then((data: PbisEntry[]) => setPbisEntries(data))
       .catch((err) => console.error("Failed to load pbis:", err));
+  };
+
+  const loadAccommodationLogs = () => {
+    fetch("/api/accommodation-logs")
+      .then((res) => res.json())
+      .then((data) => setAccommodationLogs(data))
+      .catch((err) =>
+        console.error("Failed to load accommodation logs:", err),
+      );
+  };
+
+  const logAccommodationProvided = async (
+    studentId: string,
+    accommodation: string,
+    period: number | null,
+  ) => {
+    try {
+      const res = await fetch("/api/accommodation-logs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          accommodation,
+          period,
+          staffName: currentStaffUser,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to log");
+      loadAccommodationLogs();
+    } catch (err) {
+      console.error("Failed to log accommodation:", err);
+    }
   };
 
   const loadSupportNotes = () => {
@@ -1202,6 +1246,41 @@ function App() {
                       <li>PBIS Points {label}: {pbisPoints}</li>
                       <li>Lost Instructional Time {label}: {lostMinutes} min</li>
                     </ul>
+                    {(() => {
+                      const sLogs = accommodationLogs
+                        .filter(
+                          (l) =>
+                            l.studentId === activityStudentId &&
+                            inRange(l.createdAt),
+                        )
+                        .slice()
+                        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+                      return (
+                        <div style={{ marginTop: "0.75rem" }}>
+                          <h4 style={{ margin: "0 0 0.25rem 0" }}>
+                            Accommodations Provided {label}: {sLogs.length}
+                          </h4>
+                          {sLogs.length === 0 ? (
+                            <div>No accommodation-provided records.</div>
+                          ) : (
+                            <ul style={{ margin: 0 }}>
+                              {sLogs.map((l) => (
+                                <li key={l.id}>
+                                  Accommodation Provided: {l.accommodation}
+                                  {l.period != null
+                                    ? ` | Period: ${l.period}`
+                                    : ""}
+                                  {" | Staff: "}
+                                  {l.staffName || "(unknown)"}
+                                  {" | Time: "}
+                                  {new Date(l.createdAt).toLocaleString()}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </section>
                 );
               })()}
@@ -1718,7 +1797,17 @@ function App() {
                     ) : (
                       <ul style={{ margin: 0 }}>
                         {accs.map((a) => (
-                          <li key={a}>{a}</li>
+                          <li key={a}>
+                            {a}{" "}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                logAccommodationProvided(accStudentId, a, null)
+                              }
+                            >
+                              Log Accommodation Provided
+                            </button>
+                          </li>
                         ))}
                       </ul>
                     )}
@@ -1771,7 +1860,19 @@ function App() {
                       <ul style={{ margin: 0 }}>
                         {rosterStudents.map((st) => (
                           <li key={st.studentId}>
-                            {st.firstName} {st.lastName} ({st.studentId})
+                            {st.firstName} {st.lastName} ({st.studentId}){" "}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                logAccommodationProvided(
+                                  st.studentId,
+                                  rosterAccommodation,
+                                  rosterPeriod ? Number(rosterPeriod) : null,
+                                )
+                              }
+                            >
+                              Log Accommodation Provided
+                            </button>
                           </li>
                         ))}
                       </ul>
