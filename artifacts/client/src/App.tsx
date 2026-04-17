@@ -8,8 +8,17 @@ interface Student {
   grade: number;
 }
 
+interface HallPass {
+  id: number;
+  studentId: string;
+  destination: string;
+  status: string;
+  createdAt: string;
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
+  const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
 
   useEffect(() => {
     fetch("/api/health")
@@ -21,6 +30,11 @@ function App() {
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
+
+    fetch("/api/hall-passes")
+      .then((res) => res.json())
+      .then((data: HallPass[]) => setHallPasses(data))
+      .catch((err) => console.error("Failed to load hall passes:", err));
   }, []);
 
   return (
@@ -43,6 +57,30 @@ function App() {
               <td>{s.firstName}</td>
               <td>{s.lastName}</td>
               <td>{s.grade}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2>Hall Passes</h2>
+      <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th>id</th>
+            <th>studentId</th>
+            <th>destination</th>
+            <th>status</th>
+            <th>createdAt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {hallPasses.map((p) => (
+            <tr key={p.id}>
+              <td>{p.id}</td>
+              <td>{p.studentId}</td>
+              <td>{p.destination}</td>
+              <td>{p.status}</td>
+              <td>{p.createdAt}</td>
             </tr>
           ))}
         </tbody>
