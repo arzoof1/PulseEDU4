@@ -14,6 +14,9 @@ const destinationsByRoom: Record<string, string[]> = {
 interface Student {
   id: number;
   studentId: string;
+  parentName?: string | null;
+  parentEmail?: string | null;
+  parentPhone?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -1086,6 +1089,41 @@ function App() {
                       <li>PBIS Entries {label}: {sPbis.length}</li>
                       <li>PBIS Points {label}: {pbisPoints}</li>
                       <li>Lost Instructional Time {label}: {lostMinutes} min</li>
+                    </ul>
+                  </section>
+                );
+              })()}
+
+              {(() => {
+                const s = students.find(
+                  (st) => st.studentId === activityStudentId,
+                );
+                return (
+                  <section
+                    style={{
+                      border: "1px solid #ccc",
+                      padding: "0.75rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <h3 style={{ marginTop: 0 }}>Parent Contact Info</h3>
+                    <ul style={{ margin: 0 }}>
+                      <li>
+                        Parent Name:{" "}
+                        {s?.parentName ? s.parentName : "No parent name on file"}
+                      </li>
+                      <li>
+                        Parent Email:{" "}
+                        {s?.parentEmail
+                          ? s.parentEmail
+                          : "No parent email on file"}
+                      </li>
+                      <li>
+                        Parent Phone:{" "}
+                        {s?.parentPhone
+                          ? s.parentPhone
+                          : "No parent phone on file"}
+                      </li>
                     </ul>
                   </section>
                 );
