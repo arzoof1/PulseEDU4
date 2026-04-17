@@ -39,8 +39,9 @@ interface Tardy {
   teacherName: string;
   period: string;
   reason: string;
-  entryType: "tardy" | "checkin";
+  entryType: "tardy" | "checkin" | "checkout";
   checkInWith: string | null;
+  notes: string;
   createdAt: string;
 }
 
@@ -49,6 +50,9 @@ const checkInWithOptions = [
   "Interventionist",
   "Behavior Specialist",
   "Trusted Adult",
+  "Administrator",
+  "Teacher",
+  "Other",
 ];
 
 function getTimeStatusColor(pass: HallPass, now: number): string {
@@ -85,9 +89,10 @@ function App() {
   const [destination, setDestination] = useState("");
   const [originRoom, setOriginRoom] = useState("");
 
-  const [tardyEntryType, setTardyEntryType] = useState<"tardy" | "checkin">(
-    "tardy",
-  );
+  const [tardyEntryType, setTardyEntryType] = useState<
+    "tardy" | "checkin" | "checkout"
+  >("tardy");
+  const [tardyNotes, setTardyNotes] = useState("");
   const [tardyStudentId, setTardyStudentId] = useState("");
   const [tardyStudentSearch, setTardyStudentSearch] = useState("");
   const [tardyPeriod, setTardyPeriod] = useState("");
@@ -133,7 +138,11 @@ function App() {
   const handleTardySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!tardyStudentId || !tardyPeriod) return;
-    if (tardyEntryType === "checkin" && !tardyCheckInWith) return;
+    if (
+      (tardyEntryType === "checkin" || tardyEntryType === "checkout") &&
+      !tardyCheckInWith
+    )
+      return;
     try {
       const res = await fetch("/api/tardies", {
         method: "POST",
@@ -144,7 +153,11 @@ function App() {
           period: tardyPeriod,
           reason: tardyEntryType === "tardy" ? tardyReason : "",
           entryType: tardyEntryType,
-          checkInWith: tardyEntryType === "checkin" ? tardyCheckInWith : null,
+          checkInWith:
+            tardyEntryType === "checkin" || tardyEntryType === "checkout"
+              ? tardyCheckInWith
+              : null,
+          notes: tardyNotes,
         }),
       });
       if (!res.ok) {
@@ -156,6 +169,7 @@ function App() {
       setTardyPeriod("");
       setTardyReason("");
       setTardyCheckInWith("");
+      setTardyNotes("");
       loadTardies();
     } catch (err) {
       console.error("Failed to create tardy:", err);
@@ -473,11 +487,14 @@ function App() {
             <select
               value={tardyEntryType}
               onChange={(e) =>
-                setTardyEntryType(e.target.value as "tardy" | "checkin")
+                setTardyEntryType(
+                  e.target.value as "tardy" | "checkin" | "checkout",
+                )
               }
             >
               <option value="tardy">Tardy</option>
               <option value="checkin">Check-In</option>
+              <option value="checkout">Check-Out</option>
             </select>
           </label>
         </div>
@@ -601,10 +618,10 @@ function App() {
             </label>
           </div>
         )}
-        {tardyEntryType === "checkin" && (
+        {(tardyEntryType === "checkin" || tardyEntryType === "checkout") && (
           <div style={{ marginBottom: "0.5rem" }}>
             <label>
-              Check-In With:{" "}
+              {tardyEntryType === "checkin" ? "Check-In With:" : "Check-Out With:"}{" "}
               <select
                 value={tardyCheckInWith}
                 onChange={(e) => setTardyCheckInWith(e.target.value)}
@@ -620,8 +637,22 @@ function App() {
             </label>
           </div>
         )}
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Notes (optional):{" "}
+            <input
+              type="text"
+              value={tardyNotes}
+              onChange={(e) => setTardyNotes(e.target.value)}
+            />
+          </label>
+        </div>
         <button type="submit">
-          {tardyEntryType === "tardy" ? "Log Tardy" : "Log Check-In"}
+          {tardyEntryType === "tardy"
+            ? "Log Tardy"
+            : tardyEntryType === "checkin"
+              ? "Log Check-In"
+              : "Log Check-Out"}
         </button>
       </form>
 
@@ -635,6 +666,7 @@ function App() {
             <th>period</th>
             <th>reason</th>
             <th>checkInWith</th>
+            <th>notes</th>
             <th>createdAt</th>
           </tr>
         </thead>
@@ -647,6 +679,7 @@ function App() {
               <td>{t.period}</td>
               <td>{t.reason}</td>
               <td>{t.checkInWith ?? "-"}</td>
+              <td>{t.notes}</td>
               <td>{t.createdAt}</td>
             </tr>
           ))}

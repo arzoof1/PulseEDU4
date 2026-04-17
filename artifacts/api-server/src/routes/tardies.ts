@@ -15,6 +15,7 @@ router.post("/tardies", (req, res) => {
     reason,
     entryType,
     checkInWith,
+    notes,
   } = req.body ?? {};
 
   if (
@@ -28,12 +29,22 @@ router.post("/tardies", (req, res) => {
     return;
   }
 
-  const type: "tardy" | "checkin" = entryType === "checkin" ? "checkin" : "tardy";
+  const type: "tardy" | "checkin" | "checkout" =
+    entryType === "checkin"
+      ? "checkin"
+      : entryType === "checkout"
+        ? "checkout"
+        : "tardy";
 
-  if (type === "checkin" && (typeof checkInWith !== "string" || !checkInWith)) {
+  if (
+    (type === "checkin" || type === "checkout") &&
+    (typeof checkInWith !== "string" || !checkInWith)
+  ) {
     res
       .status(400)
-      .json({ error: "checkInWith is required for check-in entries" });
+      .json({
+        error: "checkInWith is required for check-in and check-out entries",
+      });
     return;
   }
 
@@ -44,7 +55,11 @@ router.post("/tardies", (req, res) => {
     period,
     reason: typeof reason === "string" ? reason : "",
     entryType: type,
-    checkInWith: type === "checkin" ? (checkInWith as string) : null,
+    checkInWith:
+      type === "checkin" || type === "checkout"
+        ? (checkInWith as string)
+        : null,
+    notes: typeof notes === "string" ? notes : "",
     createdAt: new Date().toISOString(),
   };
 

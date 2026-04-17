@@ -1,0 +1,106 @@
+Make only the requested change.
+
+Important rules:
+
+* Make only the requested change
+* Keep changes minimal
+* Do not break existing functionality
+* Do not refactor unrelated code
+* Do not add authentication yet unless requested
+* Do not add new pages unless requested
+* Tell me exactly what files changed
+* Tell me exactly what to test
+
+Task:
+Expand the Tardy / Check-In feature into a fuller student support logging tool by adding Check-Out and optional notes.
+
+Requirements:
+
+BACKEND:
+
+1. Update the tardy/support log model to support these entry types:
+
+   * tardy
+   * checkin
+   * checkout
+
+2. Add an optional field:
+
+   * notes
+
+3. Keep support-role field available for intervention-style entries.
+
+   * use the existing checkInWith field, or rename it to something more general like supportPersonRole only if absolutely necessary
+   * keep changes minimal
+
+4. For tardy entries:
+
+   * support-role field should be null/empty
+   * notes should be optional
+
+5. For checkin and checkout entries:
+
+   * support-role field should be available
+   * notes should be optional
+
+FRONTEND:
+6. Update the existing Log Tardy / Check-In section to support:
+
+* Tardy
+* Check-In
+* Check-Out
+
+7. Add/update the entry type selector to include:
+
+   * Tardy
+   * Check-In
+   * Check-Out
+
+8. For Tardy:
+
+   * keep student selector
+   * keep period
+   * do not require support-role
+   * notes optional
+
+9. For Check-In and Check-Out:
+
+   * keep student selector
+   * keep period if already present
+   * show support-role dropdown
+   * show optional notes field
+
+10. Expand support-role options to:
+
+* Counselor
+* Interventionist
+* Behavior Specialist
+* Trusted Adult
+* Administrator
+* Teacher
+* Other
+
+11. On submit:
+
+* send the correct entryType
+* send support-role when applicable
+* send notes when provided
+
+12. Update the table to display:
+
+* entryType
+* support-role field
+* notes
+
+CONSTRAINTS:
+13. Keep everything on the existing main page only.
+14. Do not add authentication.
+15. Keep UI simple.
+
+At the end, tell me:
+
+* Files changed
+* Do I need to restart anything
+* Exact URL to open in Preview
+* Exact steps to test
+* What I should see if it worked

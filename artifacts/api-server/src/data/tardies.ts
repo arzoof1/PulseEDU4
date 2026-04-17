@@ -4,8 +4,9 @@ export interface Tardy {
   teacherName: string;
   period: string;
   reason: string;
-  entryType: "tardy" | "checkin";
+  entryType: "tardy" | "checkin" | "checkout";
   checkInWith: string | null;
+  notes: string;
   createdAt: string;
 }
 
