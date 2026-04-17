@@ -347,21 +347,6 @@ function App() {
         </label>
       </div>
 
-      <div style={{ marginBottom: "1rem" }}>
-        <label>
-          Teacher:{" "}
-          <select
-            value={selectedTeacher}
-            onChange={(e) => setSelectedTeacher(e.target.value)}
-          >
-            {teachers.map((t) => (
-              <option key={t} value={t}>
-                {t}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
 
       <div style={{ marginBottom: "1rem" }}>
         <button
