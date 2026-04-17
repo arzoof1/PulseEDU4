@@ -66,6 +66,24 @@ interface PbisEntry {
   createdAt: string;
 }
 
+interface SupportNote {
+  id: number;
+  studentId: string;
+  noteType: string;
+  noteText: string;
+  staffName: string;
+  createdAt: string;
+}
+
+const supportNoteTypes = [
+  "Parent Contact",
+  "Student Conference",
+  "Behavior Follow-Up",
+  "Academic Concern",
+  "Intervention",
+  "Other",
+];
+
 const pbisOptions: { reason: string; points: number }[] = [
   { reason: "Respectful", points: 1 },
   { reason: "Responsible", points: 1 },
@@ -138,6 +156,9 @@ function App() {
   >("positive");
 
   const [pbisEntries, setPbisEntries] = useState<PbisEntry[]>([]);
+  const [supportNotes, setSupportNotes] = useState<SupportNote[]>([]);
+  const [supportNoteType, setSupportNoteType] = useState(supportNoteTypes[0]);
+  const [supportNoteText, setSupportNoteText] = useState("");
   const [pbisStudentId, setPbisStudentId] = useState("");
   const [pbisStudentSearch, setPbisStudentSearch] = useState("");
   const [pbisOptionIndex, setPbisOptionIndex] = useState(0);
@@ -216,6 +237,7 @@ function App() {
 
     loadTardies();
     loadPbis();
+    loadSupportNotes();
   }, []);
 
   const loadTardies = () => {
@@ -230,6 +252,36 @@ function App() {
       .then((res) => res.json())
       .then((data: PbisEntry[]) => setPbisEntries(data))
       .catch((err) => console.error("Failed to load pbis:", err));
+  };
+
+  const loadSupportNotes = () => {
+    fetch("/api/support-notes")
+      .then((res) => res.json())
+      .then((data: SupportNote[]) => setSupportNotes(data))
+      .catch((err) => console.error("Failed to load support notes:", err));
+  };
+
+  const handleSupportNoteSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activityStudentId || !supportNoteText.trim()) return;
+    try {
+      const res = await fetch("/api/support-notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: activityStudentId,
+          noteType: supportNoteType,
+          noteText: supportNoteText.trim(),
+          staffName: currentStaffUser,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save support note");
+      loadSupportNotes();
+      setSupportNoteText("");
+      setSupportNoteType(supportNoteTypes[0]);
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handlePbisSubmit = async (e: React.FormEvent) => {
@@ -1429,6 +1481,54 @@ function App() {
                   </div>
                 );
               })()}
+
+              <h3>Support Notes</h3>
+              <form
+                onSubmit={handleSupportNoteSubmit}
+                style={{ marginBottom: "0.5rem" }}
+              >
+                <div style={{ marginBottom: "0.25rem" }}>
+                  <label>
+                    Note Type:{" "}
+                    <select
+                      value={supportNoteType}
+                      onChange={(e) => setSupportNoteType(e.target.value)}
+                    >
+                      {supportNoteTypes.map((t) => (
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+                <div style={{ marginBottom: "0.25rem" }}>
+                  <label>
+                    Note:{" "}
+                    <textarea
+                      value={supportNoteText}
+                      onChange={(e) => setSupportNoteText(e.target.value)}
+                      rows={2}
+                      cols={50}
+                    />
+                  </label>
+                </div>
+                <button type="submit" disabled={!supportNoteText.trim()}>
+                  Add Support Note
+                </button>
+              </form>
+              <ul>
+                {supportNotes
+                  .filter((n) => n.studentId === activityStudentId)
+                  .slice()
+                  .reverse()
+                  .map((n) => (
+                    <li key={n.id}>
+                      [{n.noteType}] {n.noteText} - by {n.staffName || "-"} -{" "}
+                      {n.createdAt}
+                    </li>
+                  ))}
+              </ul>
 
               <h3>PBIS Entries</h3>
               <ul>
