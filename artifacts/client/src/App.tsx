@@ -121,28 +121,6 @@ function App() {
   return (
     <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
       <h1>School Operations App - MVP</h1>
-      <h2>Students</h2>
-      <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th>studentId</th>
-            <th>firstName</th>
-            <th>lastName</th>
-            <th>grade</th>
-          </tr>
-        </thead>
-        <tbody>
-          {students.map((s) => (
-            <tr key={s.id}>
-              <td>{s.studentId}</td>
-              <td>{s.firstName}</td>
-              <td>{s.lastName}</td>
-              <td>{s.grade}</td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-
       <h2>Create Hall Pass</h2>
       <form onSubmit={handleSubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
