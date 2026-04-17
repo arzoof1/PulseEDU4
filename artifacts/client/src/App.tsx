@@ -46,6 +46,15 @@ const staffUsers = [
   "Ms. Garcia (Interventionist)",
 ];
 
+const staffPeriods: Record<string, number[]> = {
+  "Ms. Rivera": [1, 3, 5],
+  "Mr. Johnson": [2, 4, 6],
+  "Coach Lee": [1, 2, 7],
+  "Ms. Patel (Counselor)": [],
+  "Mr. Davis (Admin)": [],
+  "Ms. Garcia (Interventionist)": [3, 5, 7],
+};
+
 interface Tardy {
   id: number;
   studentId: string;
@@ -1643,9 +1652,14 @@ function App() {
             const allAccs = Array.from(
               new Set(students.flatMap((st) => st.accommodations ?? [])),
             ).sort();
+            const myPeriods = staffPeriods[currentStaffUser] ?? [];
             const periodIds = rosterPeriod
               ? new Set(periodRoster[rosterPeriod] ?? [])
-              : null;
+              : myPeriods.length > 0
+                ? new Set(
+                    myPeriods.flatMap((p) => periodRoster[String(p)] ?? []),
+                  )
+                : null;
             const rosterStudents = rosterAccommodation
               ? students.filter(
                   (st) =>
@@ -1719,13 +1733,18 @@ function App() {
                           value={rosterPeriod}
                           onChange={(e) => setRosterPeriod(e.target.value)}
                         >
-                          <option value="">All Periods</option>
-                          {[1, 2, 3, 4, 5, 6, 7].map((p) => (
+                          <option value="">All My Periods</option>
+                          {(staffPeriods[currentStaffUser] ?? []).map((p) => (
                             <option key={p} value={String(p)}>
                               Period {p}
                             </option>
                           ))}
                         </select>
+                        {(staffPeriods[currentStaffUser] ?? []).length === 0 && (
+                          <span style={{ marginLeft: "0.5rem", color: "#666" }}>
+                            No periods assigned to {currentStaffUser}
+                          </span>
+                        )}
                       </label>
                     </div>
                     <div style={{ marginBottom: "0.5rem" }}>
