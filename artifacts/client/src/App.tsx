@@ -150,6 +150,9 @@ function App() {
   >("hallPasses");
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
+  const [studentTab, setStudentTab] = useState<
+    "summary" | "hallPasses" | "tardy" | "pbis" | "supportNotes" | "contact"
+  >("summary");
   const [emailStatus, setEmailStatus] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
@@ -1084,7 +1087,30 @@ function App() {
 
           {activityStudentId && (
             <>
-              {(() => {
+              <div style={{ marginBottom: "1rem" }}>
+                {(
+                  [
+                    ["summary", "Summary"],
+                    ["hallPasses", "Hall Passes"],
+                    ["tardy", "Tardy / Support Logs"],
+                    ["pbis", "PBIS"],
+                    ["supportNotes", "Support Notes"],
+                    ["contact", "Contact / Communication"],
+                  ] as const
+                ).map(([key, label]) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setStudentTab(key)}
+                    disabled={studentTab === key}
+                    style={{ marginRight: "0.25rem" }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+
+              {studentTab === "summary" && (() => {
                 const student = students.find(
                   (s) => s.studentId === activityStudentId,
                 );
@@ -1146,7 +1172,7 @@ function App() {
                 );
               })()}
 
-              {(() => {
+              {studentTab === "contact" && (() => {
                 const s = students.find(
                   (st) => st.studentId === activityStudentId,
                 );
@@ -1181,6 +1207,7 @@ function App() {
                 );
               })()}
 
+              {studentTab === "hallPasses" && (<>
               <h3>Hall Passes</h3>
               <table
                 border={1}
@@ -1217,7 +1244,9 @@ function App() {
                     ))}
                 </tbody>
               </table>
+              </>)}
 
+              {studentTab === "tardy" && (<>
               <h3>Tardy / Support Logs</h3>
               <table
                 border={1}
@@ -1261,8 +1290,9 @@ function App() {
                     ))}
                 </tbody>
               </table>
+              </>)}
 
-              {(() => {
+              {studentTab === "summary" && (() => {
                 const completedPasses = hallPasses
                   .filter((p) => p.studentId === activityStudentId)
                   .filter((p) => p.status !== "active" && p.endedAt)
@@ -1292,7 +1322,7 @@ function App() {
                 );
               })()}
 
-              {(() => {
+              {studentTab === "contact" && (() => {
                 const student = students.find(
                   (s) => s.studentId === activityStudentId,
                 );
@@ -1465,6 +1495,7 @@ function App() {
                 );
               })()}
 
+              {studentTab === "pbis" && (<>
               <h3>PBIS Summary</h3>
               {(() => {
                 const studentPbis = pbisEntries.filter(
@@ -1481,7 +1512,9 @@ function App() {
                   </div>
                 );
               })()}
+              </>)}
 
+              {studentTab === "supportNotes" && (<>
               <h3>Support Notes</h3>
               <form
                 onSubmit={handleSupportNoteSubmit}
@@ -1543,7 +1576,9 @@ function App() {
                     </li>
                   ))}
               </ul>
+              </>)}
 
+              {studentTab === "pbis" && (<>
               <h3>PBIS Entries</h3>
               <ul>
                 {pbisEntries
@@ -1565,6 +1600,7 @@ function App() {
                     </li>
                   ))}
               </ul>
+              </>)}
             </>
           )}
         </section>
