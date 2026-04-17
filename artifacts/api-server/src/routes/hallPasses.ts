@@ -34,6 +34,7 @@ router.post("/hall-passes", (req, res) => {
     status: "active",
     createdAt: new Date().toISOString(),
     maxDurationMinutes: config.defaultHallPassDurationMinutes,
+    endedAt: null,
   };
 
   hallPasses.push(pass);
@@ -50,6 +51,7 @@ router.patch("/hall-passes/:id/end", (req, res) => {
   }
 
   pass.status = "ended";
+  pass.endedAt = new Date().toISOString();
   res.json(pass);
 });
 

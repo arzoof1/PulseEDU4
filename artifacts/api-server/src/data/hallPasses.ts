@@ -6,6 +6,7 @@ export interface HallPass {
   status: "active" | "ended";
   createdAt: string;
   maxDurationMinutes: number;
+  endedAt: string | null;
 }
 
 export const hallPasses: HallPass[] = [];
