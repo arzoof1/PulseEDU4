@@ -17,6 +17,7 @@ interface Student {
   parentName?: string | null;
   parentEmail?: string | null;
   parentPhone?: string | null;
+  accommodations?: string[];
   firstName: string;
   lastName: string;
   grade: number;
@@ -151,7 +152,13 @@ function App() {
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [studentTab, setStudentTab] = useState<
-    "summary" | "hallPasses" | "tardy" | "pbis" | "supportNotes" | "contact"
+    | "summary"
+    | "hallPasses"
+    | "tardy"
+    | "pbis"
+    | "supportNotes"
+    | "contact"
+    | "accommodations"
   >("summary");
   const [emailStatus, setEmailStatus] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
@@ -1096,6 +1103,7 @@ function App() {
                     ["pbis", "PBIS"],
                     ["supportNotes", "Support Notes"],
                     ["contact", "Contact / Communication"],
+                    ["accommodations", "Accommodations"],
                   ] as const
                 ).map(([key, label]) => (
                   <button
@@ -1601,6 +1609,33 @@ function App() {
                   ))}
               </ul>
               </>)}
+
+              {studentTab === "accommodations" && (() => {
+                const s = students.find(
+                  (st) => st.studentId === activityStudentId,
+                );
+                const accs = s?.accommodations ?? [];
+                return (
+                  <section
+                    style={{
+                      border: "1px solid #ccc",
+                      padding: "0.75rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
+                    {accs.length === 0 ? (
+                      <div>No accommodations on file</div>
+                    ) : (
+                      <ul style={{ margin: 0 }}>
+                        {accs.map((a) => (
+                          <li key={a}>{a}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </section>
+                );
+              })()}
             </>
           )}
         </section>
