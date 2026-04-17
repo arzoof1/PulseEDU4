@@ -1111,6 +1111,36 @@ function App() {
               </table>
 
               {(() => {
+                const completedPasses = hallPasses
+                  .filter((p) => p.studentId === activityStudentId)
+                  .filter((p) => p.status !== "active" && p.endedAt)
+                  .filter((p) =>
+                    dateFilter === "today"
+                      ? isCreatedToday(p.createdAt)
+                      : true,
+                  );
+                const hallPassMinutes = completedPasses.reduce((sum, p) => {
+                  const start = new Date(p.createdAt).getTime();
+                  const end = new Date(p.endedAt as string).getTime();
+                  const mins = Math.max(0, (end - start) / 60000);
+                  return sum + mins;
+                }, 0);
+                const hallPassMinutesRounded = Math.round(hallPassMinutes);
+                const totalMinutes = hallPassMinutesRounded;
+                return (
+                  <section style={{ marginBottom: "1rem" }}>
+                    <h3>Lost Instructional Time</h3>
+                    <ul>
+                      <li>Hall Pass Minutes: {hallPassMinutesRounded}</li>
+                      <li>
+                        Total Lost Instructional Time: {totalMinutes}
+                      </li>
+                    </ul>
+                  </section>
+                );
+              })()}
+
+              {(() => {
                 const student = students.find(
                   (s) => s.studentId === activityStudentId,
                 );
