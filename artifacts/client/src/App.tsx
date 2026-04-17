@@ -160,6 +160,8 @@ function App() {
     | "contact"
     | "accommodations"
   >("summary");
+  const [accView, setAccView] = useState<"student" | "roster">("student");
+  const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [emailStatus, setEmailStatus] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
@@ -1615,6 +1617,16 @@ function App() {
                   (st) => st.studentId === activityStudentId,
                 );
                 const accs = s?.accommodations ?? [];
+                const allAccs = Array.from(
+                  new Set(
+                    students.flatMap((st) => st.accommodations ?? []),
+                  ),
+                ).sort();
+                const rosterStudents = rosterAccommodation
+                  ? students.filter((st) =>
+                      (st.accommodations ?? []).includes(rosterAccommodation),
+                    )
+                  : [];
                 return (
                   <section
                     style={{
@@ -1623,15 +1635,74 @@ function App() {
                       marginBottom: "1rem",
                     }}
                   >
-                    <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
-                    {accs.length === 0 ? (
-                      <div>No accommodations on file</div>
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label style={{ marginRight: "0.5rem" }}>
+                        <input
+                          type="radio"
+                          name="accView"
+                          value="student"
+                          checked={accView === "student"}
+                          onChange={() => setAccView("student")}
+                        />{" "}
+                        Selected Student
+                      </label>
+                      <label>
+                        <input
+                          type="radio"
+                          name="accView"
+                          value="roster"
+                          checked={accView === "roster"}
+                          onChange={() => setAccView("roster")}
+                        />{" "}
+                        Roster by Accommodation
+                      </label>
+                    </div>
+                    {accView === "student" ? (
+                      <>
+                        <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
+                        {accs.length === 0 ? (
+                          <div>No accommodations on file</div>
+                        ) : (
+                          <ul style={{ margin: 0 }}>
+                            {accs.map((a) => (
+                              <li key={a}>{a}</li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
                     ) : (
-                      <ul style={{ margin: 0 }}>
-                        {accs.map((a) => (
-                          <li key={a}>{a}</li>
-                        ))}
-                      </ul>
+                      <>
+                        <h3 style={{ marginTop: 0 }}>Roster by Accommodation</h3>
+                        <div style={{ marginBottom: "0.5rem" }}>
+                          <label>
+                            Accommodation:{" "}
+                            <select
+                              value={rosterAccommodation}
+                              onChange={(e) =>
+                                setRosterAccommodation(e.target.value)
+                              }
+                            >
+                              <option value="">-- Select --</option>
+                              {allAccs.map((a) => (
+                                <option key={a} value={a}>
+                                  {a}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        {!rosterAccommodation ? null : rosterStudents.length === 0 ? (
+                          <div>No students found for this accommodation</div>
+                        ) : (
+                          <ul style={{ margin: 0 }}>
+                            {rosterStudents.map((st) => (
+                              <li key={st.studentId}>
+                                {st.firstName} {st.lastName} ({st.studentId})
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </>
                     )}
                   </section>
                 );
