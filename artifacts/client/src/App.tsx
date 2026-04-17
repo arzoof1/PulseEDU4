@@ -50,6 +50,7 @@ function App() {
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
+  const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -326,6 +327,22 @@ function App() {
       </form>
 
       <h2>Hall Passes</h2>
+      <div style={{ marginBottom: "0.5rem" }}>
+        <button
+          type="button"
+          onClick={() => setPassFilter("all")}
+          disabled={passFilter === "all"}
+        >
+          All Passes
+        </button>{" "}
+        <button
+          type="button"
+          onClick={() => setPassFilter("mine")}
+          disabled={passFilter === "mine"}
+        >
+          My Passes
+        </button>
+      </div>
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
@@ -341,7 +358,11 @@ function App() {
           </tr>
         </thead>
         <tbody>
-          {hallPasses.map((p) => (
+          {hallPasses
+            .filter((p) =>
+              passFilter === "mine" ? p.teacherName === selectedTeacher : true,
+            )
+            .map((p) => (
             <tr key={p.id}>
               <td>{p.studentId}</td>
               <td>{p.teacherName}</td>
