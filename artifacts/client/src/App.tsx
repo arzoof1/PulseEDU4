@@ -1,5 +1,16 @@
 import { useEffect, useState } from "react";
 
+const destinationsByRoom: Record<string, string[]> = {
+  "Room 101": ["Restroom", "Nurse", "Front Office"],
+  "Room 102": ["Restroom", "Front Office"],
+  "Room 201": ["Restroom", "Library", "Guidance"],
+  "Room 202": ["Restroom", "Nurse"],
+  "Room 204": ["Library", "Restroom", "Guidance"],
+  "Room 305": ["Restroom", "Media Center", "Front Office"],
+  "Gym": ["Nurse", "Front Office", "Cafeteria"],
+  "Cafeteria": ["Restroom", "Nurse", "Front Office"],
+};
+
 interface Student {
   id: number;
   studentId: string;
@@ -119,24 +130,44 @@ function App() {
         </div>
         <div style={{ marginBottom: "0.5rem" }}>
           <label>
-            Destination:{" "}
-            <input
-              type="text"
-              value={destination}
-              onChange={(e) => setDestination(e.target.value)}
+            Origin Room:{" "}
+            <select
+              value={originRoom}
+              onChange={(e) => {
+                const newRoom = e.target.value;
+                setOriginRoom(newRoom);
+                const allowed = destinationsByRoom[newRoom] ?? [];
+                if (destination && !allowed.includes(destination)) {
+                  setDestination("");
+                }
+              }}
               required
-            />
+            >
+              <option value="">-- select an origin room --</option>
+              {Object.keys(destinationsByRoom).map((room) => (
+                <option key={room} value={room}>
+                  {room}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
         <div style={{ marginBottom: "0.5rem" }}>
           <label>
-            Origin Room:{" "}
-            <input
-              type="text"
-              value={originRoom}
-              onChange={(e) => setOriginRoom(e.target.value)}
+            Destination:{" "}
+            <select
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
               required
-            />
+              disabled={!originRoom}
+            >
+              <option value="">-- select a destination --</option>
+              {(destinationsByRoom[originRoom] ?? []).map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
           </label>
         </div>
         <button type="submit">Create</button>
