@@ -12,7 +12,9 @@ interface HallPass {
   id: number;
   studentId: string;
   destination: string;
+  originRoom: string;
   status: string;
+  maxDurationMinutes: number;
   createdAt: string;
 }
 
@@ -66,20 +68,22 @@ function App() {
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th>id</th>
             <th>studentId</th>
             <th>destination</th>
+            <th>originRoom</th>
             <th>status</th>
+            <th>maxDurationMinutes</th>
             <th>createdAt</th>
           </tr>
         </thead>
         <tbody>
           {hallPasses.map((p) => (
             <tr key={p.id}>
-              <td>{p.id}</td>
               <td>{p.studentId}</td>
               <td>{p.destination}</td>
+              <td>{p.originRoom}</td>
               <td>{p.status}</td>
+              <td>{p.maxDurationMinutes}</td>
               <td>{p.createdAt}</td>
             </tr>
           ))}
