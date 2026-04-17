@@ -147,7 +147,7 @@ function App() {
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
-    "hallPasses" | "tardies" | "student" | "pbis"
+    "hallPasses" | "tardies" | "student" | "pbis" | "accommodations"
   >("hallPasses");
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
@@ -158,7 +158,6 @@ function App() {
     | "pbis"
     | "supportNotes"
     | "contact"
-    | "accommodations"
   >("summary");
   const [accView, setAccView] = useState<"student" | "roster">("student");
   const [rosterAccommodation, setRosterAccommodation] = useState("");
@@ -511,6 +510,13 @@ function App() {
           disabled={activeSection === "pbis"}
         >
           PBIS Points
+        </button>{" "}
+        <button
+          type="button"
+          onClick={() => setActiveSection("accommodations")}
+          disabled={activeSection === "accommodations"}
+        >
+          Accommodations
         </button>
       </div>
 
@@ -1106,7 +1112,6 @@ function App() {
                     ["pbis", "PBIS"],
                     ["supportNotes", "Support Notes"],
                     ["contact", "Contact / Communication"],
-                    ["accommodations", "Accommodations"],
                   ] as const
                 ).map(([key, label]) => (
                   <button
@@ -1613,117 +1618,120 @@ function App() {
               </ul>
               </>)}
 
-              {studentTab === "accommodations" && (() => {
-                const effectiveStudentId = accStudentId || activityStudentId;
-                const s = students.find(
-                  (st) => st.studentId === effectiveStudentId,
-                );
-                const accs = s?.accommodations ?? [];
-                const allAccs = Array.from(
-                  new Set(
-                    students.flatMap((st) => st.accommodations ?? []),
-                  ),
-                ).sort();
-                const rosterStudents = rosterAccommodation
-                  ? students.filter((st) =>
-                      (st.accommodations ?? []).includes(rosterAccommodation),
-                    )
-                  : [];
-                return (
-                  <section
-                    style={{
-                      border: "1px solid #ccc",
-                      padding: "0.75rem",
-                      marginBottom: "1rem",
-                    }}
-                  >
-                    <div style={{ marginBottom: "0.75rem" }}>
-                      <button
-                        type="button"
-                        onClick={() => setAccView("student")}
-                        disabled={accView === "student"}
-                        style={{ marginRight: "0.25rem" }}
-                      >
-                        By Student
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setAccView("roster")}
-                        disabled={accView === "roster"}
-                      >
-                        By Accommodation Roster
-                      </button>
-                    </div>
-                    {accView === "student" ? (
-                      <>
-                        <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
-                        <div style={{ marginBottom: "0.5rem" }}>
-                          <label>
-                            Student:{" "}
-                            <select
-                              value={effectiveStudentId}
-                              onChange={(e) => setAccStudentId(e.target.value)}
-                            >
-                              <option value="">-- Select --</option>
-                              {students.map((st) => (
-                                <option key={st.studentId} value={st.studentId}>
-                                  {st.firstName} {st.lastName} ({st.studentId})
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        {!effectiveStudentId ? (
-                          <div>Please select a student.</div>
-                        ) : accs.length === 0 ? (
-                          <div>No accommodations on file</div>
-                        ) : (
-                          <ul style={{ margin: 0 }}>
-                            {accs.map((a) => (
-                              <li key={a}>{a}</li>
-                            ))}
-                          </ul>
-                        )}
-                      </>
-                    ) : (
-                      <>
-                        <h3 style={{ marginTop: 0 }}>Roster by Accommodation</h3>
-                        <div style={{ marginBottom: "0.5rem" }}>
-                          <label>
-                            Accommodation:{" "}
-                            <select
-                              value={rosterAccommodation}
-                              onChange={(e) =>
-                                setRosterAccommodation(e.target.value)
-                              }
-                            >
-                              <option value="">-- Select --</option>
-                              {allAccs.map((a) => (
-                                <option key={a} value={a}>
-                                  {a}
-                                </option>
-                              ))}
-                            </select>
-                          </label>
-                        </div>
-                        {!rosterAccommodation ? null : rosterStudents.length === 0 ? (
-                          <div>No students found for this accommodation</div>
-                        ) : (
-                          <ul style={{ margin: 0 }}>
-                            {rosterStudents.map((st) => (
-                              <li key={st.studentId}>
-                                {st.firstName} {st.lastName} ({st.studentId})
-                              </li>
-                            ))}
-                          </ul>
-                        )}
-                      </>
-                    )}
-                  </section>
-                );
-              })()}
             </>
           )}
+        </section>
+      )}
+
+      {activeSection === "accommodations" && (
+        <section>
+          <h2>Accommodations</h2>
+          {(() => {
+            const s = students.find(
+              (st) => st.studentId === accStudentId,
+            );
+            const accs = s?.accommodations ?? [];
+            const allAccs = Array.from(
+              new Set(students.flatMap((st) => st.accommodations ?? [])),
+            ).sort();
+            const rosterStudents = rosterAccommodation
+              ? students.filter((st) =>
+                  (st.accommodations ?? []).includes(rosterAccommodation),
+                )
+              : [];
+            return (
+              <section
+                style={{
+                  border: "1px solid #ccc",
+                  padding: "0.75rem",
+                  marginBottom: "1rem",
+                }}
+              >
+                <div style={{ marginBottom: "0.75rem" }}>
+                  <button
+                    type="button"
+                    onClick={() => setAccView("student")}
+                    disabled={accView === "student"}
+                    style={{ marginRight: "0.25rem" }}
+                  >
+                    By Student
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccView("roster")}
+                    disabled={accView === "roster"}
+                  >
+                    By Accommodation Roster
+                  </button>
+                </div>
+                {accView === "student" ? (
+                  <>
+                    <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label>
+                        Student:{" "}
+                        <select
+                          value={accStudentId}
+                          onChange={(e) => setAccStudentId(e.target.value)}
+                        >
+                          <option value="">-- Select --</option>
+                          {students.map((st) => (
+                            <option key={st.studentId} value={st.studentId}>
+                              {st.firstName} {st.lastName} ({st.studentId})
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {!accStudentId ? (
+                      <div>Please select a student.</div>
+                    ) : accs.length === 0 ? (
+                      <div>No accommodations on file</div>
+                    ) : (
+                      <ul style={{ margin: 0 }}>
+                        {accs.map((a) => (
+                          <li key={a}>{a}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    <h3 style={{ marginTop: 0 }}>Roster by Accommodation</h3>
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label>
+                        Accommodation:{" "}
+                        <select
+                          value={rosterAccommodation}
+                          onChange={(e) =>
+                            setRosterAccommodation(e.target.value)
+                          }
+                        >
+                          <option value="">-- Select --</option>
+                          {allAccs.map((a) => (
+                            <option key={a} value={a}>
+                              {a}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {!rosterAccommodation ? null : rosterStudents.length === 0 ? (
+                      <div>No students found for this accommodation</div>
+                    ) : (
+                      <ul style={{ margin: 0 }}>
+                        {rosterStudents.map((st) => (
+                          <li key={st.studentId}>
+                            {st.firstName} {st.lastName} ({st.studentId})
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </>
+                )}
+              </section>
+            );
+          })()}
         </section>
       )}
 
