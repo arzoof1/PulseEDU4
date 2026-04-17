@@ -1236,6 +1236,27 @@ function App() {
                     }}
                   >
                     <h3 style={{ marginTop: 0 }}>Student Daily Summary</h3>
+                    <div style={{ marginBottom: "0.75rem" }}>
+                      <strong>Quick Actions:</strong>{" "}
+                      <button
+                        type="button"
+                        onClick={() => setStudentTab("pbis")}
+                      >
+                        Add PBIS
+                      </button>{" "}
+                      <button
+                        type="button"
+                        onClick={() => setStudentTab("supportNotes")}
+                      >
+                        Add Support Note
+                      </button>{" "}
+                      <button
+                        type="button"
+                        onClick={() => setStudentTab("contact")}
+                      >
+                        Send Email
+                      </button>
+                    </div>
                     <ul style={{ margin: 0 }}>
                       <li>Student Name: {studentName}</li>
                       <li>Hall Passes {label}: {sPasses.length}</li>
