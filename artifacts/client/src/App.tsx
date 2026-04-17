@@ -27,6 +27,19 @@ interface HallPass {
   status: string;
   maxDurationMinutes: number;
   createdAt: string;
+  endedAt: string | null;
+}
+
+function formatTimeStatus(pass: HallPass, now: number): string {
+  if (pass.status === "ended") return "Ended";
+  const expiresAt =
+    new Date(pass.createdAt).getTime() + pass.maxDurationMinutes * 60 * 1000;
+  const remainingMs = expiresAt - now;
+  if (remainingMs <= 0) return "Overdue";
+  const totalSeconds = Math.floor(remainingMs / 1000);
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}m ${seconds.toString().padStart(2, "0")}s left`;
 }
 
 function App() {
@@ -36,6 +49,12 @@ function App() {
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [destination, setDestination] = useState("");
   const [originRoom, setOriginRoom] = useState("");
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const interval = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const loadHallPasses = () => {
     fetch("/api/hall-passes")
@@ -183,6 +202,7 @@ function App() {
             <th>status</th>
             <th>maxDurationMinutes</th>
             <th>createdAt</th>
+            <th>Time Status</th>
           </tr>
         </thead>
         <tbody>
@@ -194,6 +214,7 @@ function App() {
               <td>{p.status}</td>
               <td>{p.maxDurationMinutes}</td>
               <td>{p.createdAt}</td>
+              <td>{formatTimeStatus(p, now)}</td>
             </tr>
           ))}
         </tbody>
