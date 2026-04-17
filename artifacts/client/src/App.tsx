@@ -121,6 +121,7 @@ function App() {
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [currentStaffUser, setCurrentStaffUser] = useState(staffUsers[0]);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
+  const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
     "hallPasses" | "tardies" | "student" | "pbis"
@@ -369,6 +370,18 @@ function App() {
           >
             <option value="all">All Records</option>
             <option value="today">Today Only</option>
+          </select>
+        </label>{" "}
+        <label>
+          Staff:{" "}
+          <select
+            value={staffFilter}
+            onChange={(e) =>
+              setStaffFilter(e.target.value as "all" | "mine")
+            }
+          >
+            <option value="all">All Staff</option>
+            <option value="mine">My Records Only</option>
           </select>
         </label>
       </div>
@@ -871,6 +884,9 @@ function App() {
             .filter((t) =>
               dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
             )
+            .filter((t) =>
+              staffFilter === "mine" ? t.teacherName === currentStaffUser : true,
+            )
             .map((t) => (
             <tr key={t.id}>
               <td>{t.studentId}</td>
@@ -1044,6 +1060,11 @@ function App() {
                     .filter((t) =>
                       dateFilter === "today"
                         ? isCreatedToday(t.createdAt)
+                        : true,
+                    )
+                    .filter((t) =>
+                      staffFilter === "mine"
+                        ? t.teacherName === currentStaffUser
                         : true,
                     )
                     .map((t) => (
@@ -1251,6 +1272,11 @@ function App() {
                       ? isCreatedToday(e.createdAt)
                       : true,
                   )
+                  .filter((e) =>
+                    staffFilter === "mine"
+                      ? e.staffName === currentStaffUser
+                      : true,
+                  )
                   .map((e) => (
                     <li key={e.id}>
                       {e.reason} - {e.points} pts - by {e.staffName || "-"} -{" "}
@@ -1391,6 +1417,11 @@ function App() {
                 .filter((entry) =>
                   dateFilter === "today"
                     ? isCreatedToday(entry.createdAt)
+                    : true,
+                )
+                .filter((entry) =>
+                  staffFilter === "mine"
+                    ? entry.staffName === currentStaffUser
                     : true,
                 )
                 .map((entry) => {
