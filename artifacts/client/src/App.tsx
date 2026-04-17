@@ -81,6 +81,16 @@ const checkInWithOptions = [
   "Other",
 ];
 
+function isCreatedToday(createdAt: string): boolean {
+  const d = new Date(createdAt);
+  const now = new Date();
+  return (
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate()
+  );
+}
+
 function getTimeStatusColor(pass: HallPass, now: number): string {
   if (pass.status === "ended") return "gray";
   const totalMs = pass.maxDurationMinutes * 60 * 1000;
@@ -110,6 +120,7 @@ function App() {
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [currentStaffUser, setCurrentStaffUser] = useState(staffUsers[0]);
+  const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
     "hallPasses" | "tardies" | "student" | "pbis"
@@ -347,6 +358,20 @@ function App() {
         </label>
       </div>
 
+      <div style={{ marginBottom: "1rem" }}>
+        <label>
+          Show:{" "}
+          <select
+            value={dateFilter}
+            onChange={(e) =>
+              setDateFilter(e.target.value as "today" | "all")
+            }
+          >
+            <option value="all">All Records</option>
+            <option value="today">Today Only</option>
+          </select>
+        </label>
+      </div>
 
       <div style={{ marginBottom: "1rem" }}>
         <button
@@ -842,7 +867,11 @@ function App() {
           </tr>
         </thead>
         <tbody>
-          {tardies.map((t) => (
+          {tardies
+            .filter((t) =>
+              dateFilter === "today" ? isCreatedToday(t.createdAt) : true,
+            )
+            .map((t) => (
             <tr key={t.id}>
               <td>{t.studentId}</td>
               <td>{t.teacherName}</td>
@@ -974,6 +1003,11 @@ function App() {
                 <tbody>
                   {hallPasses
                     .filter((p) => p.studentId === activityStudentId)
+                    .filter((p) =>
+                      dateFilter === "today"
+                        ? isCreatedToday(p.createdAt)
+                        : true,
+                    )
                     .map((p) => (
                       <tr key={p.id}>
                         <td>{p.teacherName}</td>
@@ -1007,6 +1041,11 @@ function App() {
                 <tbody>
                   {tardies
                     .filter((t) => t.studentId === activityStudentId)
+                    .filter((t) =>
+                      dateFilter === "today"
+                        ? isCreatedToday(t.createdAt)
+                        : true,
+                    )
                     .map((t) => (
                       <tr key={t.id}>
                         <td>{t.entryType}</td>
@@ -1207,6 +1246,11 @@ function App() {
               <ul>
                 {pbisEntries
                   .filter((e) => e.studentId === activityStudentId)
+                  .filter((e) =>
+                    dateFilter === "today"
+                      ? isCreatedToday(e.createdAt)
+                      : true,
+                  )
                   .map((e) => (
                     <li key={e.id}>
                       {e.reason} - {e.points} pts - by {e.staffName || "-"} -{" "}
@@ -1342,7 +1386,14 @@ function App() {
               </tr>
             </thead>
             <tbody>
-              {[...pbisEntries].reverse().map((entry) => {
+              {[...pbisEntries]
+                .reverse()
+                .filter((entry) =>
+                  dateFilter === "today"
+                    ? isCreatedToday(entry.createdAt)
+                    : true,
+                )
+                .map((entry) => {
                 const s = students.find(
                   (s) => s.studentId === entry.studentId,
                 );
