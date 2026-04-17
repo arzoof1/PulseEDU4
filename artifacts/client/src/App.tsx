@@ -84,6 +84,9 @@ function App() {
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
+  const [activeSection, setActiveSection] = useState<"hallPasses" | "tardies">(
+    "hallPasses",
+  );
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -272,6 +275,24 @@ function App() {
         </label>
       </div>
 
+      <div style={{ marginBottom: "1rem" }}>
+        <button
+          type="button"
+          onClick={() => setActiveSection("hallPasses")}
+          disabled={activeSection === "hallPasses"}
+        >
+          Hall Passes
+        </button>{" "}
+        <button
+          type="button"
+          onClick={() => setActiveSection("tardies")}
+          disabled={activeSection === "tardies"}
+        >
+          Tardy / Check-Ins
+        </button>
+      </div>
+
+      {activeSection === "hallPasses" && (<>
       {(() => {
         let active = 0;
         let overdue = 0;
@@ -510,7 +531,9 @@ function App() {
           ))}
         </tbody>
       </table>
+      </>)}
 
+      {activeSection === "tardies" && (<>
       <h2>Log Tardy / Check-In</h2>
       <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
@@ -746,6 +769,7 @@ function App() {
           ))}
         </tbody>
       </table>
+      </>)}
     </div>
   );
 }
