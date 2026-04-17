@@ -1029,6 +1029,68 @@ function App() {
 
           {activityStudentId && (
             <>
+              {(() => {
+                const student = students.find(
+                  (s) => s.studentId === activityStudentId,
+                );
+                const studentName = student
+                  ? `${student.firstName} ${student.lastName}`
+                  : activityStudentId;
+                const inRange = (createdAt: string) =>
+                  dateFilter === "today" ? isCreatedToday(createdAt) : true;
+                const sPasses = hallPasses.filter(
+                  (p) => p.studentId === activityStudentId && inRange(p.createdAt),
+                );
+                const sTardies = tardies.filter(
+                  (t) => t.studentId === activityStudentId && inRange(t.createdAt),
+                );
+                const sPbis = pbisEntries.filter(
+                  (e) => e.studentId === activityStudentId && inRange(e.createdAt),
+                );
+                const tardyCount = sTardies.filter(
+                  (t) => t.entryType === "tardy",
+                ).length;
+                const checkInCount = sTardies.filter(
+                  (t) => t.entryType === "checkin",
+                ).length;
+                const checkOutCount = sTardies.filter(
+                  (t) => t.entryType === "checkout",
+                ).length;
+                const pbisPoints = sPbis.reduce((sum, e) => sum + e.points, 0);
+                const lostMinutes = Math.round(
+                  sPasses
+                    .filter((p) => p.status !== "active" && p.endedAt)
+                    .reduce((sum, p) => {
+                      const start = new Date(p.createdAt).getTime();
+                      const end = new Date(p.endedAt as string).getTime();
+                      return sum + Math.max(0, (end - start) / 60000);
+                    }, 0),
+                );
+                const label =
+                  dateFilter === "today" ? "Today" : "(All Records)";
+                return (
+                  <section
+                    style={{
+                      border: "1px solid #ccc",
+                      padding: "0.75rem",
+                      marginBottom: "1rem",
+                    }}
+                  >
+                    <h3 style={{ marginTop: 0 }}>Student Daily Summary</h3>
+                    <ul style={{ margin: 0 }}>
+                      <li>Student Name: {studentName}</li>
+                      <li>Hall Passes {label}: {sPasses.length}</li>
+                      <li>Tardies {label}: {tardyCount}</li>
+                      <li>Check-Ins {label}: {checkInCount}</li>
+                      <li>Check-Outs {label}: {checkOutCount}</li>
+                      <li>PBIS Entries {label}: {sPbis.length}</li>
+                      <li>PBIS Points {label}: {pbisPoints}</li>
+                      <li>Lost Instructional Time {label}: {lostMinutes} min</li>
+                    </ul>
+                  </section>
+                );
+              })()}
+
               <h3>Hall Passes</h3>
               <table
                 border={1}
