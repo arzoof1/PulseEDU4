@@ -1503,15 +1503,29 @@ function App() {
                   </label>
                 </div>
                 <div style={{ marginBottom: "0.25rem" }}>
-                  <label>
-                    Note:{" "}
-                    <textarea
-                      value={supportNoteText}
-                      onChange={(e) => setSupportNoteText(e.target.value)}
-                      rows={2}
-                      cols={50}
-                    />
+                  <label
+                    style={{ display: "block", marginBottom: "0.25rem" }}
+                  >
+                    Note:
                   </label>
+                  <textarea
+                    value={supportNoteText}
+                    onChange={(e) => setSupportNoteText(e.target.value)}
+                    placeholder="Enter support note here..."
+                    rows={4}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      maxWidth: "32rem",
+                      minHeight: "5rem",
+                      padding: "0.5rem",
+                      border: "1px solid #888",
+                      borderRadius: "4px",
+                      fontFamily: "inherit",
+                      fontSize: "1rem",
+                      marginBottom: "0.5rem",
+                    }}
+                  />
                 </div>
                 <button type="submit" disabled={!supportNoteText.trim()}>
                   Add Support Note
