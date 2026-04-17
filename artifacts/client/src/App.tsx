@@ -105,6 +105,7 @@ function App() {
   >("hallPasses");
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
+  const [emailStatus, setEmailStatus] = useState("");
 
   const [pbisEntries, setPbisEntries] = useState<PbisEntry[]>([]);
   const [pbisStudentId, setPbisStudentId] = useState("");
@@ -1003,6 +1004,85 @@ function App() {
                     ))}
                 </tbody>
               </table>
+
+              {(() => {
+                const student = students.find(
+                  (s) => s.studentId === activityStudentId,
+                );
+                const studentName = student
+                  ? `${student.firstName} ${student.lastName}`
+                  : activityStudentId;
+                const studentPbis = pbisEntries.filter(
+                  (e) => e.studentId === activityStudentId,
+                );
+                const totalPoints = studentPbis.reduce(
+                  (sum, e) => sum + e.points,
+                  0,
+                );
+                const studentPasses = hallPasses.filter(
+                  (p) => p.studentId === activityStudentId,
+                );
+                const studentTardies = tardies.filter(
+                  (t) => t.studentId === activityStudentId,
+                );
+                const recent = studentPbis
+                  .slice()
+                  .reverse()
+                  .slice(0, 3)
+                  .map(
+                    (e) =>
+                      `  - ${e.reason} (${e.points} pts) on ${e.createdAt}`,
+                  )
+                  .join("\n");
+                const body =
+                  `Hello,\n\n` +
+                  `Here is a quick activity update for ${studentName}:\n\n` +
+                  `PBIS Points: ${totalPoints}\n` +
+                  `PBIS Entries: ${studentPbis.length}\n` +
+                  `Hall Passes: ${studentPasses.length}\n` +
+                  `Tardy / Support Logs: ${studentTardies.length}\n` +
+                  (recent
+                    ? `\nRecent PBIS activity:\n${recent}\n`
+                    : "") +
+                  `\nThank you,\nSchool Operations`;
+                const sendEmail = async () => {
+                  setEmailStatus("Sending...");
+                  try {
+                    const res = await fetch("/api/send-test-parent-email", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        studentName,
+                        subject: "Student Activity Update",
+                        body,
+                      }),
+                    });
+                    if (!res.ok) throw new Error("Failed to send");
+                    setEmailStatus(
+                      "Test parent email sent (stubbed - check server console).",
+                    );
+                  } catch (err) {
+                    console.error(err);
+                    setEmailStatus("Error sending test parent email.");
+                  }
+                };
+                return (
+                  <div style={{ marginBottom: "0.5rem" }}>
+                    <button
+                      type="button"
+                      onClick={sendEmail}
+                      disabled={!activityStudentId}
+                    >
+                      Send Test Parent Email
+                    </button>
+                    {emailStatus && (
+                      <span style={{ marginLeft: "0.5rem" }}>
+                        {emailStatus}
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
 
               <h3>PBIS Summary</h3>
               {(() => {
