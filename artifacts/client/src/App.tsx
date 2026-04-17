@@ -124,6 +124,48 @@ function App() {
   return (
     <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
       <h1>School Operations App - MVP</h1>
+
+      {(() => {
+        let active = 0;
+        let overdue = 0;
+        let ended = 0;
+        for (const p of hallPasses) {
+          if (p.status === "ended") {
+            ended++;
+          } else if (p.status === "active") {
+            const expiresAt =
+              new Date(p.createdAt).getTime() +
+              p.maxDurationMinutes * 60 * 1000;
+            if (now >= expiresAt) overdue++;
+            else active++;
+          }
+        }
+        const boxStyle: React.CSSProperties = {
+          border: "1px solid #ccc",
+          padding: "0.5rem 0.75rem",
+          minWidth: "8rem",
+        };
+        return (
+          <section style={{ marginBottom: "1rem" }}>
+            <h2>Hall Pass Summary</h2>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <div style={boxStyle}>
+                <div>Active Passes</div>
+                <strong>{active}</strong>
+              </div>
+              <div style={boxStyle}>
+                <div>Overdue Passes</div>
+                <strong>{overdue}</strong>
+              </div>
+              <div style={boxStyle}>
+                <div>Ended Passes</div>
+                <strong>{ended}</strong>
+              </div>
+            </div>
+          </section>
+        );
+      })()}
+
       <h2>Create Hall Pass</h2>
       <form onSubmit={handleSubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
