@@ -3,6 +3,7 @@ export interface PbisEntry {
   studentId: string;
   reason: string;
   points: number;
+  staffName: string;
   createdAt: string;
 }
 

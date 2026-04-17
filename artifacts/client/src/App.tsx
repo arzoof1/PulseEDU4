@@ -50,6 +50,7 @@ interface PbisEntry {
   studentId: string;
   reason: string;
   points: number;
+  staffName: string;
   createdAt: string;
 }
 
@@ -190,6 +191,7 @@ function App() {
           studentId: pbisStudentId,
           reason: option.reason,
           points: option.points,
+          staffName: selectedTeacher,
         }),
       });
       if (!res.ok) throw new Error("Failed to save PBIS entry");
@@ -1196,7 +1198,8 @@ function App() {
                   .filter((e) => e.studentId === activityStudentId)
                   .map((e) => (
                     <li key={e.id}>
-                      {e.reason} - {e.points} pts - {e.createdAt}
+                      {e.reason} - {e.points} pts - by {e.staffName || "-"} -{" "}
+                      {e.createdAt}
                     </li>
                   ))}
               </ul>
@@ -1323,6 +1326,7 @@ function App() {
                 <th>name</th>
                 <th>reason</th>
                 <th>points</th>
+                <th>staff</th>
                 <th>createdAt</th>
               </tr>
             </thead>
@@ -1337,6 +1341,7 @@ function App() {
                     <td>{s ? `${s.firstName} ${s.lastName}` : "-"}</td>
                     <td>{entry.reason}</td>
                     <td>{entry.points}</td>
+                    <td>{entry.staffName || "-"}</td>
                     <td>{entry.createdAt}</td>
                   </tr>
                 );

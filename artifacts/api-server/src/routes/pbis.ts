@@ -8,7 +8,7 @@ router.get("/pbis", (_req, res) => {
 });
 
 router.post("/pbis", (req, res) => {
-  const { studentId, reason, points } = req.body ?? {};
+  const { studentId, reason, points, staffName } = req.body ?? {};
 
   if (typeof studentId !== "string" || !studentId) {
     res.status(400).json({ error: "studentId is required" });
@@ -29,6 +29,7 @@ router.post("/pbis", (req, res) => {
     studentId,
     reason,
     points: pts,
+    staffName: typeof staffName === "string" ? staffName : "",
     createdAt: new Date().toISOString(),
   };
 
