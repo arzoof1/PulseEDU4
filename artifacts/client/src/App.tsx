@@ -45,6 +45,24 @@ interface Tardy {
   createdAt: string;
 }
 
+interface PbisEntry {
+  id: number;
+  studentId: string;
+  reason: string;
+  points: number;
+  createdAt: string;
+}
+
+const pbisReasonOptions = [
+  "Respectful",
+  "Responsible",
+  "Safe",
+  "Kind",
+  "On-Task",
+  "Helpful",
+  "Other",
+];
+
 const checkInWithOptions = [
   "Counselor",
   "Interventionist",
@@ -85,10 +103,16 @@ function App() {
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
-    "hallPasses" | "tardies" | "student"
+    "hallPasses" | "tardies" | "student" | "pbis"
   >("hallPasses");
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
+
+  const [pbisEntries, setPbisEntries] = useState<PbisEntry[]>([]);
+  const [pbisStudentId, setPbisStudentId] = useState("");
+  const [pbisStudentSearch, setPbisStudentSearch] = useState("");
+  const [pbisReason, setPbisReason] = useState(pbisReasonOptions[0]);
+  const [pbisPoints, setPbisPoints] = useState("1");
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -135,6 +159,7 @@ function App() {
     loadHallPasses();
 
     loadTardies();
+    loadPbis();
   }, []);
 
   const loadTardies = () => {
@@ -142,6 +167,39 @@ function App() {
       .then((res) => res.json())
       .then((data: Tardy[]) => setTardies(data))
       .catch((err) => console.error("Failed to load tardies:", err));
+  };
+
+  const loadPbis = () => {
+    fetch("/api/pbis")
+      .then((res) => res.json())
+      .then((data: PbisEntry[]) => setPbisEntries(data))
+      .catch((err) => console.error("Failed to load pbis:", err));
+  };
+
+  const handlePbisSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pbisStudentId || !pbisReason) return;
+    const points = Number(pbisPoints);
+    if (!Number.isFinite(points)) return;
+    try {
+      const res = await fetch("/api/pbis", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: pbisStudentId,
+          reason: pbisReason,
+          points,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to save PBIS entry");
+      loadPbis();
+      setPbisStudentId("");
+      setPbisStudentSearch("");
+      setPbisReason(pbisReasonOptions[0]);
+      setPbisPoints("1");
+    } catch (err) {
+      console.error(err);
+    }
   };
 
   const handleTardySubmit = async (e: React.FormEvent) => {
@@ -298,6 +356,13 @@ function App() {
           disabled={activeSection === "student"}
         >
           Student Activity
+        </button>{" "}
+        <button
+          type="button"
+          onClick={() => setActiveSection("pbis")}
+          disabled={activeSection === "pbis"}
+        >
+          PBIS Points
         </button>
       </div>
 
@@ -944,6 +1009,155 @@ function App() {
               </table>
             </>
           )}
+        </section>
+      )}
+
+      {activeSection === "pbis" && (
+        <section>
+          <h2>PBIS Points</h2>
+          <form onSubmit={handlePbisSubmit} style={{ marginBottom: "1rem" }}>
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label>
+                Student:{" "}
+                <input
+                  type="text"
+                  placeholder="Search by name or ID"
+                  value={pbisStudentSearch}
+                  onChange={(e) => {
+                    setPbisStudentSearch(e.target.value);
+                    setPbisStudentId("");
+                  }}
+                />
+              </label>
+              {pbisStudentId ? (
+                <div style={{ marginTop: "0.25rem" }}>
+                  Selected: <strong>{pbisStudentId}</strong>{" "}
+                  {(() => {
+                    const s = students.find(
+                      (s) => s.studentId === pbisStudentId,
+                    );
+                    return s ? `- ${s.firstName} ${s.lastName}` : "";
+                  })()}{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPbisStudentId("");
+                      setPbisStudentSearch("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : (
+                pbisStudentSearch && (
+                  <ul
+                    style={{
+                      listStyle: "none",
+                      padding: 0,
+                      margin: "0.25rem 0",
+                      border: "1px solid #ccc",
+                      maxWidth: "20rem",
+                    }}
+                  >
+                    {students
+                      .filter((s) => {
+                        const q = pbisStudentSearch.toLowerCase();
+                        return (
+                          s.firstName.toLowerCase().includes(q) ||
+                          s.lastName.toLowerCase().includes(q) ||
+                          s.studentId.toLowerCase().includes(q)
+                        );
+                      })
+                      .map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "0.25rem 0.5rem",
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                            }}
+                            onClick={() => {
+                              setPbisStudentId(s.studentId);
+                              setPbisStudentSearch(
+                                `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                              );
+                            }}
+                          >
+                            {s.studentId} - {s.firstName} {s.lastName}
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                )
+              )}
+            </div>
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label>
+                Reason:{" "}
+                <select
+                  value={pbisReason}
+                  onChange={(e) => setPbisReason(e.target.value)}
+                >
+                  {pbisReasonOptions.map((r) => (
+                    <option key={r} value={r}>
+                      {r}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label>
+                Points:{" "}
+                <input
+                  type="number"
+                  value={pbisPoints}
+                  onChange={(e) => setPbisPoints(e.target.value)}
+                  style={{ width: "5rem" }}
+                />
+              </label>
+            </div>
+            <button type="submit" disabled={!pbisStudentId}>
+              Save PBIS Entry
+            </button>
+          </form>
+
+          <h3>Recent PBIS Entries</h3>
+          <table
+            border={1}
+            cellPadding={6}
+            style={{ borderCollapse: "collapse" }}
+          >
+            <thead>
+              <tr>
+                <th>studentId</th>
+                <th>name</th>
+                <th>reason</th>
+                <th>points</th>
+                <th>createdAt</th>
+              </tr>
+            </thead>
+            <tbody>
+              {[...pbisEntries].reverse().map((entry) => {
+                const s = students.find(
+                  (s) => s.studentId === entry.studentId,
+                );
+                return (
+                  <tr key={entry.id}>
+                    <td>{entry.studentId}</td>
+                    <td>{s ? `${s.firstName} ${s.lastName}` : "-"}</td>
+                    <td>{entry.reason}</td>
+                    <td>{entry.points}</td>
+                    <td>{entry.createdAt}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
         </section>
       )}
     </div>
