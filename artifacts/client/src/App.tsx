@@ -106,6 +106,9 @@ function App() {
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [emailStatus, setEmailStatus] = useState("");
+  const [emailMessageType, setEmailMessageType] = useState<
+    "positive" | "pbis" | "attendance" | "checkInOut"
+  >("positive");
 
   const [pbisEntries, setPbisEntries] = useState<PbisEntry[]>([]);
   const [pbisStudentId, setPbisStudentId] = useState("");
@@ -1025,7 +1028,7 @@ function App() {
                 const studentTardies = tardies.filter(
                   (t) => t.studentId === activityStudentId,
                 );
-                const recent = studentPbis
+                const recentPbis = studentPbis
                   .slice()
                   .reverse()
                   .slice(0, 3)
@@ -1034,17 +1037,81 @@ function App() {
                       `  - ${e.reason} (${e.points} pts) on ${e.createdAt}`,
                   )
                   .join("\n");
-                const body =
-                  `Hello,\n\n` +
-                  `Here is a quick activity update for ${studentName}:\n\n` +
-                  `PBIS Points: ${totalPoints}\n` +
-                  `PBIS Entries: ${studentPbis.length}\n` +
-                  `Hall Passes: ${studentPasses.length}\n` +
-                  `Tardy / Support Logs: ${studentTardies.length}\n` +
-                  (recent
-                    ? `\nRecent PBIS activity:\n${recent}\n`
-                    : "") +
-                  `\nThank you,\nSchool Operations`;
+                const tardyOnly = studentTardies.filter(
+                  (t) => t.entryType === "tardy",
+                );
+                const checkIns = studentTardies.filter(
+                  (t) => t.entryType === "checkin",
+                );
+                const checkOuts = studentTardies.filter(
+                  (t) => t.entryType === "checkout",
+                );
+                const recentTardies = tardyOnly
+                  .slice()
+                  .reverse()
+                  .slice(0, 3)
+                  .map(
+                    (t) =>
+                      `  - Period ${t.period}${t.reason ? ` (${t.reason})` : ""} on ${t.createdAt}`,
+                  )
+                  .join("\n");
+                const recentCheckInOut = [...checkIns, ...checkOuts]
+                  .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+                  .slice(0, 3)
+                  .map(
+                    (t) =>
+                      `  - ${t.entryType === "checkin" ? "Check-In" : "Check-Out"} with ${t.checkInWith ?? "-"} on ${t.createdAt}`,
+                  )
+                  .join("\n");
+
+                let subject = "Student Activity Update";
+                let body = "";
+                if (emailMessageType === "positive") {
+                  subject = `Positive Update for ${studentName}`;
+                  body =
+                    `Hello,\n\n` +
+                    `We wanted to share a positive update about ${studentName}.\n\n` +
+                    `PBIS Points: ${totalPoints}\n` +
+                    `PBIS Entries: ${studentPbis.length}\n` +
+                    (recentPbis
+                      ? `\nRecent recognitions:\n${recentPbis}\n`
+                      : "") +
+                    `\nThank you,\nSchool Operations`;
+                } else if (emailMessageType === "pbis") {
+                  subject = `PBIS Recognition for ${studentName}`;
+                  body =
+                    `Hello,\n\n` +
+                    `${studentName} has been recognized for positive behavior.\n\n` +
+                    `Total PBIS Points: ${totalPoints}\n` +
+                    `Total PBIS Entries: ${studentPbis.length}\n` +
+                    (recentPbis
+                      ? `\nRecent PBIS recognitions:\n${recentPbis}\n`
+                      : "\nNo PBIS entries yet.\n") +
+                    `\nThank you,\nSchool Operations`;
+                } else if (emailMessageType === "attendance") {
+                  subject = `Attendance / Tardy Concern for ${studentName}`;
+                  body =
+                    `Hello,\n\n` +
+                    `We are reaching out regarding ${studentName}'s attendance.\n\n` +
+                    `Total Tardies: ${tardyOnly.length}\n` +
+                    `Total Support Logs: ${studentTardies.length}\n` +
+                    (recentTardies
+                      ? `\nRecent tardies:\n${recentTardies}\n`
+                      : "\nNo recent tardies on record.\n") +
+                    `\nPlease reach out if you have any questions.\n\n` +
+                    `Thank you,\nSchool Operations`;
+                } else {
+                  subject = `Check-In / Check-Out Notice for ${studentName}`;
+                  body =
+                    `Hello,\n\n` +
+                    `This is a notice regarding ${studentName}'s check-in / check-out activity.\n\n` +
+                    `Check-Ins: ${checkIns.length}\n` +
+                    `Check-Outs: ${checkOuts.length}\n` +
+                    (recentCheckInOut
+                      ? `\nRecent activity:\n${recentCheckInOut}\n`
+                      : "\nNo recent check-in/check-out activity on record.\n") +
+                    `\nThank you,\nSchool Operations`;
+                }
                 const sendEmail = async () => {
                   setEmailStatus("Sending...");
                   try {
@@ -1053,7 +1120,7 @@ function App() {
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
                         studentName,
-                        subject: "Student Activity Update",
+                        subject,
                         body,
                       }),
                     });
@@ -1068,6 +1135,28 @@ function App() {
                 };
                 return (
                   <div style={{ marginBottom: "0.5rem" }}>
+                    <div style={{ marginBottom: "0.25rem" }}>
+                      <label>
+                        Message Type:{" "}
+                        <select
+                          value={emailMessageType}
+                          onChange={(e) =>
+                            setEmailMessageType(
+                              e.target.value as typeof emailMessageType,
+                            )
+                          }
+                        >
+                          <option value="positive">Positive Update</option>
+                          <option value="pbis">PBIS Recognition</option>
+                          <option value="attendance">
+                            Attendance / Tardy Concern
+                          </option>
+                          <option value="checkInOut">
+                            Check-In / Check-Out Notice
+                          </option>
+                        </select>
+                      </label>
+                    </div>
                     <button
                       type="button"
                       onClick={sendEmail}
