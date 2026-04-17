@@ -4,6 +4,7 @@ import {
   getNextHallPassId,
   type HallPass,
 } from "../data/hallPasses";
+import { config } from "../data/config";
 
 const router: IRouter = Router();
 
@@ -12,10 +13,16 @@ router.get("/hall-passes", (_req, res) => {
 });
 
 router.post("/hall-passes", (req, res) => {
-  const { studentId, destination } = req.body ?? {};
+  const { studentId, destination, originRoom } = req.body ?? {};
 
-  if (typeof studentId !== "string" || typeof destination !== "string") {
-    res.status(400).json({ error: "studentId and destination are required" });
+  if (
+    typeof studentId !== "string" ||
+    typeof destination !== "string" ||
+    typeof originRoom !== "string"
+  ) {
+    res
+      .status(400)
+      .json({ error: "studentId, destination, and originRoom are required" });
     return;
   }
 
@@ -23,8 +30,10 @@ router.post("/hall-passes", (req, res) => {
     id: getNextHallPassId(),
     studentId,
     destination,
+    originRoom,
     status: "active",
     createdAt: new Date().toISOString(),
+    maxDurationMinutes: config.defaultHallPassDurationMinutes,
   };
 
   hallPasses.push(pass);

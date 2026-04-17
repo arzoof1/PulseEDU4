@@ -2,8 +2,10 @@ export interface HallPass {
   id: number;
   studentId: string;
   destination: string;
+  originRoom: string;
   status: "active" | "ended";
   createdAt: string;
+  maxDurationMinutes: number;
 }
 
 export const hallPasses: HallPass[] = [];
