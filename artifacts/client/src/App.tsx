@@ -33,6 +33,15 @@ interface HallPass {
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 
+const staffUsers = [
+  "Ms. Rivera",
+  "Mr. Johnson",
+  "Coach Lee",
+  "Ms. Patel (Counselor)",
+  "Mr. Davis (Admin)",
+  "Ms. Garcia (Interventionist)",
+];
+
 interface Tardy {
   id: number;
   studentId: string;
@@ -100,6 +109,7 @@ function App() {
   const [tardies, setTardies] = useState<Tardy[]>([]);
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
+  const [currentStaffUser, setCurrentStaffUser] = useState(staffUsers[0]);
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
     "hallPasses" | "tardies" | "student" | "pbis"
@@ -191,7 +201,7 @@ function App() {
           studentId: pbisStudentId,
           reason: option.reason,
           points: option.points,
-          staffName: selectedTeacher,
+          staffName: currentStaffUser,
         }),
       });
       if (!res.ok) throw new Error("Failed to save PBIS entry");
@@ -218,7 +228,7 @@ function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentId: tardyStudentId,
-          teacherName: selectedTeacher,
+          teacherName: currentStaffUser,
           period: tardyPeriod,
           reason: tardyEntryType === "tardy" ? tardyReason : "",
           entryType: tardyEntryType,
@@ -320,6 +330,22 @@ function App() {
   return (
     <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
       <h1>School Operations App - MVP</h1>
+
+      <div style={{ marginBottom: "1rem" }}>
+        <label>
+          <strong>Current Staff User:</strong>{" "}
+          <select
+            value={currentStaffUser}
+            onChange={(e) => setCurrentStaffUser(e.target.value)}
+          >
+            {staffUsers.map((u) => (
+              <option key={u} value={u}>
+                {u}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       <div style={{ marginBottom: "1rem" }}>
         <label>
