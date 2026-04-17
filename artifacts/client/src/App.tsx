@@ -162,6 +162,7 @@ function App() {
   >("summary");
   const [accView, setAccView] = useState<"student" | "roster">("student");
   const [rosterAccommodation, setRosterAccommodation] = useState("");
+  const [accStudentId, setAccStudentId] = useState("");
   const [emailStatus, setEmailStatus] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
@@ -1613,8 +1614,9 @@ function App() {
               </>)}
 
               {studentTab === "accommodations" && (() => {
+                const effectiveStudentId = accStudentId || activityStudentId;
                 const s = students.find(
-                  (st) => st.studentId === activityStudentId,
+                  (st) => st.studentId === effectiveStudentId,
                 );
                 const accs = s?.accommodations ?? [];
                 const allAccs = Array.from(
@@ -1635,32 +1637,45 @@ function App() {
                       marginBottom: "1rem",
                     }}
                   >
-                    <div style={{ marginBottom: "0.5rem" }}>
-                      <label style={{ marginRight: "0.5rem" }}>
-                        <input
-                          type="radio"
-                          name="accView"
-                          value="student"
-                          checked={accView === "student"}
-                          onChange={() => setAccView("student")}
-                        />{" "}
-                        Selected Student
-                      </label>
-                      <label>
-                        <input
-                          type="radio"
-                          name="accView"
-                          value="roster"
-                          checked={accView === "roster"}
-                          onChange={() => setAccView("roster")}
-                        />{" "}
-                        Roster by Accommodation
-                      </label>
+                    <div style={{ marginBottom: "0.75rem" }}>
+                      <button
+                        type="button"
+                        onClick={() => setAccView("student")}
+                        disabled={accView === "student"}
+                        style={{ marginRight: "0.25rem" }}
+                      >
+                        By Student
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setAccView("roster")}
+                        disabled={accView === "roster"}
+                      >
+                        By Accommodation Roster
+                      </button>
                     </div>
                     {accView === "student" ? (
                       <>
                         <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
-                        {accs.length === 0 ? (
+                        <div style={{ marginBottom: "0.5rem" }}>
+                          <label>
+                            Student:{" "}
+                            <select
+                              value={effectiveStudentId}
+                              onChange={(e) => setAccStudentId(e.target.value)}
+                            >
+                              <option value="">-- Select --</option>
+                              {students.map((st) => (
+                                <option key={st.studentId} value={st.studentId}>
+                                  {st.firstName} {st.lastName} ({st.studentId})
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                        </div>
+                        {!effectiveStudentId ? (
+                          <div>Please select a student.</div>
+                        ) : accs.length === 0 ? (
                           <div>No accommodations on file</div>
                         ) : (
                           <ul style={{ margin: 0 }}>
