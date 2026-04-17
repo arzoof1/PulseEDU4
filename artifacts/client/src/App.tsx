@@ -1344,6 +1344,10 @@ function App() {
                       : "\nNo recent check-in/check-out activity on record.\n") +
                     `\nThank you,\nSchool Operations`;
                 }
+                const parentEmailValue = (student?.parentEmail ?? "").trim();
+                const recipientLabel = parentEmailValue
+                  ? `Sending to: ${parentEmailValue}`
+                  : "No parent email on file — using test email";
                 const sendEmail = async () => {
                   setEmailStatus("Sending...");
                   try {
@@ -1354,6 +1358,7 @@ function App() {
                         studentName,
                         subject,
                         body,
+                        parentEmail: parentEmailValue,
                       }),
                     });
                     if (!res.ok) throw new Error("Failed to send");
@@ -1388,6 +1393,9 @@ function App() {
                           </option>
                         </select>
                       </label>
+                    </div>
+                    <div style={{ marginBottom: "0.25rem" }}>
+                      {recipientLabel}
                     </div>
                     <button
                       type="button"
