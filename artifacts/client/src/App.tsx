@@ -33,6 +33,16 @@ interface HallPass {
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 
+function getTimeStatusColor(pass: HallPass, now: number): string {
+  if (pass.status === "ended") return "gray";
+  const totalMs = pass.maxDurationMinutes * 60 * 1000;
+  const expiresAt = new Date(pass.createdAt).getTime() + totalMs;
+  const remainingMs = expiresAt - now;
+  if (remainingMs <= 0) return "red";
+  if (remainingMs < totalMs / 2) return "yellow";
+  return "green";
+}
+
 function formatTimeStatus(pass: HallPass, now: number): string {
   if (pass.status === "ended") return "Ended";
   const expiresAt =
@@ -371,7 +381,9 @@ function App() {
               <td>{p.status}</td>
               <td>{p.maxDurationMinutes}</td>
               <td>{p.createdAt}</td>
-              <td>{formatTimeStatus(p, now)}</td>
+              <td style={{ backgroundColor: getTimeStatusColor(p, now) }}>
+                {formatTimeStatus(p, now)}
+              </td>
               <td>
                 {p.status === "active" ? (
                   <button onClick={() => handleEndPass(p.id)}>End Pass</button>
