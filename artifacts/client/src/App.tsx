@@ -1004,6 +1004,23 @@ function App() {
                 </tbody>
               </table>
 
+              <h3>PBIS Summary</h3>
+              {(() => {
+                const studentPbis = pbisEntries.filter(
+                  (e) => e.studentId === activityStudentId,
+                );
+                const totalPoints = studentPbis.reduce(
+                  (sum, e) => sum + e.points,
+                  0,
+                );
+                return (
+                  <div style={{ marginBottom: "0.5rem" }}>
+                    <div>PBIS Entries: {studentPbis.length}</div>
+                    <div>PBIS Points: {totalPoints}</div>
+                  </div>
+                );
+              })()}
+
               <h3>PBIS Entries</h3>
               <ul>
                 {pbisEntries
