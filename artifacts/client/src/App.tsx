@@ -77,6 +77,21 @@ function App() {
     loadHallPasses();
   }, []);
 
+  const handleEndPass = async (id: number) => {
+    try {
+      const res = await fetch(`/api/hall-passes/${id}/end`, {
+        method: "PATCH",
+      });
+      if (!res.ok) {
+        console.error("Failed to end hall pass:", await res.text());
+        return;
+      }
+      loadHallPasses();
+    } catch (err) {
+      console.error("Failed to end hall pass:", err);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedStudentId || !destination || !originRoom) return;
@@ -203,6 +218,7 @@ function App() {
             <th>maxDurationMinutes</th>
             <th>createdAt</th>
             <th>Time Status</th>
+            <th>Actions</th>
           </tr>
         </thead>
         <tbody>
@@ -215,6 +231,13 @@ function App() {
               <td>{p.maxDurationMinutes}</td>
               <td>{p.createdAt}</td>
               <td>{formatTimeStatus(p, now)}</td>
+              <td>
+                {p.status === "active" ? (
+                  <button onClick={() => handleEndPass(p.id)}>End Pass</button>
+                ) : (
+                  "-"
+                )}
+              </td>
             </tr>
           ))}
         </tbody>
