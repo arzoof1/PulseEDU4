@@ -39,8 +39,17 @@ interface Tardy {
   teacherName: string;
   period: string;
   reason: string;
+  entryType: "tardy" | "checkin";
+  checkInWith: string | null;
   createdAt: string;
 }
+
+const checkInWithOptions = [
+  "Counselor",
+  "Interventionist",
+  "Behavior Specialist",
+  "Trusted Adult",
+];
 
 function getTimeStatusColor(pass: HallPass, now: number): string {
   if (pass.status === "ended") return "gray";
@@ -76,10 +85,14 @@ function App() {
   const [destination, setDestination] = useState("");
   const [originRoom, setOriginRoom] = useState("");
 
+  const [tardyEntryType, setTardyEntryType] = useState<"tardy" | "checkin">(
+    "tardy",
+  );
   const [tardyStudentId, setTardyStudentId] = useState("");
   const [tardyStudentSearch, setTardyStudentSearch] = useState("");
   const [tardyPeriod, setTardyPeriod] = useState("");
   const [tardyReason, setTardyReason] = useState("");
+  const [tardyCheckInWith, setTardyCheckInWith] = useState("");
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -119,7 +132,8 @@ function App() {
 
   const handleTardySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!tardyStudentId || !tardyPeriod || !tardyReason) return;
+    if (!tardyStudentId || !tardyPeriod) return;
+    if (tardyEntryType === "checkin" && !tardyCheckInWith) return;
     try {
       const res = await fetch("/api/tardies", {
         method: "POST",
@@ -128,7 +142,9 @@ function App() {
           studentId: tardyStudentId,
           teacherName: selectedTeacher,
           period: tardyPeriod,
-          reason: tardyReason,
+          reason: tardyEntryType === "tardy" ? tardyReason : "",
+          entryType: tardyEntryType,
+          checkInWith: tardyEntryType === "checkin" ? tardyCheckInWith : null,
         }),
       });
       if (!res.ok) {
@@ -139,6 +155,7 @@ function App() {
       setTardyStudentSearch("");
       setTardyPeriod("");
       setTardyReason("");
+      setTardyCheckInWith("");
       loadTardies();
     } catch (err) {
       console.error("Failed to create tardy:", err);
@@ -452,6 +469,20 @@ function App() {
       <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
           <label>
+            Entry Type:{" "}
+            <select
+              value={tardyEntryType}
+              onChange={(e) =>
+                setTardyEntryType(e.target.value as "tardy" | "checkin")
+              }
+            >
+              <option value="tardy">Tardy</option>
+              <option value="checkin">Check-In</option>
+            </select>
+          </label>
+        </div>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
             Student:{" "}
             <input
               type="text"
@@ -558,18 +589,40 @@ function App() {
             </select>
           </label>
         </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Reason:{" "}
-            <input
-              type="text"
-              value={tardyReason}
-              onChange={(e) => setTardyReason(e.target.value)}
-              required
-            />
-          </label>
-        </div>
-        <button type="submit">Log Tardy</button>
+        {tardyEntryType === "tardy" && (
+          <div style={{ marginBottom: "0.5rem" }}>
+            <label>
+              Reason:{" "}
+              <input
+                type="text"
+                value={tardyReason}
+                onChange={(e) => setTardyReason(e.target.value)}
+              />
+            </label>
+          </div>
+        )}
+        {tardyEntryType === "checkin" && (
+          <div style={{ marginBottom: "0.5rem" }}>
+            <label>
+              Check-In With:{" "}
+              <select
+                value={tardyCheckInWith}
+                onChange={(e) => setTardyCheckInWith(e.target.value)}
+                required
+              >
+                <option value="">-- select --</option>
+                {checkInWithOptions.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+        )}
+        <button type="submit">
+          {tardyEntryType === "tardy" ? "Log Tardy" : "Log Check-In"}
+        </button>
       </form>
 
       <h2>Tardy / Check-Ins</h2>
@@ -578,8 +631,10 @@ function App() {
           <tr>
             <th>studentId</th>
             <th>teacherName</th>
+            <th>entryType</th>
             <th>period</th>
             <th>reason</th>
+            <th>checkInWith</th>
             <th>createdAt</th>
           </tr>
         </thead>
@@ -588,8 +643,10 @@ function App() {
             <tr key={t.id}>
               <td>{t.studentId}</td>
               <td>{t.teacherName}</td>
+              <td>{t.entryType}</td>
               <td>{t.period}</td>
               <td>{t.reason}</td>
+              <td>{t.checkInWith ?? "-"}</td>
               <td>{t.createdAt}</td>
             </tr>
           ))}
