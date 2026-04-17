@@ -93,6 +93,10 @@ function App() {
     "tardy" | "checkin" | "checkout"
   >("tardy");
   const [tardyNotes, setTardyNotes] = useState("");
+  const [tardyCreateReturnPass, setTardyCreateReturnPass] = useState(false);
+  const [tardyReturnPassTeacher, setTardyReturnPassTeacher] = useState(
+    teachers[0],
+  );
   const [tardyStudentId, setTardyStudentId] = useState("");
   const [tardyStudentSearch, setTardyStudentSearch] = useState("");
   const [tardyPeriod, setTardyPeriod] = useState("");
@@ -170,6 +174,34 @@ function App() {
       setTardyReason("");
       setTardyCheckInWith("");
       setTardyNotes("");
+
+      if (tardyEntryType === "tardy" && tardyCreateReturnPass) {
+        try {
+          const passRes = await fetch("/api/hall-passes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId: tardyStudentId,
+              destination: "Return to Class",
+              originRoom: "Front Office",
+              teacherName: tardyReturnPassTeacher,
+            }),
+          });
+          if (!passRes.ok) {
+            console.error(
+              "Failed to create return pass:",
+              await passRes.text(),
+            );
+          } else {
+            loadHallPasses();
+          }
+        } catch (err) {
+          console.error("Failed to create return pass:", err);
+        }
+      }
+
+      setTardyCreateReturnPass(false);
+      setTardyReturnPassTeacher(teachers[0]);
       loadTardies();
     } catch (err) {
       console.error("Failed to create tardy:", err);
@@ -616,6 +648,35 @@ function App() {
                 onChange={(e) => setTardyReason(e.target.value)}
               />
             </label>
+          </div>
+        )}
+        {tardyEntryType === "tardy" && (
+          <div style={{ marginBottom: "0.5rem" }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={tardyCreateReturnPass}
+                onChange={(e) => setTardyCreateReturnPass(e.target.checked)}
+              />{" "}
+              Create return pass to class
+            </label>
+            {tardyCreateReturnPass && (
+              <div style={{ marginTop: "0.25rem" }}>
+                <label>
+                  Receiving Teacher:{" "}
+                  <select
+                    value={tardyReturnPassTeacher}
+                    onChange={(e) => setTardyReturnPassTeacher(e.target.value)}
+                  >
+                    {teachers.map((t) => (
+                      <option key={t} value={t}>
+                        {t}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+            )}
           </div>
         )}
         {(tardyEntryType === "checkin" || tardyEntryType === "checkout") && (

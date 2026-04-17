@@ -1,0 +1,71 @@
+Make only the requested change.
+
+Important rules:
+
+* Make only the requested change
+* Keep changes minimal
+* Do not break existing functionality
+* Do not refactor unrelated code
+* Do not add authentication yet unless requested
+* Do not add new pages unless requested
+* Tell me exactly what files changed
+* Tell me exactly what to test
+
+Task:
+Update the Tardy logging workflow so a tardy entry can optionally create a return-to-class hall pass at the same time.
+
+Requirements:
+
+GOAL:
+When logging a tardy, staff should be able to optionally create a hall pass back to class so they do not have to log the tardy and then separately create a hall pass.
+
+FRONTEND:
+
+1. Keep everything on the existing main page only.
+2. In the Tardy / Check-In / Check-Out form:
+
+   * only for entryType = "tardy"
+   * add an optional checkbox or toggle:
+
+     * "Create return pass to class"
+3. If checked, show:
+
+   * a receiving teacher selector
+4. Use the existing sample teacher list for the receiving teacher selector.
+5. Keep the current selected staff member as the person logging the tardy.
+6. Keep UI simple.
+
+BACKEND / WORKFLOW:
+7. Preserve the existing tardy logging behavior.
+8. When a tardy is submitted with "Create return pass to class" enabled:
+
+* still create the tardy record
+* also create a new hall pass
+
+9. The new hall pass should:
+
+   * use the selected studentId
+   * have status = active
+   * have createdAt set automatically
+   * start the timer normally
+   * be assigned to the selected receiving teacher so it appears under that teacher’s "My Passes"
+10. Keep the hall pass implementation consistent with the existing model.
+11. For now, use a simple destination value such as:
+
+* "Return to Class"
+
+12. For now, use a simple originRoom value such as:
+
+* "Front Office"
+  or another simple fixed value already used in the app, unless a better existing option is already available.
+
+13. Do not add true teacher-of-record schedule logic yet.
+14. Do not remove any current features.
+
+At the end, tell me:
+
+* Files changed
+* Do I need to restart anything
+* Exact URL to open in Preview
+* Exact steps to test
+* What I should see if it worked
