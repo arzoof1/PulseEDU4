@@ -1,14 +1,14 @@
 import { useEffect, useState } from "react";
 
 const destinationsByRoom: Record<string, string[]> = {
-  "Room 101": ["Restroom", "Nurse", "Front Office"],
-  "Room 102": ["Restroom", "Front Office"],
-  "Room 201": ["Restroom", "Library", "Guidance"],
-  "Room 202": ["Restroom", "Nurse"],
-  "Room 204": ["Library", "Restroom", "Guidance"],
-  "Room 305": ["Restroom", "Media Center", "Front Office"],
+  "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
+  "Room 102": ["Boys Restroom", "Girls Restroom", "Front Office"],
+  "Room 201": ["Boys Restroom", "Girls Restroom", "Library", "Guidance"],
+  "Room 202": ["Boys Restroom", "Girls Restroom", "Nurse"],
+  "Room 204": ["Library", "Boys Restroom", "Girls Restroom", "Guidance"],
+  "Room 305": ["Boys Restroom", "Girls Restroom", "Media Center", "Front Office"],
   "Gym": ["Nurse", "Front Office", "Cafeteria"],
-  "Cafeteria": ["Restroom", "Nurse", "Front Office"],
+  "Cafeteria": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
 };
 
 interface Student {
