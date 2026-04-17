@@ -53,7 +53,8 @@ router.patch("/hall-passes/:id/end", (req, res) => {
     return;
   }
 
-  pass.status = "ended";
+  const system = req.body?.system === true;
+  pass.status = system ? "system_ended" : "ended";
   pass.endedAt = new Date().toISOString();
   res.json(pass);
 });

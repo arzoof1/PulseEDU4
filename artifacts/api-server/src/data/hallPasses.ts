@@ -4,7 +4,7 @@ export interface HallPass {
   destination: string;
   originRoom: string;
   teacherName: string;
-  status: "active" | "ended";
+  status: "active" | "ended" | "system_ended";
   createdAt: string;
   maxDurationMinutes: number;
   endedAt: string | null;

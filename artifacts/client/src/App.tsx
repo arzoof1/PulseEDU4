@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -92,7 +92,7 @@ function isCreatedToday(createdAt: string): boolean {
 }
 
 function getTimeStatusColor(pass: HallPass, now: number): string {
-  if (pass.status === "ended") return "gray";
+  if (pass.status !== "active") return "gray";
   const totalMs = pass.maxDurationMinutes * 60 * 1000;
   const expiresAt = new Date(pass.createdAt).getTime() + totalMs;
   const remainingMs = expiresAt - now;
@@ -102,6 +102,7 @@ function getTimeStatusColor(pass: HallPass, now: number): string {
 }
 
 function formatTimeStatus(pass: HallPass, now: number): string {
+  if (pass.status === "system_ended") return "System Ended";
   if (pass.status === "ended") return "Ended";
   const expiresAt =
     new Date(pass.createdAt).getTime() + pass.maxDurationMinutes * 60 * 1000;
@@ -161,6 +162,34 @@ function App() {
     const interval = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(interval);
   }, []);
+
+  const systemEndingRef = useRef<Set<number>>(new Set());
+  useEffect(() => {
+    const SYSTEM_END_MS = 15 * 60 * 1000;
+    for (const p of hallPasses) {
+      if (p.status !== "active") continue;
+      if (systemEndingRef.current.has(p.id)) continue;
+      const elapsed = now - new Date(p.createdAt).getTime();
+      if (elapsed >= SYSTEM_END_MS) {
+        systemEndingRef.current.add(p.id);
+        fetch(`/api/hall-passes/${p.id}/end`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ system: true }),
+        })
+          .then((res) => {
+            if (!res.ok) {
+              systemEndingRef.current.delete(p.id);
+              return;
+            }
+            loadHallPasses();
+          })
+          .catch(() => {
+            systemEndingRef.current.delete(p.id);
+          });
+      }
+    }
+  }, [now, hallPasses]);
 
   const loadHallPasses = () => {
     fetch("/api/hall-passes")
@@ -423,7 +452,7 @@ function App() {
         let overdue = 0;
         let ended = 0;
         for (const p of hallPasses) {
-          if (p.status === "ended") {
+          if (p.status !== "active") {
             ended++;
           } else if (p.status === "active") {
             const expiresAt =
@@ -639,7 +668,7 @@ function App() {
               <td>{p.teacherName}</td>
               <td>{p.destination}</td>
               <td>{p.originRoom}</td>
-              <td>{p.status}</td>
+              <td>{p.status === "system_ended" ? "System Ended" : p.status}</td>
               <td>{p.maxDurationMinutes}</td>
               <td>{p.createdAt}</td>
               <td style={{ backgroundColor: getTimeStatusColor(p, now) }}>
@@ -1029,7 +1058,7 @@ function App() {
                         <td>{p.teacherName}</td>
                         <td>{p.destination}</td>
                         <td>{p.originRoom}</td>
-                        <td>{p.status}</td>
+                        <td>{p.status === "system_ended" ? "System Ended" : p.status}</td>
                         <td>{p.createdAt}</td>
                         <td>{p.endedAt ?? "-"}</td>
                       </tr>
