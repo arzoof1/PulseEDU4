@@ -3,6 +3,7 @@ export interface HallPass {
   studentId: string;
   destination: string;
   originRoom: string;
+  teacherName: string;
   status: "active" | "ended";
   createdAt: string;
   maxDurationMinutes: number;

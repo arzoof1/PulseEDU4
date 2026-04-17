@@ -24,11 +24,14 @@ interface HallPass {
   studentId: string;
   destination: string;
   originRoom: string;
+  teacherName: string;
   status: string;
   maxDurationMinutes: number;
   createdAt: string;
   endedAt: string | null;
 }
+
+const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 
 function formatTimeStatus(pass: HallPass, now: number): string {
   if (pass.status === "ended") return "Ended";
@@ -46,6 +49,7 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
 
+  const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -105,6 +109,7 @@ function App() {
           studentId: selectedStudentId,
           destination,
           originRoom,
+          teacherName: selectedTeacher,
         }),
       });
       if (!res.ok) {
@@ -124,6 +129,22 @@ function App() {
   return (
     <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
       <h1>School Operations App - MVP</h1>
+
+      <div style={{ marginBottom: "1rem" }}>
+        <label>
+          Teacher:{" "}
+          <select
+            value={selectedTeacher}
+            onChange={(e) => setSelectedTeacher(e.target.value)}
+          >
+            {teachers.map((t) => (
+              <option key={t} value={t}>
+                {t}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
 
       {(() => {
         let active = 0;
@@ -309,6 +330,7 @@ function App() {
         <thead>
           <tr>
             <th>studentId</th>
+            <th>teacher</th>
             <th>destination</th>
             <th>originRoom</th>
             <th>status</th>
@@ -322,6 +344,7 @@ function App() {
           {hallPasses.map((p) => (
             <tr key={p.id}>
               <td>{p.studentId}</td>
+              <td>{p.teacherName}</td>
               <td>{p.destination}</td>
               <td>{p.originRoom}</td>
               <td>{p.status}</td>

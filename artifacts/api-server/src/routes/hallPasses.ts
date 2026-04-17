@@ -13,16 +13,18 @@ router.get("/hall-passes", (_req, res) => {
 });
 
 router.post("/hall-passes", (req, res) => {
-  const { studentId, destination, originRoom } = req.body ?? {};
+  const { studentId, destination, originRoom, teacherName } = req.body ?? {};
 
   if (
     typeof studentId !== "string" ||
     typeof destination !== "string" ||
-    typeof originRoom !== "string"
+    typeof originRoom !== "string" ||
+    typeof teacherName !== "string"
   ) {
-    res
-      .status(400)
-      .json({ error: "studentId, destination, and originRoom are required" });
+    res.status(400).json({
+      error:
+        "studentId, destination, originRoom, and teacherName are required",
+    });
     return;
   }
 
@@ -31,6 +33,7 @@ router.post("/hall-passes", (req, res) => {
     studentId,
     destination,
     originRoom,
+    teacherName,
     status: "active",
     createdAt: new Date().toISOString(),
     maxDurationMinutes: config.defaultHallPassDurationMinutes,
