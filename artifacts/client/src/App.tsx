@@ -75,6 +75,11 @@ function App() {
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
   const [originRoom, setOriginRoom] = useState("");
+
+  const [tardyStudentId, setTardyStudentId] = useState("");
+  const [tardyStudentSearch, setTardyStudentSearch] = useState("");
+  const [tardyPeriod, setTardyPeriod] = useState("");
+  const [tardyReason, setTardyReason] = useState("");
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -102,11 +107,43 @@ function App() {
 
     loadHallPasses();
 
+    loadTardies();
+  }, []);
+
+  const loadTardies = () => {
     fetch("/api/tardies")
       .then((res) => res.json())
       .then((data: Tardy[]) => setTardies(data))
       .catch((err) => console.error("Failed to load tardies:", err));
-  }, []);
+  };
+
+  const handleTardySubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!tardyStudentId || !tardyPeriod || !tardyReason) return;
+    try {
+      const res = await fetch("/api/tardies", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: tardyStudentId,
+          teacherName: selectedTeacher,
+          period: tardyPeriod,
+          reason: tardyReason,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Failed to create tardy:", await res.text());
+        return;
+      }
+      setTardyStudentId("");
+      setTardyStudentSearch("");
+      setTardyPeriod("");
+      setTardyReason("");
+      loadTardies();
+    } catch (err) {
+      console.error("Failed to create tardy:", err);
+    }
+  };
 
   const handleEndPass = async (id: number) => {
     try {
@@ -410,6 +447,130 @@ function App() {
           ))}
         </tbody>
       </table>
+
+      <h2>Log Tardy / Check-In</h2>
+      <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Student:{" "}
+            <input
+              type="text"
+              placeholder="Search by name or ID"
+              value={tardyStudentSearch}
+              onChange={(e) => {
+                setTardyStudentSearch(e.target.value);
+                setTardyStudentId("");
+              }}
+            />
+          </label>
+          {tardyStudentId ? (
+            <div style={{ marginTop: "0.25rem" }}>
+              Selected: <strong>{tardyStudentId}</strong>{" "}
+              {(() => {
+                const s = students.find(
+                  (s) => s.studentId === tardyStudentId,
+                );
+                return s ? `- ${s.firstName} ${s.lastName}` : "";
+              })()}{" "}
+              <button
+                type="button"
+                onClick={() => {
+                  setTardyStudentId("");
+                  setTardyStudentSearch("");
+                }}
+              >
+                Clear
+              </button>
+            </div>
+          ) : (
+            tardyStudentSearch && (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: "0.25rem 0",
+                  border: "1px solid #ccc",
+                  maxWidth: "20rem",
+                }}
+              >
+                {students
+                  .filter((s) => {
+                    const q = tardyStudentSearch.toLowerCase();
+                    return (
+                      s.firstName.toLowerCase().includes(q) ||
+                      s.lastName.toLowerCase().includes(q) ||
+                      s.studentId.toLowerCase().includes(q)
+                    );
+                  })
+                  .map((s) => (
+                    <li key={s.id}>
+                      <button
+                        type="button"
+                        style={{
+                          width: "100%",
+                          textAlign: "left",
+                          padding: "0.25rem 0.5rem",
+                          background: "none",
+                          border: "none",
+                          cursor: "pointer",
+                        }}
+                        onClick={() => {
+                          setTardyStudentId(s.studentId);
+                          setTardyStudentSearch(
+                            `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                          );
+                        }}
+                      >
+                        {s.studentId} - {s.firstName} {s.lastName}
+                      </button>
+                    </li>
+                  ))}
+                {students.filter((s) => {
+                  const q = tardyStudentSearch.toLowerCase();
+                  return (
+                    s.firstName.toLowerCase().includes(q) ||
+                    s.lastName.toLowerCase().includes(q) ||
+                    s.studentId.toLowerCase().includes(q)
+                  );
+                }).length === 0 && (
+                  <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
+                    No matches
+                  </li>
+                )}
+              </ul>
+            )
+          )}
+        </div>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Period:{" "}
+            <select
+              value={tardyPeriod}
+              onChange={(e) => setTardyPeriod(e.target.value)}
+              required
+            >
+              <option value="">-- select a period --</option>
+              {["1", "2", "3", "4", "5", "6", "7"].map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Reason:{" "}
+            <input
+              type="text"
+              value={tardyReason}
+              onChange={(e) => setTardyReason(e.target.value)}
+              required
+            />
+          </label>
+        </div>
+        <button type="submit">Log Tardy</button>
+      </form>
 
       <h2>Tardy / Check-Ins</h2>
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
