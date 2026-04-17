@@ -1007,6 +1007,17 @@ function App() {
                     ))}
                 </tbody>
               </table>
+
+              <h3>PBIS Entries</h3>
+              <ul>
+                {pbisEntries
+                  .filter((e) => e.studentId === activityStudentId)
+                  .map((e) => (
+                    <li key={e.id}>
+                      {e.reason} - {e.points} pts - {e.createdAt}
+                    </li>
+                  ))}
+              </ul>
             </>
           )}
         </section>
