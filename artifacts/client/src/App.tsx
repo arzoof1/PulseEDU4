@@ -33,6 +33,15 @@ interface HallPass {
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 
+interface Tardy {
+  id: number;
+  studentId: string;
+  teacherName: string;
+  period: string;
+  reason: string;
+  createdAt: string;
+}
+
 function getTimeStatusColor(pass: HallPass, now: number): string {
   if (pass.status === "ended") return "gray";
   const totalMs = pass.maxDurationMinutes * 60 * 1000;
@@ -58,6 +67,7 @@ function formatTimeStatus(pass: HallPass, now: number): string {
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
+  const [tardies, setTardies] = useState<Tardy[]>([]);
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
@@ -91,6 +101,11 @@ function App() {
       .catch((err) => console.error("Failed to load students:", err));
 
     loadHallPasses();
+
+    fetch("/api/tardies")
+      .then((res) => res.json())
+      .then((data: Tardy[]) => setTardies(data))
+      .catch((err) => console.error("Failed to load tardies:", err));
   }, []);
 
   const handleEndPass = async (id: number) => {
@@ -391,6 +406,30 @@ function App() {
                   "-"
                 )}
               </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2>Tardy / Check-Ins</h2>
+      <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
+        <thead>
+          <tr>
+            <th>studentId</th>
+            <th>teacherName</th>
+            <th>period</th>
+            <th>reason</th>
+            <th>createdAt</th>
+          </tr>
+        </thead>
+        <tbody>
+          {tardies.map((t) => (
+            <tr key={t.id}>
+              <td>{t.studentId}</td>
+              <td>{t.teacherName}</td>
+              <td>{t.period}</td>
+              <td>{t.reason}</td>
+              <td>{t.createdAt}</td>
             </tr>
           ))}
         </tbody>
