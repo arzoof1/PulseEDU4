@@ -22,6 +22,17 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
 
+  const [selectedStudentId, setSelectedStudentId] = useState("");
+  const [destination, setDestination] = useState("");
+  const [originRoom, setOriginRoom] = useState("");
+
+  const loadHallPasses = () => {
+    fetch("/api/hall-passes")
+      .then((res) => res.json())
+      .then((data: HallPass[]) => setHallPasses(data))
+      .catch((err) => console.error("Failed to load hall passes:", err));
+  };
+
   useEffect(() => {
     fetch("/api/health")
       .then((res) => res.json())
@@ -33,11 +44,34 @@ function App() {
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
 
-    fetch("/api/hall-passes")
-      .then((res) => res.json())
-      .then((data: HallPass[]) => setHallPasses(data))
-      .catch((err) => console.error("Failed to load hall passes:", err));
+    loadHallPasses();
   }, []);
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedStudentId || !destination || !originRoom) return;
+
+    try {
+      const res = await fetch("/api/hall-passes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: selectedStudentId,
+          destination,
+          originRoom,
+        }),
+      });
+      if (!res.ok) {
+        console.error("Failed to create hall pass:", await res.text());
+        return;
+      }
+      setDestination("");
+      setOriginRoom("");
+      loadHallPasses();
+    } catch (err) {
+      console.error("Failed to create hall pass:", err);
+    }
+  };
 
   return (
     <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
@@ -63,6 +97,50 @@ function App() {
           ))}
         </tbody>
       </table>
+
+      <h2>Create Hall Pass</h2>
+      <form onSubmit={handleSubmit} style={{ marginBottom: "1rem" }}>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Student:{" "}
+            <select
+              value={selectedStudentId}
+              onChange={(e) => setSelectedStudentId(e.target.value)}
+              required
+            >
+              <option value="">-- select a student --</option>
+              {students.map((s) => (
+                <option key={s.id} value={s.studentId}>
+                  {s.studentId} - {s.firstName} {s.lastName}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Destination:{" "}
+            <input
+              type="text"
+              value={destination}
+              onChange={(e) => setDestination(e.target.value)}
+              required
+            />
+          </label>
+        </div>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Origin Room:{" "}
+            <input
+              type="text"
+              value={originRoom}
+              onChange={(e) => setOriginRoom(e.target.value)}
+              required
+            />
+          </label>
+        </div>
+        <button type="submit">Create</button>
+      </form>
 
       <h2>Hall Passes</h2>
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
