@@ -6,6 +6,7 @@ import tardiesRouter from "./tardies";
 import pbisRouter from "./pbis";
 import supportNotesRouter from "./supportNotes";
 import emailRouter from "./email";
+import scheduleRouter from "./schedule";
 
 const router: IRouter = Router();
 
@@ -16,5 +17,6 @@ router.use(tardiesRouter);
 router.use(pbisRouter);
 router.use(supportNotesRouter);
 router.use(emailRouter);
+router.use(scheduleRouter);
 
 export default router;

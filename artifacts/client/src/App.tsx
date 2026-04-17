@@ -162,6 +162,8 @@ function App() {
   const [accView, setAccView] = useState<"student" | "roster">("student");
   const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [accStudentId, setAccStudentId] = useState("");
+  const [rosterPeriod, setRosterPeriod] = useState("");
+  const [periodRoster, setPeriodRoster] = useState<Record<string, string[]>>({});
   const [emailStatus, setEmailStatus] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
@@ -244,6 +246,13 @@ function App() {
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
+
+    fetch("/api/schedule")
+      .then((res) => res.json())
+      .then((data: { periodRoster: Record<string, string[]> }) =>
+        setPeriodRoster(data.periodRoster),
+      )
+      .catch((err) => console.error("Failed to load schedule:", err));
 
     loadHallPasses();
 
@@ -1634,9 +1643,14 @@ function App() {
             const allAccs = Array.from(
               new Set(students.flatMap((st) => st.accommodations ?? [])),
             ).sort();
+            const periodIds = rosterPeriod
+              ? new Set(periodRoster[rosterPeriod] ?? [])
+              : null;
             const rosterStudents = rosterAccommodation
-              ? students.filter((st) =>
-                  (st.accommodations ?? []).includes(rosterAccommodation),
+              ? students.filter(
+                  (st) =>
+                    (st.accommodations ?? []).includes(rosterAccommodation) &&
+                    (!periodIds || periodIds.has(st.studentId)),
                 )
               : [];
             return (
@@ -1698,6 +1712,22 @@ function App() {
                 ) : (
                   <>
                     <h3 style={{ marginTop: 0 }}>Roster by Accommodation</h3>
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label>
+                        Period:{" "}
+                        <select
+                          value={rosterPeriod}
+                          onChange={(e) => setRosterPeriod(e.target.value)}
+                        >
+                          <option value="">All Periods</option>
+                          {[1, 2, 3, 4, 5, 6, 7].map((p) => (
+                            <option key={p} value={String(p)}>
+                              Period {p}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
                     <div style={{ marginBottom: "0.5rem" }}>
                       <label>
                         Accommodation:{" "}

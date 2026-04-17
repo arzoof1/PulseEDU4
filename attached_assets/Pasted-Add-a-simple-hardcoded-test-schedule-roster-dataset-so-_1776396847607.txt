@@ -1,0 +1,69 @@
+Add a simple hardcoded **test schedule/roster dataset** so the new **Accommodations → By Accommodation Roster** period filtering can be meaningfully tested before Skyward integration.
+
+Requirements:
+
+* Preserve all current functionality
+* Make only the requested change
+* Keep implementation minimal
+* Do not refactor unrelated code
+* Keep everything on the existing main page
+* Keep UI simple
+* Do not add styling libraries
+
+Goal:
+Create a simple mock schedule structure for testing accommodation rosters by period.
+
+Build:
+
+* Create hardcoded test roster data for **Periods 1 through 7**
+* Use approximately **15 students in each period**
+* Reuse existing student records where possible
+* If needed, create enough additional mock student assignments so each period has a realistic roster size
+* Students may appear in multiple periods if that is easier and more realistic
+
+Accommodations:
+
+* Use the existing accommodation list
+* Assign varying accommodations across students
+* Some students should have:
+
+  * no accommodations
+  * one accommodation
+  * multiple accommodations
+
+Examples of accommodations to use:
+
+* Extended Time
+* Small Group Testing
+* Preferential Seating
+* Read Aloud Directions
+* Frequent Breaks
+* Reduced Distractions
+* Check for Understanding
+* Copies of Notes
+
+Behavior:
+
+* In **Accommodations → By Accommodation Roster**, when a period and accommodation are selected, show only students in that selected period who have that accommodation
+* Keep the student-specific accommodations view working
+* Keep the structure simple and easy to replace later with real Skyward-connected data
+
+Data design guidance:
+
+* Keep the mock roster/schedule data in a simple constant or data structure that can later be swapped out for live schedule data
+* Do not overengineer this
+* This is for testing and workflow validation only
+
+Do not:
+
+* connect Skyward yet
+* add automatic bell-schedule logic yet
+* add teacher-specific filtering yet unless already naturally supported
+* change Hall Pass, PBIS, Tardy, Support Notes, Contact, or Student Activity behavior
+
+When finished, tell me:
+
+* which files changed
+* whether I need to restart anything
+* exact steps to test
+* what I should see if it worked
