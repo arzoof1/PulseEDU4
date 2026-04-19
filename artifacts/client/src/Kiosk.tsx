@@ -19,10 +19,34 @@ interface AllowedRow {
   destinationLocationId: number;
 }
 
-function getRoomFromUrl(): string {
-  const params = new URLSearchParams(window.location.search);
-  return (params.get("room") ?? "").trim();
+const TOKEN_KEY = "pulseed.kiosk.token";
+
+function getStoredToken(): string | null {
+  try {
+    return localStorage.getItem(TOKEN_KEY);
+  } catch {
+    return null;
+  }
 }
+function setStoredToken(token: string) {
+  try {
+    localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // ignore
+  }
+}
+function clearStoredToken() {
+  try {
+    localStorage.removeItem(TOKEN_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+type Phase =
+  | { kind: "loading" }
+  | { kind: "activate" }
+  | { kind: "ready"; token: string; room: string; staffName: string | null };
 
 type Status =
   | { kind: "idle" }
@@ -31,7 +55,234 @@ type Status =
   | { kind: "error"; message: string };
 
 export default function Kiosk() {
-  const room = getRoomFromUrl();
+  const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  const [showDeactivate, setShowDeactivate] = useState(false);
+
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setPhase({ kind: "activate" });
+      return;
+    }
+    fetch(`/api/kiosk/activation/${encodeURIComponent(token)}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          clearStoredToken();
+          setPhase({ kind: "activate" });
+          return;
+        }
+        const data = await r.json();
+        setPhase({
+          kind: "ready",
+          token,
+          room: data.room,
+          staffName: data.staffName ?? null,
+        });
+      })
+      .catch(() => {
+        // Network failure; keep token, fall back to activate screen so the
+        // user isn't stuck staring at a spinner forever.
+        setPhase({ kind: "activate" });
+      });
+  }, []);
+
+  function handleActivated(token: string, room: string, staffName: string) {
+    setStoredToken(token);
+    setPhase({ kind: "ready", token, room, staffName });
+  }
+
+  function handleRevoked() {
+    clearStoredToken();
+    setPhase({ kind: "activate" });
+    setShowDeactivate(false);
+  }
+
+  if (phase.kind === "loading") {
+    return (
+      <Shell>
+        <div style={{ opacity: 0.6 }}>Loading…</div>
+      </Shell>
+    );
+  }
+
+  if (phase.kind === "activate") {
+    return (
+      <Shell>
+        <ActivationScreen onActivated={handleActivated} />
+      </Shell>
+    );
+  }
+
+  return (
+    <Shell>
+      <GearButton onClick={() => setShowDeactivate(true)} />
+      <KioskBody
+        token={phase.token}
+        room={phase.room}
+        staffName={phase.staffName}
+        onRevoked={handleRevoked}
+      />
+      {showDeactivate && (
+        <DeactivateModal
+          token={phase.token}
+          onClose={() => setShowDeactivate(false)}
+          onDeactivated={handleRevoked}
+        />
+      )}
+    </Shell>
+  );
+}
+
+/* ----------------------------- Activation screen ----------------------------- */
+
+function ActivationScreen({
+  onActivated,
+}: {
+  onActivated: (token: string, room: string, staffName: string) => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [room, setRoom] = useState("");
+  const [pickerLocations, setPickerLocations] = useState<string[] | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setBusy(true);
+    setError("");
+    try {
+      const body: Record<string, string> = {
+        email: email.trim(),
+        password,
+      };
+      if (room) body.room = room;
+      const res = await fetch("/api/kiosk/activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 409 && data.needsRoom) {
+        setPickerLocations(data.locations ?? []);
+        setError(
+          "You don't have a default room set yet. Pick the room this kiosk is in.",
+        );
+        return;
+      }
+      if (!res.ok) {
+        setError(data.error ?? `Activation failed (${res.status})`);
+        return;
+      }
+      onActivated(data.token, data.room, data.staffName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <form
+      onSubmit={submit}
+      style={{
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 12,
+        padding: "1.75rem",
+        width: "min(440px, 92vw)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "1rem",
+      }}
+    >
+      <div style={{ textAlign: "center", marginBottom: "0.25rem" }}>
+        <div style={{ fontSize: "1.4rem", fontWeight: 700, letterSpacing: "0.02em" }}>
+          Activate Kiosk
+        </div>
+        <div style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 4 }}>
+          A teacher must sign in once to put this device in kiosk mode.
+        </div>
+      </div>
+
+      <Field label="Teacher email">
+        <input
+          type="email"
+          autoComplete="username"
+          autoFocus
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          disabled={busy}
+          style={inputStyle}
+        />
+      </Field>
+
+      <Field label="Password">
+        <input
+          type="password"
+          autoComplete="current-password"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          disabled={busy}
+          style={inputStyle}
+        />
+      </Field>
+
+      {pickerLocations && (
+        <Field label="Room this kiosk is in">
+          <select
+            value={room}
+            onChange={(e) => setRoom(e.target.value)}
+            disabled={busy}
+            style={inputStyle}
+          >
+            <option value="">Select a room…</option>
+            {pickerLocations.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {error && <ErrorBox>{error}</ErrorBox>}
+
+      <button
+        type="submit"
+        disabled={
+          busy ||
+          !email.trim() ||
+          !password ||
+          (pickerLocations !== null && !room)
+        }
+        style={primaryBtn(
+          busy ||
+            !email.trim() ||
+            !password ||
+            (pickerLocations !== null && !room),
+        )}
+      >
+        {busy ? "Activating…" : "Activate this kiosk"}
+      </button>
+    </form>
+  );
+}
+
+/* -------------------------------- Kiosk body -------------------------------- */
+
+function KioskBody({
+  token,
+  room,
+  staffName,
+  onRevoked,
+}: {
+  token: string;
+  room: string;
+  staffName: string | null;
+  onRevoked: () => void;
+}) {
   const [school, setSchool] = useState<SchoolSettings | null>(null);
   const [locations, setLocations] = useState<LocationRow[]>([]);
   const [allowed, setAllowed] = useState<AllowedRow[]>([]);
@@ -105,10 +356,17 @@ export default function Kiosk() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentId: studentId.trim(),
-          originRoom: room,
+          token,
           destination,
         }),
       });
+      if (res.status === 401) {
+        const body = await res.json().catch(() => ({}));
+        if (body.revoked) {
+          onRevoked();
+          return;
+        }
+      }
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         setStatus({
@@ -130,23 +388,8 @@ export default function Kiosk() {
     }
   }
 
-  if (!room) {
-    return (
-      <Shell>
-        <h1 style={{ fontSize: "2rem", marginBottom: "1rem" }}>
-          Kiosk not configured
-        </h1>
-        <p style={{ opacity: 0.8 }}>
-          This device's URL is missing a <code>?room=</code> parameter.
-          <br />
-          Example: <code>/kiosk?room=Room%20101</code>
-        </p>
-      </Shell>
-    );
-  }
-
   return (
-    <Shell>
+    <>
       <div
         style={{
           fontSize: "0.875rem",
@@ -161,12 +404,17 @@ export default function Kiosk() {
       <h1
         style={{
           fontSize: "clamp(2rem, 5vw, 3.5rem)",
-          margin: "0.25rem 0 0.5rem",
+          margin: "0.25rem 0 0.25rem",
           fontWeight: 700,
         }}
       >
         {room}
       </h1>
+      {staffName && (
+        <div style={{ fontSize: "0.95rem", opacity: 0.55, marginBottom: "0.5rem" }}>
+          Activated by {staffName}
+        </div>
+      )}
       <div style={{ fontSize: "1rem", opacity: 0.7, marginBottom: "2rem" }}>
         {now.toLocaleString([], {
           weekday: "long",
@@ -230,27 +478,14 @@ export default function Kiosk() {
                 No student-visible destinations are configured for this room.
               </div>
             )}
-            {!originLocation && (
+            {!originLocation && locations.length > 0 && (
               <div style={{ fontSize: "0.85rem", color: "#fca5a5", marginTop: 6 }}>
-                "{room}" is not a known location. Check the kiosk URL.
+                "{room}" is not a known location. Ask an admin.
               </div>
             )}
           </Field>
 
-          {status.kind === "error" && (
-            <div
-              style={{
-                background: "rgba(239,68,68,0.15)",
-                border: "1px solid rgba(239,68,68,0.4)",
-                color: "#fecaca",
-                padding: "0.75rem 1rem",
-                borderRadius: 8,
-                fontSize: "0.95rem",
-              }}
-            >
-              {status.message}
-            </div>
-          )}
+          {status.kind === "error" && <ErrorBox>{status.message}</ErrorBox>}
 
           <button
             type="submit"
@@ -259,32 +494,205 @@ export default function Kiosk() {
               !studentId.trim() ||
               !destination
             }
-            style={{
-              background:
-                status.kind === "submitting" ||
+            style={primaryBtn(
+              status.kind === "submitting" ||
                 !studentId.trim() ||
-                !destination
-                  ? "rgba(59,130,246,0.4)"
-                  : "#3b82f6",
-              color: "#fff",
-              border: "none",
-              borderRadius: 8,
-              padding: "0.9rem 1rem",
-              fontSize: "1.1rem",
-              fontWeight: 600,
-              cursor:
-                status.kind === "submitting" ||
-                !studentId.trim() ||
-                !destination
-                  ? "not-allowed"
-                  : "pointer",
-            }}
+                !destination,
+              { padding: "0.9rem 1rem", fontSize: "1.1rem" },
+            )}
           >
             {status.kind === "submitting" ? "Creating pass…" : "Get Pass"}
           </button>
         </form>
       )}
-    </Shell>
+    </>
+  );
+}
+
+/* ----------------------------- Deactivate modal ----------------------------- */
+
+function DeactivateModal({
+  token,
+  onClose,
+  onDeactivated,
+}: {
+  token: string;
+  onClose: () => void;
+  onDeactivated: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!email.trim() || !password) return;
+    setBusy(true);
+    setError("");
+    try {
+      const loginRes = await fetch("/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: email.trim(), password }),
+      });
+      if (!loginRes.ok) {
+        const b = await loginRes.json().catch(() => ({}));
+        setError(b.error ?? "Sign-in failed");
+        return;
+      }
+      const deactRes = await fetch("/api/kiosk/deactivate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token }),
+      });
+      // Always log the staff out so we don't leave a teacher session sitting on
+      // a shared classroom device.
+      await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+      if (!deactRes.ok && deactRes.status !== 404) {
+        const b = await deactRes.json().catch(() => ({}));
+        setError(b.error ?? `Deactivation failed (${deactRes.status})`);
+        return;
+      }
+      onDeactivated();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1.5rem",
+        zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <form
+        onSubmit={submit}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#0f172a",
+          border: "1px solid rgba(255,255,255,0.15)",
+          borderRadius: 12,
+          padding: "1.75rem",
+          width: "min(420px, 92vw)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1rem",
+        }}
+      >
+        <div style={{ textAlign: "center" }}>
+          <div style={{ fontSize: "1.25rem", fontWeight: 700 }}>
+            Deactivate Kiosk
+          </div>
+          <div style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 4 }}>
+            Any signed-in staff member can deactivate. We log who did it.
+          </div>
+        </div>
+
+        <Field label="Your email">
+          <input
+            type="email"
+            autoComplete="username"
+            autoFocus
+            value={email}
+            onChange={(e) => setEmail(e.target.value)}
+            disabled={busy}
+            style={inputStyle}
+          />
+        </Field>
+
+        <Field label="Password">
+          <input
+            type="password"
+            autoComplete="current-password"
+            value={password}
+            onChange={(e) => setPassword(e.target.value)}
+            disabled={busy}
+            style={inputStyle}
+          />
+        </Field>
+
+        {error && <ErrorBox>{error}</ErrorBox>}
+
+        <div style={{ display: "flex", gap: "0.5rem" }}>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={busy}
+            style={{
+              flex: 1,
+              background: "transparent",
+              color: "#fff",
+              border: "1px solid rgba(255,255,255,0.25)",
+              borderRadius: 8,
+              padding: "0.75rem 1rem",
+              fontSize: "1rem",
+              cursor: busy ? "not-allowed" : "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="submit"
+            disabled={busy || !email.trim() || !password}
+            style={{
+              ...primaryBtn(busy || !email.trim() || !password),
+              flex: 1,
+              background:
+                busy || !email.trim() || !password ? "rgba(239,68,68,0.4)" : "#ef4444",
+            }}
+          >
+            {busy ? "Working…" : "Deactivate"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+/* ---------------------------------- bits ---------------------------------- */
+
+function GearButton({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label="Kiosk settings"
+      title="Kiosk settings"
+      onClick={onClick}
+      style={{
+        position: "fixed",
+        top: 12,
+        right: 12,
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.15)",
+        color: "rgba(255,255,255,0.55)",
+        borderRadius: 999,
+        width: 40,
+        height: 40,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        zIndex: 10,
+      }}
+    >
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="3" />
+        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+      </svg>
+    </button>
   );
 }
 
@@ -302,6 +710,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         fontFamily: "system-ui, sans-serif",
         padding: "2rem",
         textAlign: "center",
+        position: "relative",
       }}
     >
       {children}
@@ -317,12 +726,37 @@ function Field({
   children: React.ReactNode;
 }) {
   return (
-    <label style={{ display: "flex", flexDirection: "column", gap: 6, textAlign: "left" }}>
+    <label
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: 6,
+        textAlign: "left",
+      }}
+    >
       <span style={{ fontSize: "0.85rem", opacity: 0.8, fontWeight: 500 }}>
         {label}
       </span>
       {children}
     </label>
+  );
+}
+
+function ErrorBox({ children }: { children: React.ReactNode }) {
+  return (
+    <div
+      style={{
+        background: "rgba(239,68,68,0.15)",
+        border: "1px solid rgba(239,68,68,0.4)",
+        color: "#fecaca",
+        padding: "0.6rem 0.9rem",
+        borderRadius: 8,
+        fontSize: "0.9rem",
+        textAlign: "left",
+      }}
+    >
+      {children}
+    </div>
   );
 }
 
@@ -337,6 +771,23 @@ const inputStyle: React.CSSProperties = {
   width: "100%",
   boxSizing: "border-box",
 };
+
+function primaryBtn(
+  disabled: boolean,
+  override: React.CSSProperties = {},
+): React.CSSProperties {
+  return {
+    background: disabled ? "rgba(59,130,246,0.4)" : "#3b82f6",
+    color: "#fff",
+    border: "none",
+    borderRadius: 8,
+    padding: "0.75rem 1rem",
+    fontSize: "1rem",
+    fontWeight: 600,
+    cursor: disabled ? "not-allowed" : "pointer",
+    ...override,
+  };
+}
 
 function SuccessCard({
   studentId,
@@ -358,13 +809,17 @@ function SuccessCard({
       }}
     >
       <div style={{ fontSize: "3rem", marginBottom: "0.5rem" }}>✓</div>
-      <div style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "0.5rem" }}>
+      <div
+        style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "0.5rem" }}
+      >
         Pass created
       </div>
       <div style={{ opacity: 0.85, marginBottom: "1.5rem" }}>
         Student <strong>{studentId}</strong> → <strong>{destination}</strong>
       </div>
-      <div style={{ fontSize: "0.85rem", opacity: 0.55, marginBottom: "1rem" }}>
+      <div
+        style={{ fontSize: "0.85rem", opacity: 0.55, marginBottom: "1rem" }}
+      >
         Resetting in a few seconds…
       </div>
       <button
