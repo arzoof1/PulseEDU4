@@ -3986,6 +3986,11 @@ function App() {
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
+  const canManageBehaviorLists =
+    isAdmin ||
+    isBehaviorSpec ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isDean === true;
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
@@ -4047,10 +4052,17 @@ function App() {
     if (!isPbisCoord && activeSection === "pbisLists") {
       setActiveSection("hallPasses");
     }
-    if (!isBehaviorSpec && activeSection === "interventions") {
+    if (!canManageBehaviorLists && activeSection === "interventions") {
       setActiveSection("hallPasses");
     }
-  }, [isAdmin, isEseCoord, isPbisCoord, isBehaviorSpec, activeSection]);
+  }, [
+    isAdmin,
+    isEseCoord,
+    isPbisCoord,
+    isBehaviorSpec,
+    canManageBehaviorLists,
+    activeSection,
+  ]);
 
   useEffect(() => {
     if (activeSection === "pbisLists" && isPbisCoord) {
@@ -4063,7 +4075,7 @@ function App() {
       loadMySections();
       loadLeaderboard();
     }
-    if (activeSection === "interventions" && isBehaviorSpec) {
+    if (activeSection === "interventions" && canManageBehaviorLists) {
       loadInterventionTypes();
       loadPulloutReasons();
     }
@@ -4076,7 +4088,7 @@ function App() {
       loadInterventionEntries();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeSection, isPbisCoord, isBehaviorSpec]);
+  }, [activeSection, isPbisCoord, isBehaviorSpec, canManageBehaviorLists]);
 
   type NavSection = {
     key: typeof activeSection;
@@ -4254,7 +4266,7 @@ function App() {
         {baseNavSections.map(renderNavItem)}
         {isEseCoord && eseNavSections.map(renderNavItem)}
         {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
-        {isBehaviorSpec && interventionsNavSections.map(renderNavItem)}
+        {canManageBehaviorLists && interventionsNavSections.map(renderNavItem)}
         {canVerifyPullouts &&
           renderNavItem({
             key: "verifyPullouts",
@@ -9070,7 +9082,7 @@ function App() {
         </section>
       )}
 
-      {activeSection === "interventions" && isBehaviorSpec && (
+      {activeSection === "interventions" && canManageBehaviorLists && (
         <section className="card">
           <h2>Classroom Interventions</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
@@ -9192,7 +9204,7 @@ function App() {
         </section>
       )}
 
-      {activeSection === "interventions" && isBehaviorSpec && (
+      {activeSection === "interventions" && canManageBehaviorLists && (
         <section className="card">
           <h2>Pullout Reasons</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>

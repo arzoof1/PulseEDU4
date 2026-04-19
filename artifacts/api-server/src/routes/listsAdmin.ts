@@ -60,8 +60,9 @@ const requirePbisAdmin = requireRole(
   "PBIS coordinator or admin",
 );
 const requireInterventionAdmin = requireRole(
-  (s) => s.isAdmin || s.isBehaviorSpecialist,
-  "Behavior specialist or admin",
+  (s) =>
+    s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator || s.isDean,
+  "Admin, behavior specialist, MTSS coordinator, or dean",
 );
 
 // ---- PBIS Reasons ----

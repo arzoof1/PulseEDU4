@@ -43,8 +43,15 @@ function requireReasonAdmin() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!staff.isAdmin && !staff.isBehaviorSpecialist) {
-      res.status(403).json({ error: "Behavior specialist or admin only" });
+    if (
+      !staff.isAdmin &&
+      !staff.isBehaviorSpecialist &&
+      !staff.isMtssCoordinator &&
+      !staff.isDean
+    ) {
+      res.status(403).json({
+        error: "Admin, behavior specialist, MTSS coordinator, or dean only",
+      });
       return;
     }
     (req as Request & { staff: StaffRow }).staff = staff;
