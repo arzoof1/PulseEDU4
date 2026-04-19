@@ -63,14 +63,14 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
 
 router.patch("/hall-passes/:id", async (req, res) => {
   const id = Number(req.params.id);
-  const { endedAt, editedBy } = req.body ?? {};
+  const { endedAt, createdAt, editedBy } = req.body ?? {};
 
   if (typeof editedBy !== "string" || !editedBy.includes("(Admin)")) {
     res.status(403).json({ error: "Admin access required" });
     return;
   }
 
-  if (endedAt !== null && typeof endedAt !== "string") {
+  if (endedAt !== undefined && endedAt !== null && typeof endedAt !== "string") {
     res
       .status(400)
       .json({ error: "endedAt must be an ISO string or null" });
@@ -85,6 +85,20 @@ router.patch("/hall-passes/:id", async (req, res) => {
     }
   }
 
+  if (createdAt !== undefined) {
+    if (typeof createdAt !== "string" || !createdAt) {
+      res
+        .status(400)
+        .json({ error: "createdAt must be a non-empty ISO string" });
+      return;
+    }
+    const d = new Date(createdAt);
+    if (Number.isNaN(d.getTime())) {
+      res.status(400).json({ error: "createdAt is not a valid date" });
+      return;
+    }
+  }
+
   const [existing] = await db
     .select()
     .from(hallPassesTable)
@@ -95,7 +109,12 @@ router.patch("/hall-passes/:id", async (req, res) => {
     return;
   }
 
-  const newEndedAt = endedAt === "" ? null : (endedAt as string | null);
+  const endedAtProvided = endedAt !== undefined;
+  const newEndedAt = endedAtProvided
+    ? endedAt === "" || endedAt === null
+      ? null
+      : (endedAt as string)
+    : (existing.endedAt ?? null);
   const newStatus =
     newEndedAt === null
       ? "active"
@@ -103,15 +122,29 @@ router.patch("/hall-passes/:id", async (req, res) => {
         ? "system_ended"
         : "ended";
 
+  const updates: Partial<typeof hallPassesTable.$inferInsert> = {};
+  if (endedAtProvided) {
+    updates.endedAt = newEndedAt;
+    updates.status = newStatus;
+  }
+  if (createdAt !== undefined) {
+    updates.createdAt = createdAt as string;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.json(existing);
+    return;
+  }
+
   const [updated] = await db
     .update(hallPassesTable)
-    .set({ endedAt: newEndedAt, status: newStatus })
+    .set(updates)
     .where(eq(hallPassesTable.id, id))
     .returning();
 
   const nowIso = new Date().toISOString();
   const edits: Array<typeof recordEditsTable.$inferInsert> = [];
-  if ((existing.endedAt ?? null) !== (newEndedAt ?? null)) {
+  if (endedAtProvided && (existing.endedAt ?? null) !== (newEndedAt ?? null)) {
     edits.push({
       recordType: "hall_pass",
       recordId: String(id),
@@ -122,13 +155,27 @@ router.patch("/hall-passes/:id", async (req, res) => {
       editedAt: nowIso,
     });
   }
-  if (existing.status !== newStatus) {
+  if (endedAtProvided && existing.status !== newStatus) {
     edits.push({
       recordType: "hall_pass",
       recordId: String(id),
       fieldName: "status",
       oldValue: existing.status,
       newValue: newStatus,
+      editedBy,
+      editedAt: nowIso,
+    });
+  }
+  if (
+    createdAt !== undefined &&
+    existing.createdAt !== (createdAt as string)
+  ) {
+    edits.push({
+      recordType: "hall_pass",
+      recordId: String(id),
+      fieldName: "createdAt",
+      oldValue: existing.createdAt,
+      newValue: createdAt as string,
       editedBy,
       editedAt: nowIso,
     });

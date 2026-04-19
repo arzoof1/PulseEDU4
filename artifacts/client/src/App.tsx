@@ -157,6 +157,7 @@ function App() {
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
+  const [editCreatedAt, setEditCreatedAt] = useState<string>("");
   const [tardies, setTardies] = useState<Tardy[]>([]);
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
@@ -533,10 +534,21 @@ function App() {
       const endedAtIso = editEndedAt
         ? new Date(editEndedAt).toISOString()
         : null;
+      const createdAtIso = editCreatedAt
+        ? new Date(editCreatedAt).toISOString()
+        : null;
+      if (!createdAtIso) {
+        alert("Started date is required.");
+        return;
+      }
       const res = await fetch(`/api/hall-passes/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endedAt: endedAtIso, editedBy: currentStaffUser }),
+        body: JSON.stringify({
+          endedAt: endedAtIso,
+          createdAt: createdAtIso,
+          editedBy: currentStaffUser,
+        }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -546,6 +558,7 @@ function App() {
       }
       setEditingPassId(null);
       setEditEndedAt("");
+      setEditCreatedAt("");
       loadHallPasses();
     } catch (err) {
       console.error("Failed to edit hall pass:", err);
@@ -1030,7 +1043,17 @@ function App() {
                   );
                 })()}
               </td>
-              <td>{fmtTime(p.createdAt)}</td>
+              <td>
+                {isEditing ? (
+                  <input
+                    type="datetime-local"
+                    value={editCreatedAt}
+                    onChange={(e) => setEditCreatedAt(e.target.value)}
+                  />
+                ) : (
+                  fmtTime(p.createdAt)
+                )}
+              </td>
               <td>
                 {isEditing ? (
                   <input
@@ -1055,6 +1078,7 @@ function App() {
                       onClick={() => {
                         setEditingPassId(null);
                         setEditEndedAt("");
+                        setEditCreatedAt("");
                       }}
                     >
                       Cancel
@@ -1081,6 +1105,13 @@ function App() {
                             setEditEndedAt(
                               p.endedAt
                                 ? new Date(p.endedAt)
+                                    .toISOString()
+                                    .slice(0, 16)
+                                : "",
+                            );
+                            setEditCreatedAt(
+                              p.createdAt
+                                ? new Date(p.createdAt)
                                     .toISOString()
                                     .slice(0, 16)
                                 : "",
