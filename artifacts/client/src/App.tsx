@@ -153,14 +153,80 @@ function formatTimeStatus(pass: HallPass, now: number): string {
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s left`;
 }
 
-function RequestPulloutSection({ students }: { students: Student[] }) {
+type InterventionTypeLite = {
+  id: number;
+  name: string;
+  category: string;
+  active: boolean;
+};
+
+function RequestPulloutSection({
+  students,
+  interventionTypes,
+}: {
+  students: Student[];
+  interventionTypes: InterventionTypeLite[];
+}) {
   const [studentSearch, setStudentSearch] = useState("");
   const [studentId, setStudentId] = useState<string>("");
   const [period, setPeriod] = useState<string>("");
   const [reason, setReason] = useState<string>("");
-  const [interventionsTried, setInterventionsTried] = useState<string>("");
+  const [selectedInterventionIds, setSelectedInterventionIds] = useState<
+    Set<number>
+  >(new Set());
+  const [otherIntervention, setOtherIntervention] = useState<string>("");
   const [acknowledgeNoIntervention, setAcknowledgeNoIntervention] =
     useState(false);
+
+  const activeInterventions = useMemo(
+    () =>
+      interventionTypes
+        .filter((t) => t.active)
+        .sort((a, b) => {
+          const ao = a.name.toLowerCase() === "other" ? 1 : 0;
+          const bo = b.name.toLowerCase() === "other" ? 1 : 0;
+          if (ao !== bo) return ao - bo;
+          return a.name.localeCompare(b.name);
+        }),
+    [interventionTypes],
+  );
+  const otherSelected = useMemo(
+    () =>
+      activeInterventions.some(
+        (t) =>
+          selectedInterventionIds.has(t.id) &&
+          t.name.toLowerCase() === "other",
+      ),
+    [activeInterventions, selectedInterventionIds],
+  );
+
+  const buildInterventionsTried = (): string => {
+    const names = activeInterventions
+      .filter((t) => selectedInterventionIds.has(t.id))
+      .map((t) =>
+        t.name.toLowerCase() === "other" && otherIntervention.trim()
+          ? `Other: ${otherIntervention.trim()}`
+          : t.name,
+      )
+      .filter((n) => n.toLowerCase() !== "other");
+    if (
+      otherSelected &&
+      !names.some((n) => n.toLowerCase().startsWith("other:"))
+    ) {
+      // "Other" picked but no description typed — still record the choice.
+      names.push("Other");
+    }
+    return names.join("; ");
+  };
+  const interventionsTried = buildInterventionsTried();
+  const toggleIntervention = (id: number) => {
+    setSelectedInterventionIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
   const [preflight, setPreflight] = useState<{
     hasRecentIntervention: boolean;
     windowDays: number;
@@ -269,7 +335,8 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
         setStudentSearch("");
         setPeriod("");
         setReason("");
-        setInterventionsTried("");
+        setSelectedInterventionIds(new Set());
+        setOtherIntervention("");
         setAcknowledgeNoIntervention(false);
         setPreflight(null);
       }
@@ -366,15 +433,75 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
             placeholder="What's happening that requires the student to leave class?"
           />
         </label>
-        <label style={{ display: "grid", gap: 4 }}>
-          <span>Interventions tried (optional)</span>
-          <textarea
-            value={interventionsTried}
-            onChange={(e) => setInterventionsTried(e.target.value)}
-            rows={2}
-            placeholder="Brief notes on what you tried first."
-          />
-        </label>
+        <fieldset
+          style={{
+            display: "grid",
+            gap: 6,
+            border: "1px solid #e5e7eb",
+            borderRadius: 6,
+            padding: "0.5rem 0.75rem",
+          }}
+        >
+          <legend style={{ padding: "0 0.25rem", fontWeight: 600 }}>
+            Interventions tried
+          </legend>
+          {activeInterventions.length === 0 ? (
+            <div
+              style={{ fontSize: "0.85rem", color: "var(--text-subtle, #64748b)" }}
+            >
+              No intervention options have been set up yet. Ask your behavior
+              specialist or admin to add some in Settings.
+            </div>
+          ) : (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fill, minmax(180px, 1fr))",
+                gap: "0.25rem 0.75rem",
+              }}
+            >
+              {activeInterventions.map((t) => (
+                <label
+                  key={t.id}
+                  style={{
+                    display: "flex",
+                    gap: 6,
+                    alignItems: "center",
+                    fontSize: "0.9rem",
+                    cursor: "pointer",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedInterventionIds.has(t.id)}
+                    onChange={() => toggleIntervention(t.id)}
+                  />
+                  <span>{t.name}</span>
+                </label>
+              ))}
+            </div>
+          )}
+          {otherSelected && (
+            <input
+              type="text"
+              value={otherIntervention}
+              onChange={(e) => setOtherIntervention(e.target.value)}
+              placeholder="Describe the 'Other' intervention you tried…"
+              autoFocus
+            />
+          )}
+          {interventionsTried && (
+            <div
+              style={{
+                fontSize: "0.8rem",
+                color: "var(--text-subtle, #64748b)",
+              }}
+            >
+              Will be recorded as: {interventionsTried}
+            </div>
+          )}
+        </fieldset>
         {selectedStudent &&
           preflight &&
           !preflight.hasRecentIntervention && (
@@ -7874,7 +8001,10 @@ function App() {
       </>)}
 
       {activeSection === "requestPullout" && (
-        <RequestPulloutSection students={students} />
+        <RequestPulloutSection
+          students={students}
+          interventionTypes={interventionList}
+        />
       )}
 
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
