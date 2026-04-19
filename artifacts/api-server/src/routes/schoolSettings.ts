@@ -21,7 +21,7 @@ router.get("/school-settings", async (_req, res) => {
 
 router.put("/school-settings", async (req, res) => {
   const current = await getOrCreate();
-  const { schoolName, fromName, emailSignature } = req.body ?? {};
+  const { schoolName, fromName, emailSignature, periodCount } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
   if (typeof schoolName === "string" && schoolName.trim()) {
@@ -32,6 +32,19 @@ router.put("/school-settings", async (req, res) => {
   }
   if (typeof emailSignature === "string") {
     updates.emailSignature = emailSignature;
+  }
+  if (periodCount !== undefined) {
+    if (
+      typeof periodCount !== "number" ||
+      !Number.isInteger(periodCount) ||
+      periodCount < 1 ||
+      periodCount > 12
+    ) {
+      return res
+        .status(400)
+        .json({ error: "periodCount must be an integer between 1 and 12" });
+    }
+    updates.periodCount = periodCount;
   }
 
   if (Object.keys(updates).length === 0) {

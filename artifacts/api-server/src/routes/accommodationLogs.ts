@@ -265,12 +265,25 @@ router.post(
       }
     }
 
+    // Use ON CONFLICT DO NOTHING against the partial unique index
+    // (student_id, accommodation_id, period, substring(created_at,1,10))
+    // WHERE status='provided' to make the duplicate guard race-safe.
+    let actuallyInserted = 0;
     if (toInsert.length > 0) {
-      await db.insert(accommodationLogsTable).values(toInsert);
+      const inserted = await db
+        .insert(accommodationLogsTable)
+        .values(toInsert)
+        .onConflictDoNothing()
+        .returning({ id: accommodationLogsTable.id });
+      actuallyInserted = inserted.length;
+      // Any row blocked by the unique index is a duplicate the app guard
+      // missed (concurrent submit) — count it as a duplicate skip.
+      const blocked = toInsert.length - actuallyInserted;
+      skippedDuplicate += blocked;
     }
 
     res.status(201).json({
-      inserted: toInsert.length,
+      inserted: actuallyInserted,
       skippedNotEntitled,
       skippedDuplicate,
       sectionId: section.id,

@@ -182,7 +182,8 @@ function App() {
     schoolName: string;
     fromName: string;
     emailSignature: string;
-  }>({ schoolName: "", fromName: "", emailSignature: "" });
+    periodCount: number;
+  }>({ schoolName: "", fromName: "", emailSignature: "", periodCount: 7 });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
   >("idle");
@@ -493,6 +494,8 @@ function App() {
           schoolName: data.schoolName ?? "",
           fromName: data.fromName ?? "",
           emailSignature: data.emailSignature ?? "",
+          periodCount:
+            typeof data.periodCount === "number" ? data.periodCount : 7,
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -516,6 +519,8 @@ function App() {
         schoolName: data.schoolName ?? "",
         fromName: data.fromName ?? "",
         emailSignature: data.emailSignature ?? "",
+        periodCount:
+          typeof data.periodCount === "number" ? data.periodCount : 7,
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -2075,35 +2080,93 @@ function App() {
                       <li>Lost Instructional Time {label}: {lostMinutes} min</li>
                     </ul>
                     {(() => {
-                      const sLogs = accommodationLogs
+                      const sLogs = (
+                        accommodationLogs as Array<
+                          (typeof accommodationLogs)[number] & {
+                            status?: string;
+                          }
+                        >
+                      )
                         .filter(
                           (l) =>
                             l.studentId === activityStudentId &&
                             inRange(l.createdAt),
                         )
                         .slice()
-                        .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+                        .sort((a, b) =>
+                          b.createdAt.localeCompare(a.createdAt),
+                        );
+                      const providedCount = sLogs.filter(
+                        (l) => (l.status ?? "provided") === "provided",
+                      ).length;
+                      const refusedCount = sLogs.filter(
+                        (l) => l.status === "refused",
+                      ).length;
                       return (
                         <div style={{ marginTop: "0.75rem" }}>
                           <h4 style={{ margin: "0 0 0.25rem 0" }}>
-                            Accommodations Provided {label}: {sLogs.length}
+                            Accommodations {label}:{" "}
+                            <span style={{ color: "#0a7a3b" }}>
+                              {providedCount} provided
+                            </span>
+                            {" / "}
+                            <span style={{ color: "#b00020" }}>
+                              {refusedCount} refused
+                            </span>
                           </h4>
                           {sLogs.length === 0 ? (
-                            <div>No accommodation-provided records.</div>
+                            <div>No accommodation records.</div>
                           ) : (
-                            <ul style={{ margin: 0 }}>
-                              {sLogs.map((l) => (
-                                <li key={l.id}>
-                                  Accommodation Provided: {l.accommodation}
-                                  {l.period != null
-                                    ? ` | Period: ${l.period}`
-                                    : ""}
-                                  {" | Staff: "}
-                                  {l.staffName || "(unknown)"}
-                                  {" | Time: "}
-                                  {new Date(l.createdAt).toLocaleString()}
-                                </li>
-                              ))}
+                            <ul
+                              style={{
+                                margin: 0,
+                                listStyle: "none",
+                                padding: 0,
+                              }}
+                            >
+                              {sLogs.map((l) => {
+                                const refused = l.status === "refused";
+                                const dt = new Date(l.createdAt);
+                                const dateStr = dt.toLocaleDateString();
+                                const timeStr = dt.toLocaleTimeString([], {
+                                  hour: "2-digit",
+                                  minute: "2-digit",
+                                });
+                                return (
+                                  <li
+                                    key={l.id}
+                                    style={{
+                                      padding: "0.35rem 0.5rem",
+                                      marginBottom: "0.25rem",
+                                      borderLeft: `4px solid ${
+                                        refused ? "#b00020" : "#0a7a3b"
+                                      }`,
+                                      background: refused
+                                        ? "#fde2e2"
+                                        : "#e6f4ea",
+                                    }}
+                                  >
+                                    <strong
+                                      style={{
+                                        color: refused
+                                          ? "#b00020"
+                                          : "#0a7a3b",
+                                      }}
+                                    >
+                                      {refused ? "Refused" : "Provided"}
+                                    </strong>
+                                    {": "}
+                                    {l.accommodation}
+                                    {l.period != null
+                                      ? ` | Period ${l.period}`
+                                      : ""}
+                                    {" | "}
+                                    {dateStr} {timeStr}
+                                    {" | "}
+                                    {l.staffName || "(unknown)"}
+                                  </li>
+                                );
+                              })}
                             </ul>
                           )}
                         </div>
@@ -3918,6 +3981,37 @@ function App() {
                     fromName: e.target.value,
                   })
                 }
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.25rem" }}>
+              <span>
+                Number of Periods in the School Day
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontWeight: "normal",
+                    marginLeft: "0.5rem",
+                  }}
+                >
+                  (1–12; controls period dropdowns app-wide)
+                </span>
+              </span>
+              <input
+                type="number"
+                min={1}
+                max={12}
+                step={1}
+                value={schoolSettings.periodCount}
+                onChange={(e) => {
+                  const n = Number(e.target.value);
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    periodCount: Number.isFinite(n)
+                      ? Math.max(1, Math.min(12, Math.trunc(n)))
+                      : schoolSettings.periodCount,
+                  });
+                }}
+                style={{ width: "6rem" }}
               />
             </label>
             <label style={{ display: "grid", gap: "0.25rem" }}>
