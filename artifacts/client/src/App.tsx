@@ -1009,6 +1009,236 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   );
 }
 
+function StudentPulloutsTab({ studentId }: { studentId: string }) {
+  const [rows, setRows] = useState<PulloutRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    (async () => {
+      try {
+        const r = await fetch(
+          `/api/pullouts/by-student/${encodeURIComponent(studentId)}`,
+        );
+        if (!r.ok) {
+          if (!cancelled) setErr("Could not load pullouts.");
+        } else {
+          const data = (await r.json()) as PulloutRow[];
+          if (!cancelled) setRows(data);
+        }
+      } catch {
+        if (!cancelled) setErr("Network error.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  if (loading) return <p>Loading pullouts…</p>;
+  if (err) return <p style={{ color: "crimson" }}>{err}</p>;
+  if (rows.length === 0)
+    return <p>No pullouts on file for this student.</p>;
+
+  return (
+    <>
+      <h3>Pullouts ({rows.length})</h3>
+      <table
+        border={1}
+        cellPadding={6}
+        style={{ borderCollapse: "collapse" }}
+      >
+        <thead>
+          <tr>
+            <th>requestedAt</th>
+            <th>referringTeacher</th>
+            <th>period</th>
+            <th>reason</th>
+            <th>status</th>
+            <th>verifiedBy</th>
+            <th>arrivedAt</th>
+            <th>parentEmail</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((p) => (
+            <tr key={p.id}>
+              <td>{p.requestedAt}</td>
+              <td>{p.referringTeacherName || "-"}</td>
+              <td>{p.period ?? "-"}</td>
+              <td>{p.editedReason ?? p.reason}</td>
+              <td>{p.status}</td>
+              <td>{p.verifiedByName ?? "-"}</td>
+              <td>{p.arrivedAt ?? "-"}</td>
+              <td>
+                {p.parentEmailStatus
+                  ? `${p.parentEmailStatus}${p.parentEmailTo ? ` → ${p.parentEmailTo}` : ""}`
+                  : "-"}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </>
+  );
+}
+
+type PulloutReportBucket = {
+  total: number;
+  pending: number;
+  verified: number;
+  arrived: number;
+  returned: number;
+  closed: number;
+  rejected: number;
+};
+type PulloutReportData = {
+  windowDays: number;
+  sinceIso: string;
+  total: number;
+  byStudent: (PulloutReportBucket & { studentId: string })[];
+  byTeacher: (PulloutReportBucket & { referringTeacherName: string })[];
+  byReason: (PulloutReportBucket & { reason: string })[];
+};
+
+function PulloutReportSection({ students }: { students: Student[] }) {
+  const [days, setDays] = useState(30);
+  const [data, setData] = useState<PulloutReportData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  const studentName = (id: string) =>
+    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setErr(null);
+    (async () => {
+      try {
+        const r = await fetch(`/api/pullouts/report?days=${days}`);
+        if (!r.ok) {
+          if (!cancelled) setErr("Could not load report.");
+        } else {
+          const j = (await r.json()) as PulloutReportData;
+          if (!cancelled) setData(j);
+        }
+      } catch {
+        if (!cancelled) setErr("Network error.");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [days]);
+
+  const renderBucket = (
+    title: string,
+    rows: (PulloutReportBucket & Record<string, string>)[],
+    keyName: string,
+    label: (v: string) => string,
+  ) => (
+    <div style={{ marginTop: "0.75rem" }}>
+      <h4 style={{ margin: "0.25rem 0" }}>{title}</h4>
+      {rows.length === 0 ? (
+        <p style={{ color: "#666" }}>None.</p>
+      ) : (
+        <table
+          border={1}
+          cellPadding={4}
+          style={{ borderCollapse: "collapse", fontSize: "0.9em" }}
+        >
+          <thead>
+            <tr>
+              <th style={{ textAlign: "left" }}>{keyName}</th>
+              <th>total</th>
+              <th>pending</th>
+              <th>verified</th>
+              <th>arrived</th>
+              <th>returned</th>
+              <th>closed</th>
+              <th>rejected</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 15).map((r) => (
+              <tr key={r[keyName]}>
+                <td>{label(r[keyName])}</td>
+                <td style={{ textAlign: "right" }}>{r.total}</td>
+                <td style={{ textAlign: "right" }}>{r.pending}</td>
+                <td style={{ textAlign: "right" }}>{r.verified}</td>
+                <td style={{ textAlign: "right" }}>{r.arrived}</td>
+                <td style={{ textAlign: "right" }}>{r.returned}</td>
+                <td style={{ textAlign: "right" }}>{r.closed}</td>
+                <td style={{ textAlign: "right" }}>{r.rejected}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+
+  return (
+    <section
+      className="card"
+      style={{ marginBottom: "1rem", background: "#f6f8fb" }}
+    >
+      <h3 style={{ marginTop: 0 }}>Pullout Report</h3>
+      <div style={{ marginBottom: "0.5rem" }}>
+        Window:{" "}
+        <select
+          value={days}
+          onChange={(e) => setDays(Number(e.target.value))}
+        >
+          <option value={7}>Last 7 days</option>
+          <option value={30}>Last 30 days</option>
+          <option value={90}>Last 90 days</option>
+          <option value={365}>Last 365 days</option>
+        </select>
+      </div>
+      {loading && <p>Loading…</p>}
+      {err && <p style={{ color: "crimson" }}>{err}</p>}
+      {data && (
+        <>
+          <div>
+            <strong>{data.total}</strong> pullouts in the last{" "}
+            {data.windowDays} days.
+          </div>
+          {renderBucket(
+            "Top students",
+            data.byStudent as (PulloutReportBucket &
+              Record<string, string>)[],
+            "studentId",
+            (id) => `${id} - ${studentName(id)}`,
+          )}
+          {renderBucket(
+            "Top referring teachers",
+            data.byTeacher as (PulloutReportBucket &
+              Record<string, string>)[],
+            "referringTeacherName",
+            (n) => n,
+          )}
+          {renderBucket(
+            "Top reasons",
+            data.byReason as (PulloutReportBucket &
+              Record<string, string>)[],
+            "reason",
+            (n) => n,
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
@@ -1116,6 +1346,7 @@ function App() {
     | "pbis"
     | "supportNotes"
     | "contact"
+    | "pullouts"
   >("summary");
   const [accView, setAccView] = useState<
     "student" | "roster" | "daily" | "reports"
@@ -4268,6 +4499,7 @@ function App() {
                     ["pbis", "PBIS"],
                     ["supportNotes", "Support Notes"],
                     ["contact", "Contact / Communication"],
+                    ["pullouts", "Pullouts"],
                   ] as const
                 ).map(([key, label]) => (
                   <button
@@ -4497,6 +4729,10 @@ function App() {
                   </section>
                 );
               })()}
+
+              {studentTab === "pullouts" && (
+                <StudentPulloutsTab studentId={activityStudentId} />
+              )}
 
               {studentTab === "hallPasses" && (<>
               <h3>Hall Passes</h3>
@@ -7102,7 +7338,10 @@ function App() {
       )}
 
       {activeSection === "issDashboard" && canViewIssDashboard && (
-        <IssDashboardSection students={students} />
+        <>
+          <PulloutReportSection students={students} />
+          <IssDashboardSection students={students} />
+        </>
       )}
 
       {activeSection === "logIntervention" && (

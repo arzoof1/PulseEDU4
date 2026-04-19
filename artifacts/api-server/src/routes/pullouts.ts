@@ -348,6 +348,119 @@ router.patch(
   },
 );
 
+// Per-student pullout history. Any signed-in staff can view, mirroring
+// the Student Activity tab access pattern.
+router.get(
+  "/pullouts/by-student/:studentId",
+  requireStaffMW(),
+  async (req: Request, res: Response) => {
+    const sid = String(req.params.studentId ?? "").trim();
+    if (!sid) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.studentId, sid))
+      .orderBy(desc(pulloutsTable.requestedAt));
+    res.json(rows);
+  },
+);
+
+// Aggregated pullout report. Restricted to ISS-view roles so it's not
+// exposed to all teachers.
+router.get(
+  "/pullouts/report",
+  requireStaffMW(
+    (s) =>
+      s.isAdmin ||
+      s.isBehaviorSpecialist ||
+      s.isDean ||
+      s.isMtssCoordinator ||
+      s.isIssTeacher,
+    "ISS dashboard role",
+  ),
+  async (req: Request, res: Response) => {
+    let days = Number(req.query.days ?? 30);
+    if (!Number.isFinite(days) || days < 1 || days > 365) days = 30;
+    const since = daysAgoIso(days);
+
+    const all = await db
+      .select()
+      .from(pulloutsTable)
+      .where(gte(pulloutsTable.requestedAt, since))
+      .orderBy(desc(pulloutsTable.requestedAt));
+
+    type Counters = {
+      total: number;
+      pending: number;
+      verified: number;
+      arrived: number;
+      returned: number;
+      closed: number;
+      rejected: number;
+    };
+    const empty = (): Counters => ({
+      total: 0,
+      pending: 0,
+      verified: 0,
+      arrived: 0,
+      returned: 0,
+      closed: 0,
+      rejected: 0,
+    });
+    const bump = (c: Counters, status: string) => {
+      c.total += 1;
+      if (status === "pending") c.pending += 1;
+      else if (status === "verified" || status === "enroute")
+        c.verified += 1;
+      else if (status === "arrived") c.arrived += 1;
+      else if (status === "returned") c.returned += 1;
+      else if (status === "closed") c.closed += 1;
+      else if (status === "rejected") c.rejected += 1;
+    };
+
+    const byStudent = new Map<string, Counters>();
+    const byTeacher = new Map<string, Counters>();
+    const byReason = new Map<string, Counters>();
+
+    for (const r of all) {
+      if (!byStudent.has(r.studentId)) byStudent.set(r.studentId, empty());
+      bump(byStudent.get(r.studentId)!, r.status);
+
+      const teacher = r.referringTeacherName || "(unspecified)";
+      if (!byTeacher.has(teacher)) byTeacher.set(teacher, empty());
+      bump(byTeacher.get(teacher)!, r.status);
+
+      // Bucket reason by lowercased first 60 chars to group near-duplicates.
+      const text = (r.editedReason ?? r.reason).trim();
+      const bucket =
+        text.length > 60 ? text.slice(0, 57) + "…" : text || "(no reason)";
+      const key = bucket.toLowerCase();
+      if (!byReason.has(key)) byReason.set(key, empty());
+      bump(byReason.get(key)!, r.status);
+    }
+
+    const toSorted = <K extends string | number>(
+      m: Map<string, Counters>,
+      keyName: K,
+    ) =>
+      Array.from(m.entries())
+        .map(([k, c]) => ({ [keyName]: k, ...c }))
+        .sort((a, b) => b.total - a.total);
+
+    res.json({
+      windowDays: days,
+      sinceIso: since,
+      total: all.length,
+      byStudent: toSorted(byStudent, "studentId" as const),
+      byTeacher: toSorted(byTeacher, "referringTeacherName" as const),
+      byReason: toSorted(byReason, "reason" as const),
+    });
+  },
+);
+
 // ISS dashboard actions: mark arrived / returned / closed.
 const isIssActor = (s: StaffRow) =>
   s.isAdmin ||
