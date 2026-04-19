@@ -457,6 +457,131 @@ function App() {
   const [pbisReportMsg, setPbisReportMsg] = useState("");
   const [pbisReportBusy, setPbisReportBusy] = useState(false);
 
+  // PBIS goals state
+  type PbisGoal = {
+    id: number;
+    studentId: string;
+    reason: string | null;
+    targetPoints: number;
+    periodType: "week" | "month" | "quarter" | "all";
+    createdById: number | null;
+    createdByName: string;
+    createdAt: string;
+    archivedAt: string | null;
+  };
+  const [pbisGoals, setPbisGoals] = useState<PbisGoal[]>([]);
+  const [goalReason, setGoalReason] = useState<string>("");
+  const [goalTarget, setGoalTarget] = useState<number>(10);
+  const [goalPeriod, setGoalPeriod] = useState<
+    "week" | "month" | "quarter" | "all"
+  >("week");
+  const [goalMsg, setGoalMsg] = useState("");
+  const [goalBusy, setGoalBusy] = useState(false);
+
+  const loadPbisGoals = async () => {
+    try {
+      const res = await fetch("/api/pbis-goals");
+      if (!res.ok) {
+        setPbisGoals([]);
+        return;
+      }
+      const data = (await res.json()) as PbisGoal[];
+      setPbisGoals(Array.isArray(data) ? data : []);
+    } catch {
+      setPbisGoals([]);
+    }
+  };
+
+  const periodWindow = (
+    period: "week" | "month" | "quarter" | "all",
+  ): { startIso: string | null; label: string } => {
+    const now = new Date();
+    if (period === "all") return { startIso: null, label: "All time" };
+    if (period === "week") {
+      // Monday 00:00 local
+      const d = new Date(now);
+      const day = d.getDay(); // 0=Sun..6=Sat
+      const diff = (day === 0 ? -6 : 1 - day);
+      d.setDate(d.getDate() + diff);
+      d.setHours(0, 0, 0, 0);
+      return { startIso: d.toISOString(), label: "This week" };
+    }
+    if (period === "month") {
+      const d = new Date(now.getFullYear(), now.getMonth(), 1);
+      return { startIso: d.toISOString(), label: "This month" };
+    }
+    // quarter
+    const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+    const d = new Date(now.getFullYear(), qStartMonth, 1);
+    return { startIso: d.toISOString(), label: "This quarter" };
+  };
+
+  const computeGoalProgress = (goal: PbisGoal): number => {
+    const { startIso } = periodWindow(goal.periodType);
+    return pbisEntries
+      .filter((e) => e.studentId === goal.studentId && !e.voidedAt)
+      .filter((e) => (startIso ? e.createdAt >= startIso : true))
+      .filter((e) => (goal.reason ? e.reason === goal.reason : true))
+      .reduce((sum, e) => sum + (e.points || 0), 0);
+  };
+
+  const addPbisGoal = async (studentId: string) => {
+    setGoalMsg("");
+    if (!studentId) {
+      setGoalMsg("Pick a student first.");
+      return;
+    }
+    if (!Number.isInteger(goalTarget) || goalTarget < 1) {
+      setGoalMsg("Target must be a positive whole number.");
+      return;
+    }
+    setGoalBusy(true);
+    try {
+      const res = await fetch("/api/pbis-goals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          reason: goalReason.trim() || undefined,
+          targetPoints: goalTarget,
+          periodType: goalPeriod,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!res.ok) {
+        setGoalMsg(j.error || `Couldn't add goal (HTTP ${res.status}).`);
+        return;
+      }
+      setGoalReason("");
+      setGoalTarget(10);
+      setGoalPeriod("week");
+      await loadPbisGoals();
+    } catch (e) {
+      setGoalMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setGoalBusy(false);
+    }
+  };
+
+  const archivePbisGoal = async (id: number) => {
+    if (!window.confirm("Archive this goal?")) return;
+    try {
+      const res = await fetch(`/api/pbis-goals/${id}/archive`, {
+        method: "POST",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setGoalMsg(j.error || `Couldn't archive (HTTP ${res.status}).`);
+        return;
+      }
+      await loadPbisGoals();
+    } catch (e) {
+      setGoalMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   // PBIS edit/void inline state
   const [pbisEditId, setPbisEditId] = useState<number | null>(null);
   const [pbisEditReason, setPbisEditReason] = useState("");
@@ -1745,6 +1870,9 @@ function App() {
   useEffect(() => {
     if (activeSection === "pbisLists" && isPbisCoord) {
       loadPbisReasons();
+    }
+    if (activeSection === "pbis") {
+      loadPbisGoals();
     }
     if (activeSection === "interventions" && isBehaviorSpec) {
       loadInterventionTypes();
@@ -4839,6 +4967,232 @@ function App() {
                         ))}
                       </ul>
                     )}
+                    {(() => {
+                      const goals = pbisGoals.filter(
+                        (g) =>
+                          g.studentId === pbisStudentId && !g.archivedAt,
+                      );
+                      return (
+                        <div style={{ marginTop: "0.6rem" }}>
+                          <div
+                            style={{
+                              fontWeight: 600,
+                              fontSize: "0.85rem",
+                              marginBottom: "0.3rem",
+                            }}
+                          >
+                            Goals
+                          </div>
+                          {goals.length === 0 ? (
+                            <div
+                              style={{
+                                fontSize: "0.8rem",
+                                color: "var(--muted, #64748b)",
+                                marginBottom: "0.4rem",
+                              }}
+                            >
+                              No active goals.
+                            </div>
+                          ) : (
+                            <ul
+                              style={{
+                                listStyle: "none",
+                                padding: 0,
+                                margin: "0 0 0.4rem",
+                                display: "flex",
+                                flexDirection: "column",
+                                gap: 4,
+                              }}
+                            >
+                              {goals.map((g) => {
+                                const earned = computeGoalProgress(g);
+                                const pct = Math.min(
+                                  100,
+                                  Math.round(
+                                    (earned / g.targetPoints) * 100,
+                                  ),
+                                );
+                                const reached = earned >= g.targetPoints;
+                                const { label } = periodWindow(g.periodType);
+                                const canArchive =
+                                  isAdmin ||
+                                  isPbisCoord ||
+                                  (g.createdById !== null &&
+                                    g.createdById === authUser?.id);
+                                return (
+                                  <li
+                                    key={g.id}
+                                    style={{
+                                      fontSize: "0.8rem",
+                                      display: "flex",
+                                      flexDirection: "column",
+                                      gap: 2,
+                                    }}
+                                  >
+                                    <div
+                                      style={{
+                                        display: "flex",
+                                        gap: 6,
+                                        alignItems: "center",
+                                        flexWrap: "wrap",
+                                      }}
+                                    >
+                                      {reached && (
+                                        <span
+                                          title="Goal reached"
+                                          style={{
+                                            background: "#15803d",
+                                            color: "white",
+                                            padding: "0 6px",
+                                            borderRadius: 999,
+                                            fontSize: "0.7rem",
+                                          }}
+                                        >
+                                          ★ Reached
+                                        </span>
+                                      )}
+                                      <strong>
+                                        {g.reason || "Any reason"}
+                                      </strong>
+                                      <span style={{ color: "#64748b" }}>
+                                        · {label} · {earned}/{g.targetPoints}{" "}
+                                        pts
+                                      </span>
+                                      {canArchive && (
+                                        <button
+                                          type="button"
+                                          onClick={() =>
+                                            archivePbisGoal(g.id)
+                                          }
+                                          style={{
+                                            marginLeft: "auto",
+                                            fontSize: "0.7rem",
+                                          }}
+                                        >
+                                          Archive
+                                        </button>
+                                      )}
+                                    </div>
+                                    <div
+                                      style={{
+                                        height: 6,
+                                        background: "#e2e8f0",
+                                        borderRadius: 3,
+                                        overflow: "hidden",
+                                      }}
+                                    >
+                                      <div
+                                        style={{
+                                          width: `${pct}%`,
+                                          height: "100%",
+                                          background: reached
+                                            ? "#15803d"
+                                            : "#3b82f6",
+                                        }}
+                                      />
+                                    </div>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          )}
+                          <details>
+                            <summary
+                              style={{
+                                cursor: "pointer",
+                                fontSize: "0.8rem",
+                                color: "#3b82f6",
+                              }}
+                            >
+                              + Add goal
+                            </summary>
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns:
+                                  "auto auto auto auto",
+                                gap: 6,
+                                alignItems: "end",
+                                marginTop: "0.4rem",
+                                fontSize: "0.8rem",
+                              }}
+                            >
+                              <label>
+                                <div>Reason</div>
+                                <select
+                                  value={goalReason}
+                                  onChange={(e) =>
+                                    setGoalReason(e.target.value)
+                                  }
+                                >
+                                  <option value="">Any reason</option>
+                                  {pbisReasonsList
+                                    .slice()
+                                    .sort((a, b) =>
+                                      a.name.localeCompare(b.name),
+                                    )
+                                    .map((r) => (
+                                      <option key={r.id} value={r.name}>
+                                        {r.name}
+                                      </option>
+                                    ))}
+                                </select>
+                              </label>
+                              <label>
+                                <div>Target</div>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  value={goalTarget}
+                                  onChange={(e) =>
+                                    setGoalTarget(Number(e.target.value))
+                                  }
+                                  style={{ width: "5rem" }}
+                                />
+                              </label>
+                              <label>
+                                <div>Period</div>
+                                <select
+                                  value={goalPeriod}
+                                  onChange={(e) =>
+                                    setGoalPeriod(
+                                      e.target.value as
+                                        | "week"
+                                        | "month"
+                                        | "quarter"
+                                        | "all",
+                                    )
+                                  }
+                                >
+                                  <option value="week">Week</option>
+                                  <option value="month">Month</option>
+                                  <option value="quarter">Quarter</option>
+                                  <option value="all">All-time</option>
+                                </select>
+                              </label>
+                              <button
+                                type="button"
+                                disabled={goalBusy}
+                                onClick={() => addPbisGoal(pbisStudentId)}
+                              >
+                                {goalBusy ? "Adding…" : "Add"}
+                              </button>
+                            </div>
+                            {goalMsg && (
+                              <div
+                                style={{
+                                  fontSize: "0.75rem",
+                                  color: "#b91c1c",
+                                  marginTop: 4,
+                                }}
+                              >
+                                {goalMsg}
+                              </div>
+                            )}
+                          </details>
+                        </div>
+                      );
+                    })()}
                   </div>
                 );
               })()}

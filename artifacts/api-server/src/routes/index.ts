@@ -18,6 +18,7 @@ import authRouter from "./auth";
 import reportsRouter from "./reports";
 import listsAdminRouter from "./listsAdmin";
 import interventionsRouter from "./interventions";
+import pbisGoalsRouter from "./pbisGoals";
 
 const router: IRouter = Router();
 
@@ -40,5 +41,6 @@ router.use(authRouter);
 router.use(reportsRouter);
 router.use(listsAdminRouter);
 router.use(interventionsRouter);
+router.use(pbisGoalsRouter);
 
 export default router;
