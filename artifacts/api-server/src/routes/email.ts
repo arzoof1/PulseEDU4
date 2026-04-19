@@ -1,7 +1,24 @@
 import { Router, type IRouter } from "express";
 import { getUncachableResendClient } from "../lib/resendClient";
+import { db, schoolSettingsTable } from "@workspace/db";
 
 const router: IRouter = Router();
+
+async function getFromName(): Promise<string> {
+  try {
+    const [row] = await db.select().from(schoolSettingsTable).limit(1);
+    return row?.fromName?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+function formatFromHeader(fromName: string, fromEmail: string): string {
+  if (!fromName) return fromEmail;
+  if (fromEmail.includes("<")) return fromEmail;
+  const safeName = fromName.replace(/"/g, "'");
+  return `${safeName} <${fromEmail}>`;
+}
 
 const TEST_PARENT_EMAIL = "coachclifford@me.com";
 
@@ -24,8 +41,10 @@ router.post("/send-test-parent-email", async (req, res) => {
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
+    const fromName = await getFromName();
+    const fromHeader = formatFromHeader(fromName, fromEmail);
     const result = await client.emails.send({
-      from: fromEmail,
+      from: fromHeader,
       to: recipient,
       subject: finalSubject,
       text: finalBody,

@@ -1764,6 +1764,8 @@ function App() {
                   )
                   .join("\n");
 
+                const signature =
+                  schoolSettings.emailSignature || "Thank you,\nPulseED";
                 let subject = "Student Activity Update";
                 let body = "";
                 if (emailMessageType === "positive") {
@@ -1776,7 +1778,7 @@ function App() {
                     (recentPbis
                       ? `\nRecent recognitions:\n${recentPbis}\n`
                       : "") +
-                    `\nThank you,\nPulseED`;
+                    `\n${signature}`;
                 } else if (emailMessageType === "pbis") {
                   subject = `PBIS Recognition for ${studentName}`;
                   body =
@@ -1787,7 +1789,7 @@ function App() {
                     (recentPbis
                       ? `\nRecent PBIS recognitions:\n${recentPbis}\n`
                       : "\nNo PBIS entries yet.\n") +
-                    `\nThank you,\nPulseED`;
+                    `\n${signature}`;
                 } else if (emailMessageType === "attendance") {
                   subject = `Attendance / Tardy Concern for ${studentName}`;
                   body =
@@ -1799,7 +1801,7 @@ function App() {
                       ? `\nRecent tardies:\n${recentTardies}\n`
                       : "\nNo recent tardies on record.\n") +
                     `\nPlease reach out if you have any questions.\n\n` +
-                    `Thank you,\nPulseED`;
+                    `${signature}`;
                 } else {
                   subject = `Check-In / Check-Out Notice for ${studentName}`;
                   body =
@@ -1810,7 +1812,7 @@ function App() {
                     (recentCheckInOut
                       ? `\nRecent activity:\n${recentCheckInOut}\n`
                       : "\nNo recent check-in/check-out activity on record.\n") +
-                    `\nThank you,\nPulseED`;
+                    `\n${signature}`;
                 }
                 const parentEmailOnFile = (student?.parentEmail ?? "").trim();
                 const recipientToUse = (emailOverride || parentEmailOnFile).trim();
