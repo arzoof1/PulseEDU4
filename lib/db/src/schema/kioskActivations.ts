@@ -14,6 +14,7 @@ export const kioskActivationsTable = pgTable("kiosk_activations", {
   activatedAt: timestamp("activated_at", { withTimezone: true })
     .notNull()
     .defaultNow(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
   deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
   deactivatedByStaffId: integer("deactivated_by_staff_id"),
 });

@@ -11,9 +11,11 @@ import {
   kioskActivationsTable,
   adminNotificationsTable,
 } from "@workspace/db";
-import { and, eq, isNull } from "drizzle-orm";
+import { and, eq, isNull, gt } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
+
+const ACTIVATION_TTL_MS = 12 * 60 * 60 * 1000;
 
 const router: IRouter = Router();
 
@@ -146,16 +148,20 @@ router.post("/kiosk/activate", async (req, res) => {
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashToken(token);
 
+  const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
+
   await db.insert(kioskActivationsTable).values({
     tokenHash,
     room: chosenRoom,
     staffId: staff.id,
+    expiresAt,
   });
 
   res.status(201).json({
     token,
     room: chosenRoom,
     staffName: staff.displayName,
+    expiresAt: expiresAt.toISOString(),
   });
 });
 
@@ -172,10 +178,11 @@ router.get("/kiosk/activation/:token", async (req, res) => {
       and(
         eq(kioskActivationsTable.tokenHash, hashToken(token)),
         isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
       ),
     );
   if (!act) {
-    res.status(401).json({ error: "Activation not found or revoked" });
+    res.status(401).json({ error: "Activation not found, revoked, or expired" });
     return;
   }
   const [staff] = await db
@@ -186,6 +193,7 @@ router.get("/kiosk/activation/:token", async (req, res) => {
     room: act.room,
     staffName: staff?.displayName ?? null,
     activatedAt: act.activatedAt,
+    expiresAt: act.expiresAt,
   });
 });
 
@@ -305,11 +313,12 @@ router.post("/kiosk/hall-passes", async (req, res) => {
       and(
         eq(kioskActivationsTable.tokenHash, hashToken(token)),
         isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
       ),
     );
   if (!act) {
     res.status(401).json({
-      error: "Kiosk activation not found or revoked",
+      error: "Kiosk activation not found, revoked, or expired",
       revoked: true,
     });
     return;
