@@ -21,6 +21,7 @@ import {
   studentAccommodationsTable,
   accommodationLogsTable,
   studentsTable,
+  hallPassesTable,
 } from "@workspace/db";
 import { and, eq, isNull, inArray, sql, desc } from "drizzle-orm";
 
@@ -404,6 +405,127 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
       avgCoveragePct,
     },
     recent,
+  });
+});
+
+// School-wide hall pass report for a single day. Admin / ESE only.
+//   GET /api/reports/hall-passes?date=YYYY-MM-DD  (default: today UTC)
+// Returns: totals + top-10 lists (student takers, student lost minutes,
+// teacher granters, destinations).
+router.get("/reports/hall-passes", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  if (!staff.isAdmin && !staff.isEseCoordinator) {
+    res.status(403).json({ error: "Admin or ESE coordinator only" });
+    return;
+  }
+  const dateRaw = req.query.date ? String(req.query.date) : todayIsoDate();
+  if (!parseStrictIsoDate(dateRaw)) {
+    res
+      .status(400)
+      .json({ error: "date must be a valid YYYY-MM-DD calendar date" });
+    return;
+  }
+
+  const passes = await db
+    .select({
+      studentId: hallPassesTable.studentId,
+      destination: hallPassesTable.destination,
+      teacherName: hallPassesTable.teacherName,
+      createdAt: hallPassesTable.createdAt,
+      endedAt: hallPassesTable.endedAt,
+      status: hallPassesTable.status,
+    })
+    .from(hallPassesTable)
+    .where(
+      sql`substring(${hallPassesTable.createdAt}, 1, 10) = ${dateRaw}`,
+    );
+
+  const nowMs = Date.now();
+  // Per-pass minutes lost. Capped at 8h to neutralize stuck active passes.
+  const SAFETY_CAP_MIN = 480;
+  function passMinutes(p: { createdAt: string; endedAt: string | null }): number {
+    const start = Date.parse(p.createdAt);
+    if (Number.isNaN(start)) return 0;
+    const endRef = p.endedAt ? Date.parse(p.endedAt) : nowMs;
+    if (Number.isNaN(endRef)) return 0;
+    const mins = Math.max(0, (endRef - start) / 60000);
+    return Math.min(mins, SAFETY_CAP_MIN);
+  }
+
+  let totalLost = 0;
+  let activePassCount = 0;
+  const studentCount = new Map<string, number>();
+  const studentMins = new Map<string, number>();
+  const teacherCount = new Map<string, number>();
+  const destCount = new Map<string, number>();
+  for (const p of passes) {
+    const m = passMinutes(p);
+    totalLost += m;
+    if (p.status === "active") activePassCount++;
+    studentCount.set(p.studentId, (studentCount.get(p.studentId) ?? 0) + 1);
+    studentMins.set(p.studentId, (studentMins.get(p.studentId) ?? 0) + m);
+    teacherCount.set(
+      p.teacherName,
+      (teacherCount.get(p.teacherName) ?? 0) + 1,
+    );
+    destCount.set(p.destination, (destCount.get(p.destination) ?? 0) + 1);
+  }
+
+  // Resolve student display names for the top lists (single batch query).
+  const idsNeeded = Array.from(
+    new Set([
+      ...Array.from(studentCount.keys()),
+      ...Array.from(studentMins.keys()),
+    ]),
+  );
+  const studentRows = idsNeeded.length
+    ? await db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+        })
+        .from(studentsTable)
+        .where(inArray(studentsTable.studentId, idsNeeded))
+    : [];
+  const nameById = new Map(
+    studentRows.map((s) => [
+      s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+    ]),
+  );
+
+  function topN<K>(m: Map<K, number>, n = 10): Array<[K, number]> {
+    return Array.from(m.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n);
+  }
+
+  res.json({
+    date: dateRaw,
+    asOf: new Date(nowMs).toISOString(),
+    totalPasses: passes.length,
+    totalLostMinutes: Math.round(totalLost),
+    activePassCount,
+    topStudentTakers: topN(studentCount).map(([id, count]) => ({
+      studentId: id,
+      studentName: nameById.get(id) ?? id,
+      count,
+    })),
+    topStudentLostMinutes: topN(studentMins).map(([id, mins]) => ({
+      studentId: id,
+      studentName: nameById.get(id) ?? id,
+      minutes: Math.round(mins),
+    })),
+    topTeacherGranters: topN(teacherCount).map(([teacherName, count]) => ({
+      teacherName,
+      count,
+    })),
+    topDestinations: topN(destCount).map(([destination, count]) => ({
+      destination,
+      count,
+    })),
   });
 });
 

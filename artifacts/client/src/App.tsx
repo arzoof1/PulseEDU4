@@ -169,6 +169,35 @@ function App() {
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
+
+  // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
+  const [hpView, setHpView] = useState<"overview" | "reports">("overview");
+  // Hall pass reports state.
+  const [hpReportDate, setHpReportDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10),
+  );
+  interface HpReportData {
+    date: string;
+    asOf: string;
+    totalPasses: number;
+    totalLostMinutes: number;
+    activePassCount: number;
+    topStudentTakers: Array<{
+      studentId: string;
+      studentName: string;
+      count: number;
+    }>;
+    topStudentLostMinutes: Array<{
+      studentId: string;
+      studentName: string;
+      minutes: number;
+    }>;
+    topTeacherGranters: Array<{ teacherName: string; count: number }>;
+    topDestinations: Array<{ destination: string; count: number }>;
+  }
+  const [hpReportData, setHpReportData] = useState<HpReportData | null>(null);
+  const [hpReportLoading, setHpReportLoading] = useState(false);
+  const [hpReportError, setHpReportError] = useState("");
   const [activeSection, setActiveSection] = useState<
     | "hallPasses"
     | "tardies"
@@ -573,6 +602,64 @@ function App() {
     if (reportCustomTo < reportCustomFrom) return null;
     return { from: reportCustomFrom, to: reportCustomTo };
   };
+
+  const hpReportReqIdRef = useRef(0);
+  const loadHpReport = async () => {
+    if (!authUser || (!authUser.isAdmin && !authUser.isEseCoordinator)) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(hpReportDate)) {
+      setHpReportError("Pick a valid date.");
+      setHpReportData(null);
+      return;
+    }
+    const myReqId = ++hpReportReqIdRef.current;
+    setHpReportLoading(true);
+    setHpReportError("");
+    try {
+      const res = await fetch(
+        `/api/reports/hall-passes?date=${encodeURIComponent(hpReportDate)}`,
+      );
+      if (myReqId !== hpReportReqIdRef.current) return;
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as HpReportData;
+      if (myReqId !== hpReportReqIdRef.current) return;
+      setHpReportData(data);
+    } catch (err) {
+      if (myReqId !== hpReportReqIdRef.current) return;
+      setHpReportError(err instanceof Error ? err.message : String(err));
+      setHpReportData(null);
+    } finally {
+      if (myReqId === hpReportReqIdRef.current) setHpReportLoading(false);
+    }
+  };
+
+  // Auto-reload hall pass report when its tab is open and the date changes.
+  useEffect(() => {
+    if (
+      activeSection === "hallPasses" &&
+      hpView === "reports" &&
+      authUser &&
+      (authUser.isAdmin || authUser.isEseCoordinator)
+    ) {
+      loadHpReport();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, hpView, hpReportDate, authUser?.id]);
+
+  // Force hpView back to "overview" if the current user lacks admin/ESE access
+  // (e.g., after sign-out/sign-in within same SPA session).
+  useEffect(() => {
+    if (
+      authUser &&
+      !authUser.isAdmin &&
+      !authUser.isEseCoordinator &&
+      hpView !== "overview"
+    ) {
+      setHpView("overview");
+    }
+  }, [authUser?.id, authUser?.isAdmin, authUser?.isEseCoordinator, hpView]);
 
   const reportReqIdRef = useRef(0);
   const loadReport = async () => {
@@ -1385,6 +1472,26 @@ function App() {
       <main className="app-main">
 
       {activeSection === "hallPasses" && (<>
+      {(authUser?.isAdmin || authUser?.isEseCoordinator) && (
+        <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
+          <button
+            type="button"
+            onClick={() => setHpView("overview")}
+            disabled={hpView === "overview"}
+            style={{ marginRight: "0.25rem" }}
+          >
+            Overview
+          </button>
+          <button
+            type="button"
+            onClick={() => setHpView("reports")}
+            disabled={hpView === "reports"}
+          >
+            Reports
+          </button>
+        </div>
+      )}
+      {hpView === "overview" && (<>
       {(() => {
         let active = 0;
         let overdue = 0;
@@ -1790,6 +1897,206 @@ function App() {
         </tbody>
       </table>
       </div>
+      </>)}
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && (
+        <div className="card">
+          <h2>
+            Hall Pass Reports
+            <button
+              type="button"
+              className="no-print"
+              onClick={() => window.print()}
+              style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+            >
+              Print
+            </button>
+          </h2>
+          <div
+            className="no-print"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              marginBottom: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <label>
+              Date:{" "}
+              <input
+                type="date"
+                value={hpReportDate}
+                onChange={(e) => setHpReportDate(e.target.value)}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={() =>
+                setHpReportDate(new Date().toISOString().slice(0, 10))
+              }
+            >
+              Today
+            </button>
+            <button type="button" onClick={() => loadHpReport()}>
+              Refresh
+            </button>
+            {hpReportLoading && <span style={{ color: "#666" }}>Loading…</span>}
+            {hpReportError && (
+              <span style={{ color: "#a00" }}>{hpReportError}</span>
+            )}
+          </div>
+          {!hpReportData ? (
+            hpReportLoading ? null : <div>No data.</div>
+          ) : (
+            <>
+              <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "#555" }}>
+                Reporting on {hpReportData.date} (as of{" "}
+                {new Date(hpReportData.asOf).toLocaleString()})
+              </div>
+              <div className="stat-grid" style={{ marginBottom: "1rem" }}>
+                <div className="stat-card">
+                  <span className="stat-label">Total Lost Instructional Minutes</span>
+                  <span className="stat-value">
+                    {hpReportData.totalLostMinutes}
+                  </span>
+                </div>
+                <div className="stat-card">
+                  <span className="stat-label">Total Passes</span>
+                  <span className="stat-value">{hpReportData.totalPasses}</span>
+                </div>
+                <div className="stat-card stat-active">
+                  <span className="stat-label">Currently Active</span>
+                  <span className="stat-value">
+                    {hpReportData.activePassCount}
+                  </span>
+                </div>
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                  gap: "1rem",
+                }}
+              >
+                {/* Top student pass takers */}
+                <div>
+                  <h3 style={{ marginTop: 0 }}>Top 10 Student Pass Takers</h3>
+                  {hpReportData.topStudentTakers.length === 0 ? (
+                    <div className="muted">No passes today.</div>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Student</th>
+                          <th style={{ textAlign: "right" }}>Passes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hpReportData.topStudentTakers.map((r, i) => (
+                          <tr key={r.studentId}>
+                            <td>{i + 1}</td>
+                            <td>
+                              {r.studentName}{" "}
+                              <span className="muted">({r.studentId})</span>
+                            </td>
+                            <td style={{ textAlign: "right" }}>{r.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* Top student lost instruction */}
+                <div>
+                  <h3 style={{ marginTop: 0 }}>Top 10 Students by Lost Instruction</h3>
+                  {hpReportData.topStudentLostMinutes.length === 0 ? (
+                    <div className="muted">No passes today.</div>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Student</th>
+                          <th style={{ textAlign: "right" }}>Minutes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hpReportData.topStudentLostMinutes.map((r, i) => (
+                          <tr key={r.studentId}>
+                            <td>{i + 1}</td>
+                            <td>
+                              {r.studentName}{" "}
+                              <span className="muted">({r.studentId})</span>
+                            </td>
+                            <td style={{ textAlign: "right" }}>{r.minutes}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* Top teacher granters */}
+                <div>
+                  <h3 style={{ marginTop: 0 }}>Top 10 Teacher Pass Granters</h3>
+                  {hpReportData.topTeacherGranters.length === 0 ? (
+                    <div className="muted">No passes today.</div>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Teacher</th>
+                          <th style={{ textAlign: "right" }}>Passes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hpReportData.topTeacherGranters.map((r, i) => (
+                          <tr key={r.teacherName}>
+                            <td>{i + 1}</td>
+                            <td>{r.teacherName}</td>
+                            <td style={{ textAlign: "right" }}>{r.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+
+                {/* Top destinations */}
+                <div>
+                  <h3 style={{ marginTop: 0 }}>Top 10 Pass-To Locations</h3>
+                  {hpReportData.topDestinations.length === 0 ? (
+                    <div className="muted">No passes today.</div>
+                  ) : (
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>#</th>
+                          <th>Destination</th>
+                          <th style={{ textAlign: "right" }}>Passes</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {hpReportData.topDestinations.map((r, i) => (
+                          <tr key={r.destination}>
+                            <td>{i + 1}</td>
+                            <td>{r.destination}</td>
+                            <td style={{ textAlign: "right" }}>{r.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+            </>
+          )}
+        </div>
+      )}
       </>)}
 
       {activeSection === "tardies" && (<>
