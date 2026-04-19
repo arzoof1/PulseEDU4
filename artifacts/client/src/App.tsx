@@ -187,6 +187,16 @@ function App() {
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [settingsError, setSettingsError] = useState("");
+  const [activeKiosks, setActiveKiosks] = useState<
+    Array<{
+      id: number;
+      room: string;
+      activatedByName: string | null;
+      activatedAt: string;
+      expiresAt: string;
+      deviceLabel: string | null;
+    }>
+  >([]);
   const [adminNotifications, setAdminNotifications] = useState<
     Array<{
       id: number;
@@ -309,6 +319,14 @@ function App() {
       .catch(() => setAdminNotifications([]));
   };
 
+  const loadActiveKiosks = () => {
+    if (!authUser?.isAdmin) return;
+    fetch("/api/kiosk/activations?status=active")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setActiveKiosks(data))
+      .catch(() => setActiveKiosks([]));
+  };
+
   const resolveAdminNotification = async (id: number) => {
     const res = await fetch(`/api/admin/notifications/${id}/resolve`, {
       method: "POST",
@@ -316,8 +334,23 @@ function App() {
     if (res.ok) loadAdminNotifications();
   };
 
+  const forceDeactivateKiosk = async (id: number, room: string) => {
+    if (
+      !window.confirm(
+        `Force-deactivate the kiosk in ${room}? The next person who walks up will need to re-activate it.`,
+      )
+    ) {
+      return;
+    }
+    const res = await fetch(`/api/kiosk/activations/${id}/deactivate`, {
+      method: "POST",
+    });
+    if (res.ok) loadActiveKiosks();
+  };
+
   useEffect(() => {
     loadAdminNotifications();
+    loadActiveKiosks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.isAdmin]);
 
@@ -2783,6 +2816,111 @@ function App() {
                 );
               })}
             </ul>
+          )}
+        </div>
+      )}
+
+      {activeSection === "settings" && isAdmin && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "0.5rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <h2 style={{ margin: 0 }}>
+              Active Kiosks{" "}
+              <span style={{ color: "var(--text-subtle)", fontWeight: 400 }}>
+                ({activeKiosks.length})
+              </span>
+            </h2>
+            <button type="button" onClick={loadActiveKiosks}>
+              Refresh
+            </button>
+          </div>
+          <p style={{ color: "var(--text-subtle)", marginTop: "0.5rem" }}>
+            Devices currently in kiosk mode. Force-deactivating logs the
+            device out immediately — students at that kiosk will see the
+            activation screen on their next interaction.
+          </p>
+          {activeKiosks.length === 0 ? (
+            <p style={{ color: "var(--text-subtle)" }}>
+              No kiosks are currently active.
+            </p>
+          ) : (
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
+                    Room
+                  </th>
+                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
+                    Activated by
+                  </th>
+                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
+                    Started
+                  </th>
+                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
+                    Expires
+                  </th>
+                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
+                    Device
+                  </th>
+                  <th style={{ padding: "0.5rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeKiosks.map((k) => (
+                  <tr
+                    key={k.id}
+                    style={{ borderTop: "1px solid var(--border)" }}
+                  >
+                    <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                      {k.room}
+                    </td>
+                    <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                      {k.activatedByName ?? "—"}
+                    </td>
+                    <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                      {new Date(k.activatedAt).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </td>
+                    <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                      {new Date(k.expiresAt).toLocaleString([], {
+                        month: "short",
+                        day: "numeric",
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </td>
+                    <td
+                      style={{
+                        padding: "0.5rem",
+                        color: "var(--text-subtle)",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      {k.deviceLabel ?? "Unknown"}
+                    </td>
+                    <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                      <button
+                        type="button"
+                        onClick={() => forceDeactivateKiosk(k.id, k.room)}
+                      >
+                        Force deactivate
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
       )}

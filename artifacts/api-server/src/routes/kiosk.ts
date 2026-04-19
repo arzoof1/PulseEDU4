@@ -11,7 +11,7 @@ import {
   kioskActivationsTable,
   adminNotificationsTable,
 } from "@workspace/db";
-import { and, eq, isNull, gt } from "drizzle-orm";
+import { and, eq, isNull, gt, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 
@@ -241,22 +241,66 @@ router.post("/kiosk/deactivate", requireStaff, async (req, res) => {
   res.status(204).end();
 });
 
-router.get("/kiosk/activations", requireAdmin, async (_req, res) => {
+router.get("/kiosk/activations", requireAdmin, async (req, res) => {
+  const onlyActive = (req.query.status ?? "active") === "active";
+  const baseWhere = onlyActive
+    ? and(
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      )
+    : undefined;
+
   const rows = await db
     .select({
       id: kioskActivationsTable.id,
       room: kioskActivationsTable.room,
       staffId: kioskActivationsTable.staffId,
       activatedAt: kioskActivationsTable.activatedAt,
+      expiresAt: kioskActivationsTable.expiresAt,
       deactivatedAt: kioskActivationsTable.deactivatedAt,
       deactivatedByStaffId: kioskActivationsTable.deactivatedByStaffId,
+      deviceLabel: kioskActivationsTable.deviceLabel,
+      deviceFingerprint: kioskActivationsTable.deviceFingerprint,
       activatedByName: staffTable.displayName,
     })
     .from(kioskActivationsTable)
     .leftJoin(staffTable, eq(staffTable.id, kioskActivationsTable.staffId))
-    .orderBy(kioskActivationsTable.activatedAt);
+    .where(baseWhere as never)
+    .orderBy(desc(kioskActivationsTable.activatedAt));
   res.json(rows);
 });
+
+router.post(
+  "/kiosk/activations/:id/deactivate",
+  requireAdmin,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const result = await db
+      .update(kioskActivationsTable)
+      .set({
+        deactivatedAt: new Date(),
+        deactivatedByStaffId: staff.id,
+      })
+      .where(
+        and(
+          eq(kioskActivationsTable.id, id),
+          isNull(kioskActivationsTable.deactivatedAt),
+        ),
+      )
+      .returning();
+    if (result.length === 0) {
+      res.status(404).json({ error: "Activation not found or already revoked" });
+      return;
+    }
+    res.status(204).end();
+  },
+);
 
 router.get("/admin/notifications", requireAdmin, async (_req, res) => {
   const rows = await db
