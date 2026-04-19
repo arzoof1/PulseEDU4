@@ -82,6 +82,14 @@ type Phase =
 
 type Mode = "out" | "back";
 
+interface ActivePass {
+  id: number;
+  studentId: string;
+  destination: string;
+  createdAt: string; // ISO
+  maxDurationMinutes: number;
+}
+
 type Status =
   | { kind: "idle" }
   | { kind: "submitting" }
@@ -332,6 +340,9 @@ function KioskBody({
   const [destination, setDestination] = useState("");
   const [mode, setMode] = useState<Mode>("out");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const [activePass, setActivePass] = useState<ActivePass | null>(null);
+  const [returning, setReturning] = useState(false);
+  const [returnError, setReturnError] = useState<string | null>(null);
   const studentIdInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
@@ -425,15 +436,46 @@ function KioskBody({
         return;
       }
       const data = (await res.json().catch(() => ({}))) as {
+        id?: number;
         destination?: string;
+        createdAt?: string;
+        maxDurationMinutes?: number;
       };
-      setStatus({
-        kind: "success",
-        mode,
-        studentId: studentId.trim(),
-        destination:
-          mode === "out" ? destination : (data.destination ?? "(unknown)"),
-      });
+      if (mode === "out") {
+        // Skip the brief success card and go straight to the giant
+        // countdown screen so the teacher can see who's out from across
+        // the room.
+        if (
+          typeof data.id === "number" &&
+          typeof data.createdAt === "string" &&
+          typeof data.maxDurationMinutes === "number"
+        ) {
+          setActivePass({
+            id: data.id,
+            studentId: studentId.trim(),
+            destination,
+            createdAt: data.createdAt,
+            maxDurationMinutes: data.maxDurationMinutes,
+          });
+          setStudentId("");
+          setDestination("");
+          setStatus({ kind: "idle" });
+        } else {
+          setStatus({
+            kind: "success",
+            mode,
+            studentId: studentId.trim(),
+            destination,
+          });
+        }
+      } else {
+        setStatus({
+          kind: "success",
+          mode,
+          studentId: studentId.trim(),
+          destination: data.destination ?? "(unknown)",
+        });
+      }
     } catch (err) {
       setStatus({
         kind: "error",
@@ -479,7 +521,51 @@ function KioskBody({
         })}
       </div>
 
-      {status.kind === "success" ? (
+      {activePass ? (
+        <TimerScreen
+          activePass={activePass}
+          now={now}
+          returning={returning}
+          returnError={returnError}
+          onReturn={async () => {
+            setReturning(true);
+            setReturnError(null);
+            try {
+              const res = await fetch("/api/kiosk/hall-passes/return", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  studentId: activePass.studentId,
+                  token,
+                }),
+              });
+              if (res.status === 401) {
+                const b = await res.json().catch(() => ({}));
+                if (b.revoked) {
+                  onRevoked();
+                  return;
+                }
+              }
+              if (!res.ok && res.status !== 404) {
+                const b = await res.json().catch(() => ({}));
+                setReturnError(
+                  b.error ?? `Request failed (${res.status})`,
+                );
+                return;
+              }
+              // 404 means the pass was already ended elsewhere; treat as
+              // success and clear the screen.
+              setActivePass(null);
+            } catch (err) {
+              setReturnError(
+                err instanceof Error ? err.message : "Network error",
+              );
+            } finally {
+              setReturning(false);
+            }
+          }}
+        />
+      ) : status.kind === "success" ? (
         <SuccessCard
           mode={status.mode}
           studentId={status.studentId}
@@ -909,6 +995,134 @@ function primaryBtn(
     cursor: disabled ? "not-allowed" : "pointer",
     ...override,
   };
+}
+
+function TimerScreen({
+  activePass,
+  now,
+  returning,
+  returnError,
+  onReturn,
+}: {
+  activePass: ActivePass;
+  now: Date;
+  returning: boolean;
+  returnError: string | null;
+  onReturn: () => void;
+}) {
+  const elapsedMs = now.getTime() - new Date(activePass.createdAt).getTime();
+  const totalMs = activePass.maxDurationMinutes * 60 * 1000;
+  const remainingMs = totalMs - elapsedMs;
+  const overdue = remainingMs <= 0;
+  const absMs = Math.abs(remainingMs);
+  const totalSeconds = Math.floor(absMs / 1000);
+  const mm = Math.floor(totalSeconds / 60);
+  const ss = totalSeconds % 60;
+  const timeText = `${overdue ? "-" : ""}${mm}:${String(ss).padStart(2, "0")}`;
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: overdue ? "#dc2626" : "#15803d",
+        color: "#fff",
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "2rem",
+        zIndex: 5,
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "clamp(1rem, 2.5vw, 1.5rem)",
+          letterSpacing: "0.15em",
+          textTransform: "uppercase",
+          opacity: 0.85,
+          marginBottom: "0.75rem",
+        }}
+      >
+        {overdue ? "Overdue" : "Out on pass"}
+      </div>
+      <div
+        style={{
+          fontSize: "clamp(2.5rem, 7vw, 5rem)",
+          fontWeight: 700,
+          lineHeight: 1.1,
+          marginBottom: "0.5rem",
+        }}
+      >
+        {activePass.studentId}
+        <span style={{ opacity: 0.85, fontWeight: 500 }}> → </span>
+        {activePass.destination}
+      </div>
+      <div
+        aria-label={overdue ? "overdue countdown" : "time remaining"}
+        style={{
+          fontSize: "clamp(8rem, 28vw, 22rem)",
+          fontWeight: 900,
+          lineHeight: 1,
+          fontVariantNumeric: "tabular-nums",
+          letterSpacing: "0.02em",
+          margin: "1rem 0 1.5rem",
+          textShadow: "0 4px 24px rgba(0,0,0,0.25)",
+        }}
+      >
+        {timeText}
+      </div>
+      <div
+        style={{
+          fontSize: "clamp(1rem, 2vw, 1.25rem)",
+          opacity: 0.85,
+          marginBottom: "2rem",
+        }}
+      >
+        {overdue
+          ? `Over the ${activePass.maxDurationMinutes}-minute limit`
+          : `Limit: ${activePass.maxDurationMinutes} minutes`}
+      </div>
+
+      {returnError && (
+        <div
+          style={{
+            background: "rgba(0,0,0,0.25)",
+            border: "1px solid rgba(255,255,255,0.4)",
+            color: "#fff",
+            padding: "0.6rem 0.9rem",
+            borderRadius: 8,
+            fontSize: "1rem",
+            marginBottom: "1rem",
+            maxWidth: 480,
+          }}
+        >
+          {returnError}
+        </div>
+      )}
+
+      <button
+        type="button"
+        onClick={onReturn}
+        disabled={returning}
+        style={{
+          background: "#fff",
+          color: overdue ? "#dc2626" : "#15803d",
+          border: "none",
+          borderRadius: 12,
+          padding: "1.1rem 2.5rem",
+          fontSize: "clamp(1.25rem, 2.5vw, 1.6rem)",
+          fontWeight: 700,
+          cursor: returning ? "not-allowed" : "pointer",
+          opacity: returning ? 0.7 : 1,
+          boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+        }}
+      >
+        {returning ? "Signing in…" : "I'm back"}
+      </button>
+    </div>
+  );
 }
 
 function SuccessCard({
