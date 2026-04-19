@@ -10,6 +10,7 @@ import {
   staffTable,
   kioskActivationsTable,
   adminNotificationsTable,
+  studentsTable,
 } from "@workspace/db";
 import { and, eq, isNull, gt, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
@@ -465,7 +466,15 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     })
     .returning();
 
-  res.status(201).json(pass);
+  const [student] = await db
+    .select({ firstName: studentsTable.firstName })
+    .from(studentsTable)
+    .where(eq(studentsTable.studentId, studentId.trim()));
+
+  res.status(201).json({
+    ...pass,
+    studentFirstName: student?.firstName ?? null,
+  });
 });
 
 // Student "I'm back" flow: ends the student's currently-active hall pass from
@@ -540,7 +549,15 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     .where(eq(hallPassesTable.id, target.id))
     .returning();
 
-  res.json(updated);
+  const [student] = await db
+    .select({ firstName: studentsTable.firstName })
+    .from(studentsTable)
+    .where(eq(studentsTable.studentId, trimmedId));
+
+  res.json({
+    ...updated,
+    studentFirstName: student?.firstName ?? null,
+  });
 });
 
 export default router;

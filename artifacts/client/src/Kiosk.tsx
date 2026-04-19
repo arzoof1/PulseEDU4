@@ -85,6 +85,7 @@ type Mode = "out" | "back";
 interface ActivePass {
   id: number;
   studentId: string;
+  studentFirstName: string | null;
   destination: string;
   createdAt: string; // ISO
   maxDurationMinutes: number;
@@ -97,6 +98,7 @@ type Status =
       kind: "success";
       mode: Mode;
       studentId: string;
+      studentFirstName: string | null;
       destination: string;
     }
   | { kind: "error"; message: string };
@@ -440,6 +442,7 @@ function KioskBody({
         destination?: string;
         createdAt?: string;
         maxDurationMinutes?: number;
+        studentFirstName?: string | null;
       };
       if (mode === "out") {
         // Skip the brief success card and go straight to the giant
@@ -453,6 +456,7 @@ function KioskBody({
           setActivePass({
             id: data.id,
             studentId: studentId.trim(),
+            studentFirstName: data.studentFirstName ?? null,
             destination,
             createdAt: data.createdAt,
             maxDurationMinutes: data.maxDurationMinutes,
@@ -465,6 +469,7 @@ function KioskBody({
             kind: "success",
             mode,
             studentId: studentId.trim(),
+            studentFirstName: data.studentFirstName ?? null,
             destination,
           });
         }
@@ -473,6 +478,7 @@ function KioskBody({
           kind: "success",
           mode,
           studentId: studentId.trim(),
+          studentFirstName: data.studentFirstName ?? null,
           destination: data.destination ?? "(unknown)",
         });
       }
@@ -569,6 +575,7 @@ function KioskBody({
         <SuccessCard
           mode={status.mode}
           studentId={status.studentId}
+          studentFirstName={status.studentFirstName}
           destination={status.destination}
           onReset={resetForm}
         />
@@ -1055,7 +1062,7 @@ function TimerScreen({
           marginBottom: "0.5rem",
         }}
       >
-        {activePass.studentId}
+        {activePass.studentFirstName ?? activePass.studentId}
         <span style={{ opacity: 0.85, fontWeight: 500 }}> → </span>
         {activePass.destination}
       </div>
@@ -1128,14 +1135,17 @@ function TimerScreen({
 function SuccessCard({
   mode,
   studentId,
+  studentFirstName,
   destination,
   onReset,
 }: {
   mode: Mode;
   studentId: string;
+  studentFirstName: string | null;
   destination: string;
   onReset: () => void;
 }) {
+  const displayName = studentFirstName ?? studentId;
   return (
     <div
       style={{
@@ -1155,12 +1165,11 @@ function SuccessCard({
       <div style={{ opacity: 0.85, marginBottom: "1.5rem" }}>
         {mode === "out" ? (
           <>
-            Student <strong>{studentId}</strong> →{" "}
-            <strong>{destination}</strong>
+            <strong>{displayName}</strong> → <strong>{destination}</strong>
           </>
         ) : (
           <>
-            Student <strong>{studentId}</strong> signed back in from{" "}
+            <strong>{displayName}</strong> signed back in from{" "}
             <strong>{destination}</strong>
           </>
         )}
