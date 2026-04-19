@@ -22,6 +22,7 @@ import {
   accommodationLogsTable,
   studentsTable,
   hallPassesTable,
+  pbisEntriesTable,
 } from "@workspace/db";
 import { and, eq, isNull, inArray, sql, desc } from "drizzle-orm";
 
@@ -525,6 +526,147 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
     topDestinations: topN(destCount).map(([destination, count]) => ({
       destination,
       count,
+    })),
+  });
+});
+
+// PBIS report.
+//   GET /api/reports/pbis?from=YYYY-MM-DD&to=YYYY-MM-DD&teacherName=&reason=&studentId=
+// Auth scope:
+//   - admin / ESE / PBIS coordinator: school-wide; all filters honored as given.
+//   - other staff: forced to their own awarded entries (teacherName filter ignored).
+router.get("/reports/pbis", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+
+  const fromRaw = req.query.from ? String(req.query.from) : todayIsoDate();
+  const toRaw = req.query.to ? String(req.query.to) : todayIsoDate();
+  if (!parseStrictIsoDate(fromRaw) || !parseStrictIsoDate(toRaw)) {
+    res
+      .status(400)
+      .json({ error: "from and to must be valid YYYY-MM-DD calendar dates" });
+    return;
+  }
+  if (toRaw < fromRaw) {
+    res.status(400).json({ error: "to must be on or after from" });
+    return;
+  }
+  const fromDate = parseStrictIsoDate(fromRaw)!;
+  const toDate = parseStrictIsoDate(toRaw)!;
+  const spanDays =
+    Math.round((toDate.getTime() - fromDate.getTime()) / 86400000) + 1;
+  if (spanDays > MAX_RANGE_DAYS) {
+    res
+      .status(400)
+      .json({ error: `Date range may not exceed ${MAX_RANGE_DAYS} days` });
+    return;
+  }
+
+  const isPrivileged =
+    staff.isAdmin || staff.isEseCoordinator || staff.isPbisCoordinator;
+
+  const reasonFilter =
+    typeof req.query.reason === "string" && req.query.reason.trim()
+      ? req.query.reason.trim()
+      : null;
+  const studentFilter =
+    typeof req.query.studentId === "string" && req.query.studentId.trim()
+      ? req.query.studentId.trim()
+      : null;
+
+  // Privileged users may filter by any teacher name; others are pinned to self.
+  let teacherFilter: string | null = null;
+  if (isPrivileged) {
+    if (
+      typeof req.query.teacherName === "string" &&
+      req.query.teacherName.trim()
+    ) {
+      teacherFilter = req.query.teacherName.trim();
+    }
+  } else {
+    teacherFilter = staff.displayName;
+  }
+
+  const conds = [
+    sql`substring(${pbisEntriesTable.createdAt}, 1, 10) >= ${fromRaw}`,
+    sql`substring(${pbisEntriesTable.createdAt}, 1, 10) <= ${toRaw}`,
+  ];
+  if (reasonFilter) conds.push(eq(pbisEntriesTable.reason, reasonFilter));
+  if (studentFilter) conds.push(eq(pbisEntriesTable.studentId, studentFilter));
+  if (teacherFilter) conds.push(eq(pbisEntriesTable.staffName, teacherFilter));
+
+  const rowsRaw = await db
+    .select()
+    .from(pbisEntriesTable)
+    .where(and(...conds))
+    .orderBy(desc(pbisEntriesTable.createdAt))
+    .limit(500);
+
+  const rowStudentIds = Array.from(
+    new Set(rowsRaw.map((r) => r.studentId).filter(Boolean)),
+  );
+  const studentRows = rowStudentIds.length
+    ? await db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+        })
+        .from(studentsTable)
+        .where(inArray(studentsTable.studentId, rowStudentIds))
+    : [];
+  const nameById = new Map(
+    studentRows.map((s) => [
+      s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+    ]),
+  );
+
+  let totalPoints = 0;
+  const byReason = new Map<string, { count: number; points: number }>();
+  const byTeacher = new Map<string, { count: number; points: number }>();
+  const distinctStudents = new Set<string>();
+  for (const r of rowsRaw) {
+    totalPoints += r.points || 0;
+    distinctStudents.add(r.studentId);
+    const br = byReason.get(r.reason) ?? { count: 0, points: 0 };
+    br.count++;
+    br.points += r.points || 0;
+    byReason.set(r.reason, br);
+    const bt = byTeacher.get(r.staffName || "—") ?? { count: 0, points: 0 };
+    bt.count++;
+    bt.points += r.points || 0;
+    byTeacher.set(r.staffName || "—", bt);
+  }
+
+  res.json({
+    range: { from: fromRaw, to: toRaw, days: spanDays },
+    scope: isPrivileged ? "school" : "self",
+    appliedFilters: {
+      teacherName: teacherFilter,
+      reason: reasonFilter,
+      studentId: studentFilter,
+    },
+    totals: {
+      count: rowsRaw.length,
+      totalPoints,
+      distinctStudents: distinctStudents.size,
+      truncated: rowsRaw.length === 500,
+    },
+    byReason: Array.from(byReason.entries())
+      .map(([reason, v]) => ({ reason, ...v }))
+      .sort((a, b) => b.points - a.points),
+    byTeacher: Array.from(byTeacher.entries())
+      .map(([teacherName, v]) => ({ teacherName, ...v }))
+      .sort((a, b) => b.points - a.points),
+    rows: rowsRaw.map((r) => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      studentId: r.studentId,
+      studentName: nameById.get(r.studentId) ?? r.studentId,
+      reason: r.reason,
+      points: r.points,
+      staffName: r.staffName,
     })),
   });
 });

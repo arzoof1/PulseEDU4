@@ -407,6 +407,83 @@ function App() {
   const [pbisStudentSearch, setPbisStudentSearch] = useState("");
   const [pbisOptionIndex, setPbisOptionIndex] = useState(0);
   const [pbisReasonId, setPbisReasonId] = useState<number | "">("");
+
+  // PBIS report panel state
+  type PbisReportRow = {
+    id: number;
+    createdAt: string;
+    studentId: string;
+    studentName: string;
+    reason: string;
+    points: number;
+    staffName: string;
+  };
+  type PbisReport = {
+    range: { from: string; to: string; days: number };
+    scope: "school" | "self";
+    appliedFilters: {
+      teacherName: string | null;
+      reason: string | null;
+      studentId: string | null;
+    };
+    totals: {
+      count: number;
+      totalPoints: number;
+      distinctStudents: number;
+      truncated: boolean;
+    };
+    byReason: Array<{ reason: string; count: number; points: number }>;
+    byTeacher: Array<{ teacherName: string; count: number; points: number }>;
+    rows: PbisReportRow[];
+  };
+  const todayIso = () => new Date().toISOString().slice(0, 10);
+  const sevenDaysAgoIso = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 6);
+    return d.toISOString().slice(0, 10);
+  };
+  const [pbisReportFrom, setPbisReportFrom] = useState(sevenDaysAgoIso());
+  const [pbisReportTo, setPbisReportTo] = useState(todayIso());
+  const [pbisReportTeacher, setPbisReportTeacher] = useState("");
+  const [pbisReportReason, setPbisReportReason] = useState("");
+  const [pbisReportStudent, setPbisReportStudent] = useState("");
+  const [pbisReport, setPbisReport] = useState<PbisReport | null>(null);
+  const [pbisReportMsg, setPbisReportMsg] = useState("");
+  const [pbisReportBusy, setPbisReportBusy] = useState(false);
+
+  const runPbisReport = async () => {
+    setPbisReportMsg("");
+    setPbisReportBusy(true);
+    try {
+      const params = new URLSearchParams({
+        from: pbisReportFrom,
+        to: pbisReportTo,
+      });
+      if (pbisReportTeacher.trim())
+        params.set("teacherName", pbisReportTeacher.trim());
+      if (pbisReportReason.trim())
+        params.set("reason", pbisReportReason.trim());
+      if (pbisReportStudent.trim())
+        params.set("studentId", pbisReportStudent.trim());
+      const res = await fetch(`/api/reports/pbis?${params.toString()}`);
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setPbisReport(null);
+        setPbisReportMsg(
+          res.status === 401
+            ? "Your session expired. Please sign in again."
+            : j.error || `Couldn't run report (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      setPbisReport((await res.json()) as PbisReport);
+    } catch (e) {
+      setPbisReport(null);
+      setPbisReportMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPbisReportBusy(false);
+    }
+  };
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -4687,6 +4764,239 @@ function App() {
               })}
             </tbody>
           </table>
+
+          <h3 style={{ marginTop: "1.5rem" }}>PBIS Report</h3>
+          <p style={{ marginTop: 0, color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
+            {isPbisCoord || isAdmin || isEseCoord
+              ? "School-wide. Leave a filter blank to ignore it."
+              : "Showing only PBIS points you awarded."}
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns:
+                "repeat(auto-fit, minmax(10rem, 1fr)) auto",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              maxWidth: "60rem",
+            }}
+          >
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>From</div>
+              <input
+                type="date"
+                value={pbisReportFrom}
+                onChange={(e) => setPbisReportFrom(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>To</div>
+              <input
+                type="date"
+                value={pbisReportTo}
+                onChange={(e) => setPbisReportTo(e.target.value)}
+                style={{ width: "100%" }}
+              />
+            </label>
+            {(isPbisCoord || isAdmin || isEseCoord) && (
+              <label>
+                <div style={{ fontSize: "0.85rem" }}>Teacher (display name)</div>
+                <input
+                  type="text"
+                  value={pbisReportTeacher}
+                  onChange={(e) => setPbisReportTeacher(e.target.value)}
+                  placeholder="Any"
+                  style={{ width: "100%" }}
+                />
+              </label>
+            )}
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Reason</div>
+              <select
+                value={pbisReportReason}
+                onChange={(e) => setPbisReportReason(e.target.value)}
+                style={{ width: "100%" }}
+              >
+                <option value="">Any</option>
+                {pbisReasonsList
+                  .slice()
+                  .sort((a, b) => a.name.localeCompare(b.name))
+                  .map((r) => (
+                    <option key={r.id} value={r.name}>
+                      {r.name}
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Student ID</div>
+              <input
+                type="text"
+                value={pbisReportStudent}
+                onChange={(e) => setPbisReportStudent(e.target.value)}
+                placeholder="Any"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <button
+              type="button"
+              onClick={runPbisReport}
+              disabled={pbisReportBusy}
+            >
+              {pbisReportBusy ? "Running…" : "Run report"}
+            </button>
+          </div>
+          {pbisReportMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {pbisReportMsg}
+            </div>
+          )}
+
+          {pbisReport && (
+            <div style={{ maxWidth: "60rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "1rem",
+                  marginBottom: "0.75rem",
+                  fontSize: "0.9rem",
+                }}
+              >
+                <div>
+                  <strong>{pbisReport.totals.totalPoints}</strong> points
+                </div>
+                <div>
+                  <strong>{pbisReport.totals.count}</strong>{" "}
+                  {pbisReport.totals.count === 1 ? "entry" : "entries"}
+                </div>
+                <div>
+                  <strong>{pbisReport.totals.distinctStudents}</strong>{" "}
+                  {pbisReport.totals.distinctStudents === 1
+                    ? "student"
+                    : "students"}
+                </div>
+                <div style={{ color: "var(--muted, #64748b)" }}>
+                  {pbisReport.range.from} → {pbisReport.range.to} (
+                  {pbisReport.range.days}d, {pbisReport.scope})
+                </div>
+                {pbisReport.totals.truncated && (
+                  <div style={{ color: "crimson" }}>
+                    Showing first 500 rows — narrow your filters.
+                  </div>
+                )}
+              </div>
+
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "1fr 1fr",
+                  gap: "1rem",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+                    By reason
+                  </div>
+                  {pbisReport.byReason.length === 0 ? (
+                    <div style={{ fontSize: "0.85rem", color: "var(--muted, #64748b)" }}>
+                      —
+                    </div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                          <th style={{ padding: "0.25rem" }}>Reason</th>
+                          <th style={{ padding: "0.25rem" }}>Pts</th>
+                          <th style={{ padding: "0.25rem" }}>#</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pbisReport.byReason.map((r) => (
+                          <tr key={r.reason} style={{ borderBottom: "1px solid #eee" }}>
+                            <td style={{ padding: "0.25rem" }}>{r.reason}</td>
+                            <td style={{ padding: "0.25rem" }}>{r.points}</td>
+                            <td style={{ padding: "0.25rem" }}>{r.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+                <div>
+                  <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+                    By teacher
+                  </div>
+                  {pbisReport.byTeacher.length === 0 ? (
+                    <div style={{ fontSize: "0.85rem", color: "var(--muted, #64748b)" }}>
+                      —
+                    </div>
+                  ) : (
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                      <thead>
+                        <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                          <th style={{ padding: "0.25rem" }}>Teacher</th>
+                          <th style={{ padding: "0.25rem" }}>Pts</th>
+                          <th style={{ padding: "0.25rem" }}>#</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pbisReport.byTeacher.map((t) => (
+                          <tr key={t.teacherName} style={{ borderBottom: "1px solid #eee" }}>
+                            <td style={{ padding: "0.25rem" }}>{t.teacherName}</td>
+                            <td style={{ padding: "0.25rem" }}>{t.points}</td>
+                            <td style={{ padding: "0.25rem" }}>{t.count}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              </div>
+
+              <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+                Entries
+              </div>
+              {pbisReport.rows.length === 0 ? (
+                <div style={{ fontSize: "0.85rem", color: "var(--muted, #64748b)" }}>
+                  No entries match these filters.
+                </div>
+              ) : (
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                  <thead>
+                    <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                      <th style={{ padding: "0.25rem" }}>When</th>
+                      <th style={{ padding: "0.25rem" }}>Student</th>
+                      <th style={{ padding: "0.25rem" }}>Reason</th>
+                      <th style={{ padding: "0.25rem" }}>Pts</th>
+                      <th style={{ padding: "0.25rem" }}>Teacher</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {pbisReport.rows.map((r) => (
+                      <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
+                        <td style={{ padding: "0.25rem" }}>
+                          {new Date(r.createdAt).toLocaleString()}
+                        </td>
+                        <td style={{ padding: "0.25rem" }}>
+                          {r.studentName}
+                          <div style={{ fontSize: 11, color: "var(--text-subtle, #94a3b8)" }}>
+                            {r.studentId}
+                          </div>
+                        </td>
+                        <td style={{ padding: "0.25rem" }}>{r.reason}</td>
+                        <td style={{ padding: "0.25rem" }}>{r.points}</td>
+                        <td style={{ padding: "0.25rem" }}>{r.staffName || "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          )}
         </section>
       </>)}
 
