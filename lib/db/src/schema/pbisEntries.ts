@@ -5,6 +5,7 @@ export const pbisEntriesTable = pgTable("pbis_entries", {
   studentId: text("student_id").notNull(),
   reason: text("reason").notNull(),
   points: integer("points").notNull(),
+  staffId: integer("staff_id"),
   staffName: text("staff_name").notNull(),
   createdAt: text("created_at").notNull(),
 });

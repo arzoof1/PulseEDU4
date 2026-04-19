@@ -17,6 +17,7 @@ import kioskRouter from "./kiosk";
 import authRouter from "./auth";
 import reportsRouter from "./reports";
 import listsAdminRouter from "./listsAdmin";
+import interventionsRouter from "./interventions";
 
 const router: IRouter = Router();
 
@@ -38,5 +39,6 @@ router.use(kioskRouter);
 router.use(authRouter);
 router.use(reportsRouter);
 router.use(listsAdminRouter);
+router.use(interventionsRouter);
 
 export default router;

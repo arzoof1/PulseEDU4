@@ -18,3 +18,4 @@ export * from "./kioskActivations";
 export * from "./adminNotifications";
 export * from "./pbisReasons";
 export * from "./interventionTypes";
+export * from "./interventionEntries";

@@ -574,7 +574,9 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
       ? req.query.studentId.trim()
       : null;
 
-  // Privileged users may filter by any teacher name; others are pinned to self.
+  // Privileged users may filter by any teacher name; non-privileged users are
+  // pinned to their own entries via the immutable staff_id, never the
+  // mutable, non-unique display name.
   let teacherFilter: string | null = null;
   if (isPrivileged) {
     if (
@@ -583,8 +585,6 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
     ) {
       teacherFilter = req.query.teacherName.trim();
     }
-  } else {
-    teacherFilter = staff.displayName;
   }
 
   const conds = [
@@ -594,6 +594,10 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
   if (reasonFilter) conds.push(eq(pbisEntriesTable.reason, reasonFilter));
   if (studentFilter) conds.push(eq(pbisEntriesTable.studentId, studentFilter));
   if (teacherFilter) conds.push(eq(pbisEntriesTable.staffName, teacherFilter));
+  if (!isPrivileged) {
+    conds.push(eq(pbisEntriesTable.staffId, staff.id));
+    teacherFilter = staff.displayName; // surfaced in appliedFilters only
+  }
 
   const rowsRaw = await db
     .select()

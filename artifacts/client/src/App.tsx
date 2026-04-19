@@ -209,6 +209,7 @@ function App() {
     | "ese"
     | "pbisLists"
     | "interventions"
+    | "logIntervention"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -450,6 +451,79 @@ function App() {
   const [pbisReport, setPbisReport] = useState<PbisReport | null>(null);
   const [pbisReportMsg, setPbisReportMsg] = useState("");
   const [pbisReportBusy, setPbisReportBusy] = useState(false);
+
+  // Log Intervention (teacher form) state
+  type InterventionEntry = {
+    id: number;
+    studentId: string;
+    interventionType: string;
+    note: string | null;
+    staffId: number | null;
+    staffName: string;
+    createdAt: string;
+  };
+  const [interventionEntries, setInterventionEntries] = useState<
+    InterventionEntry[]
+  >([]);
+  const [logIntervStudentId, setLogIntervStudentId] = useState("");
+  const [logIntervStudentSearch, setLogIntervStudentSearch] = useState("");
+  const [logIntervTypeId, setLogIntervTypeId] = useState<number | "">("");
+  const [logIntervNote, setLogIntervNote] = useState("");
+  const [logIntervMsg, setLogIntervMsg] = useState("");
+  const [logIntervBusy, setLogIntervBusy] = useState(false);
+
+  const loadInterventionEntries = async () => {
+    try {
+      const res = await fetch("/api/interventions");
+      if (!res.ok) {
+        setInterventionEntries([]);
+        return;
+      }
+      const data = (await res.json()) as InterventionEntry[];
+      setInterventionEntries(Array.isArray(data) ? data : []);
+    } catch {
+      setInterventionEntries([]);
+    }
+  };
+
+  const submitIntervention = async () => {
+    setLogIntervMsg("");
+    const sid = logIntervStudentId.trim();
+    if (!sid) {
+      setLogIntervMsg("Pick a student first.");
+      return;
+    }
+    if (typeof logIntervTypeId !== "number") {
+      setLogIntervMsg("Pick an intervention.");
+      return;
+    }
+    setLogIntervBusy(true);
+    try {
+      const res = await fetch("/api/interventions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: sid,
+          interventionTypeId: logIntervTypeId,
+          note: logIntervNote.trim() || undefined,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!res.ok) {
+        setLogIntervMsg(j.error || `Couldn't save (HTTP ${res.status}).`);
+        return;
+      }
+      setLogIntervMsg("Saved.");
+      setLogIntervNote("");
+      await loadInterventionEntries();
+    } catch (e) {
+      setLogIntervMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLogIntervBusy(false);
+    }
+  };
 
   const runPbisReport = async () => {
     setPbisReportMsg("");
@@ -1582,6 +1656,10 @@ function App() {
     if (activeSection === "interventions" && isBehaviorSpec) {
       loadInterventionTypes();
     }
+    if (activeSection === "logIntervention") {
+      loadInterventionTypes();
+      loadInterventionEntries();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, isPbisCoord, isBehaviorSpec]);
 
@@ -1596,6 +1674,7 @@ function App() {
     { key: "student", label: "Student Activity", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
+    { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
   ];
   const eseNavSections: NavSection[] = [
     { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
@@ -4999,6 +5078,265 @@ function App() {
           )}
         </section>
       </>)}
+
+      {activeSection === "logIntervention" && (
+        <section className="card">
+          <h2>Log Intervention</h2>
+          <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
+            Record a classroom intervention you tried with a student. Your
+            behavior specialist will see school-wide history; everyone else
+            sees only their own entries.
+          </p>
+          {intervListMsg && (
+            <div
+              style={{
+                margin: "0.5rem 0 1rem",
+                padding: "0.5rem 0.75rem",
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                color: "#b91c1c",
+                borderRadius: 6,
+              }}
+            >
+              {intervListMsg}
+            </div>
+          )}
+          {interventionList.filter((t) => t.active).length === 0 &&
+            !intervListMsg && (
+              <div
+                style={{
+                  margin: "0.5rem 0 1rem",
+                  padding: "0.5rem 0.75rem",
+                  background: "#fff7ed",
+                  border: "1px solid #fed7aa",
+                  color: "#9a3412",
+                  borderRadius: 6,
+                }}
+              >
+                No active intervention types are configured yet. Ask your
+                behavior specialist to add some on the Interventions page.
+              </div>
+            )}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              submitIntervention();
+            }}
+            style={{ marginBottom: "1rem" }}
+          >
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label>
+                Student:{" "}
+                <input
+                  type="text"
+                  placeholder="Search by name or ID"
+                  value={logIntervStudentSearch}
+                  onChange={(e) => {
+                    setLogIntervStudentSearch(e.target.value);
+                    setLogIntervStudentId("");
+                  }}
+                />
+              </label>
+              {logIntervStudentId ? (
+                <div style={{ marginTop: "0.25rem" }}>
+                  Selected: <strong>{logIntervStudentId}</strong>{" "}
+                  {(() => {
+                    const s = students.find(
+                      (s) => s.studentId === logIntervStudentId,
+                    );
+                    return s ? `- ${s.firstName} ${s.lastName}` : "";
+                  })()}{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setLogIntervStudentId("");
+                      setLogIntervStudentSearch("");
+                    }}
+                  >
+                    Clear
+                  </button>
+                </div>
+              ) : (
+                logIntervStudentSearch && (
+                  <ul
+                    style={{
+                      listStyle: "none",
+                      padding: 0,
+                      margin: "0.25rem 0",
+                      border: "1px solid #ccc",
+                      maxWidth: "20rem",
+                    }}
+                  >
+                    {students
+                      .filter((s) => {
+                        const q = logIntervStudentSearch.toLowerCase();
+                        return (
+                          s.firstName.toLowerCase().includes(q) ||
+                          s.lastName.toLowerCase().includes(q) ||
+                          s.studentId.toLowerCase().includes(q)
+                        );
+                      })
+                      .slice(0, 25)
+                      .map((s) => (
+                        <li key={s.id}>
+                          <button
+                            type="button"
+                            style={{
+                              width: "100%",
+                              textAlign: "left",
+                              padding: "0.25rem 0.5rem",
+                              background: "none",
+                              border: "none",
+                              cursor: "pointer",
+                            }}
+                            onClick={() => {
+                              setLogIntervStudentId(s.studentId);
+                              setLogIntervStudentSearch(
+                                `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                              );
+                            }}
+                          >
+                            {s.studentId} - {s.firstName} {s.lastName}
+                          </button>
+                        </li>
+                      ))}
+                  </ul>
+                )
+              )}
+            </div>
+            <div style={{ marginBottom: "0.5rem" }}>
+              <label>
+                Intervention:{" "}
+                <select
+                  value={logIntervTypeId}
+                  onChange={(e) =>
+                    setLogIntervTypeId(
+                      e.target.value === "" ? "" : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="">— pick one —</option>
+                  {interventionList
+                    .filter((t) => t.active)
+                    .slice()
+                    .sort(
+                      (a, b) =>
+                        a.category.localeCompare(b.category) ||
+                        a.name.localeCompare(b.name),
+                    )
+                    .map((t) => (
+                      <option key={t.id} value={t.id}>
+                        [{t.category}] {t.name}
+                        {t.requiresNote ? " (note required)" : ""}
+                      </option>
+                    ))}
+                </select>
+              </label>
+            </div>
+            {(() => {
+              const picked =
+                typeof logIntervTypeId === "number"
+                  ? interventionList.find((t) => t.id === logIntervTypeId)
+                  : null;
+              const required = !!picked?.requiresNote;
+              return (
+                <div style={{ marginBottom: "0.5rem" }}>
+                  <label style={{ display: "block" }}>
+                    Note{required ? " (required)" : " (optional)"}:
+                    <textarea
+                      value={logIntervNote}
+                      onChange={(e) => setLogIntervNote(e.target.value)}
+                      rows={2}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        maxWidth: "32rem",
+                        marginTop: "0.25rem",
+                      }}
+                      placeholder={
+                        required
+                          ? "Briefly describe what happened…"
+                          : "Add context (optional)"
+                      }
+                    />
+                  </label>
+                </div>
+              );
+            })()}
+            <button
+              type="submit"
+              disabled={
+                logIntervBusy ||
+                !logIntervStudentId ||
+                typeof logIntervTypeId !== "number"
+              }
+            >
+              {logIntervBusy ? "Saving…" : "Save intervention"}
+            </button>
+            {logIntervMsg && (
+              <div
+                style={{
+                  marginTop: "0.5rem",
+                  color:
+                    logIntervMsg === "Saved." ? "#15803d" : "#b91c1c",
+                }}
+              >
+                {logIntervMsg}
+              </div>
+            )}
+          </form>
+
+          <h3 style={{ marginTop: "1.25rem" }}>Recent interventions</h3>
+          {interventionEntries.length === 0 ? (
+            <p style={{ color: "var(--text-subtle, #64748b)" }}>
+              No interventions logged yet.
+            </p>
+          ) : (
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "0.9rem",
+              }}
+            >
+              <thead>
+                <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
+                  <th style={{ padding: "0.4rem 0.5rem" }}>When</th>
+                  <th style={{ padding: "0.4rem 0.5rem" }}>Student</th>
+                  <th style={{ padding: "0.4rem 0.5rem" }}>Intervention</th>
+                  <th style={{ padding: "0.4rem 0.5rem" }}>Note</th>
+                  <th style={{ padding: "0.4rem 0.5rem" }}>Staff</th>
+                </tr>
+              </thead>
+              <tbody>
+                {interventionEntries.slice(0, 50).map((e) => {
+                  const s = students.find((s) => s.studentId === e.studentId);
+                  return (
+                    <tr key={e.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                        {new Date(e.createdAt).toLocaleString()}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                        {e.studentId}
+                        {s ? ` — ${s.firstName} ${s.lastName}` : ""}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                        {e.interventionType}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                        {e.note || ""}
+                      </td>
+                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                        {e.staffName}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
 
       {activeSection === "ese" && isEseCoord && (
         <section className="card">

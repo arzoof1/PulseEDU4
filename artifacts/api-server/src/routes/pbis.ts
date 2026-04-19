@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, pbisEntriesTable } from "@workspace/db";
+import { db, pbisEntriesTable, staffTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -10,6 +11,20 @@ router.get("/pbis", async (_req, res) => {
 
 router.post("/pbis", async (req, res) => {
   const { studentId, reason, points, staffName } = req.body ?? {};
+  const sessionStaffId = req.session.staffId;
+  let resolvedStaffId: number | null = null;
+  let resolvedStaffName =
+    typeof staffName === "string" ? staffName : "";
+  if (sessionStaffId) {
+    const [s] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, sessionStaffId));
+    if (s && s.active) {
+      resolvedStaffId = s.id;
+      resolvedStaffName = s.displayName;
+    }
+  }
 
   if (typeof studentId !== "string" || !studentId) {
     res.status(400).json({ error: "studentId is required" });
@@ -31,7 +46,8 @@ router.post("/pbis", async (req, res) => {
       studentId,
       reason,
       points: pts,
-      staffName: typeof staffName === "string" ? staffName : "",
+      staffId: resolvedStaffId,
+      staffName: resolvedStaffName,
       createdAt: new Date().toISOString(),
     })
     .returning();
