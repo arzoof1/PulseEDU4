@@ -223,6 +223,15 @@ function App() {
   const [originRoom, setOriginRoom] = useState("");
   const [destinationTeacher, setDestinationTeacher] = useState("");
   const [contactedAck, setContactedAck] = useState(false);
+  const [staffDefaults, setStaffDefaults] = useState<Record<string, string>>(
+    {},
+  );
+
+  useEffect(() => {
+    const def = staffDefaults[currentStaffUser];
+    if (def) setOriginRoom(def);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentStaffUser, staffDefaults]);
 
   const [tardyEntryType, setTardyEntryType] = useState<
     "tardy" | "checkin" | "checkout"
@@ -289,6 +298,21 @@ function App() {
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
+
+    fetch("/api/staff-defaults")
+      .then((res) => res.json())
+      .then(
+        (data: { staffName: string; defaultLocationName: string | null }[]) => {
+          const map: Record<string, string> = {};
+          for (const row of data) {
+            if (row.defaultLocationName) {
+              map[row.staffName] = row.defaultLocationName;
+            }
+          }
+          setStaffDefaults(map);
+        },
+      )
+      .catch((err) => console.error("Failed to load staff defaults:", err));
 
     loadAccommodationLogs();
 

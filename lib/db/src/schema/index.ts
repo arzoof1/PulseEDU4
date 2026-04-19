@@ -8,3 +8,4 @@ export * from "./students";
 export * from "./periodRoster";
 export * from "./schoolSettings";
 export * from "./locations";
+export * from "./staffDefaults";

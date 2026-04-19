@@ -10,6 +10,7 @@ import scheduleRouter from "./schedule";
 import accommodationLogsRouter from "./accommodationLogs";
 import schoolSettingsRouter from "./schoolSettings";
 import locationsRouter from "./locations";
+import staffDefaultsRouter from "./staffDefaults";
 
 const router: IRouter = Router();
 
@@ -24,5 +25,6 @@ router.use(scheduleRouter);
 router.use(accommodationLogsRouter);
 router.use(schoolSettingsRouter);
 router.use(locationsRouter);
+router.use(staffDefaultsRouter);
 
 export default router;

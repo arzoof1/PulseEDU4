@@ -8,6 +8,7 @@ import {
   studentsTable,
   periodRosterTable,
   locationsTable,
+  staffDefaultsTable,
 } from "@workspace/db";
 import { config } from "./data/config";
 import { students as seedStudents } from "./data/students";
@@ -161,6 +162,21 @@ export async function seedIfEmpty() {
       { name: "Nurse", kind: "office", isOrigin: false, isDestination: true },
       { name: "Front Office", kind: "office", isOrigin: false, isDestination: true },
       { name: "Guidance", kind: "office", isOrigin: false, isDestination: true },
+    ]);
+  }
+
+  const [sd] = await db.select().from(staffDefaultsTable).limit(1);
+  if (!sd) {
+    await db.insert(staffDefaultsTable).values([
+      { staffName: "Ms. Rivera", defaultLocationName: "Room 101" },
+      { staffName: "Mr. Johnson", defaultLocationName: "Room 204" },
+      { staffName: "Coach Lee", defaultLocationName: "Gym" },
+      { staffName: "Ms. Patel (Counselor)", defaultLocationName: "Guidance" },
+      { staffName: "Mr. Davis (Admin)", defaultLocationName: "Front Office" },
+      {
+        staffName: "Ms. Garcia (Interventionist)",
+        defaultLocationName: "Room 305",
+      },
     ]);
   }
 
