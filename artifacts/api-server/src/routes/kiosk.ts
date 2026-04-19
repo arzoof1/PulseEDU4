@@ -7,6 +7,7 @@ import {
   staffDefaultsTable,
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
+import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 
 const router: IRouter = Router();
@@ -67,6 +68,23 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   if (!allowed) {
     res.status(403).json({
       error: `${destination} is not an allowed destination from ${originRoom}`,
+    });
+    return;
+  }
+
+  const existingActive = (await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.studentId, studentId.trim()),
+        eq(hallPassesTable.status, "active"),
+      ),
+    )) as Array<InferSelectModel<typeof hallPassesTable>>;
+  if (existingActive.length > 0) {
+    const open = existingActive[0];
+    res.status(409).json({
+      error: `Student ${studentId.trim()} already has an active pass to ${open.destination}. End it before issuing another.`,
     });
     return;
   }

@@ -89,6 +89,12 @@ export default function Kiosk() {
     setStatus({ kind: "idle" });
   }
 
+  useEffect(() => {
+    if (status.kind !== "success") return;
+    const id = setTimeout(resetForm, 8000);
+    return () => clearTimeout(id);
+  }, [status.kind]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!studentId.trim() || !destination) return;
@@ -357,6 +363,9 @@ function SuccessCard({
       </div>
       <div style={{ opacity: 0.85, marginBottom: "1.5rem" }}>
         Student <strong>{studentId}</strong> → <strong>{destination}</strong>
+      </div>
+      <div style={{ fontSize: "0.85rem", opacity: 0.55, marginBottom: "1rem" }}>
+        Resetting in a few seconds…
       </div>
       <button
         type="button"
