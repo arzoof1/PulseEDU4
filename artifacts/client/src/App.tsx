@@ -187,6 +187,14 @@ function App() {
     "idle" | "saving" | "saved" | "error"
   >("idle");
   const [settingsError, setSettingsError] = useState("");
+  const [adminNotifications, setAdminNotifications] = useState<
+    Array<{
+      id: number;
+      type: string;
+      payload: Record<string, unknown>;
+      createdAt: string;
+    }>
+  >([]);
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [studentTab, setStudentTab] = useState<
@@ -293,6 +301,26 @@ function App() {
       }
     }
   }, [now, hallPasses]);
+
+  const loadAdminNotifications = () => {
+    if (!authUser?.isAdmin) return;
+    fetch("/api/admin/notifications")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data) => setAdminNotifications(data))
+      .catch(() => setAdminNotifications([]));
+  };
+
+  const resolveAdminNotification = async (id: number) => {
+    const res = await fetch(`/api/admin/notifications/${id}/resolve`, {
+      method: "POST",
+    });
+    if (res.ok) loadAdminNotifications();
+  };
+
+  useEffect(() => {
+    loadAdminNotifications();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.isAdmin]);
 
   const loadHallPasses = () => {
     fetch("/api/hall-passes")
@@ -745,7 +773,7 @@ function App() {
     return s ? `${s.firstName} ${s.lastName}` : id;
   };
 
-  const isAdmin = currentStaffUser.includes("(Admin)");
+  const isAdmin = authUser?.isAdmin === true;
 
   useEffect(() => {
     if (!isAdmin && activeSection === "settings") {
@@ -1185,7 +1213,7 @@ function App() {
               passFilter === "mine" ? p.teacherName === currentStaffUser : true,
             )
             .map((p) => {
-            const isAdmin = currentStaffUser.includes("(Admin)");
+            const isAdmin = authUser?.isAdmin === true;
             const isEditing = editingPassId === p.id;
             const statusClass =
               p.status === "active"
@@ -2696,6 +2724,89 @@ function App() {
           </table>
         </section>
       </>)}
+
+      {activeSection === "settings" && isAdmin && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h2>
+            Admin Notifications
+            {adminNotifications.length > 0 && (
+              <span
+                style={{
+                  marginLeft: "0.5rem",
+                  background: "#f59e0b",
+                  color: "#1f2937",
+                  borderRadius: "999px",
+                  padding: "0.1rem 0.55rem",
+                  fontSize: "0.75rem",
+                  fontWeight: 700,
+                  verticalAlign: "middle",
+                }}
+              >
+                {adminNotifications.length}
+              </span>
+            )}
+          </h2>
+          {adminNotifications.length === 0 ? (
+            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+              No pending notifications.
+            </p>
+          ) : (
+            <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+              {adminNotifications.map((n) => {
+                const p = n.payload as Record<string, string>;
+                let body: React.ReactNode;
+                if (n.type === "kiosk_default_room_missing") {
+                  body = (
+                    <>
+                      <strong>{p.staffDisplayName}</strong> activated a kiosk
+                      in <strong>{p.chosenRoom}</strong> but has no default
+                      room set in Staff Defaults. Update their default so they
+                      don't have to pick on every activation.
+                    </>
+                  );
+                } else {
+                  body = (
+                    <code style={{ fontSize: "0.85rem" }}>
+                      {n.type}: {JSON.stringify(n.payload)}
+                    </code>
+                  );
+                }
+                return (
+                  <li
+                    key={n.id}
+                    style={{
+                      display: "flex",
+                      gap: "0.75rem",
+                      alignItems: "flex-start",
+                      borderTop: "1px solid var(--border)",
+                      padding: "0.75rem 0",
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div>{body}</div>
+                      <div
+                        style={{
+                          color: "var(--text-subtle)",
+                          fontSize: "0.8rem",
+                          marginTop: "0.25rem",
+                        }}
+                      >
+                        {new Date(n.createdAt).toLocaleString()}
+                      </div>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => resolveAdminNotification(n.id)}
+                    >
+                      Mark resolved
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </div>
+      )}
 
       {activeSection === "settings" && isAdmin && (
         <div className="card" style={{ marginBottom: "1rem" }}>

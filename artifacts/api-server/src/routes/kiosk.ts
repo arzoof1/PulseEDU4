@@ -1,4 +1,4 @@
-import { Router, type IRouter } from "express";
+import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
 import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "node:crypto";
 import {
@@ -19,6 +19,44 @@ const router: IRouter = Router();
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
+}
+
+async function requireStaff(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const staffId = req.session.staffId;
+  if (!staffId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, staffId));
+  if (!staff || !staff.active) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  (req as Request & { staff: typeof staff }).staff = staff;
+  next();
+}
+
+async function requireAdmin(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  await requireStaff(req, res, () => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    if (!staff.isAdmin) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    next();
+  });
 }
 
 router.post("/kiosk/activate", async (req, res) => {
@@ -150,6 +188,92 @@ router.get("/kiosk/activation/:token", async (req, res) => {
     activatedAt: act.activatedAt,
   });
 });
+
+router.post("/kiosk/deactivate", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const { token } = req.body ?? {};
+  if (typeof token !== "string" || token.length < 16) {
+    res.status(400).json({ error: "token is required" });
+    return;
+  }
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+      ),
+    );
+  if (!act) {
+    res.status(404).json({ error: "Activation not found or already revoked" });
+    return;
+  }
+  await db
+    .update(kioskActivationsTable)
+    .set({
+      deactivatedAt: new Date(),
+      deactivatedByStaffId: staff.id,
+    })
+    .where(eq(kioskActivationsTable.id, act.id));
+  res.status(204).end();
+});
+
+router.get("/kiosk/activations", requireAdmin, async (_req, res) => {
+  const rows = await db
+    .select({
+      id: kioskActivationsTable.id,
+      room: kioskActivationsTable.room,
+      staffId: kioskActivationsTable.staffId,
+      activatedAt: kioskActivationsTable.activatedAt,
+      deactivatedAt: kioskActivationsTable.deactivatedAt,
+      deactivatedByStaffId: kioskActivationsTable.deactivatedByStaffId,
+      activatedByName: staffTable.displayName,
+    })
+    .from(kioskActivationsTable)
+    .leftJoin(staffTable, eq(staffTable.id, kioskActivationsTable.staffId))
+    .orderBy(kioskActivationsTable.activatedAt);
+  res.json(rows);
+});
+
+router.get("/admin/notifications", requireAdmin, async (_req, res) => {
+  const rows = await db
+    .select()
+    .from(adminNotificationsTable)
+    .where(isNull(adminNotificationsTable.resolvedAt))
+    .orderBy(adminNotificationsTable.createdAt);
+  res.json(rows);
+});
+
+router.post(
+  "/admin/notifications/:id/resolve",
+  requireAdmin,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const result = await db
+      .update(adminNotificationsTable)
+      .set({ resolvedAt: new Date(), resolvedByStaffId: staff.id })
+      .where(
+        and(
+          eq(adminNotificationsTable.id, id),
+          isNull(adminNotificationsTable.resolvedAt),
+        ),
+      )
+      .returning();
+    if (result.length === 0) {
+      res.status(404).json({ error: "Notification not found" });
+      return;
+    }
+    res.status(204).end();
+  },
+);
 
 router.post("/kiosk/hall-passes", async (req, res) => {
   const { studentId, originRoom, destination } = req.body ?? {};
