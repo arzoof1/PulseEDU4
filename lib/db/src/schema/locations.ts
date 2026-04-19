@@ -7,6 +7,7 @@ export const locationsTable = pgTable("locations", {
   kind: text("kind").notNull().default("classroom"),
   isOrigin: boolean("is_origin").notNull().default(false),
   isDestination: boolean("is_destination").notNull().default(false),
+  studentVisible: boolean("student_visible").notNull().default(false),
   active: boolean("active").notNull().default(true),
 });
 

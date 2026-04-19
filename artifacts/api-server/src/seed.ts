@@ -158,11 +158,11 @@ export async function seedIfEmpty() {
       { name: "Cafeteria", kind: "common_area", isOrigin: true, isDestination: true },
       { name: "Library", kind: "common_area", isOrigin: false, isDestination: true },
       { name: "Media Center", kind: "common_area", isOrigin: false, isDestination: true },
-      { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true },
-      { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true },
-      { name: "Nurse", kind: "office", isOrigin: false, isDestination: true },
-      { name: "Front Office", kind: "office", isOrigin: false, isDestination: true },
-      { name: "Guidance", kind: "office", isOrigin: false, isDestination: true },
+      { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Nurse", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Front Office", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Guidance", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
     ]);
   }
 
