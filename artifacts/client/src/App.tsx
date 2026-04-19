@@ -1934,6 +1934,9 @@ function App() {
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
   >("positive");
+  const [emailSubjectDraft, setEmailSubjectDraft] = useState("");
+  const [emailBodyDraft, setEmailBodyDraft] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
 
   const [pbisEntries, setPbisEntries] = useState<PbisEntry[]>([]);
   const [supportNotes, setSupportNotes] = useState<SupportNote[]>([]);
@@ -5371,11 +5374,11 @@ function App() {
 
                 const signature =
                   schoolSettings.emailSignature || "Thank you,\nPulseED";
-                let subject = "Student Activity Update";
-                let body = "";
+                let templateSubject = "Student Activity Update";
+                let templateBody = "";
                 if (emailMessageType === "positive") {
-                  subject = `Positive Update for ${studentName}`;
-                  body =
+                  templateSubject = `Positive Update for ${studentName}`;
+                  templateBody =
                     `Hello,\n\n` +
                     `We wanted to share a positive update about ${studentName}.\n\n` +
                     `PBIS Points: ${totalPoints}\n` +
@@ -5385,8 +5388,8 @@ function App() {
                       : "") +
                     `\n${signature}`;
                 } else if (emailMessageType === "pbis") {
-                  subject = `PBIS Recognition for ${studentName}`;
-                  body =
+                  templateSubject = `PBIS Recognition for ${studentName}`;
+                  templateBody =
                     `Hello,\n\n` +
                     `${studentName} has been recognized for positive behavior.\n\n` +
                     `Total PBIS Points: ${totalPoints}\n` +
@@ -5396,8 +5399,8 @@ function App() {
                       : "\nNo PBIS entries yet.\n") +
                     `\n${signature}`;
                 } else if (emailMessageType === "attendance") {
-                  subject = `Attendance / Tardy Concern for ${studentName}`;
-                  body =
+                  templateSubject = `Attendance / Tardy Concern for ${studentName}`;
+                  templateBody =
                     `Hello,\n\n` +
                     `We are reaching out regarding ${studentName}'s attendance.\n\n` +
                     `Total Tardies: ${tardyOnly.length}\n` +
@@ -5408,8 +5411,8 @@ function App() {
                     `\nPlease reach out if you have any questions.\n\n` +
                     `${signature}`;
                 } else {
-                  subject = `Check-In / Check-Out Notice for ${studentName}`;
-                  body =
+                  templateSubject = `Check-In / Check-Out Notice for ${studentName}`;
+                  templateBody =
                     `Hello,\n\n` +
                     `This is a notice regarding ${studentName}'s check-in / check-out activity.\n\n` +
                     `Check-Ins: ${checkIns.length}\n` +
@@ -5421,17 +5424,26 @@ function App() {
                 }
                 const parentEmailOnFile = (student?.parentEmail ?? "").trim();
                 const recipientToUse = (emailOverride || parentEmailOnFile).trim();
+                const subjectToSend = (emailSubjectDraft || templateSubject).trim();
+                const bodyToSend = emailBodyDraft || templateBody;
+                const applyTemplate = () => {
+                  setEmailSubjectDraft(templateSubject);
+                  setEmailBodyDraft(templateBody);
+                  setEmailStatus("");
+                };
                 const sendEmail = async () => {
+                  if (emailSending) return;
+                  setEmailSending(true);
                   setEmailStatus("Sending...");
                   try {
-                    const res = await fetch("/api/send-test-parent-email", {
+                    const res = await fetch("/api/parent-email/send", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
-                        studentName,
-                        subject,
-                        body,
-                        parentEmail: recipientToUse,
+                        studentId: activityStudentId,
+                        recipient: recipientToUse,
+                        subject: subjectToSend,
+                        body: bodyToSend,
                       }),
                     });
                     const data = await res.json().catch(() => ({}));
@@ -5441,18 +5453,37 @@ function App() {
                         `HTTP ${res.status}`;
                       throw new Error(detail);
                     }
-                    setEmailStatus(`Sent to ${data.to || recipientToUse}.`);
+                    setEmailStatus(
+                      `Sent to ${data.to || recipientToUse}. Logged to support notes.`,
+                    );
+                    fetch(
+                      `/api/support-notes?studentId=${encodeURIComponent(activityStudentId)}`,
+                    )
+                      .then((r) => (r.ok ? r.json() : []))
+                      .then((rows) => {
+                        if (Array.isArray(rows)) {
+                          setSupportNotes((prev) => {
+                            const others = prev.filter(
+                              (n) => n.studentId !== activityStudentId,
+                            );
+                            return [...others, ...rows];
+                          });
+                        }
+                      })
+                      .catch(() => {});
                   } catch (err) {
                     const msg = err instanceof Error ? err.message : String(err);
                     console.error(err);
                     setEmailStatus(`Error: ${msg}`);
+                  } finally {
+                    setEmailSending(false);
                   }
                 };
                 return (
                   <div style={{ marginBottom: "0.5rem" }}>
                     <div style={{ marginBottom: "0.25rem" }}>
                       <label>
-                        Message Type:{" "}
+                        Template:{" "}
                         <select
                           value={emailMessageType}
                           onChange={(e) =>
@@ -5470,7 +5501,20 @@ function App() {
                             Check-In / Check-Out Notice
                           </option>
                         </select>
-                      </label>
+                      </label>{" "}
+                      <button type="button" onClick={applyTemplate}>
+                        Apply Template
+                      </button>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-muted)",
+                          marginTop: 4,
+                        }}
+                      >
+                        Pick a template and click Apply, then edit the subject
+                        and message below before sending.
+                      </div>
                     </div>
                     <div style={{ marginBottom: "0.5rem" }}>
                       <label style={{ display: "block" }}>
@@ -5498,10 +5542,49 @@ function App() {
                           : "No parent email on file. Type any address above (use your own for testing)."}
                       </div>
                     </div>
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label style={{ display: "block" }}>
+                        Subject:{" "}
+                        <input
+                          type="text"
+                          value={emailSubjectDraft}
+                          onChange={(e) => setEmailSubjectDraft(e.target.value)}
+                          placeholder={templateSubject}
+                          style={{ width: "30rem", maxWidth: "100%" }}
+                        />
+                      </label>
+                    </div>
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label style={{ display: "block" }}>
+                        Message:
+                        <textarea
+                          value={emailBodyDraft}
+                          onChange={(e) => setEmailBodyDraft(e.target.value)}
+                          placeholder={
+                            templateBody ||
+                            "Type your message to the parent here..."
+                          }
+                          rows={10}
+                          style={{
+                            width: "100%",
+                            maxWidth: "40rem",
+                            display: "block",
+                            marginTop: 4,
+                            fontFamily: "inherit",
+                          }}
+                        />
+                      </label>
+                    </div>
                     <button
                       type="button"
                       onClick={sendEmail}
-                      disabled={!activityStudentId || !recipientToUse}
+                      disabled={
+                        !activityStudentId ||
+                        !recipientToUse ||
+                        !subjectToSend ||
+                        !bodyToSend.trim() ||
+                        emailSending
+                      }
                     >
                       Send Parent Email
                     </button>

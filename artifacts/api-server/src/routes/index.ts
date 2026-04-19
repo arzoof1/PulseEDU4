@@ -23,6 +23,7 @@ import pbisMilestonesRouter from "./pbisMilestones";
 import pulloutsRouter from "./pullouts";
 import digestRouter from "./digest";
 import adminStaffRouter from "./adminStaff";
+import parentEmailRouter from "./parentEmail";
 
 const router: IRouter = Router();
 
@@ -50,5 +51,6 @@ router.use(pbisMilestonesRouter);
 router.use(pulloutsRouter);
 router.use(digestRouter);
 router.use(adminStaffRouter);
+router.use(parentEmailRouter);
 
 export default router;
