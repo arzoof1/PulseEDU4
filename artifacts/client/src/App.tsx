@@ -112,6 +112,13 @@ const checkInWithOptions = [
   "Other",
 ];
 
+function fmtTime(iso?: string | null): string {
+  if (!iso) return "-";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "-";
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
 function isCreatedToday(createdAt: string): boolean {
   const d = new Date(createdAt);
   const now = new Date();
@@ -523,16 +530,48 @@ function App() {
     }
   };
 
+  const IconDoor = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M5 21h14" />
+      <path d="M7 21V4a1 1 0 0 1 1-1h8a1 1 0 0 1 1 1v17" />
+      <circle cx="14.5" cy="12" r="0.6" fill="currentColor" stroke="none" />
+    </svg>
+  );
+  const IconClock = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M12 7v5l3 2" />
+    </svg>
+  );
+  const IconUser = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="8" r="4" />
+      <path d="M4 21c0-4 4-7 8-7s8 3 8 7" />
+    </svg>
+  );
+  const IconStar = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path d="M12 3l2.7 5.5 6 .9-4.4 4.3 1 6L12 17l-5.4 2.8 1-6L3.3 9.4l6-.9L12 3z" />
+    </svg>
+  );
+  const IconClipboard = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="6" y="4" width="12" height="17" rx="2" />
+      <path d="M9 4h6v3H9z" />
+      <path d="M9 11h6M9 15h6" />
+    </svg>
+  );
+
   const navSections: {
     key: typeof activeSection;
     label: string;
-    icon: string;
+    icon: React.ReactNode;
   }[] = [
-    { key: "hallPasses", label: "Hall Passes", icon: "🚪" },
-    { key: "tardies", label: "Tardy / Check-Ins", icon: "⏱" },
-    { key: "student", label: "Student Activity", icon: "👤" },
-    { key: "pbis", label: "PBIS Points", icon: "⭐" },
-    { key: "accommodations", label: "Accommodations", icon: "📋" },
+    { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
+    { key: "tardies", label: "Tardy / Check-Ins", icon: IconClock },
+    { key: "student", label: "Student Activity", icon: IconUser },
+    { key: "pbis", label: "PBIS Points", icon: IconStar },
+    { key: "accommodations", label: "Accommodations", icon: IconClipboard },
   ];
   const userInitials = currentStaffUser
     .replace(/\(.*?\)/g, "")
@@ -832,15 +871,15 @@ function App() {
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th>studentId</th>
-            <th>teacher</th>
-            <th>destination</th>
-            <th>originRoom</th>
-            <th>status</th>
-            <th>maxDurationMinutes</th>
-            <th>createdAt</th>
-            <th>endedAt</th>
-            <th>Time Status</th>
+            <th>Student</th>
+            <th>Teacher</th>
+            <th>Destination</th>
+            <th>Origin</th>
+            <th>Status</th>
+            <th>Max</th>
+            <th>Started</th>
+            <th>Ended</th>
+            <th>Time</th>
             <th>Actions</th>
           </tr>
         </thead>
@@ -852,15 +891,23 @@ function App() {
             .map((p) => {
             const isAdmin = currentStaffUser.includes("(Admin)");
             const isEditing = editingPassId === p.id;
+            const statusClass =
+              p.status === "active"
+                ? "badge badge-active"
+                : p.status === "system_ended"
+                  ? "badge badge-overdue"
+                  : "badge badge-ended";
+            const statusLabel =
+              p.status === "system_ended" ? "System Ended" : p.status;
             return (
             <tr key={p.id}>
               <td>{p.studentId}</td>
               <td>{p.teacherName}</td>
               <td>{p.destination}</td>
               <td>{p.originRoom}</td>
-              <td>{p.status === "system_ended" ? "System Ended" : p.status}</td>
-              <td>{p.maxDurationMinutes}</td>
-              <td>{p.createdAt}</td>
+              <td><span className={statusClass}>{statusLabel}</span></td>
+              <td>{p.maxDurationMinutes}m</td>
+              <td>{fmtTime(p.createdAt)}</td>
               <td>
                 {isEditing ? (
                   <input
@@ -869,7 +916,7 @@ function App() {
                     onChange={(e) => setEditEndedAt(e.target.value)}
                   />
                 ) : (
-                  p.endedAt ?? "-"
+                  fmtTime(p.endedAt)
                 )}
               </td>
               <td style={{ backgroundColor: getTimeStatusColor(p, now) }}>
