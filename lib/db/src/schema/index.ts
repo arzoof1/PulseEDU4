@@ -4,3 +4,5 @@ export * from "./pbisEntries";
 export * from "./supportNotes";
 export * from "./accommodationLogs";
 export * from "./recordEdits";
+export * from "./students";
+export * from "./periodRoster";
