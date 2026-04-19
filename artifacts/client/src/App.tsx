@@ -665,6 +665,7 @@ function App() {
   const loadReport = async () => {
     if (!reportTeacherId) {
       setReportData(null);
+      setReportError("");
       return;
     }
     const range = computeReportRange();
@@ -687,8 +688,20 @@ function App() {
       const res = await fetch(`/api/reports/accommodations?${params}`);
       if (myReqId !== reportReqIdRef.current) return;
       if (!res.ok) {
+        if (res.status === 401) {
+          throw new Error(
+            "Your session has expired. Please refresh the page and sign in again.",
+          );
+        }
         const text = await res.text().catch(() => "");
-        throw new Error(text || `HTTP ${res.status}`);
+        let msg = text;
+        try {
+          const j = JSON.parse(text) as { error?: string };
+          if (j && typeof j.error === "string") msg = j.error;
+        } catch {
+          // text wasn't JSON — keep as-is
+        }
+        throw new Error(msg || `HTTP ${res.status}`);
       }
       const data = (await res.json()) as ReportData;
       if (myReqId !== reportReqIdRef.current) return;
