@@ -1,10 +1,11 @@
 import { Router, type IRouter } from "express";
+import { getUncachableResendClient } from "../lib/resendClient";
 
 const router: IRouter = Router();
 
 const TEST_PARENT_EMAIL = "coachclifford@me.com";
 
-router.post("/send-test-parent-email", (req, res) => {
+router.post("/send-test-parent-email", async (req, res) => {
   const { studentName, subject, body, parentEmail } = req.body ?? {};
 
   if (typeof studentName !== "string" || !studentName) {
@@ -21,21 +22,41 @@ router.post("/send-test-parent-email", (req, res) => {
   const usedFallback = !trimmedParentEmail;
   const recipient = usedFallback ? TEST_PARENT_EMAIL : trimmedParentEmail;
 
-  console.log("[stub email] To:", recipient);
-  if (usedFallback) {
-    console.log("[stub email] (no parent email on file - using test email)");
-  }
-  console.log("[stub email] Subject:", finalSubject);
-  console.log("[stub email] Body:\n" + finalBody);
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const result = await client.emails.send({
+      from: fromEmail,
+      to: recipient,
+      subject: finalSubject,
+      text: finalBody,
+    });
 
-  res.status(200).json({
-    ok: true,
-    to: recipient,
-    usedFallback,
-    subject: finalSubject,
-    body: finalBody,
-    note: "Email send is stubbed; logged to server console only.",
-  });
+    if (result.error) {
+      console.error("[email] Resend error:", result.error);
+      res.status(502).json({
+        error: "Email provider rejected the request.",
+        detail: result.error.message,
+      });
+      return;
+    }
+
+    console.log("[email] Sent via Resend to:", recipient, "id:", result.data?.id);
+    res.status(200).json({
+      ok: true,
+      to: recipient,
+      usedFallback,
+      subject: finalSubject,
+      body: finalBody,
+      providerId: result.data?.id,
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[email] Send failed:", message);
+    res.status(500).json({
+      error: "Failed to send email.",
+      detail: message,
+    });
+  }
 });
 
 export default router;
