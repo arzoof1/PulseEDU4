@@ -49,6 +49,91 @@ router.get("/pbis", async (_req, res) => {
   res.json(rows);
 });
 
+// Leaderboard for a bounded period. Excludes voided entries.
+// Query: ?period=week|month|quarter|all (default week), ?limit=10
+// Returns: { period, from, until, students: [{studentId, total, count}], staff: [{staffId, staffName, total, count}] }
+router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const period = String(req.query.period ?? "week");
+  const limit = Math.min(50, Math.max(1, Number(req.query.limit ?? 10)));
+
+  const now = new Date();
+  let from: Date | null = null;
+  if (period === "week") {
+    const d = new Date(now);
+    const day = d.getDay(); // 0=Sun
+    const diff = (day + 6) % 7; // days since Monday
+    d.setHours(0, 0, 0, 0);
+    d.setDate(d.getDate() - diff);
+    from = d;
+  } else if (period === "month") {
+    from = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+  } else if (period === "quarter") {
+    const qStartMonth = Math.floor(now.getMonth() / 3) * 3;
+    from = new Date(now.getFullYear(), qStartMonth, 1, 0, 0, 0, 0);
+  } else if (period !== "all") {
+    res.status(400).json({ error: "Invalid period" });
+    return;
+  }
+
+  const all = await db.select().from(pbisEntriesTable);
+  const fromIso = from ? from.toISOString() : null;
+  const filtered = all.filter((e) => {
+    if (e.voidedAt) return false;
+    if (fromIso && e.createdAt < fromIso) return false;
+    return true;
+  });
+
+  const studentTotals = new Map<string, { total: number; count: number }>();
+  const staffTotals = new Map<
+    number,
+    { staffName: string; total: number; count: number }
+  >();
+  for (const e of filtered) {
+    const s = studentTotals.get(e.studentId) ?? { total: 0, count: 0 };
+    s.total += e.points;
+    s.count += 1;
+    studentTotals.set(e.studentId, s);
+    if (e.staffId !== null) {
+      const t = staffTotals.get(e.staffId) ?? {
+        staffName: e.staffName,
+        total: 0,
+        count: 0,
+      };
+      t.total += e.points;
+      t.count += 1;
+      t.staffName = e.staffName || t.staffName;
+      staffTotals.set(e.staffId, t);
+    }
+  }
+
+  const students = Array.from(studentTotals.entries())
+    .map(([studentId, v]) => ({ studentId, total: v.total, count: v.count }))
+    .sort((a, b) => b.total - a.total || a.studentId.localeCompare(b.studentId))
+    .slice(0, limit);
+  const staffBoard = Array.from(staffTotals.entries())
+    .map(([staffId, v]) => ({
+      staffId,
+      staffName: v.staffName,
+      total: v.total,
+      count: v.count,
+    }))
+    .sort((a, b) => b.total - a.total || a.staffName.localeCompare(b.staffName))
+    .slice(0, limit);
+
+  res.json({
+    period,
+    from: fromIso,
+    until: now.toISOString(),
+    students,
+    staff: staffBoard,
+  });
+});
+
 router.post("/pbis", async (req, res) => {
   const { studentId, reason, points, staffName } = req.body ?? {};
   const sessionStaffId = req.session.staffId;

@@ -457,6 +457,44 @@ function App() {
   const [pbisReportMsg, setPbisReportMsg] = useState("");
   const [pbisReportBusy, setPbisReportBusy] = useState(false);
 
+  // PBIS leaderboard state
+  type LeaderboardPeriod = "week" | "month" | "quarter" | "all";
+  type LeaderboardData = {
+    period: string;
+    from: string | null;
+    until: string;
+    students: { studentId: string; total: number; count: number }[];
+    staff: { staffId: number; staffName: string; total: number; count: number }[];
+  };
+  const [leaderboardPeriod, setLeaderboardPeriod] =
+    useState<LeaderboardPeriod>("week");
+  const [leaderboard, setLeaderboard] = useState<LeaderboardData | null>(null);
+  const [leaderboardMsg, setLeaderboardMsg] = useState("");
+  const [leaderboardBusy, setLeaderboardBusy] = useState(false);
+
+  const loadLeaderboard = async (p: LeaderboardPeriod = leaderboardPeriod) => {
+    setLeaderboardBusy(true);
+    setLeaderboardMsg("");
+    try {
+      const res = await fetch(
+        `/api/pbis/leaderboard?period=${encodeURIComponent(p)}&limit=10`,
+      );
+      const j = (await res.json().catch(() => ({}))) as LeaderboardData & {
+        error?: string;
+      };
+      if (!res.ok) {
+        setLeaderboardMsg(j.error || `Couldn't load (HTTP ${res.status}).`);
+        setLeaderboard(null);
+        return;
+      }
+      setLeaderboard(j);
+    } catch (e) {
+      setLeaderboardMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLeaderboardBusy(false);
+    }
+  };
+
   // PBIS bulk award state
   const [bulkSource, setBulkSource] = useState<"section" | "ids">("section");
   const [bulkSectionId, setBulkSectionId] = useState<number | "">("");
@@ -1976,6 +2014,7 @@ function App() {
     if (activeSection === "pbis") {
       loadPbisGoals();
       loadMySections();
+      loadLeaderboard();
     }
     if (activeSection === "interventions" && isBehaviorSpec) {
       loadInterventionTypes();
@@ -5482,6 +5521,110 @@ function App() {
                 })}
             </tbody>
           </table>
+
+          <h3 style={{ marginTop: "1.5rem" }}>Leaderboard</h3>
+          <div style={{ display: "flex", gap: "0.5rem", alignItems: "center", flexWrap: "wrap" }}>
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ fontSize: "0.8rem" }}>Period</span>
+              <select
+                value={leaderboardPeriod}
+                onChange={(e) => {
+                  const p = e.target.value as LeaderboardPeriod;
+                  setLeaderboardPeriod(p);
+                  loadLeaderboard(p);
+                }}
+              >
+                <option value="week">This week (Mon–Sun)</option>
+                <option value="month">This month</option>
+                <option value="quarter">This quarter</option>
+                <option value="all">All time</option>
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={() => loadLeaderboard()}
+              disabled={leaderboardBusy}
+            >
+              {leaderboardBusy ? "Loading…" : "Refresh"}
+            </button>
+            {leaderboardMsg && (
+              <span style={{ color: "#b91c1c", fontSize: "0.85rem" }}>
+                {leaderboardMsg}
+              </span>
+            )}
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+              gap: "1rem",
+              marginTop: "0.5rem",
+            }}
+          >
+            <div>
+              <h4 style={{ margin: "0 0 0.25rem" }}>Top Students</h4>
+              {leaderboard && leaderboard.students.length === 0 ? (
+                <div style={{ color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
+                  No points awarded in this period yet.
+                </div>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Student</th>
+                      <th>Points</th>
+                      <th>Awards</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard?.students.map((s, idx) => (
+                      <tr key={s.studentId}>
+                        <td>{idx + 1}</td>
+                        <td>
+                          {studentName(s.studentId)}{" "}
+                          <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
+                            {s.studentId}
+                          </span>
+                        </td>
+                        <td>{s.total}</td>
+                        <td>{s.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+            <div>
+              <h4 style={{ margin: "0 0 0.25rem" }}>Top Awarders</h4>
+              {leaderboard && leaderboard.staff.length === 0 ? (
+                <div style={{ color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
+                  No staff awards in this period yet.
+                </div>
+              ) : (
+                <table>
+                  <thead>
+                    <tr>
+                      <th>#</th>
+                      <th>Staff</th>
+                      <th>Points</th>
+                      <th>Awards</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {leaderboard?.staff.map((s, idx) => (
+                      <tr key={s.staffId}>
+                        <td>{idx + 1}</td>
+                        <td>{s.staffName}</td>
+                        <td>{s.total}</td>
+                        <td>{s.count}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </div>
 
           <h3 style={{ marginTop: "1.5rem" }}>Bulk Award</h3>
           <p style={{ marginTop: 0, color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
