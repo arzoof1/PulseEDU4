@@ -54,8 +54,12 @@ app.use(
     rolling: true,
     cookie: {
       httpOnly: true,
-      sameSite: "lax",
-      secure: process.env.NODE_ENV === "production",
+      // SameSite=None + Secure lets the session cookie work both inside the
+      // Replit workspace preview iframe (cross-site context) and in a normal
+      // standalone tab. Both dev and prod are served over HTTPS so Secure is
+      // safe to require.
+      sameSite: "none",
+      secure: true,
       maxAge: 1000 * 60 * 60 * 24 * 14,
     },
     name: "pulseed.sid",
