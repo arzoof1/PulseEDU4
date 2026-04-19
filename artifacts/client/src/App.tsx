@@ -1715,7 +1715,7 @@ function App() {
                     (recentPbis
                       ? `\nRecent recognitions:\n${recentPbis}\n`
                       : "") +
-                    `\nThank you,\nSchool Operations`;
+                    `\nThank you,\nPulseED`;
                 } else if (emailMessageType === "pbis") {
                   subject = `PBIS Recognition for ${studentName}`;
                   body =
@@ -1726,7 +1726,7 @@ function App() {
                     (recentPbis
                       ? `\nRecent PBIS recognitions:\n${recentPbis}\n`
                       : "\nNo PBIS entries yet.\n") +
-                    `\nThank you,\nSchool Operations`;
+                    `\nThank you,\nPulseED`;
                 } else if (emailMessageType === "attendance") {
                   subject = `Attendance / Tardy Concern for ${studentName}`;
                   body =
@@ -1738,7 +1738,7 @@ function App() {
                       ? `\nRecent tardies:\n${recentTardies}\n`
                       : "\nNo recent tardies on record.\n") +
                     `\nPlease reach out if you have any questions.\n\n` +
-                    `Thank you,\nSchool Operations`;
+                    `Thank you,\nPulseED`;
                 } else {
                   subject = `Check-In / Check-Out Notice for ${studentName}`;
                   body =
@@ -1749,7 +1749,7 @@ function App() {
                     (recentCheckInOut
                       ? `\nRecent activity:\n${recentCheckInOut}\n`
                       : "\nNo recent check-in/check-out activity on record.\n") +
-                    `\nThank you,\nSchool Operations`;
+                    `\nThank you,\nPulseED`;
                 }
                 const parentEmailOnFile = (student?.parentEmail ?? "").trim();
                 const recipientToUse = (emailOverride || parentEmailOnFile).trim();
