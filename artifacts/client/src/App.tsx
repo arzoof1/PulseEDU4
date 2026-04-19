@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import Login from "./Login";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -163,7 +164,14 @@ function App() {
   const [tardies, setTardies] = useState<Tardy[]>([]);
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
-  const [currentStaffUser, setCurrentStaffUser] = useState(staffUsers[0]);
+  const [authUser, setAuthUser] = useState<{
+    id: number;
+    email: string;
+    displayName: string;
+    isAdmin: boolean;
+  } | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+  const currentStaffUser = authUser?.displayName ?? "";
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
@@ -294,6 +302,15 @@ function App() {
   };
 
   useEffect(() => {
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((user) => setAuthUser(user))
+      .catch(() => setAuthUser(null))
+      .finally(() => setAuthLoading(false));
+  }, []);
+
+  useEffect(() => {
+    if (!authUser) return;
     fetch("/api/health")
       .then((res) => res.json())
       .then((data) => console.log("Health check response:", data))
@@ -772,6 +789,27 @@ function App() {
     .join("")
     .toUpperCase();
 
+  if (authLoading) {
+    return (
+      <div
+        style={{
+          minHeight: "100vh",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "var(--text-subtle, #64748b)",
+          fontFamily: "system-ui, sans-serif",
+        }}
+      >
+        Loading…
+      </div>
+    );
+  }
+
+  if (!authUser) {
+    return <Login onLogin={(u) => setAuthUser(u)} />;
+  }
+
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -829,16 +867,27 @@ function App() {
           </label>
           <span className="user-pill">
             <span className="avatar">{userInitials || "?"}</span>
-            <select
-              value={currentStaffUser}
-              onChange={(e) => setCurrentStaffUser(e.target.value)}
+            <span style={{ padding: "0 0.5rem", whiteSpace: "nowrap" }}>
+              {currentStaffUser}
+            </span>
+            <button
+              type="button"
+              onClick={async () => {
+                await fetch("/api/auth/logout", { method: "POST" });
+                setAuthUser(null);
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--border)",
+                color: "inherit",
+                borderRadius: 6,
+                padding: "0.25rem 0.6rem",
+                cursor: "pointer",
+                fontSize: "0.85rem",
+              }}
             >
-              {staffUsers.map((u) => (
-                <option key={u} value={u}>
-                  {u}
-                </option>
-              ))}
-            </select>
+              Sign out
+            </button>
           </span>
         </div>
       </header>
