@@ -1,0 +1,88 @@
+We are continuing a school operations app MVP inspired by Minga. Do not write code unless I specifically ask for a prompt for the Replit agent. For now, help me think, prioritize, and write focused prompts only.
+
+Current app status:
+
+Top-Level Sections:
+- Hall Passes
+- Tardy / Check-Ins
+- Student Activity
+- PBIS Points
+- Accommodations
+- Global Current Staff User picker used to attribute staff actions
+
+Current features:
+
+1. Hall Passes
+- Issue a hall pass for a student
+- View active/ended passes
+- End active pass manually
+- System can end passes and show who ended them
+- Filters: All vs Mine, All Records vs Today
+- Active pass counts shown
+
+2. Tardy / Check-Ins
+- Log Tardy, Check-In, Check-Out
+- View list with timestamp, student, staff
+- Filters: All vs Mine, All Records vs Today
+
+3. Student Activity
+- Search/select a student
+- Quick Actions row above sub-tabs: Add PBIS, Add Support Note, Send Email
+- Summary tab shows hall passes, tardies, check-ins, check-outs, PBIS entries, PBIS points, lost instructional minutes, and accommodations provided
+- Hall Passes tab shows that student’s passes
+- Tardy / Support Logs tab shows that student’s tardy/check-in/check-out records
+- PBIS tab shows entries and add form
+- Support Notes tab shows notes and add form
+- Contact / Communication tab shows parent contact info and parent email composer with message types: Positive, PBIS, Attendance, Check-In/Out
+
+4. PBIS Points
+- Add PBIS entry for a student
+- View entries
+- Filters: All vs Mine, All Records vs Today
+
+5. Accommodations
+By Student:
+- Select student and view accommodations
+- Each row has Log Accommodation Provided
+
+By Accommodation Roster:
+- Period dropdown limited by staff-period mapping
+- Accommodation dropdown from unique accommodations
+- Shows students with that accommodation in that period
+- Bulk button: Log Provided for All Listed Students
+- Individual Log Provided button per row
+
+Mock Data:
+- 30 students with grade, parent contact info, varied accommodations
+- Period rosters 1–7 mocked
+- Staff-to-period mapping mocked
+
+Backend endpoints:
+- GET /api/health, GET /api/healthz
+- GET /api/students
+- GET /api/hall-passes, POST /api/hall-passes, POST /api/hall-passes/:id/end
+- GET /api/tardies, POST /api/tardies
+- GET /api/pbis, POST /api/pbis
+- GET /api/support-notes, POST /api/support-notes
+- POST /api/email/parent
+- GET /api/schedule
+- GET /api/accommodation-logs, POST /api/accommodation-logs
+
+Current limitations:
+- no auth
+- no routing
+- single page
+- all storage is in-memory
+- no edit/delete yet
+- no SIS integration
+- no bell schedule logic
+- no compliance reports yet
+
+Working rules:
+- Keep changes small and focused
+- Do not refactor unrelated areas
+- Do not add extra features beyond the requested step
+- Always tell me exactly what prompt to give the Replit agent
+- Assume we want the fastest path to a stable usable MVP for school staff
+
+Help me decide the best next step. My instinct is to move current in-memory data to persistent database storage first without changing workflows. If you agree, help me write a very tight agent prompt for that step only.
