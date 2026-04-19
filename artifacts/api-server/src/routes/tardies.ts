@@ -1,13 +1,14 @@
 import { Router, type IRouter } from "express";
-import { tardies, getNextTardyId, type Tardy } from "../data/tardies";
+import { db, tardiesTable } from "@workspace/db";
 
 const router: IRouter = Router();
 
-router.get("/tardies", (_req, res) => {
-  res.json(tardies);
+router.get("/tardies", async (_req, res) => {
+  const rows = await db.select().from(tardiesTable);
+  res.json(rows);
 });
 
-router.post("/tardies", (req, res) => {
+router.post("/tardies", async (req, res) => {
   const {
     studentId,
     teacherName,
@@ -48,22 +49,23 @@ router.post("/tardies", (req, res) => {
     return;
   }
 
-  const tardy: Tardy = {
-    id: getNextTardyId(),
-    studentId,
-    teacherName,
-    period,
-    reason: typeof reason === "string" ? reason : "",
-    entryType: type,
-    checkInWith:
-      type === "checkin" || type === "checkout"
-        ? (checkInWith as string)
-        : null,
-    notes: typeof notes === "string" ? notes : "",
-    createdAt: new Date().toISOString(),
-  };
+  const [tardy] = await db
+    .insert(tardiesTable)
+    .values({
+      studentId,
+      teacherName,
+      period,
+      reason: typeof reason === "string" ? reason : "",
+      entryType: type,
+      checkInWith:
+        type === "checkin" || type === "checkout"
+          ? (checkInWith as string)
+          : null,
+      notes: typeof notes === "string" ? notes : "",
+      createdAt: new Date().toISOString(),
+    })
+    .returning();
 
-  tardies.push(tardy);
   res.status(201).json(tardy);
 });
 

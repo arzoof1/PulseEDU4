@@ -1,22 +1,24 @@
 import { Router, type IRouter } from "express";
-import {
-  accommodationLogs,
-  getNextAccommodationLogId,
-  type AccommodationLog,
-} from "../data/accommodationLogs";
+import { db, accommodationLogsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-router.get("/accommodation-logs", (req, res) => {
+router.get("/accommodation-logs", async (req, res) => {
   const { studentId } = req.query;
   if (typeof studentId === "string" && studentId) {
-    res.json(accommodationLogs.filter((l) => l.studentId === studentId));
+    const rows = await db
+      .select()
+      .from(accommodationLogsTable)
+      .where(eq(accommodationLogsTable.studentId, studentId));
+    res.json(rows);
     return;
   }
-  res.json(accommodationLogs);
+  const rows = await db.select().from(accommodationLogsTable);
+  res.json(rows);
 });
 
-router.post("/accommodation-logs", (req, res) => {
+router.post("/accommodation-logs", async (req, res) => {
   const { studentId, accommodation, period, staffName } = req.body ?? {};
 
   if (typeof studentId !== "string" || !studentId) {
@@ -28,21 +30,24 @@ router.post("/accommodation-logs", (req, res) => {
     return;
   }
 
-  const log: AccommodationLog = {
-    id: getNextAccommodationLogId(),
-    studentId,
-    accommodation,
-    period:
-      typeof period === "number"
-        ? period
-        : typeof period === "string" && period
-          ? Number(period)
-          : null,
-    staffName: typeof staffName === "string" ? staffName : "",
-    createdAt: new Date().toISOString(),
-  };
+  const periodValue =
+    typeof period === "number"
+      ? period
+      : typeof period === "string" && period
+        ? Number(period)
+        : null;
 
-  accommodationLogs.push(log);
+  const [log] = await db
+    .insert(accommodationLogsTable)
+    .values({
+      studentId,
+      accommodation,
+      period: periodValue,
+      staffName: typeof staffName === "string" ? staffName : "",
+      createdAt: new Date().toISOString(),
+    })
+    .returning();
+
   res.status(201).json(log);
 });
 

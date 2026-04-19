@@ -1,13 +1,14 @@
 import { Router, type IRouter } from "express";
-import { pbisEntries, getNextPbisId, type PbisEntry } from "../data/pbis";
+import { db, pbisEntriesTable } from "@workspace/db";
 
 const router: IRouter = Router();
 
-router.get("/pbis", (_req, res) => {
-  res.json(pbisEntries);
+router.get("/pbis", async (_req, res) => {
+  const rows = await db.select().from(pbisEntriesTable);
+  res.json(rows);
 });
 
-router.post("/pbis", (req, res) => {
+router.post("/pbis", async (req, res) => {
   const { studentId, reason, points, staffName } = req.body ?? {};
 
   if (typeof studentId !== "string" || !studentId) {
@@ -24,16 +25,17 @@ router.post("/pbis", (req, res) => {
     return;
   }
 
-  const entry: PbisEntry = {
-    id: getNextPbisId(),
-    studentId,
-    reason,
-    points: pts,
-    staffName: typeof staffName === "string" ? staffName : "",
-    createdAt: new Date().toISOString(),
-  };
+  const [entry] = await db
+    .insert(pbisEntriesTable)
+    .values({
+      studentId,
+      reason,
+      points: pts,
+      staffName: typeof staffName === "string" ? staffName : "",
+      createdAt: new Date().toISOString(),
+    })
+    .returning();
 
-  pbisEntries.push(entry);
   res.status(201).json(entry);
 });
 

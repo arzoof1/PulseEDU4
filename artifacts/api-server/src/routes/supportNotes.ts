@@ -1,22 +1,24 @@
 import { Router, type IRouter } from "express";
-import {
-  supportNotes,
-  getNextSupportNoteId,
-  type SupportNote,
-} from "../data/supportNotes";
+import { db, supportNotesTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-router.get("/support-notes", (req, res) => {
+router.get("/support-notes", async (req, res) => {
   const { studentId } = req.query;
   if (typeof studentId === "string" && studentId) {
-    res.json(supportNotes.filter((n) => n.studentId === studentId));
+    const rows = await db
+      .select()
+      .from(supportNotesTable)
+      .where(eq(supportNotesTable.studentId, studentId));
+    res.json(rows);
     return;
   }
-  res.json(supportNotes);
+  const rows = await db.select().from(supportNotesTable);
+  res.json(rows);
 });
 
-router.post("/support-notes", (req, res) => {
+router.post("/support-notes", async (req, res) => {
   const { studentId, noteType, noteText, staffName } = req.body ?? {};
 
   if (typeof studentId !== "string" || !studentId) {
@@ -32,16 +34,17 @@ router.post("/support-notes", (req, res) => {
     return;
   }
 
-  const note: SupportNote = {
-    id: getNextSupportNoteId(),
-    studentId,
-    noteType,
-    noteText,
-    staffName: typeof staffName === "string" ? staffName : "",
-    createdAt: new Date().toISOString(),
-  };
+  const [note] = await db
+    .insert(supportNotesTable)
+    .values({
+      studentId,
+      noteType,
+      noteText,
+      staffName: typeof staffName === "string" ? staffName : "",
+      createdAt: new Date().toISOString(),
+    })
+    .returning();
 
-  supportNotes.push(note);
   res.status(201).json(note);
 });
 

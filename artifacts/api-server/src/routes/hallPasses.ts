@@ -1,18 +1,16 @@
 import { Router, type IRouter } from "express";
-import {
-  hallPasses,
-  getNextHallPassId,
-  type HallPass,
-} from "../data/hallPasses";
+import { db, hallPassesTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 import { config } from "../data/config";
 
 const router: IRouter = Router();
 
-router.get("/hall-passes", (_req, res) => {
-  res.json(hallPasses);
+router.get("/hall-passes", async (_req, res) => {
+  const rows = await db.select().from(hallPassesTable);
+  res.json(rows);
 });
 
-router.post("/hall-passes", (req, res) => {
+router.post("/hall-passes", async (req, res) => {
   const { studentId, destination, originRoom, teacherName } = req.body ?? {};
 
   if (
@@ -28,34 +26,38 @@ router.post("/hall-passes", (req, res) => {
     return;
   }
 
-  const pass: HallPass = {
-    id: getNextHallPassId(),
-    studentId,
-    destination,
-    originRoom,
-    teacherName,
-    status: "active",
-    createdAt: new Date().toISOString(),
-    maxDurationMinutes: config.defaultHallPassDurationMinutes,
-    endedAt: null,
-  };
-
-  hallPasses.push(pass);
+  const [pass] = await db
+    .insert(hallPassesTable)
+    .values({
+      studentId,
+      destination,
+      originRoom,
+      teacherName,
+      status: "active",
+      createdAt: new Date().toISOString(),
+      maxDurationMinutes: config.defaultHallPassDurationMinutes,
+      endedAt: null,
+    })
+    .returning();
   res.status(201).json(pass);
 });
 
-router.patch("/hall-passes/:id/end", (req, res) => {
+router.patch("/hall-passes/:id/end", async (req, res) => {
   const id = Number(req.params.id);
-  const pass = hallPasses.find((p) => p.id === id);
+  const system = req.body?.system === true;
+  const [pass] = await db
+    .update(hallPassesTable)
+    .set({
+      status: system ? "system_ended" : "ended",
+      endedAt: new Date().toISOString(),
+    })
+    .where(eq(hallPassesTable.id, id))
+    .returning();
 
   if (!pass) {
     res.status(404).json({ error: "Hall pass not found" });
     return;
   }
-
-  const system = req.body?.system === true;
-  pass.status = system ? "system_ended" : "ended";
-  pass.endedAt = new Date().toISOString();
   res.json(pass);
 });
 

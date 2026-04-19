@@ -1,0 +1,12 @@
+import { pgTable, serial, text } from "drizzle-orm/pg-core";
+
+export const supportNotesTable = pgTable("support_notes", {
+  id: serial("id").primaryKey(),
+  studentId: text("student_id").notNull(),
+  noteType: text("note_type").notNull(),
+  noteText: text("note_text").notNull(),
+  staffName: text("staff_name").notNull(),
+  createdAt: text("created_at").notNull(),
+});
+
+export type SupportNoteRow = typeof supportNotesTable.$inferSelect;
