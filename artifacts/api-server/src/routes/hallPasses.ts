@@ -11,7 +11,14 @@ router.get("/hall-passes", async (_req, res) => {
 });
 
 router.post("/hall-passes", async (req, res) => {
-  const { studentId, destination, originRoom, teacherName } = req.body ?? {};
+  const {
+    studentId,
+    destination,
+    originRoom,
+    teacherName,
+    destinationTeacher,
+    contactedAcknowledged,
+  } = req.body ?? {};
 
   if (
     typeof studentId !== "string" ||
@@ -26,6 +33,20 @@ router.post("/hall-passes", async (req, res) => {
     return;
   }
 
+  const destTeacher =
+    typeof destinationTeacher === "string" && destinationTeacher.trim()
+      ? destinationTeacher.trim()
+      : null;
+  const acknowledged = contactedAcknowledged === true;
+
+  if (destTeacher && !acknowledged) {
+    res.status(400).json({
+      error:
+        "contactedAcknowledged must be true when destinationTeacher is set",
+    });
+    return;
+  }
+
   const [pass] = await db
     .insert(hallPassesTable)
     .values({
@@ -33,6 +54,8 @@ router.post("/hall-passes", async (req, res) => {
       destination,
       originRoom,
       teacherName,
+      destinationTeacher: destTeacher,
+      contactedAcknowledged: acknowledged,
       status: "active",
       createdAt: new Date().toISOString(),
       maxDurationMinutes: config.defaultHallPassDurationMinutes,
