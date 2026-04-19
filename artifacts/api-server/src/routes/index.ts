@@ -12,6 +12,7 @@ import schoolSettingsRouter from "./schoolSettings";
 import locationsRouter from "./locations";
 import staffDefaultsRouter from "./staffDefaults";
 import locationAllowedDestinationsRouter from "./locationAllowedDestinations";
+import kioskRouter from "./kiosk";
 
 const router: IRouter = Router();
 
@@ -28,5 +29,6 @@ router.use(schoolSettingsRouter);
 router.use(locationsRouter);
 router.use(staffDefaultsRouter);
 router.use(locationAllowedDestinationsRouter);
+router.use(kioskRouter);
 
 export default router;
