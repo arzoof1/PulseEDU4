@@ -66,7 +66,9 @@ const requireInterventionAdmin = requireRole(
 
 // ---- PBIS Reasons ----
 
-router.get("/pbis-reasons", async (_req, res) => {
+router.get("/pbis-reasons", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const rows = await db
     .select()
     .from(pbisReasonsTable)
@@ -144,7 +146,9 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
 
 // ---- Intervention Types ----
 
-router.get("/intervention-types", async (_req, res) => {
+router.get("/intervention-types", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const rows = await db
     .select()
     .from(interventionTypesTable)

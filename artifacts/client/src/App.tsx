@@ -862,24 +862,48 @@ function App() {
       );
   };
 
-  const loadPbisReasons = () => {
-    fetch("/api/pbis-reasons")
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) =>
-        setPbisReasonsList(Array.isArray(data) ? (data as PbisReason[]) : []),
-      )
-      .catch(() => setPbisReasonsList([]));
+  const loadPbisReasons = async () => {
+    setPbisListMsg("");
+    try {
+      const res = await fetch("/api/pbis-reasons");
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setPbisReasonsList([]);
+        setPbisListMsg(
+          res.status === 401
+            ? "Your session expired. Please sign in again."
+            : j.error || `Couldn't load reasons (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      const data = (await res.json()) as PbisReason[];
+      setPbisReasonsList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setPbisReasonsList([]);
+      setPbisListMsg(e instanceof Error ? e.message : String(e));
+    }
   };
 
-  const loadInterventionTypes = () => {
-    fetch("/api/intervention-types")
-      .then((res) => (res.ok ? res.json() : []))
-      .then((data) =>
-        setInterventionList(
-          Array.isArray(data) ? (data as InterventionType[]) : [],
-        ),
-      )
-      .catch(() => setInterventionList([]));
+  const loadInterventionTypes = async () => {
+    setIntervListMsg("");
+    try {
+      const res = await fetch("/api/intervention-types");
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setInterventionList([]);
+        setIntervListMsg(
+          res.status === 401
+            ? "Your session expired. Please sign in again."
+            : j.error || `Couldn't load interventions (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      const data = (await res.json()) as InterventionType[];
+      setInterventionList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setInterventionList([]);
+      setIntervListMsg(e instanceof Error ? e.message : String(e));
+    }
   };
 
   const addPbisReason = async () => {
