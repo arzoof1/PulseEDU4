@@ -216,9 +216,9 @@ function App() {
     | "supportNotes"
     | "contact"
   >("summary");
-  const [accView, setAccView] = useState<"student" | "roster" | "daily">(
-    "student",
-  );
+  const [accView, setAccView] = useState<
+    "student" | "roster" | "daily" | "reports"
+  >("student");
   const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [accStudentId, setAccStudentId] = useState("");
   const [rosterPeriod, setRosterPeriod] = useState("");
@@ -244,6 +244,56 @@ function App() {
     new Set(),
   );
   const [dailySubmitMsg, setDailySubmitMsg] = useState("");
+  // Reports sub-tab state
+  type ReportRange = "today" | "7d" | "30d" | "custom";
+  const [reportRange, setReportRange] = useState<ReportRange>("7d");
+  const [reportCustomFrom, setReportCustomFrom] = useState("");
+  const [reportCustomTo, setReportCustomTo] = useState("");
+  const [reportTeacherId, setReportTeacherId] = useState<number | "">("");
+  const [reportPeriod, setReportPeriod] = useState<string>("");
+  const [reportTeachers, setReportTeachers] = useState<
+    Array<{ id: number; displayName: string }>
+  >([]);
+  interface ReportData {
+    teacher: { id: number; displayName: string };
+    range: { from: string; to: string; days: number };
+    periodFilter: number | null;
+    sections: Array<{
+      id: number;
+      period: number;
+      courseName: string;
+      isPlanning: boolean;
+      rosterCount: number;
+      accommodatedRosterCount: number;
+    }>;
+    daily: Array<{
+      date: string;
+      period: number;
+      sectionId: number | null;
+      submitted: boolean;
+      providedCount: number;
+      refusedCount: number;
+      coverage: { logged: number; eligible: number };
+    }>;
+    totals: {
+      providedCount: number;
+      refusedCount: number;
+      daysWithActivity: number;
+      avgCoveragePct: number | null;
+    };
+    recent: Array<{
+      id: number;
+      createdAt: string;
+      period: number | null;
+      studentId: string;
+      studentName: string;
+      accommodation: string;
+      status: string;
+    }>;
+  }
+  const [reportData, setReportData] = useState<ReportData | null>(null);
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportError, setReportError] = useState("");
   // ESE coordinator state
   const [schoolAccs, setSchoolAccs] = useState<
     Array<{
@@ -485,6 +535,117 @@ function App() {
     loadSchoolSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.id]);
+
+  // ---- Reports tab ----
+  const loadReportTeachers = () => {
+    fetch("/api/reports/teachers")
+      .then((res) => (res.ok ? res.json() : { teachers: [] }))
+      .then((data) =>
+        setReportTeachers(Array.isArray(data.teachers) ? data.teachers : []),
+      )
+      .catch(() => setReportTeachers([]));
+  };
+
+  const computeReportRange = (): { from: string; to: string } | null => {
+    const today = new Date();
+    const isoToday = today.toISOString().slice(0, 10);
+    const dayMs = 86400000;
+    if (reportRange === "today") return { from: isoToday, to: isoToday };
+    if (reportRange === "7d") {
+      const from = new Date(today.getTime() - 6 * dayMs)
+        .toISOString()
+        .slice(0, 10);
+      return { from, to: isoToday };
+    }
+    if (reportRange === "30d") {
+      const from = new Date(today.getTime() - 29 * dayMs)
+        .toISOString()
+        .slice(0, 10);
+      return { from, to: isoToday };
+    }
+    // custom
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(reportCustomFrom) ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(reportCustomTo)
+    ) {
+      return null;
+    }
+    if (reportCustomTo < reportCustomFrom) return null;
+    return { from: reportCustomFrom, to: reportCustomTo };
+  };
+
+  const reportReqIdRef = useRef(0);
+  const loadReport = async () => {
+    if (!reportTeacherId) {
+      setReportData(null);
+      return;
+    }
+    const range = computeReportRange();
+    if (!range) {
+      setReportError("Please pick a valid From / To date.");
+      setReportData(null);
+      return;
+    }
+    const myReqId = ++reportReqIdRef.current;
+    setReportLoading(true);
+    setReportError("");
+    try {
+      const params = new URLSearchParams({
+        mode: "teacher",
+        teacherId: String(reportTeacherId),
+        from: range.from,
+        to: range.to,
+      });
+      if (reportPeriod) params.set("period", reportPeriod);
+      const res = await fetch(`/api/reports/accommodations?${params}`);
+      if (myReqId !== reportReqIdRef.current) return;
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const data = (await res.json()) as ReportData;
+      if (myReqId !== reportReqIdRef.current) return;
+      setReportData(data);
+    } catch (err) {
+      if (myReqId !== reportReqIdRef.current) return;
+      setReportError(err instanceof Error ? err.message : String(err));
+      setReportData(null);
+    } finally {
+      if (myReqId === reportReqIdRef.current) setReportLoading(false);
+    }
+  };
+
+  // Load teachers list once for admin/ESE
+  useEffect(() => {
+    if (authUser && (authUser.isAdmin || authUser.isEseCoordinator)) {
+      loadReportTeachers();
+    }
+    // Default selected teacher to the signed-in user when entering the tab
+    if (authUser && reportTeacherId === "") {
+      setReportTeacherId(authUser.id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
+
+  // Reload when filters change AND we're on the reports view
+  useEffect(() => {
+    if (
+      activeSection === "accommodations" &&
+      accView === "reports" &&
+      reportTeacherId !== ""
+    ) {
+      loadReport();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    activeSection,
+    accView,
+    reportTeacherId,
+    reportPeriod,
+    reportRange,
+    reportCustomFrom,
+    reportCustomTo,
+  ]);
 
   const loadSchoolSettings = () => {
     fetch("/api/school-settings")
@@ -2765,8 +2926,16 @@ function App() {
                     type="button"
                     onClick={() => setAccView("daily")}
                     disabled={accView === "daily"}
+                    style={{ marginRight: "0.25rem" }}
                   >
                     Daily Class Log
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccView("reports")}
+                    disabled={accView === "reports"}
+                  >
+                    Reports
                   </button>
                 </div>
                 {accView === "student" ? (
@@ -2911,7 +3080,7 @@ function App() {
                       </>
                     )}
                   </>
-                ) : (
+                ) : accView === "daily" ? (
                   (() => {
                     const allInPeriod = dailyPeriod
                       ? periodRoster[dailyPeriod] ?? []
@@ -3186,6 +3355,525 @@ function App() {
                               </div>
                             </div>
                           </div>
+                        )}
+                      </>
+                    );
+                  })()
+                ) : (
+                  // ----- Reports view -----
+                  (() => {
+                    const isPrivileged =
+                      authUser?.isAdmin === true ||
+                      authUser?.isEseCoordinator === true;
+                    const periodOptions: number[] = (() => {
+                      // Use teacher's own teaching periods if any; else 1..periodCount.
+                      if (
+                        myPeriods.length > 0 &&
+                        (!isPrivileged ||
+                          reportTeacherId === authUser?.id)
+                      ) {
+                        return myPeriods;
+                      }
+                      const max =
+                        schoolSettings.periodCount > 0
+                          ? schoolSettings.periodCount
+                          : 7;
+                      return Array.from({ length: max }, (_, i) => i + 1);
+                    })();
+                    const cellBg = (cell: ReportData["daily"][number]) => {
+                      if (!cell.submitted) return "#f6f6f6";
+                      const { logged, eligible } = cell.coverage;
+                      if (eligible === 0) return "#e6f4ea";
+                      const pct = logged / eligible;
+                      if (pct >= 0.9) return "#cdebd6";
+                      if (pct >= 0.5) return "#fff4cc";
+                      return "#fde2e2";
+                    };
+                    return (
+                      <>
+                        <h3 style={{ marginTop: 0 }}>Accommodation Reports</h3>
+
+                        {/* ---- Filter bar ---- */}
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "0.75rem",
+                            alignItems: "center",
+                            marginBottom: "0.75rem",
+                          }}
+                        >
+                          {/* Date range */}
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: "0.25rem",
+                              alignItems: "center",
+                            }}
+                          >
+                            <span style={{ fontSize: "0.9rem" }}>Range:</span>
+                            {(["today", "7d", "30d", "custom"] as const).map(
+                              (r) => (
+                                <button
+                                  key={r}
+                                  type="button"
+                                  onClick={() => setReportRange(r)}
+                                  disabled={reportRange === r}
+                                  style={{ padding: "0.15rem 0.5rem" }}
+                                >
+                                  {r === "today"
+                                    ? "Today"
+                                    : r === "7d"
+                                      ? "7d"
+                                      : r === "30d"
+                                        ? "30d"
+                                        : "Custom"}
+                                </button>
+                              ),
+                            )}
+                          </div>
+                          {reportRange === "custom" && (
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: "0.25rem",
+                                alignItems: "center",
+                              }}
+                            >
+                              <input
+                                type="date"
+                                value={reportCustomFrom}
+                                onChange={(e) =>
+                                  setReportCustomFrom(e.target.value)
+                                }
+                              />
+                              <span>to</span>
+                              <input
+                                type="date"
+                                value={reportCustomTo}
+                                onChange={(e) =>
+                                  setReportCustomTo(e.target.value)
+                                }
+                              />
+                            </div>
+                          )}
+
+                          {/* Teacher picker (privileged only) */}
+                          {isPrivileged ? (
+                            <label>
+                              Teacher:{" "}
+                              <select
+                                value={
+                                  reportTeacherId === ""
+                                    ? ""
+                                    : String(reportTeacherId)
+                                }
+                                onChange={(e) =>
+                                  setReportTeacherId(
+                                    e.target.value === ""
+                                      ? ""
+                                      : Number(e.target.value),
+                                  )
+                                }
+                              >
+                                <option value="">-- Select teacher --</option>
+                                {reportTeachers.map((t) => (
+                                  <option key={t.id} value={String(t.id)}>
+                                    {t.displayName}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          ) : (
+                            <span style={{ fontSize: "0.9rem", color: "#555" }}>
+                              Teacher: <strong>{authUser?.displayName}</strong>
+                            </span>
+                          )}
+
+                          {/* Period filter */}
+                          <label>
+                            Period:{" "}
+                            <select
+                              value={reportPeriod}
+                              onChange={(e) => setReportPeriod(e.target.value)}
+                            >
+                              <option value="">All</option>
+                              {periodOptions.map((p) => (
+                                <option key={p} value={String(p)}>
+                                  P{p}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+
+                          {reportLoading && (
+                            <span style={{ color: "#666" }}>Loading…</span>
+                          )}
+                          {reportError && (
+                            <span style={{ color: "#a00" }}>
+                              {reportError}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* ---- Body ---- */}
+                        {!reportTeacherId ? (
+                          <div>Pick a teacher to view their report.</div>
+                        ) : !reportData ? (
+                          reportLoading ? null : (
+                            <div>No data.</div>
+                          )
+                        ) : (
+                          <>
+                            {/* Summary cards */}
+                            <div
+                              style={{
+                                display: "grid",
+                                gridTemplateColumns:
+                                  "repeat(auto-fit, minmax(140px, 1fr))",
+                                gap: "0.5rem",
+                                marginBottom: "0.75rem",
+                              }}
+                            >
+                              <div
+                                style={{
+                                  border: "1px solid #ccc",
+                                  padding: "0.5rem",
+                                }}
+                              >
+                                <div style={{ fontSize: "0.8rem" }}>
+                                  Provided
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: "1.4rem",
+                                    color: "#0a7a3b",
+                                  }}
+                                >
+                                  {reportData.totals.providedCount}
+                                </div>
+                              </div>
+                              <div
+                                style={{
+                                  border: "1px solid #ccc",
+                                  padding: "0.5rem",
+                                }}
+                              >
+                                <div style={{ fontSize: "0.8rem" }}>
+                                  Refused
+                                </div>
+                                <div
+                                  style={{
+                                    fontSize: "1.4rem",
+                                    color: "#b00020",
+                                  }}
+                                >
+                                  {reportData.totals.refusedCount}
+                                </div>
+                              </div>
+                              <div
+                                style={{
+                                  border: "1px solid #ccc",
+                                  padding: "0.5rem",
+                                }}
+                              >
+                                <div style={{ fontSize: "0.8rem" }}>
+                                  Days w/ activity
+                                </div>
+                                <div style={{ fontSize: "1.4rem" }}>
+                                  {reportData.totals.daysWithActivity} /{" "}
+                                  {reportData.range.days}
+                                </div>
+                              </div>
+                              <div
+                                style={{
+                                  border: "1px solid #ccc",
+                                  padding: "0.5rem",
+                                }}
+                              >
+                                <div style={{ fontSize: "0.8rem" }}>
+                                  Avg coverage
+                                </div>
+                                <div style={{ fontSize: "1.4rem" }}>
+                                  {reportData.totals.avgCoveragePct == null
+                                    ? "—"
+                                    : `${reportData.totals.avgCoveragePct}%`}
+                                </div>
+                              </div>
+                            </div>
+
+                            {/* Sections */}
+                            <h4 style={{ margin: "0.5rem 0 0.25rem 0" }}>
+                              Sections
+                            </h4>
+                            {reportData.sections.length === 0 ? (
+                              <div>No sections for this teacher.</div>
+                            ) : (
+                              <table
+                                style={{
+                                  borderCollapse: "collapse",
+                                  width: "100%",
+                                  marginBottom: "0.75rem",
+                                }}
+                              >
+                                <thead>
+                                  <tr>
+                                    <th
+                                      style={{
+                                        textAlign: "left",
+                                        borderBottom: "1px solid #ccc",
+                                        padding: "0.25rem",
+                                      }}
+                                    >
+                                      Period
+                                    </th>
+                                    <th
+                                      style={{
+                                        textAlign: "left",
+                                        borderBottom: "1px solid #ccc",
+                                        padding: "0.25rem",
+                                      }}
+                                    >
+                                      Course
+                                    </th>
+                                    <th
+                                      style={{
+                                        textAlign: "right",
+                                        borderBottom: "1px solid #ccc",
+                                        padding: "0.25rem",
+                                      }}
+                                    >
+                                      Roster
+                                    </th>
+                                    <th
+                                      style={{
+                                        textAlign: "right",
+                                        borderBottom: "1px solid #ccc",
+                                        padding: "0.25rem",
+                                      }}
+                                    >
+                                      W/ accommodations
+                                    </th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {reportData.sections
+                                    .slice()
+                                    .sort((a, b) => a.period - b.period)
+                                    .map((s) => (
+                                      <tr key={s.id}>
+                                        <td style={{ padding: "0.25rem" }}>
+                                          P{s.period}
+                                        </td>
+                                        <td style={{ padding: "0.25rem" }}>
+                                          {s.courseName}
+                                          {s.isPlanning ? " (planning)" : ""}
+                                        </td>
+                                        <td
+                                          style={{
+                                            padding: "0.25rem",
+                                            textAlign: "right",
+                                          }}
+                                        >
+                                          {s.rosterCount}
+                                        </td>
+                                        <td
+                                          style={{
+                                            padding: "0.25rem",
+                                            textAlign: "right",
+                                          }}
+                                        >
+                                          {s.accommodatedRosterCount}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                </tbody>
+                              </table>
+                            )}
+
+                            {/* Daily x period grid */}
+                            <h4 style={{ margin: "0.5rem 0 0.25rem 0" }}>
+                              Daily Coverage
+                            </h4>
+                            {reportData.daily.length === 0 ? (
+                              <div>
+                                No teaching periods in range. Pick a different
+                                range or remove the period filter.
+                              </div>
+                            ) : (() => {
+                              const periodsInGrid = Array.from(
+                                new Set(
+                                  reportData.daily.map((c) => c.period),
+                                ),
+                              ).sort((a, b) => a - b);
+                              const datesInGrid = Array.from(
+                                new Set(reportData.daily.map((c) => c.date)),
+                              ).sort();
+                              const cellByKey = new Map(
+                                reportData.daily.map((c) => [
+                                  `${c.date}|${c.period}`,
+                                  c,
+                                ]),
+                              );
+                              return (
+                                <div style={{ overflowX: "auto" }}>
+                                  <table
+                                    style={{
+                                      borderCollapse: "collapse",
+                                      fontSize: "0.85rem",
+                                    }}
+                                  >
+                                    <thead>
+                                      <tr>
+                                        <th
+                                          style={{
+                                            border: "1px solid #ccc",
+                                            padding: "0.25rem",
+                                            background: "#f3f3f3",
+                                          }}
+                                        >
+                                          Date
+                                        </th>
+                                        {periodsInGrid.map((p) => (
+                                          <th
+                                            key={p}
+                                            style={{
+                                              border: "1px solid #ccc",
+                                              padding: "0.25rem",
+                                              background: "#f3f3f3",
+                                            }}
+                                          >
+                                            P{p}
+                                          </th>
+                                        ))}
+                                      </tr>
+                                    </thead>
+                                    <tbody>
+                                      {datesInGrid.map((d) => (
+                                        <tr key={d}>
+                                          <td
+                                            style={{
+                                              border: "1px solid #ccc",
+                                              padding: "0.25rem",
+                                              whiteSpace: "nowrap",
+                                            }}
+                                          >
+                                            {d}
+                                          </td>
+                                          {periodsInGrid.map((p) => {
+                                            const cell = cellByKey.get(
+                                              `${d}|${p}`,
+                                            );
+                                            if (!cell) {
+                                              return (
+                                                <td
+                                                  key={p}
+                                                  style={{
+                                                    border: "1px solid #ccc",
+                                                    padding: "0.25rem",
+                                                    background: "#f6f6f6",
+                                                    color: "#999",
+                                                    textAlign: "center",
+                                                  }}
+                                                >
+                                                  —
+                                                </td>
+                                              );
+                                            }
+                                            const title = cell.submitted
+                                              ? `${cell.coverage.logged} of ${cell.coverage.eligible} accommodated students logged | ${cell.providedCount} provided | ${cell.refusedCount} refused`
+                                              : "No log submitted";
+                                            return (
+                                              <td
+                                                key={p}
+                                                title={title}
+                                                style={{
+                                                  border: "1px solid #ccc",
+                                                  padding: "0.25rem",
+                                                  textAlign: "center",
+                                                  background: cellBg(cell),
+                                                  minWidth: "3rem",
+                                                }}
+                                              >
+                                                {cell.submitted
+                                                  ? `${cell.coverage.logged}/${cell.coverage.eligible}`
+                                                  : "·"}
+                                              </td>
+                                            );
+                                          })}
+                                        </tr>
+                                      ))}
+                                    </tbody>
+                                  </table>
+                                  <div
+                                    style={{
+                                      marginTop: "0.25rem",
+                                      fontSize: "0.75rem",
+                                      color: "#555",
+                                    }}
+                                  >
+                                    Cells show <em>logged / eligible</em>{" "}
+                                    students. Green ≥90%, yellow ≥50%, red
+                                    &lt;50%, gray = no submit.
+                                  </div>
+                                </div>
+                              );
+                            })()}
+
+                            {/* Recent feed */}
+                            <h4 style={{ margin: "0.75rem 0 0.25rem 0" }}>
+                              Recent activity (last 20)
+                            </h4>
+                            {reportData.recent.length === 0 ? (
+                              <div>No recent log entries.</div>
+                            ) : (
+                              <ul
+                                style={{
+                                  margin: 0,
+                                  padding: 0,
+                                  listStyle: "none",
+                                }}
+                              >
+                                {reportData.recent.map((r) => {
+                                  const refused = r.status === "refused";
+                                  return (
+                                    <li
+                                      key={r.id}
+                                      style={{
+                                        padding: "0.25rem 0.5rem",
+                                        marginBottom: "0.15rem",
+                                        borderLeft: `4px solid ${
+                                          refused ? "#b00020" : "#0a7a3b"
+                                        }`,
+                                        background: refused
+                                          ? "#fde2e2"
+                                          : "#e6f4ea",
+                                      }}
+                                    >
+                                      <strong
+                                        style={{
+                                          color: refused
+                                            ? "#b00020"
+                                            : "#0a7a3b",
+                                        }}
+                                      >
+                                        {refused ? "Refused" : "Provided"}
+                                      </strong>
+                                      {": "}
+                                      {r.accommodation}
+                                      {" | "}
+                                      {r.studentName}
+                                      {r.period != null
+                                        ? ` | P${r.period}`
+                                        : ""}
+                                      {" | "}
+                                      {new Date(r.createdAt).toLocaleString()}
+                                    </li>
+                                  );
+                                })}
+                              </ul>
+                            )}
+                          </>
                         )}
                       </>
                     );

@@ -77,6 +77,30 @@ function eachDateInclusive(fromIso: string, toIso: string): string[] {
   return out;
 }
 
+// List of teachers (active staff who teach at least one non-planning section).
+// Used by the Reports UI's teacher picker. Admin / ESE only.
+router.get("/reports/teachers", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  if (!staff.isAdmin && !staff.isEseCoordinator) {
+    res.status(403).json({ error: "Admin or ESE coordinator only" });
+    return;
+  }
+  const rows = await db
+    .selectDistinct({
+      id: staffTable.id,
+      displayName: staffTable.displayName,
+    })
+    .from(staffTable)
+    .innerJoin(
+      classSectionsTable,
+      eq(classSectionsTable.teacherStaffId, staffTable.id),
+    )
+    .where(and(eq(staffTable.active, true), eq(classSectionsTable.isPlanning, false)));
+  rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  res.json({ teachers: rows });
+});
+
 router.get("/reports/accommodations", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
@@ -323,6 +347,8 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     .where(
       and(
         eq(accommodationLogsTable.staffId, teacher.id),
+        sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) >= ${from}`,
+        sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) <= ${to}`,
         periodFilter != null
           ? eq(accommodationLogsTable.period, periodFilter)
           : sql`true`,
