@@ -193,6 +193,7 @@ function App() {
     }[]
   >([]);
   const [emailStatus, setEmailStatus] = useState("");
+  const [emailOverride, setEmailOverride] = useState("");
   const [emailMessageType, setEmailMessageType] = useState<
     "positive" | "pbis" | "attendance" | "checkInOut"
   >("positive");
@@ -1750,10 +1751,8 @@ function App() {
                       : "\nNo recent check-in/check-out activity on record.\n") +
                     `\nThank you,\nSchool Operations`;
                 }
-                const parentEmailValue = (student?.parentEmail ?? "").trim();
-                const recipientLabel = parentEmailValue
-                  ? `Sending to: ${parentEmailValue}`
-                  : "No parent email on file — using test email";
+                const parentEmailOnFile = (student?.parentEmail ?? "").trim();
+                const recipientToUse = (emailOverride || parentEmailOnFile).trim();
                 const sendEmail = async () => {
                   setEmailStatus("Sending...");
                   try {
@@ -1764,16 +1763,21 @@ function App() {
                         studentName,
                         subject,
                         body,
-                        parentEmail: parentEmailValue,
+                        parentEmail: recipientToUse,
                       }),
                     });
-                    if (!res.ok) throw new Error("Failed to send");
-                    setEmailStatus(
-                      "Test parent email sent (stubbed - check server console).",
-                    );
+                    const data = await res.json().catch(() => ({}));
+                    if (!res.ok) {
+                      const detail =
+                        (data && (data.detail || data.error)) ||
+                        `HTTP ${res.status}`;
+                      throw new Error(detail);
+                    }
+                    setEmailStatus(`Sent to ${data.to || recipientToUse}.`);
                   } catch (err) {
+                    const msg = err instanceof Error ? err.message : String(err);
                     console.error(err);
-                    setEmailStatus("Error sending test parent email.");
+                    setEmailStatus(`Error: ${msg}`);
                   }
                 };
                 return (
@@ -1800,15 +1804,38 @@ function App() {
                         </select>
                       </label>
                     </div>
-                    <div style={{ marginBottom: "0.25rem" }}>
-                      {recipientLabel}
+                    <div style={{ marginBottom: "0.5rem" }}>
+                      <label style={{ display: "block" }}>
+                        Send to:{" "}
+                        <input
+                          type="email"
+                          value={emailOverride}
+                          onChange={(e) => setEmailOverride(e.target.value)}
+                          placeholder={
+                            parentEmailOnFile ||
+                            "parent@example.com (or your test email)"
+                          }
+                          style={{ width: "20rem" }}
+                        />
+                      </label>
+                      <div
+                        style={{
+                          fontSize: 12,
+                          color: "var(--text-muted)",
+                          marginTop: 4,
+                        }}
+                      >
+                        {parentEmailOnFile
+                          ? `On file: ${parentEmailOnFile}. Type a different address above to override.`
+                          : "No parent email on file. Type any address above (use your own for testing)."}
+                      </div>
                     </div>
                     <button
                       type="button"
                       onClick={sendEmail}
-                      disabled={!activityStudentId}
+                      disabled={!activityStudentId || !recipientToUse}
                     >
-                      Send Test Parent Email
+                      Send Parent Email
                     </button>
                     {emailStatus && (
                       <span style={{ marginLeft: "0.5rem" }}>
