@@ -10,7 +10,9 @@ import {
   locationsTable,
   staffDefaultsTable,
   locationAllowedDestinationsTable,
+  staffTable,
 } from "@workspace/db";
+import bcrypt from "bcryptjs";
 import { config } from "./data/config";
 import { students as seedStudents } from "./data/students";
 import { periodRoster as seedPeriodRoster } from "./data/schedule";
@@ -197,6 +199,49 @@ export async function seedIfEmpty() {
       {
         staffName: "Ms. Garcia (Interventionist)",
         defaultLocationName: "Room 305",
+      },
+    ]);
+  }
+
+  const [staffSeed] = await db.select().from(staffTable).limit(1);
+  if (!staffSeed) {
+    const tempHash = await bcrypt.hash("pulseed-temp", 10);
+    await db.insert(staffTable).values([
+      {
+        email: "ms.rivera@school.local",
+        displayName: "Ms. Rivera",
+        passwordHash: tempHash,
+        isAdmin: false,
+      },
+      {
+        email: "mr.johnson@school.local",
+        displayName: "Mr. Johnson",
+        passwordHash: tempHash,
+        isAdmin: false,
+      },
+      {
+        email: "coach.lee@school.local",
+        displayName: "Coach Lee",
+        passwordHash: tempHash,
+        isAdmin: false,
+      },
+      {
+        email: "ms.patel@school.local",
+        displayName: "Ms. Patel (Counselor)",
+        passwordHash: tempHash,
+        isAdmin: false,
+      },
+      {
+        email: "mr.davis@school.local",
+        displayName: "Mr. Davis (Admin)",
+        passwordHash: tempHash,
+        isAdmin: true,
+      },
+      {
+        email: "ms.garcia@school.local",
+        displayName: "Ms. Garcia (Interventionist)",
+        passwordHash: tempHash,
+        isAdmin: false,
       },
     ]);
   }

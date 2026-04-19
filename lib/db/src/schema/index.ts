@@ -10,3 +10,4 @@ export * from "./schoolSettings";
 export * from "./locations";
 export * from "./staffDefaults";
 export * from "./locationAllowedDestinations";
+export * from "./staff";
