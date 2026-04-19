@@ -3,8 +3,9 @@ import {
   pulloutsTable,
   studentsTable,
   schoolSettingsTable,
+  staffTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, or } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
 
 export type PulloutEmailResult = {
@@ -142,5 +143,139 @@ export async function sendPulloutArrivalEmail(
       })
       .where(eq(pulloutsTable.id, pulloutId));
     return { status: "error", emailTo: parentEmail, errorMsg: errMsg };
+  }
+}
+
+/**
+ * Notify the dispatch team (admins, deans, MTSS coordinators, ISS staff)
+ * that a new pullout request has been submitted. Mirrors the Resend
+ * front-desk radio call. Idempotent via dispatchEmailSentAt.
+ */
+export async function sendPulloutDispatchEmail(
+  pulloutId: number,
+): Promise<PulloutEmailResult> {
+  const [p] = await db
+    .select()
+    .from(pulloutsTable)
+    .where(eq(pulloutsTable.id, pulloutId));
+  if (!p) {
+    return { status: "skipped", emailTo: null, errorMsg: "Pullout not found" };
+  }
+  if (p.dispatchEmailSentAt) {
+    return {
+      status:
+        (p.dispatchEmailStatus as "sent" | "skipped" | "error" | null) ??
+        "skipped",
+      emailTo: p.dispatchEmailTo,
+      errorMsg: p.dispatchEmailErrorMsg,
+    };
+  }
+
+  const nowIso = new Date().toISOString();
+
+  // Recipients: any active staff with admin / dean / MTSS / ISS role.
+  const dispatchers = await db
+    .select()
+    .from(staffTable)
+    .where(
+      or(
+        eq(staffTable.isAdmin, true),
+        eq(staffTable.isDean, true),
+        eq(staffTable.isMtssCoordinator, true),
+        eq(staffTable.isIssTeacher, true),
+      ),
+    );
+  const recipients = dispatchers
+    .filter((s) => s.active && s.email && s.email.includes("@"))
+    .map((s) => s.email);
+
+  if (recipients.length === 0) {
+    await db
+      .update(pulloutsTable)
+      .set({
+        dispatchEmailSentAt: nowIso,
+        dispatchEmailStatus: "skipped",
+        dispatchEmailTo: null,
+        dispatchEmailErrorMsg: "No dispatchers configured",
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return {
+      status: "skipped",
+      emailTo: null,
+      errorMsg: "No dispatchers configured",
+    };
+  }
+
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(eq(studentsTable.studentId, p.studentId));
+  const [settings] = await db.select().from(schoolSettingsTable);
+  const schoolName = settings?.schoolName ?? "PulseED";
+  const fromName = settings?.fromName ?? schoolName;
+
+  const studentLabel = student
+    ? `${student.firstName} ${student.lastName} (${p.studentId})`
+    : p.studentId;
+  const reasonText = (p.editedReason ?? p.reason).trim();
+  const periodText = p.period ? `Period ${p.period}` : "Period n/a";
+  const teacherText = p.referringTeacherName || "(unspecified)";
+
+  const subject = `[${schoolName}] Pullout requested: ${studentLabel} (${periodText})`;
+  const body =
+    `A new pullout request has been submitted in PulseED.\n\n` +
+    `Student: ${studentLabel}\n` +
+    `Referring teacher: ${teacherText}\n` +
+    `${periodText}\n` +
+    `Submitted by: ${p.requestedByName}\n` +
+    `Reason: "${reasonText}"\n\n` +
+    `Open PulseED → Verify Pullouts to verify and dispatch to ISS.`;
+  const html =
+    `<p>A new pullout request has been submitted in PulseED.</p>` +
+    `<ul>` +
+    `<li><strong>Student:</strong> ${studentLabel}</li>` +
+    `<li><strong>Referring teacher:</strong> ${teacherText}</li>` +
+    `<li><strong>${periodText}</strong></li>` +
+    `<li><strong>Submitted by:</strong> ${p.requestedByName}</li>` +
+    `<li><strong>Reason:</strong> "${reasonText}"</li>` +
+    `</ul>` +
+    `<p>Open PulseED → <em>Verify Pullouts</em> to verify and dispatch to ISS.</p>`;
+
+  const recipientStr = recipients.join(", ");
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const fromHeader = `${fromName} <${fromEmail}>`;
+    const sendRes = await client.emails.send({
+      from: fromHeader,
+      to: recipients,
+      subject,
+      text: body,
+      html,
+    });
+    if (sendRes.error) {
+      throw new Error(sendRes.error.message ?? "Resend error");
+    }
+    await db
+      .update(pulloutsTable)
+      .set({
+        dispatchEmailSentAt: nowIso,
+        dispatchEmailStatus: "sent",
+        dispatchEmailTo: recipientStr,
+        dispatchEmailErrorMsg: null,
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return { status: "sent", emailTo: recipientStr, errorMsg: null };
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    await db
+      .update(pulloutsTable)
+      .set({
+        dispatchEmailSentAt: nowIso,
+        dispatchEmailStatus: "error",
+        dispatchEmailTo: recipientStr,
+        dispatchEmailErrorMsg: errMsg,
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return { status: "error", emailTo: recipientStr, errorMsg: errMsg };
   }
 }

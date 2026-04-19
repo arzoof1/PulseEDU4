@@ -34,6 +34,10 @@ export const pulloutsTable = pgTable(
     reviewedById: integer("reviewed_by_id"),
     reviewedByName: text("reviewed_by_name"),
     reviewNotes: text("review_notes"),
+    dispatchEmailSentAt: text("dispatch_email_sent_at"),
+    dispatchEmailStatus: text("dispatch_email_status"),
+    dispatchEmailTo: text("dispatch_email_to"),
+    dispatchEmailErrorMsg: text("dispatch_email_error_msg"),
   },
   (t) => ({
     studentIdx: index("pullouts_student_idx").on(t.studentId),

@@ -248,9 +248,18 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
       if (!r.ok) {
         setMsg({ ok: false, text: data?.error || "Could not submit." });
       } else {
+        const er = data?.dispatchEmail;
+        let dispatchTail = "";
+        if (er?.status === "sent") {
+          dispatchTail = ` Dispatch team notified by email.`;
+        } else if (er?.status === "skipped") {
+          dispatchTail = ` Dispatch email skipped: ${er.errorMsg ?? "no recipients"}.`;
+        } else if (er?.status === "error") {
+          dispatchTail = ` Dispatch email failed: ${er.errorMsg ?? "unknown"}.`;
+        }
         setMsg({
           ok: true,
-          text: `Pullout request #${data.id} submitted. An administrator will verify it shortly.`,
+          text: `Pullout request #${data.id} submitted. An administrator will verify it shortly.${dispatchTail}`,
         });
         setStudentId("");
         setStudentSearch("");

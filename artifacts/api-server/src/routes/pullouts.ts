@@ -12,7 +12,10 @@ import {
   interventionEntriesTable,
 } from "@workspace/db";
 import { eq, and, gte, desc } from "drizzle-orm";
-import { sendPulloutArrivalEmail } from "../lib/pulloutEmail";
+import {
+  sendPulloutArrivalEmail,
+  sendPulloutDispatchEmail,
+} from "../lib/pulloutEmail";
 
 const router: IRouter = Router();
 
@@ -236,7 +239,12 @@ router.post(
         status: "pending",
       })
       .returning();
-    res.status(201).json(row);
+
+    // Notify dispatch team (admins/dean/MTSS/ISS) by email so they can
+    // verify and route this pullout. Synchronous so the UI can surface
+    // the result alongside the row.
+    const dispatchEmail = await sendPulloutDispatchEmail(row.id);
+    res.status(201).json({ ...row, dispatchEmail });
   },
 );
 
