@@ -1,8 +1,48 @@
-import { Router, type IRouter } from "express";
-import { db, pbisEntriesTable, staffTable } from "@workspace/db";
+import { Router, type IRouter, type Request, type Response } from "express";
+import {
+  db,
+  pbisEntriesTable,
+  staffTable,
+  recordEditsTable,
+} from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
+
+type StaffRow = typeof staffTable.$inferSelect;
+
+async function loadSessionStaff(req: Request): Promise<StaffRow | null> {
+  const id = req.session.staffId;
+  if (!id) return null;
+  const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
+  return s && s.active ? s : null;
+}
+
+function canManageEntry(
+  staff: StaffRow,
+  entry: typeof pbisEntriesTable.$inferSelect,
+): boolean {
+  if (staff.isAdmin || staff.isPbisCoordinator) return true;
+  return entry.staffId !== null && entry.staffId === staff.id;
+}
+
+async function logEdit(
+  entryId: number,
+  field: string,
+  oldVal: string | null,
+  newVal: string | null,
+  staff: StaffRow,
+) {
+  await db.insert(recordEditsTable).values({
+    recordType: "pbis_entry",
+    recordId: String(entryId),
+    fieldName: field,
+    oldValue: oldVal,
+    newValue: newVal,
+    editedBy: staff.displayName,
+    editedAt: new Date().toISOString(),
+  });
+}
 
 router.get("/pbis", async (_req, res) => {
   const rows = await db.select().from(pbisEntriesTable);
@@ -53,6 +93,129 @@ router.post("/pbis", async (req, res) => {
     .returning();
 
   res.status(201).json(entry);
+});
+
+// Edit an existing PBIS entry. Owner OR admin/PBIS coord. No edits to voided rows.
+router.patch("/pbis/:id", async (req: Request, res: Response) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const [entry] = await db
+    .select()
+    .from(pbisEntriesTable)
+    .where(eq(pbisEntriesTable.id, id));
+  if (!entry) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+  if (entry.voidedAt) {
+    res.status(400).json({ error: "Voided entries cannot be edited" });
+    return;
+  }
+  if (!canManageEntry(staff, entry)) {
+    res.status(403).json({ error: "Not your entry" });
+    return;
+  }
+
+  const updates: { reason?: string; points?: number } = {};
+  const { reason, points } = req.body ?? {};
+  if (reason !== undefined) {
+    if (typeof reason !== "string" || !reason.trim()) {
+      res.status(400).json({ error: "reason must be a non-empty string" });
+      return;
+    }
+    updates.reason = reason.trim();
+  }
+  if (points !== undefined) {
+    const pts = Number(points);
+    if (!Number.isFinite(pts)) {
+      res.status(400).json({ error: "points must be a number" });
+      return;
+    }
+    updates.points = pts;
+  }
+  if (!Object.keys(updates).length) {
+    res.status(400).json({ error: "Nothing to update" });
+    return;
+  }
+
+  const [updated] = await db
+    .update(pbisEntriesTable)
+    .set(updates)
+    .where(eq(pbisEntriesTable.id, id))
+    .returning();
+
+  if (updates.reason !== undefined && updates.reason !== entry.reason) {
+    await logEdit(id, "reason", entry.reason, updates.reason, staff);
+  }
+  if (updates.points !== undefined && updates.points !== entry.points) {
+    await logEdit(
+      id,
+      "points",
+      String(entry.points),
+      String(updates.points),
+      staff,
+    );
+  }
+
+  res.json(updated);
+});
+
+// Void a PBIS entry (soft-delete). Owner OR admin/PBIS coord. Idempotent-ish:
+// re-voiding returns 400.
+router.post("/pbis/:id/void", async (req: Request, res: Response) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const [entry] = await db
+    .select()
+    .from(pbisEntriesTable)
+    .where(eq(pbisEntriesTable.id, id));
+  if (!entry) {
+    res.status(404).json({ error: "Entry not found" });
+    return;
+  }
+  if (entry.voidedAt) {
+    res.status(400).json({ error: "Already voided" });
+    return;
+  }
+  if (!canManageEntry(staff, entry)) {
+    res.status(403).json({ error: "Not your entry" });
+    return;
+  }
+  const { reason } = req.body ?? {};
+  const reasonText = typeof reason === "string" ? reason.trim() : "";
+  if (!reasonText) {
+    res.status(400).json({ error: "Void reason is required" });
+    return;
+  }
+  const nowIso = new Date().toISOString();
+  const [updated] = await db
+    .update(pbisEntriesTable)
+    .set({
+      voidedAt: nowIso,
+      voidedById: staff.id,
+      voidedByName: staff.displayName,
+      voidReason: reasonText,
+    })
+    .where(eq(pbisEntriesTable.id, id))
+    .returning();
+  await logEdit(id, "voided", null, reasonText, staff);
+  res.json(updated);
 });
 
 export default router;

@@ -68,8 +68,13 @@ interface PbisEntry {
   studentId: string;
   reason: string;
   points: number;
+  staffId: number | null;
   staffName: string;
   createdAt: string;
+  voidedAt: string | null;
+  voidedById: number | null;
+  voidedByName: string | null;
+  voidReason: string | null;
 }
 
 interface SupportNote {
@@ -451,6 +456,94 @@ function App() {
   const [pbisReport, setPbisReport] = useState<PbisReport | null>(null);
   const [pbisReportMsg, setPbisReportMsg] = useState("");
   const [pbisReportBusy, setPbisReportBusy] = useState(false);
+
+  // PBIS edit/void inline state
+  const [pbisEditId, setPbisEditId] = useState<number | null>(null);
+  const [pbisEditReason, setPbisEditReason] = useState("");
+  const [pbisEditPoints, setPbisEditPoints] = useState<number>(1);
+  const [pbisRowMsg, setPbisRowMsg] = useState<{
+    id: number;
+    msg: string;
+  } | null>(null);
+
+  const beginEditPbis = (e: PbisEntry) => {
+    setPbisEditId(e.id);
+    setPbisEditReason(e.reason);
+    setPbisEditPoints(e.points);
+    setPbisRowMsg(null);
+  };
+  const cancelEditPbis = () => {
+    setPbisEditId(null);
+    setPbisRowMsg(null);
+  };
+  const saveEditPbis = async (id: number) => {
+    setPbisRowMsg(null);
+    try {
+      const res = await fetch(`/api/pbis/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          reason: pbisEditReason.trim(),
+          points: pbisEditPoints,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      } & Partial<PbisEntry>;
+      if (!res.ok) {
+        setPbisRowMsg({
+          id,
+          msg: j.error || `Couldn't save (HTTP ${res.status}).`,
+        });
+        return;
+      }
+      setPbisEntries((prev) =>
+        prev.map((e) => (e.id === id ? { ...e, ...(j as PbisEntry) } : e)),
+      );
+      setPbisEditId(null);
+    } catch (err) {
+      setPbisRowMsg({
+        id,
+        msg: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
+  const voidPbisEntry = async (id: number) => {
+    const reason = window.prompt(
+      "Why are you voiding this PBIS entry? (required)",
+    );
+    if (reason === null) return;
+    if (!reason.trim()) {
+      setPbisRowMsg({ id, msg: "Void reason is required." });
+      return;
+    }
+    setPbisRowMsg(null);
+    try {
+      const res = await fetch(`/api/pbis/${id}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      } & Partial<PbisEntry>;
+      if (!res.ok) {
+        setPbisRowMsg({
+          id,
+          msg: j.error || `Couldn't void (HTTP ${res.status}).`,
+        });
+        return;
+      }
+      setPbisEntries((prev) =>
+        prev.map((e) => (e.id === id ? { ...e, ...(j as PbisEntry) } : e)),
+      );
+    } catch (err) {
+      setPbisRowMsg({
+        id,
+        msg: err instanceof Error ? err.message : String(err),
+      });
+    }
+  };
 
   // Log Intervention (teacher form) state
   type InterventionEntry = {
@@ -4687,7 +4780,7 @@ function App() {
             {pbisStudentId &&
               (() => {
                 const forStudent = pbisEntries
-                  .filter((e) => e.studentId === pbisStudentId)
+                  .filter((e) => e.studentId === pbisStudentId && !e.voidedAt)
                   .slice()
                   .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
                 const total = forStudent.reduce(
@@ -4800,12 +4893,12 @@ function App() {
           >
             <thead>
               <tr>
-                <th>studentId</th>
-                <th>name</th>
+                <th>student</th>
                 <th>reason</th>
                 <th>points</th>
                 <th>staff</th>
                 <th>createdAt</th>
+                <th>actions</th>
               </tr>
             </thead>
             <tbody>
@@ -4822,25 +4915,114 @@ function App() {
                     : true,
                 )
                 .map((entry) => {
-                return (
-                  <tr key={entry.id}>
-                    <td>
-                      <div style={{ fontWeight: 600 }}>
-                        {studentName(entry.studentId)}
-                      </div>
-                      <div
-                        style={{ fontSize: 11, color: "var(--text-subtle)" }}
-                      >
-                        {entry.studentId}
-                      </div>
-                    </td>
-                    <td>{entry.reason}</td>
-                    <td>{entry.points}</td>
-                    <td>{entry.staffName || "-"}</td>
-                    <td>{fmtTime(entry.createdAt)}</td>
-                  </tr>
-                );
-              })}
+                  const isVoided = !!entry.voidedAt;
+                  const isEditing = pbisEditId === entry.id;
+                  const canManage =
+                    isAdmin ||
+                    isPbisCoord ||
+                    (entry.staffId !== null &&
+                      entry.staffId === authUser?.id);
+                  const rowMsg =
+                    pbisRowMsg && pbisRowMsg.id === entry.id
+                      ? pbisRowMsg.msg
+                      : "";
+                  const cellStyle: React.CSSProperties = isVoided
+                    ? { textDecoration: "line-through", color: "#94a3b8" }
+                    : {};
+                  return (
+                    <tr key={entry.id}>
+                      <td style={cellStyle}>
+                        <div style={{ fontWeight: 600 }}>
+                          {studentName(entry.studentId)}
+                        </div>
+                        <div
+                          style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                        >
+                          {entry.studentId}
+                        </div>
+                      </td>
+                      <td style={cellStyle}>
+                        {isEditing ? (
+                          <input
+                            type="text"
+                            value={pbisEditReason}
+                            onChange={(e) =>
+                              setPbisEditReason(e.target.value)
+                            }
+                            style={{ width: "12rem" }}
+                          />
+                        ) : (
+                          entry.reason
+                        )}
+                      </td>
+                      <td style={cellStyle}>
+                        {isEditing ? (
+                          <input
+                            type="number"
+                            value={pbisEditPoints}
+                            onChange={(e) =>
+                              setPbisEditPoints(Number(e.target.value))
+                            }
+                            style={{ width: "5rem" }}
+                          />
+                        ) : (
+                          entry.points
+                        )}
+                      </td>
+                      <td style={cellStyle}>{entry.staffName || "-"}</td>
+                      <td style={cellStyle}>{fmtTime(entry.createdAt)}</td>
+                      <td>
+                        {isVoided ? (
+                          <span
+                            style={{ fontSize: 11, color: "#b91c1c" }}
+                            title={entry.voidReason || ""}
+                          >
+                            Voided by {entry.voidedByName || "?"}
+                            {entry.voidReason ? `: ${entry.voidReason}` : ""}
+                          </span>
+                        ) : isEditing ? (
+                          <span style={{ display: "inline-flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => saveEditPbis(entry.id)}
+                            >
+                              Save
+                            </button>
+                            <button type="button" onClick={cancelEditPbis}>
+                              Cancel
+                            </button>
+                          </span>
+                        ) : canManage ? (
+                          <span style={{ display: "inline-flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => beginEditPbis(entry)}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => voidPbisEntry(entry.id)}
+                            >
+                              Void
+                            </button>
+                          </span>
+                        ) : null}
+                        {rowMsg && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "#b91c1c",
+                              marginTop: 2,
+                            }}
+                          >
+                            {rowMsg}
+                          </div>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
             </tbody>
           </table>
 

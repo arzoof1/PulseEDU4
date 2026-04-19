@@ -590,6 +590,7 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
   const conds = [
     sql`substring(${pbisEntriesTable.createdAt}, 1, 10) >= ${fromRaw}`,
     sql`substring(${pbisEntriesTable.createdAt}, 1, 10) <= ${toRaw}`,
+    sql`${pbisEntriesTable.voidedAt} IS NULL`,
   ];
   if (reasonFilter) conds.push(eq(pbisEntriesTable.reason, reasonFilter));
   if (studentFilter) conds.push(eq(pbisEntriesTable.studentId, studentFilter));
