@@ -613,6 +613,13 @@ function App() {
     </svg>
   );
 
+  const IconSettings = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1A1.7 1.7 0 0 0 9 19.4a1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1A1.7 1.7 0 0 0 4.6 9a1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z" />
+    </svg>
+  );
+
   const studentName = (id: string): string => {
     const s = students.find((x) => x.studentId === id);
     return s ? `${s.firstName} ${s.lastName}` : id;
@@ -626,20 +633,32 @@ function App() {
     }
   }, [isAdmin, activeSection]);
 
-  const navSections: {
+  type NavSection = {
     key: typeof activeSection;
     label: string;
     icon: React.ReactNode;
-  }[] = [
+  };
+  const baseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
     { key: "tardies", label: "Tardy / Check-Ins", icon: IconClock },
     { key: "student", label: "Student Activity", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
-    ...(isAdmin
-      ? ([{ key: "settings", label: "Settings", icon: IconClipboard }] as const)
-      : []),
   ];
+  const adminNavSections: NavSection[] = [
+    { key: "settings", label: "Settings", icon: IconSettings },
+  ];
+  const renderNavItem = (s: NavSection) => (
+    <button
+      key={s.key}
+      type="button"
+      className={"nav-item" + (activeSection === s.key ? " active" : "")}
+      onClick={() => setActiveSection(s.key)}
+    >
+      <span className="nav-icon">{s.icon}</span>
+      {s.label}
+    </button>
+  );
   const userInitials = currentStaffUser
     .replace(/\(.*?\)/g, "")
     .trim()
@@ -723,19 +742,25 @@ function App() {
 
       <aside className="sidebar">
         <div className="section-label">Workspace</div>
-        {navSections.map((s) => (
-          <button
-            key={s.key}
-            type="button"
-            className={
-              "nav-item" + (activeSection === s.key ? " active" : "")
-            }
-            onClick={() => setActiveSection(s.key)}
-          >
-            <span className="nav-icon">{s.icon}</span>
-            {s.label}
-          </button>
-        ))}
+        {baseNavSections.map(renderNavItem)}
+        {isAdmin && (
+          <>
+            <div className="nav-admin-divider" aria-hidden="true">
+              <svg
+                className="nav-admin-ekg"
+                viewBox="0 0 220 12"
+                preserveAspectRatio="none"
+              >
+                <path
+                  className="nav-admin-ekg-track"
+                  d="M0 6 H80 L86 3 L90 9 L94 1 L98 11 L102 3 L106 6 H220"
+                />
+              </svg>
+            </div>
+            <div className="section-label nav-admin-label">Admin</div>
+            {adminNavSections.map(renderNavItem)}
+          </>
+        )}
       </aside>
 
       <main className="app-main">
