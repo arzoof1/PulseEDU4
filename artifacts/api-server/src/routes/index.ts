@@ -20,6 +20,7 @@ import listsAdminRouter from "./listsAdmin";
 import interventionsRouter from "./interventions";
 import pbisGoalsRouter from "./pbisGoals";
 import pbisMilestonesRouter from "./pbisMilestones";
+import pulloutsRouter from "./pullouts";
 
 const router: IRouter = Router();
 
@@ -44,5 +45,6 @@ router.use(listsAdminRouter);
 router.use(interventionsRouter);
 router.use(pbisGoalsRouter);
 router.use(pbisMilestonesRouter);
+router.use(pulloutsRouter);
 
 export default router;

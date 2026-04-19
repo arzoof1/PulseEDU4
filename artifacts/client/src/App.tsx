@@ -153,6 +153,254 @@ function formatTimeStatus(pass: HallPass, now: number): string {
   return `${minutes}m ${seconds.toString().padStart(2, "0")}s left`;
 }
 
+function RequestPulloutSection({ students }: { students: Student[] }) {
+  const [studentSearch, setStudentSearch] = useState("");
+  const [studentId, setStudentId] = useState<string>("");
+  const [period, setPeriod] = useState<string>("");
+  const [reason, setReason] = useState<string>("");
+  const [interventionsTried, setInterventionsTried] = useState<string>("");
+  const [acknowledgeNoIntervention, setAcknowledgeNoIntervention] =
+    useState(false);
+  const [preflight, setPreflight] = useState<{
+    hasRecentIntervention: boolean;
+    windowDays: number;
+  } | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const sortedStudents = useMemo(() => {
+    const q = studentSearch.trim().toLowerCase();
+    const list = q
+      ? students.filter(
+          (s) =>
+            s.name.toLowerCase().includes(q) ||
+            s.id.toLowerCase().includes(q),
+        )
+      : students;
+    return list.slice(0, 50);
+  }, [students, studentSearch]);
+
+  const selectedStudent = useMemo(
+    () => students.find((s) => s.id === studentId) ?? null,
+    [students, studentId],
+  );
+
+  // Fetch preflight when student changes.
+  useEffect(() => {
+    if (!studentId) {
+      setPreflight(null);
+      setAcknowledgeNoIntervention(false);
+      return;
+    }
+    let cancelled = false;
+    fetch(
+      `/api/pullouts/preflight?studentId=${encodeURIComponent(studentId)}`,
+    )
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled || !d) return;
+        setPreflight({
+          hasRecentIntervention: !!d.hasRecentIntervention,
+          windowDays: d.windowDays ?? 7,
+        });
+        setAcknowledgeNoIntervention(false);
+      })
+      .catch(() => {
+        if (!cancelled) setPreflight(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  const submit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg(null);
+    if (!studentId || !reason.trim()) {
+      setMsg({ ok: false, text: "Pick a student and enter a reason." });
+      return;
+    }
+    if (
+      preflight &&
+      !preflight.hasRecentIntervention &&
+      !acknowledgeNoIntervention
+    ) {
+      setMsg({
+        ok: false,
+        text: `No classroom intervention is logged for this student in the past ${preflight.windowDays} school days. Either log one first, or check the acknowledgment box below.`,
+      });
+      return;
+    }
+    setSubmitting(true);
+    try {
+      const r = await fetch("/api/pullouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          reason: reason.trim(),
+          period: period ? Number(period) : null,
+          interventionsTried: interventionsTried.trim() || null,
+          acknowledgeNoIntervention,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not submit." });
+      } else {
+        setMsg({
+          ok: true,
+          text: `Pullout request #${data.id} submitted. An administrator will verify it shortly.`,
+        });
+        setStudentId("");
+        setStudentSearch("");
+        setPeriod("");
+        setReason("");
+        setInterventionsTried("");
+        setAcknowledgeNoIntervention(false);
+        setPreflight(null);
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>Request Pullout</h2>
+      <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
+        Submit a pullout request when a student needs to be removed from class
+        after classroom interventions have been tried. An administrator, dean,
+        or MTSS coordinator will verify before the student is sent.
+      </p>
+      {msg && (
+        <div
+          style={{
+            margin: "0.5rem 0 1rem",
+            padding: "0.5rem 0.75rem",
+            background: msg.ok ? "#ecfdf5" : "#fef2f2",
+            border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}`,
+            color: msg.ok ? "#065f46" : "#b91c1c",
+            borderRadius: 6,
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+      <form onSubmit={submit} style={{ display: "grid", gap: "0.75rem" }}>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span>Student</span>
+          <input
+            type="text"
+            placeholder="Search by name or ID…"
+            value={studentSearch}
+            onChange={(e) => setStudentSearch(e.target.value)}
+          />
+          <select
+            value={studentId}
+            onChange={(e) => setStudentId(e.target.value)}
+          >
+            <option value="">— select a student —</option>
+            {sortedStudents.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name} ({s.id})
+              </option>
+            ))}
+          </select>
+        </label>
+        {selectedStudent && preflight && (
+          <div
+            style={{
+              padding: "0.5rem 0.75rem",
+              borderRadius: 6,
+              background: preflight.hasRecentIntervention
+                ? "#ecfdf5"
+                : "#fef9c3",
+              border: `1px solid ${
+                preflight.hasRecentIntervention ? "#a7f3d0" : "#fde68a"
+              }`,
+              color: preflight.hasRecentIntervention ? "#065f46" : "#854d0e",
+              fontSize: "0.9rem",
+            }}
+          >
+            {preflight.hasRecentIntervention
+              ? `✓ At least one classroom intervention is logged for ${selectedStudent.name} within the past ${preflight.windowDays} days.`
+              : `⚠ No classroom interventions are logged for ${selectedStudent.name} in the past ${preflight.windowDays} days.`}
+          </div>
+        )}
+        <label style={{ display: "grid", gap: 4 }}>
+          <span>Period</span>
+          <select
+            value={period}
+            onChange={(e) => setPeriod(e.target.value)}
+          >
+            <option value="">— optional —</option>
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
+              <option key={p} value={p}>
+                Period {p}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span>Reason for pullout</span>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={3}
+            placeholder="What's happening that requires the student to leave class?"
+          />
+        </label>
+        <label style={{ display: "grid", gap: 4 }}>
+          <span>Interventions tried (optional)</span>
+          <textarea
+            value={interventionsTried}
+            onChange={(e) => setInterventionsTried(e.target.value)}
+            rows={2}
+            placeholder="Brief notes on what you tried first."
+          />
+        </label>
+        {selectedStudent &&
+          preflight &&
+          !preflight.hasRecentIntervention && (
+            <label
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "flex-start",
+                fontSize: "0.9rem",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={acknowledgeNoIntervention}
+                onChange={(e) =>
+                  setAcknowledgeNoIntervention(e.target.checked)
+                }
+                style={{ marginTop: 3 }}
+              />
+              <span>
+                I have tried classroom interventions but did not log them.
+                Submit this pullout anyway.
+              </span>
+            </label>
+          )}
+        <div>
+          <button
+            type="submit"
+            disabled={submitting || !studentId || !reason.trim()}
+            className="btn-primary"
+          >
+            {submitting ? "Submitting…" : "Submit pullout request"}
+          </button>
+        </div>
+      </form>
+    </section>
+  );
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
@@ -170,6 +418,9 @@ function App() {
     isEseCoordinator: boolean;
     isPbisCoordinator: boolean;
     isBehaviorSpecialist: boolean;
+    isIssTeacher: boolean;
+    isDean: boolean;
+    isMtssCoordinator: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -215,6 +466,7 @@ function App() {
     | "pbisLists"
     | "interventions"
     | "logIntervention"
+    | "requestPullout"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -2141,6 +2393,12 @@ function App() {
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
+  const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
+  const isDean = authUser?.isDean === true || isAdmin;
+  const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
+  void isIssTeacher;
+  void isDean;
+  void isMtss;
 
   useEffect(() => {
     if (!isAdmin && activeSection === "settings") {
@@ -2190,6 +2448,7 @@ function App() {
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
+    { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
   ];
   const eseNavSections: NavSection[] = [
     { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
@@ -6164,6 +6423,10 @@ function App() {
           )}
         </section>
       </>)}
+
+      {activeSection === "requestPullout" && (
+        <RequestPulloutSection students={students} />
+      )}
 
       {activeSection === "logIntervention" && (
         <section className="card">

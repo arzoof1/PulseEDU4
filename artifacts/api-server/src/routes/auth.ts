@@ -22,6 +22,9 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isEseCoordinator: row.isEseCoordinator,
     isPbisCoordinator: row.isPbisCoordinator,
     isBehaviorSpecialist: row.isBehaviorSpecialist,
+    isIssTeacher: row.isIssTeacher,
+    isDean: row.isDean,
+    isMtssCoordinator: row.isMtssCoordinator,
   };
 }
 

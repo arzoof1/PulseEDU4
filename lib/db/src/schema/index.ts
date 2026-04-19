@@ -21,3 +21,4 @@ export * from "./interventionTypes";
 export * from "./interventionEntries";
 export * from "./pbisGoals";
 export * from "./pbisMilestones";
+export * from "./pullouts";
