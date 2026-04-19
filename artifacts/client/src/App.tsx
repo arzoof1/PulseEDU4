@@ -29,6 +29,8 @@ interface HallPass {
   destination: string;
   originRoom: string;
   teacherName: string;
+  destinationTeacher: string | null;
+  contactedAcknowledged: boolean;
   status: string;
   maxDurationMinutes: number;
   createdAt: string;
@@ -219,6 +221,8 @@ function App() {
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
   const [originRoom, setOriginRoom] = useState("");
+  const [destinationTeacher, setDestinationTeacher] = useState("");
+  const [contactedAck, setContactedAck] = useState(false);
 
   const [tardyEntryType, setTardyEntryType] = useState<
     "tardy" | "checkin" | "checkout"
@@ -585,6 +589,8 @@ function App() {
           destination,
           originRoom,
           teacherName: currentStaffUser,
+          destinationTeacher: destinationTeacher || null,
+          contactedAcknowledged: destinationTeacher ? contactedAck : false,
         }),
       });
       if (!res.ok) {
@@ -595,6 +601,8 @@ function App() {
       setOriginRoom("");
       setSelectedStudentId("");
       setStudentSearch("");
+      setDestinationTeacher("");
+      setContactedAck(false);
       loadHallPasses();
     } catch (err) {
       console.error("Failed to create hall pass:", err);
@@ -958,7 +966,50 @@ function App() {
             </select>
           </label>
         </div>
-        <button type="submit">Create</button>
+        <div style={{ marginBottom: "0.5rem" }}>
+          <label>
+            Destination Teacher (optional):{" "}
+            <select
+              value={destinationTeacher}
+              onChange={(e) => {
+                setDestinationTeacher(e.target.value);
+                setContactedAck(false);
+              }}
+            >
+              <option value="">-- none --</option>
+              {staffUsers
+                .filter((u) => u !== currentStaffUser)
+                .map((u) => (
+                  <option key={u} value={u}>
+                    {u}
+                  </option>
+                ))}
+            </select>
+          </label>
+        </div>
+        {destinationTeacher && (
+          <div style={{ marginBottom: "0.5rem" }}>
+            <label>
+              <input
+                type="checkbox"
+                checked={contactedAck}
+                onChange={(e) => setContactedAck(e.target.checked)}
+              />{" "}
+              I've contacted {destinationTeacher}
+            </label>
+          </div>
+        )}
+        <button
+          type="submit"
+          disabled={Boolean(destinationTeacher) && !contactedAck}
+          title={
+            destinationTeacher && !contactedAck
+              ? `Confirm you've contacted ${destinationTeacher} to enable.`
+              : undefined
+          }
+        >
+          Create
+        </button>
       </form>
       </div>
 
@@ -1026,7 +1077,14 @@ function App() {
                 </div>
               </td>
               <td>{p.teacherName}</td>
-              <td>{p.destination}</td>
+              <td>
+                <div>{p.destination}</div>
+                {p.destinationTeacher && (
+                  <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+                    → {p.destinationTeacher}
+                  </div>
+                )}
+              </td>
               <td>{p.originRoom}</td>
               <td><span className={statusClass}>{statusLabel}</span></td>
               <td>
