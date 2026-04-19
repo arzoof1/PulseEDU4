@@ -7,6 +7,7 @@ import {
   accommodationLogsTable,
   studentsTable,
   periodRosterTable,
+  locationsTable,
 } from "@workspace/db";
 import { config } from "./data/config";
 import { students as seedStudents } from "./data/students";
@@ -140,6 +141,27 @@ export async function seedIfEmpty() {
     if (rows.length > 0) {
       await db.insert(periodRosterTable).values(rows);
     }
+  }
+
+  const [loc] = await db.select().from(locationsTable).limit(1);
+  if (!loc) {
+    await db.insert(locationsTable).values([
+      { name: "Room 101", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 102", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 201", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 202", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 204", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 305", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Gym", kind: "common_area", isOrigin: true, isDestination: false },
+      { name: "Cafeteria", kind: "common_area", isOrigin: true, isDestination: true },
+      { name: "Library", kind: "common_area", isOrigin: false, isDestination: true },
+      { name: "Media Center", kind: "common_area", isOrigin: false, isDestination: true },
+      { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true },
+      { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true },
+      { name: "Nurse", kind: "office", isOrigin: false, isDestination: true },
+      { name: "Front Office", kind: "office", isOrigin: false, isDestination: true },
+      { name: "Guidance", kind: "office", isOrigin: false, isDestination: true },
+    ]);
   }
 
   const [a] = await db.select().from(accommodationLogsTable).limit(1);

@@ -9,6 +9,7 @@ import emailRouter from "./email";
 import scheduleRouter from "./schedule";
 import accommodationLogsRouter from "./accommodationLogs";
 import schoolSettingsRouter from "./schoolSettings";
+import locationsRouter from "./locations";
 
 const router: IRouter = Router();
 
@@ -22,5 +23,6 @@ router.use(emailRouter);
 router.use(scheduleRouter);
 router.use(accommodationLogsRouter);
 router.use(schoolSettingsRouter);
+router.use(locationsRouter);
 
 export default router;
