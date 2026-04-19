@@ -478,7 +478,7 @@ function App() {
       const res = await fetch(`/api/hall-passes/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ endedAt: endedAtIso, editedBy: selectedTeacher }),
+        body: JSON.stringify({ endedAt: endedAtIso, editedBy: currentStaffUser }),
       });
       if (!res.ok) {
         const text = await res.text();
@@ -826,7 +826,7 @@ function App() {
               passFilter === "mine" ? p.teacherName === selectedTeacher : true,
             )
             .map((p) => {
-            const isAdmin = selectedTeacher.includes("(Admin)");
+            const isAdmin = currentStaffUser.includes("(Admin)");
             const isEditing = editingPassId === p.id;
             return (
             <tr key={p.id}>
