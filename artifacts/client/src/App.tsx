@@ -226,6 +226,9 @@ function App() {
   const [staffDefaults, setStaffDefaults] = useState<Record<string, string>>(
     {},
   );
+  const [apiDestinationMap, setApiDestinationMap] = useState<
+    Record<string, string[]>
+  >({});
 
   useEffect(() => {
     const def = staffDefaults[currentStaffUser];
@@ -298,6 +301,27 @@ function App() {
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
+
+    fetch("/api/location-allowed-destinations")
+      .then((res) => res.json())
+      .then(
+        (
+          data: { originName: string; destinationName: string }[],
+        ) => {
+          const map: Record<string, string[]> = {};
+          for (const row of data) {
+            if (!map[row.originName]) map[row.originName] = [];
+            map[row.originName].push(row.destinationName);
+          }
+          for (const k of Object.keys(map)) {
+            map[k].sort((a, b) => a.localeCompare(b));
+          }
+          setApiDestinationMap(map);
+        },
+      )
+      .catch((err) =>
+        console.error("Failed to load location destinations:", err),
+      );
 
     fetch("/api/staff-defaults")
       .then((res) => res.json())
@@ -599,6 +623,11 @@ function App() {
       console.error("Failed to edit hall pass:", err);
     }
   };
+
+  const effectiveDestinationsByRoom: Record<string, string[]> =
+    Object.keys(apiDestinationMap).length > 0
+      ? apiDestinationMap
+      : destinationsByRoom;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -957,7 +986,7 @@ function App() {
               onChange={(e) => {
                 const newRoom = e.target.value;
                 setOriginRoom(newRoom);
-                const allowed = destinationsByRoom[newRoom] ?? [];
+                const allowed = effectiveDestinationsByRoom[newRoom] ?? [];
                 if (destination && !allowed.includes(destination)) {
                   setDestination("");
                 }
@@ -965,7 +994,9 @@ function App() {
               required
             >
               <option value="">-- select an origin room --</option>
-              {Object.keys(destinationsByRoom).map((room) => (
+              {Object.keys(effectiveDestinationsByRoom)
+                .sort((a, b) => a.localeCompare(b))
+                .map((room) => (
                 <option key={room} value={room}>
                   {room}
                 </option>
@@ -983,7 +1014,7 @@ function App() {
               disabled={!originRoom}
             >
               <option value="">-- select a destination --</option>
-              {(destinationsByRoom[originRoom] ?? []).map((d) => (
+              {(effectiveDestinationsByRoom[originRoom] ?? []).map((d) => (
                 <option key={d} value={d}>
                   {d}
                 </option>
