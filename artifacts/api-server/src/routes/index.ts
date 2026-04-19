@@ -22,6 +22,7 @@ import pbisGoalsRouter from "./pbisGoals";
 import pbisMilestonesRouter from "./pbisMilestones";
 import pulloutsRouter from "./pullouts";
 import digestRouter from "./digest";
+import adminStaffRouter from "./adminStaff";
 
 const router: IRouter = Router();
 
@@ -48,5 +49,6 @@ router.use(pbisGoalsRouter);
 router.use(pbisMilestonesRouter);
 router.use(pulloutsRouter);
 router.use(digestRouter);
+router.use(adminStaffRouter);
 
 export default router;
