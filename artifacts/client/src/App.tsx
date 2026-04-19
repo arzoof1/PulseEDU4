@@ -4302,49 +4302,62 @@ function App() {
         </div>
       </header>
 
-      <aside className="sidebar">
-        <div className="section-label">Workspace</div>
-        {baseNavSections.map(renderNavItem)}
-        {isEseCoord && eseNavSections.map(renderNavItem)}
-        {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
-        {canManageBehaviorLists && interventionsNavSections.map(renderNavItem)}
-        {canVerifyPullouts &&
-          renderNavItem({
-            key: "verifyPullouts",
-            label: "Verify Pullouts",
-            icon: IconClipboard,
-          })}
-        {canViewIssDashboard &&
-          renderNavItem({
-            key: "issDashboard",
-            label: "ISS Dashboard",
-            icon: IconClipboard,
-          })}
-        {canReviewPullouts &&
-          renderNavItem({
-            key: "behaviorReview",
-            label: "Behavior Review",
-            icon: IconClipboard,
-          })}
-        {isAdmin && (
-          <>
-            <div className="nav-admin-divider" aria-hidden="true">
-              <svg
-                className="nav-admin-ekg"
-                viewBox="0 0 220 12"
-                preserveAspectRatio="none"
-              >
-                <path
-                  className="nav-admin-ekg-track"
-                  d="M0 6 H80 L86 3 L90 9 L94 1 L98 11 L102 3 L106 6 H220"
-                />
-              </svg>
-            </div>
-            <div className="section-label nav-admin-label">Admin</div>
-            {adminNavSections.map(renderNavItem)}
-          </>
-        )}
-      </aside>
+      {(() => {
+        const hasBelowEkg =
+          isEseCoord ||
+          isPbisCoord ||
+          canManageBehaviorLists ||
+          canVerifyPullouts ||
+          canViewIssDashboard ||
+          canReviewPullouts ||
+          isAdmin;
+        return (
+          <aside className="sidebar">
+            <div className="section-label">Workspace</div>
+            {baseNavSections.map(renderNavItem)}
+            {hasBelowEkg && (
+              <>
+                <div className="nav-admin-divider" aria-hidden="true">
+                  <svg
+                    className="nav-admin-ekg"
+                    viewBox="0 0 220 12"
+                    preserveAspectRatio="none"
+                  >
+                    <path
+                      className="nav-admin-ekg-track"
+                      d="M0 6 H80 L86 3 L90 9 L94 1 L98 11 L102 3 L106 6 H220"
+                    />
+                  </svg>
+                </div>
+                <div className="section-label nav-admin-label">Tools</div>
+                {isEseCoord && eseNavSections.map(renderNavItem)}
+                {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
+                {canManageBehaviorLists &&
+                  interventionsNavSections.map(renderNavItem)}
+                {canVerifyPullouts &&
+                  renderNavItem({
+                    key: "verifyPullouts",
+                    label: "Verify Pullouts",
+                    icon: IconClipboard,
+                  })}
+                {canViewIssDashboard &&
+                  renderNavItem({
+                    key: "issDashboard",
+                    label: "ISS Dashboard",
+                    icon: IconClipboard,
+                  })}
+                {canReviewPullouts &&
+                  renderNavItem({
+                    key: "behaviorReview",
+                    label: "Behavior Review",
+                    icon: IconClipboard,
+                  })}
+                {isAdmin && adminNavSections.map(renderNavItem)}
+              </>
+            )}
+          </aside>
+        );
+      })()}
 
       <main className="app-main">
 
