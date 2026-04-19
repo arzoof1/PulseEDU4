@@ -601,6 +601,10 @@ function VerifyPulloutsSection({
       )}
       {loading ? (
         <div style={{ color: "var(--text-subtle, #64748b)" }}>Loading…</div>
+      ) : msg && !msg.ok && rows.length === 0 ? (
+        <button type="button" onClick={refresh}>
+          Try again
+        </button>
       ) : rows.length === 0 ? (
         <div style={{ color: "var(--text-subtle, #64748b)" }}>
           No pending pullouts. 🎉
@@ -973,6 +977,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
       )}
       {loading ? (
         <div style={{ color: "var(--text-subtle, #64748b)" }}>Loading…</div>
+      ) : msg && !msg.ok && rows.length === 0 ? (
+        <button type="button" onClick={refresh}>
+          Try again
+        </button>
       ) : (
         <>
           <h3 style={{ marginTop: "1rem" }}>
@@ -1097,6 +1105,10 @@ function BehaviorReviewSection({
       )}
       {loading ? (
         <p>Loading…</p>
+      ) : msg && !msg.ok && rows.length === 0 ? (
+        <button type="button" onClick={refresh}>
+          Try again
+        </button>
       ) : rows.length === 0 ? (
         <p>No pullouts awaiting review. 🎉</p>
       ) : (
