@@ -21,7 +21,7 @@ import {
   interventionTypesTable,
   staffTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -97,7 +97,7 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
   const existing = await db
     .select()
     .from(pbisReasonsTable)
-    .where(eq(pbisReasonsTable.name, name.trim()));
+    .where(sql`lower(${pbisReasonsTable.name}) = lower(${name.trim()})`);
   if (existing.length > 0) {
     res.status(409).json({ error: "Reason name already exists" });
     return;
@@ -169,7 +169,7 @@ router.post("/intervention-types", requireInterventionAdmin, async (req, res) =>
   const existing = await db
     .select()
     .from(interventionTypesTable)
-    .where(eq(interventionTypesTable.name, name.trim()));
+    .where(sql`lower(${interventionTypesTable.name}) = lower(${name.trim()})`);
   if (existing.length > 0) {
     res.status(409).json({ error: "Intervention name already exists" });
     return;

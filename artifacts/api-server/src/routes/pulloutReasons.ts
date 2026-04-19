@@ -11,7 +11,7 @@ import {
   type NextFunction,
 } from "express";
 import { db, pulloutReasonsTable, staffTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -80,7 +80,7 @@ router.post("/pullout-reasons", requireReasonAdmin(), async (req, res) => {
   const existing = await db
     .select()
     .from(pulloutReasonsTable)
-    .where(eq(pulloutReasonsTable.name, name.trim()));
+    .where(sql`lower(${pulloutReasonsTable.name}) = lower(${name.trim()})`);
   if (existing.length > 0) {
     res.status(409).json({ error: "Reason name already exists" });
     return;
@@ -121,6 +121,27 @@ router.patch(
       return;
     }
     res.json(row);
+  },
+);
+
+router.delete(
+  "/pullout-reasons/:id",
+  requireReasonAdmin(),
+  async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .delete(pulloutReasonsTable)
+      .where(eq(pulloutReasonsTable.id, id))
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    res.json({ ok: true, id: row.id });
   },
 );
 

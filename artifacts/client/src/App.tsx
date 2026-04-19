@@ -3270,13 +3270,18 @@ function App() {
     setPbisListMsg("");
     try {
       const res = await fetch("/api/pbis-reasons");
+      if (res.status === 401) {
+        // Swallow transient 401s on initial load — the user may not be signed
+        // in yet, or the session cookie hasn't been attached to this request.
+        // The Add helper will surface a clear message if it's actually broken.
+        setPbisReasonsList([]);
+        return;
+      }
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         setPbisReasonsList([]);
         setPbisListMsg(
-          res.status === 401
-            ? "Your session expired. Please sign in again."
-            : j.error || `Couldn't load reasons (HTTP ${res.status}).`,
+          j.error || `Couldn't load reasons (HTTP ${res.status}).`,
         );
         return;
       }
@@ -3292,13 +3297,16 @@ function App() {
     setIntervListMsg("");
     try {
       const res = await fetch("/api/intervention-types");
+      if (res.status === 401) {
+        // Swallow transient 401s on initial load (see loadPbisReasons note).
+        setInterventionList([]);
+        return;
+      }
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         setInterventionList([]);
         setIntervListMsg(
-          res.status === 401
-            ? "Your session expired. Please sign in again."
-            : j.error || `Couldn't load interventions (HTTP ${res.status}).`,
+          j.error || `Couldn't load interventions (HTTP ${res.status}).`,
         );
         return;
       }
@@ -3498,6 +3506,29 @@ function App() {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      loadPulloutReasons();
+    } catch (e) {
+      setPulloutReasonMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const deletePulloutReason = async (id: number, name: string) => {
+    if (
+      !window.confirm(
+        `Delete the pullout reason "${name}"? Past pullouts using it stay intact.`,
+      )
+    ) {
+      return;
+    }
+    setPulloutReasonMsg("");
+    try {
+      const res = await fetch(`/api/pullout-reasons/${id}`, {
+        method: "DELETE",
       });
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
@@ -9298,7 +9329,13 @@ function App() {
                       <td style={{ padding: "0.4rem" }}>
                         {r.active ? "Yes" : "No"}
                       </td>
-                      <td style={{ padding: "0.4rem" }}>
+                      <td
+                        style={{
+                          padding: "0.4rem",
+                          display: "flex",
+                          gap: "0.4rem",
+                        }}
+                      >
                         <button
                           type="button"
                           onClick={() =>
@@ -9306,6 +9343,17 @@ function App() {
                           }
                         >
                           {r.active ? "Deactivate" : "Activate"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deletePulloutReason(r.id, r.name)}
+                          style={{
+                            background: "#fee2e2",
+                            color: "#991b1b",
+                            border: "1px solid #fecaca",
+                          }}
+                        >
+                          Delete
                         </button>
                       </td>
                     </tr>
