@@ -1,6 +1,8 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { seedIfEmpty } from "./seed";
+import cron from "node-cron";
+import { sendDailyDigestEmail } from "./lib/dailyDigest";
 
 const rawPort = process.env["PORT"];
 
@@ -26,5 +28,37 @@ seedIfEmpty()
       }
 
       logger.info({ port }, "Server listening");
+
+      // Daily pullout digest. Defaults to 16:00 (4pm) school local time.
+      // Override with DIGEST_CRON / DIGEST_TZ env vars. Skip in test.
+      if (process.env.NODE_ENV !== "test") {
+        const expr = process.env.DIGEST_CRON ?? "0 16 * * 1-5";
+        const tz = process.env.DIGEST_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            expr,
+            async () => {
+              try {
+                const r = await sendDailyDigestEmail(new Date());
+                logger.info(
+                  {
+                    status: r.status,
+                    emailTo: r.emailTo,
+                    requested: r.totals.requested,
+                    backlog: r.totals.unreviewedClosedBacklog,
+                  },
+                  "Daily digest fired",
+                );
+              } catch (cronErr) {
+                logger.error({ err: cronErr }, "Daily digest send failed");
+              }
+            },
+            { timezone: tz },
+          );
+          logger.info({ expr, tz }, "Daily digest scheduled");
+        } catch (schedErr) {
+          logger.error({ err: schedErr }, "Failed to schedule daily digest");
+        }
+      }
     });
   });

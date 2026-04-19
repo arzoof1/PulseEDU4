@@ -21,6 +21,7 @@ import interventionsRouter from "./interventions";
 import pbisGoalsRouter from "./pbisGoals";
 import pbisMilestonesRouter from "./pbisMilestones";
 import pulloutsRouter from "./pullouts";
+import digestRouter from "./digest";
 
 const router: IRouter = Router();
 
@@ -46,5 +47,6 @@ router.use(interventionsRouter);
 router.use(pbisGoalsRouter);
 router.use(pbisMilestonesRouter);
 router.use(pulloutsRouter);
+router.use(digestRouter);
 
 export default router;
