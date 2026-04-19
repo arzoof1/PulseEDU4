@@ -148,6 +148,8 @@ function formatTimeStatus(pass: HallPass, now: number): string {
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
+  const [editingPassId, setEditingPassId] = useState<number | null>(null);
+  const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [tardies, setTardies] = useState<Tardy[]>([]);
 
   const [selectedTeacher, setSelectedTeacher] = useState(teachers[0]);
@@ -465,6 +467,30 @@ function App() {
       loadHallPasses();
     } catch (err) {
       console.error("Failed to end hall pass:", err);
+    }
+  };
+
+  const handleSavePassEdit = async (id: number) => {
+    try {
+      const endedAtIso = editEndedAt
+        ? new Date(editEndedAt).toISOString()
+        : null;
+      const res = await fetch(`/api/hall-passes/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ endedAt: endedAtIso, editedBy: selectedTeacher }),
+      });
+      if (!res.ok) {
+        const text = await res.text();
+        console.error("Failed to edit hall pass:", text);
+        alert("Failed to edit hall pass: " + text);
+        return;
+      }
+      setEditingPassId(null);
+      setEditEndedAt("");
+      loadHallPasses();
+    } catch (err) {
+      console.error("Failed to edit hall pass:", err);
     }
   };
 
@@ -789,6 +815,7 @@ function App() {
             <th>status</th>
             <th>maxDurationMinutes</th>
             <th>createdAt</th>
+            <th>endedAt</th>
             <th>Time Status</th>
             <th>Actions</th>
           </tr>
@@ -798,7 +825,10 @@ function App() {
             .filter((p) =>
               passFilter === "mine" ? p.teacherName === selectedTeacher : true,
             )
-            .map((p) => (
+            .map((p) => {
+            const isAdmin = selectedTeacher.includes("(Admin)");
+            const isEditing = editingPassId === p.id;
+            return (
             <tr key={p.id}>
               <td>{p.studentId}</td>
               <td>{p.teacherName}</td>
@@ -807,18 +837,72 @@ function App() {
               <td>{p.status === "system_ended" ? "System Ended" : p.status}</td>
               <td>{p.maxDurationMinutes}</td>
               <td>{p.createdAt}</td>
+              <td>
+                {isEditing ? (
+                  <input
+                    type="datetime-local"
+                    value={editEndedAt}
+                    onChange={(e) => setEditEndedAt(e.target.value)}
+                  />
+                ) : (
+                  p.endedAt ?? "-"
+                )}
+              </td>
               <td style={{ backgroundColor: getTimeStatusColor(p, now) }}>
                 {formatTimeStatus(p, now)}
               </td>
               <td>
-                {p.status === "active" ? (
-                  <button onClick={() => handleEndPass(p.id)}>End Pass</button>
+                {isEditing ? (
+                  <>
+                    <button onClick={() => handleSavePassEdit(p.id)}>
+                      Save
+                    </button>{" "}
+                    <button
+                      onClick={() => {
+                        setEditingPassId(null);
+                        setEditEndedAt("");
+                      }}
+                    >
+                      Cancel
+                    </button>{" "}
+                    <button onClick={() => setEditEndedAt("")}>
+                      Clear (reopen)
+                    </button>
+                  </>
                 ) : (
-                  "-"
+                  <>
+                    {p.status === "active" ? (
+                      <button onClick={() => handleEndPass(p.id)}>
+                        End Pass
+                      </button>
+                    ) : (
+                      "-"
+                    )}
+                    {isAdmin && (
+                      <>
+                        {" "}
+                        <button
+                          onClick={() => {
+                            setEditingPassId(p.id);
+                            setEditEndedAt(
+                              p.endedAt
+                                ? new Date(p.endedAt)
+                                    .toISOString()
+                                    .slice(0, 16)
+                                : "",
+                            );
+                          }}
+                        >
+                          Edit
+                        </button>
+                      </>
+                    )}
+                  </>
                 )}
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
       </>)}
