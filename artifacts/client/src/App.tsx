@@ -547,29 +547,32 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="brand">
-          <span className="logo" aria-hidden="true">
-            <svg
-              className="ekg"
-              viewBox="0 0 130 32"
-              width="68"
-              height="22"
-              role="img"
-              aria-label="PulseED heartbeat"
-            >
-              <path
-                className="ekg-track"
-                d="M0 16 H40 L44 13 L48 19 L52 4 L56 28 L60 13 L64 16 H130"
-              />
-              <path
-                className="ekg-pulse"
-                d="M0 16 H40 L44 13 L48 19 L52 4 L56 28 L60 13 L64 16 H130"
-              />
-            </svg>
-          </span>
+        <div className="brand" aria-label="PulseED">
+          <svg
+            className="ekg-layer ekg-bg"
+            viewBox="0 0 220 40"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              className="ekg-track"
+              d="M0 20 H140 L146 16 L150 24 L154 5 L158 35 L162 16 L166 20 H220"
+            />
+          </svg>
           <span className="wordmark">
             Pulse<span className="accent">ED</span>
           </span>
+          <svg
+            className="ekg-layer ekg-fg"
+            viewBox="0 0 220 40"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              className="ekg-pulse"
+              d="M0 20 H140 L146 16 L150 24 L154 5 L158 35 L162 16 L166 20 H220"
+            />
+          </svg>
         </div>
         <div className="header-controls">
           <label>

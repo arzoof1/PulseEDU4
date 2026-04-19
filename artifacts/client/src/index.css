@@ -115,65 +115,67 @@ strong {
 }
 
 .app-header .brand {
-  display: flex;
-  align-items: center;
-  gap: 0.625rem;
-  font-weight: 700;
-  font-size: 1rem;
-  color: var(--text);
-}
-
-.app-header .brand .logo {
-  height: 32px;
-  padding: 0 10px;
-  border-radius: 9px;
-  background: linear-gradient(135deg, #0e7490, #06b6d4);
+  position: relative;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  color: white;
-  box-shadow: 0 1px 2px rgba(14, 116, 144, 0.25);
+  width: 220px;
+  height: 40px;
+  color: var(--text);
 }
 
-.app-header .brand .ekg {
+.app-header .brand .ekg-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
   display: block;
   overflow: visible;
+  pointer-events: none;
 }
+
+.app-header .brand .ekg-bg { z-index: 0; }
+.app-header .brand .ekg-fg { z-index: 2; }
 
 .app-header .brand .ekg-track {
   fill: none;
-  stroke: rgba(255, 255, 255, 0.35);
-  stroke-width: 2;
+  stroke: rgba(239, 68, 68, 0.28);
+  stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
 
 .app-header .brand .ekg-pulse {
   fill: none;
-  stroke: #ffffff;
-  stroke-width: 2.25;
+  stroke: #ef4444;
+  stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-dasharray: 28 220;
-  stroke-dashoffset: 248;
+  stroke-dasharray: 38 260;
+  stroke-dashoffset: 298;
   animation: ekg-sweep 2.2s linear infinite;
-  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.55));
+  filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.85))
+    drop-shadow(0 0 1.5px rgba(239, 68, 68, 1));
 }
 
 @keyframes ekg-sweep {
-  from { stroke-dashoffset: 248; }
+  from { stroke-dashoffset: 298; }
   to { stroke-dashoffset: 0; }
 }
 
 .app-header .brand .wordmark {
-  font-weight: 700;
-  font-size: 1.05rem;
-  letter-spacing: -0.01em;
-  color: var(--text);
+  position: relative;
+  z-index: 1;
+  font-weight: 800;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  color: #0b1424;
+  line-height: 1;
 }
 
 .app-header .brand .wordmark .accent {
   color: var(--accent);
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
 }
 
 .app-header .header-controls {
