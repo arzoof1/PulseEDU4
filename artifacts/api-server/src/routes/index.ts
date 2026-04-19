@@ -15,6 +15,7 @@ import staffDefaultsRouter from "./staffDefaults";
 import locationAllowedDestinationsRouter from "./locationAllowedDestinations";
 import kioskRouter from "./kiosk";
 import authRouter from "./auth";
+import reportsRouter from "./reports";
 
 const router: IRouter = Router();
 
@@ -34,5 +35,6 @@ router.use(staffDefaultsRouter);
 router.use(locationAllowedDestinationsRouter);
 router.use(kioskRouter);
 router.use(authRouter);
+router.use(reportsRouter);
 
 export default router;
