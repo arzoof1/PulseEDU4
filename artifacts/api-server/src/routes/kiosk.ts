@@ -1,16 +1,155 @@
 import { Router, type IRouter } from "express";
+import bcrypt from "bcryptjs";
+import { randomBytes, createHash } from "node:crypto";
 import {
   db,
   hallPassesTable,
   locationsTable,
   locationAllowedDestinationsTable,
   staffDefaultsTable,
+  staffTable,
+  kioskActivationsTable,
+  adminNotificationsTable,
 } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, isNull } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 
 const router: IRouter = Router();
+
+function hashToken(token: string): string {
+  return createHash("sha256").update(token).digest("hex");
+}
+
+router.post("/kiosk/activate", async (req, res) => {
+  const { email, password, room } = req.body ?? {};
+
+  if (
+    typeof email !== "string" ||
+    typeof password !== "string" ||
+    !email.trim() ||
+    !password
+  ) {
+    res.status(400).json({ error: "email and password are required" });
+    return;
+  }
+
+  const normalizedEmail = email.trim().toLowerCase();
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.email, normalizedEmail));
+
+  if (!staff || !staff.active) {
+    res.status(401).json({ error: "Invalid email or password" });
+    return;
+  }
+  const ok = await bcrypt.compare(password, staff.passwordHash);
+  if (!ok) {
+    res.status(401).json({ error: "Invalid email or password" });
+    return;
+  }
+
+  const [defaultRow] = await db
+    .select()
+    .from(staffDefaultsTable)
+    .where(eq(staffDefaultsTable.staffName, staff.displayName));
+  const defaultRoom = defaultRow?.defaultLocationName ?? null;
+
+  const originLocations = (
+    await db
+      .select()
+      .from(locationsTable)
+      .where(
+        and(
+          eq(locationsTable.isOrigin, true),
+          eq(locationsTable.active, true),
+        ),
+      )
+  ).map((l) => l.name);
+
+  let chosenRoom: string;
+  let usedFallbackPicker = false;
+
+  if (typeof room === "string" && room.trim()) {
+    const candidate = room.trim();
+    if (!originLocations.includes(candidate)) {
+      res.status(400).json({
+        error: `Room "${candidate}" is not a valid kiosk room`,
+      });
+      return;
+    }
+    chosenRoom = candidate;
+    if (!defaultRoom) usedFallbackPicker = true;
+  } else if (defaultRoom) {
+    chosenRoom = defaultRoom;
+  } else {
+    res.status(409).json({
+      error: "No default room set",
+      needsRoom: true,
+      locations: originLocations,
+    });
+    return;
+  }
+
+  if (usedFallbackPicker) {
+    await db.insert(adminNotificationsTable).values({
+      type: "kiosk_default_room_missing",
+      payload: {
+        staffId: staff.id,
+        staffEmail: staff.email,
+        staffDisplayName: staff.displayName,
+        chosenRoom,
+        activatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = hashToken(token);
+
+  await db.insert(kioskActivationsTable).values({
+    tokenHash,
+    room: chosenRoom,
+    staffId: staff.id,
+  });
+
+  res.status(201).json({
+    token,
+    room: chosenRoom,
+    staffName: staff.displayName,
+  });
+});
+
+router.get("/kiosk/activation/:token", async (req, res) => {
+  const token = req.params.token;
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "Invalid token" });
+    return;
+  }
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+      ),
+    );
+  if (!act) {
+    res.status(401).json({ error: "Activation not found or revoked" });
+    return;
+  }
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, act.staffId));
+  res.json({
+    room: act.room,
+    staffName: staff?.displayName ?? null,
+    activatedAt: act.activatedAt,
+  });
+});
 
 router.post("/kiosk/hall-passes", async (req, res) => {
   const { studentId, originRoom, destination } = req.body ?? {};

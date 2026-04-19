@@ -11,3 +11,5 @@ export * from "./locations";
 export * from "./staffDefaults";
 export * from "./locationAllowedDestinations";
 export * from "./staff";
+export * from "./kioskActivations";
+export * from "./adminNotifications";
