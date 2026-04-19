@@ -1,0 +1,158 @@
+We are ready to design the next core feature set inside PulseED, specifically the PBIS and Classroom Intervention system. This must align with our existing database structure (students, PBIS entries, support notes, schedules, etc.) and follow our rule: no unnecessary features, no refactoring—only build what is essential and scalable.
+
+Primary Goal
+
+Create a teacher-facing workflow that allows:
+
+Efficient whole-class PBIS point assignment
+Quick individual student intervention logging
+Automatic family communication (real-time + weekly summary)
+
+The system must prioritize:
+
+Speed (minimal clicks for teachers)
+Clarity (clean UI tied to class periods)
+Data integrity (accurate logging tied to students, teacher, and period)
+Communication (consistent, automated parent updates)
+PBIS TAB — CORE USER FLOW
+Step 1: Teacher Entry Point
+Teacher clicks PBIS tab
+Teacher selects class period
+System loads all students for that period
+Step 2: Student Display
+Display students in a grid layout (thumbnail-style cards)
+Each student card should include:
+Student name
+Student ID
+(Future-ready) indicators:
+ESE / 504
+ESOL
+(Future iteration) circular student photo
+Step 3: Bulk Selection for PBIS
+Include a “Select All” button at the top
+Selecting all:
+Automatically checks all student cards
+Teachers can:
+Deselect individual students as needed
+Step 4: PBIS Submission
+Once selection is finalized:
+Teacher clicks Submit / Award PBIS
+Prompt teacher to:
+Select PBIS behavior category (from existing controlled list)
+Enter a short note describing the positive behavior
+On submit:
+Create PBIS entries tied to each selected student
+Include:
+Teacher (logged-in user)
+Period
+Timestamp
+Behavior category
+Note
+INDIVIDUAL STUDENT INTERVENTIONS
+
+This is a parallel workflow within the same screen.
+
+Goal
+
+Allow teachers to quickly log low-level classroom interventions for individual students.
+
+Workflow
+Teacher selects one or more individual students
+Clicks “Log Intervention”
+Intervention Options (Predefined List)
+
+Examples (expandable later):
+
+Seat change
+Verbal redirection
+Off-task (not working)
+Excessive talking
+Disruption
+Not following directions
+Phone misuse
+Other (with note required)
+Submission Requirements
+Select intervention type
+Add optional note
+Submit
+Data Handling
+Log into supportNotes or intervention-related table
+Must include:
+Student
+Teacher
+Period
+Timestamp
+Intervention type
+Note
+FAMILY COMMUNICATION SYSTEM
+Immediate Communication (Per Entry)
+
+Every time a PBIS or intervention entry is created:
+
+Trigger same-day parent notification
+Message should include:
+Student name
+Type of entry (positive vs intervention)
+Behavior or intervention
+Teacher note
+Timestamp (optional but preferred)
+
+Goal: real-time communication to build transparency and trust
+
+Weekly Summary (Friday Email)
+
+Every Friday afternoon:
+
+Generate per-student weekly report
+Email sent to families
+Weekly Report Includes
+All PBIS entries (positive behaviors)
+All interventions logged
+Teacher notes
+Optional summary metrics:
+Total positives
+Total interventions
+
+Goal:
+Create a clear narrative of the student’s week, not just isolated events.
+
+SYSTEM ALIGNMENT REQUIREMENTS
+Must connect cleanly to:
+Existing students table
+Existing PBIS entries
+Existing supportNotes/intervention logs
+Existing schedule/period structure
+Must respect:
+Current UI (no redesign unless required)
+Existing API patterns
+Logged-in user as default teacher
+FUTURE (DO NOT BUILD YET, JUST DESIGN WITH IN MIND)
+Student photos in UI
+SIS integration for attendance (to avoid logging for absent students)
+Parent communication preferences (email vs text)
+Admin reporting dashboards
+Editable PBIS behavior categories
+IMPORTANT BUILD CONSTRAINTS
+Do NOT write code yet
+Do NOT refactor existing working features
+Do NOT introduce new systems outside current architecture
+
+Instead:
+
+Map this workflow to current tables and endpoints
+Identify any gaps or minimal additions needed
+Propose the cleanest step-by-step implementation plan
+END STATE VISION
+
+Teachers can:
+
+Open PBIS tab → select period → award points to entire class in seconds
+Log interventions just as quickly
+Trust that every action automatically communicates with families
+
+Families receive:
+
+Immediate updates
+A consistent weekly summary
+
+This system should become a core driver of school culture, communication, and accountability.
