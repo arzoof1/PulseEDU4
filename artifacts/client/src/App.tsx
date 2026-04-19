@@ -406,6 +406,7 @@ function App() {
   const [pbisStudentId, setPbisStudentId] = useState("");
   const [pbisStudentSearch, setPbisStudentSearch] = useState("");
   const [pbisOptionIndex, setPbisOptionIndex] = useState(0);
+  const [pbisReasonId, setPbisReasonId] = useState<number | "">("");
   const [selectedStudentId, setSelectedStudentId] = useState("");
   const [studentSearch, setStudentSearch] = useState("");
   const [destination, setDestination] = useState("");
@@ -592,6 +593,7 @@ function App() {
 
     loadTardies();
     loadPbis();
+    loadPbisReasons();
     loadSupportNotes();
     loadSchoolSettings();
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -1242,16 +1244,18 @@ function App() {
   const handlePbisSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!pbisStudentId) return;
-    const option = pbisOptions[pbisOptionIndex];
-    if (!option) return;
+    const reason = pbisReasonsList.find(
+      (r) => r.id === pbisReasonId && r.active,
+    );
+    if (!reason) return;
     try {
       const res = await fetch("/api/pbis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentId: pbisStudentId,
-          reason: option.reason,
-          points: option.points,
+          reason: reason.name,
+          points: reason.defaultPoints,
           staffName: currentStaffUser,
         }),
       });
@@ -1259,7 +1263,7 @@ function App() {
       loadPbis();
       setPbisStudentId("");
       setPbisStudentSearch("");
-      setPbisOptionIndex(0);
+      setPbisReasonId("");
     } catch (err) {
       console.error(err);
     }
@@ -4528,21 +4532,41 @@ function App() {
               <label>
                 PBIS Recognition:{" "}
                 <select
-                  value={pbisOptionIndex}
+                  value={pbisReasonId === "" ? "" : String(pbisReasonId)}
                   onChange={(e) =>
-                    setPbisOptionIndex(Number(e.target.value))
+                    setPbisReasonId(
+                      e.target.value === "" ? "" : Number(e.target.value),
+                    )
                   }
                 >
-                  {pbisOptions.map((opt, i) => (
-                    <option key={opt.reason} value={i}>
-                      {opt.reason} ({opt.points}{" "}
-                      {opt.points === 1 ? "point" : "points"})
-                    </option>
-                  ))}
+                  <option value="">— Select a reason —</option>
+                  {pbisReasonsList
+                    .filter((r) => r.active)
+                    .slice()
+                    .sort((a, b) =>
+                      a.category === b.category
+                        ? a.name.localeCompare(b.name)
+                        : a.category.localeCompare(b.category),
+                    )
+                    .map((r) => (
+                      <option key={r.id} value={r.id}>
+                        {r.name} ({r.defaultPoints}{" "}
+                        {r.defaultPoints === 1 ? "point" : "points"})
+                      </option>
+                    ))}
                 </select>
               </label>
+              {pbisReasonsList.filter((r) => r.active).length === 0 && (
+                <div style={{ fontSize: "0.85rem", color: "var(--muted, #666)" }}>
+                  No active PBIS reasons yet. Ask your PBIS coordinator or
+                  admin to add some.
+                </div>
+              )}
             </div>
-            <button type="submit" disabled={!pbisStudentId}>
+            <button
+              type="submit"
+              disabled={!pbisStudentId || pbisReasonId === ""}
+            >
               Save PBIS Entry
             </button>
           </form>
