@@ -401,6 +401,355 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
   );
 }
 
+type PulloutRow = {
+  id: number;
+  studentId: string;
+  requestedById: number | null;
+  requestedByName: string;
+  requestedAt: string;
+  referringTeacherStaffId: number | null;
+  referringTeacherName: string;
+  period: number | null;
+  reason: string;
+  editedReason: string | null;
+  interventionsTried: string | null;
+  status: string;
+  verifiedById: number | null;
+  verifiedByName: string | null;
+  verifiedAt: string | null;
+  rejectedAt: string | null;
+  rejectedReason: string | null;
+  arrivedAt: string | null;
+  arrivedById: number | null;
+  arrivedByName: string | null;
+  returnedAt: string | null;
+  closedAt: string | null;
+  parentEmailSentAt: string | null;
+  parentEmailStatus: string | null;
+  parentEmailErrorMsg: string | null;
+  parentEmailTo: string | null;
+};
+
+function VerifyPulloutsSection({
+  students,
+  onChange,
+}: {
+  students: Student[];
+  onChange: () => void;
+}) {
+  const [rows, setRows] = useState<PulloutRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [edits, setEdits] = useState<
+    Record<
+      number,
+      {
+        editedReason: string;
+        period: string;
+        referringTeacherName: string;
+        rejectedReason: string;
+      }
+    >
+  >({});
+  const [busyId, setBusyId] = useState<number | null>(null);
+
+  const studentName = (id: string) =>
+    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/pullouts?scope=pending");
+      if (!r.ok) {
+        setMsg({ ok: false, text: "Could not load pending pullouts." });
+        setRows([]);
+      } else {
+        const data: PulloutRow[] = await r.json();
+        setRows(data);
+        // seed edit drafts
+        const next: typeof edits = {};
+        for (const p of data) {
+          next[p.id] = {
+            editedReason: p.editedReason ?? p.reason,
+            period: p.period == null ? "" : String(p.period),
+            referringTeacherName: p.referringTeacherName,
+            rejectedReason: "",
+          };
+        }
+        setEdits(next);
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const setEdit = (
+    id: number,
+    patch: Partial<{
+      editedReason: string;
+      period: string;
+      referringTeacherName: string;
+      rejectedReason: string;
+    }>,
+  ) => {
+    setEdits((prev) => ({
+      ...prev,
+      [id]: { ...prev[id], ...patch },
+    }));
+  };
+
+  const verify = async (p: PulloutRow) => {
+    const draft = edits[p.id];
+    setBusyId(p.id);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/pullouts/${p.id}/verify`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          editedReason: draft?.editedReason ?? "",
+          period: draft?.period === "" ? null : Number(draft?.period ?? ""),
+          referringTeacherName: draft?.referringTeacherName ?? "",
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not verify." });
+      } else {
+        setMsg({
+          ok: true,
+          text: `Verified pullout #${p.id} for ${studentName(p.studentId)}.`,
+        });
+        await refresh();
+        onChange();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const reject = async (p: PulloutRow) => {
+    const draft = edits[p.id];
+    if (!draft?.rejectedReason.trim()) {
+      setMsg({
+        ok: false,
+        text: `Add a rejection reason for pullout #${p.id} before rejecting.`,
+      });
+      return;
+    }
+    setBusyId(p.id);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/pullouts/${p.id}/reject`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ rejectedReason: draft.rejectedReason.trim() }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not reject." });
+      } else {
+        setMsg({
+          ok: true,
+          text: `Rejected pullout #${p.id} for ${studentName(p.studentId)}.`,
+        });
+        await refresh();
+        onChange();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>Verify Pullouts</h2>
+      <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
+        Review pending pullout requests. You can edit the reason, period, or
+        referring teacher name before verifying — those edits become the
+        record sent to the ISS room and to parents.
+      </p>
+      {msg && (
+        <div
+          style={{
+            margin: "0.5rem 0 1rem",
+            padding: "0.5rem 0.75rem",
+            background: msg.ok ? "#ecfdf5" : "#fef2f2",
+            border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}`,
+            color: msg.ok ? "#065f46" : "#b91c1c",
+            borderRadius: 6,
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+      {loading ? (
+        <div style={{ color: "var(--text-subtle, #64748b)" }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ color: "var(--text-subtle, #64748b)" }}>
+          No pending pullouts. 🎉
+        </div>
+      ) : (
+        <div style={{ display: "grid", gap: "1rem" }}>
+          {rows.map((p) => {
+            const draft = edits[p.id] ?? {
+              editedReason: p.reason,
+              period: p.period == null ? "" : String(p.period),
+              referringTeacherName: p.referringTeacherName,
+              rejectedReason: "",
+            };
+            return (
+              <div
+                key={p.id}
+                style={{
+                  border: "1px solid var(--border, #e2e8f0)",
+                  borderRadius: 8,
+                  padding: "0.75rem 1rem",
+                  background: "var(--surface, white)",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    flexWrap: "wrap",
+                    gap: 8,
+                  }}
+                >
+                  <div>
+                    <strong>{studentName(p.studentId)}</strong>{" "}
+                    <span style={{ color: "#64748b" }}>
+                      (#{p.studentId}) · pullout #{p.id}
+                    </span>
+                  </div>
+                  <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
+                    Requested by {p.requestedByName} ·{" "}
+                    {new Date(p.requestedAt).toLocaleString()}
+                  </div>
+                </div>
+                {p.interventionsTried && (
+                  <div
+                    style={{
+                      marginTop: 6,
+                      fontSize: "0.88rem",
+                      color: "#475569",
+                    }}
+                  >
+                    <em>Interventions tried:</em> {p.interventionsTried}
+                  </div>
+                )}
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns:
+                      "minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr)",
+                    gap: "0.5rem",
+                    marginTop: "0.5rem",
+                  }}
+                >
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontSize: "0.85rem" }}>Reason (editable)</span>
+                    <textarea
+                      rows={2}
+                      value={draft.editedReason}
+                      onChange={(e) =>
+                        setEdit(p.id, { editedReason: e.target.value })
+                      }
+                    />
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontSize: "0.85rem" }}>Period</span>
+                    <select
+                      value={draft.period}
+                      onChange={(e) =>
+                        setEdit(p.id, { period: e.target.value })
+                      }
+                    >
+                      <option value="">—</option>
+                      {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                        <option key={n} value={n}>
+                          {n}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label style={{ display: "grid", gap: 4 }}>
+                    <span style={{ fontSize: "0.85rem" }}>
+                      Referring teacher
+                    </span>
+                    <input
+                      type="text"
+                      value={draft.referringTeacherName}
+                      onChange={(e) =>
+                        setEdit(p.id, {
+                          referringTeacherName: e.target.value,
+                        })
+                      }
+                    />
+                  </label>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    gap: "0.5rem",
+                    marginTop: "0.75rem",
+                    alignItems: "center",
+                    flexWrap: "wrap",
+                  }}
+                >
+                  <button
+                    type="button"
+                    className="btn-primary"
+                    disabled={busyId === p.id}
+                    onClick={() => verify(p)}
+                  >
+                    {busyId === p.id ? "Working…" : "Verify & send to ISS"}
+                  </button>
+                  <input
+                    type="text"
+                    placeholder="Rejection reason"
+                    value={draft.rejectedReason}
+                    onChange={(e) =>
+                      setEdit(p.id, { rejectedReason: e.target.value })
+                    }
+                    style={{ flex: 1, minWidth: 180 }}
+                  />
+                  <button
+                    type="button"
+                    disabled={busyId === p.id}
+                    onClick={() => reject(p)}
+                    style={{
+                      background: "transparent",
+                      color: "#b91c1c",
+                      border: "1px solid #fecaca",
+                      borderRadius: 6,
+                      padding: "0.4rem 0.8rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    Reject
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
@@ -467,6 +816,7 @@ function App() {
     | "interventions"
     | "logIntervention"
     | "requestPullout"
+    | "verifyPullouts"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -2396,9 +2746,29 @@ function App() {
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
+  const canVerifyPullouts = isAdmin || isDean || isMtss;
   void isIssTeacher;
-  void isDean;
-  void isMtss;
+
+  // Pending pullout count for the verifier badge.
+  const [pendingPulloutCount, setPendingPulloutCount] = useState<number>(0);
+  const [pendingPulloutsTick, setPendingPulloutsTick] = useState(0);
+  useEffect(() => {
+    if (!canVerifyPullouts) {
+      setPendingPulloutCount(0);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/pullouts?scope=pending")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled) return;
+        if (Array.isArray(rows)) setPendingPulloutCount(rows.length);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [canVerifyPullouts, pendingPulloutsTick]);
 
   useEffect(() => {
     if (!isAdmin && activeSection === "settings") {
@@ -2462,6 +2832,28 @@ function App() {
   const adminNavSections: NavSection[] = [
     { key: "settings", label: "Settings", icon: IconSettings },
   ];
+  const navBadge = (key: typeof activeSection) => {
+    if (key === "verifyPullouts" && pendingPulloutCount > 0) {
+      return (
+        <span
+          style={{
+            marginLeft: 6,
+            background: "#dc2626",
+            color: "white",
+            borderRadius: 999,
+            padding: "0 7px",
+            fontSize: "0.72rem",
+            fontWeight: 700,
+            lineHeight: "18px",
+            display: "inline-block",
+          }}
+        >
+          {pendingPulloutCount}
+        </span>
+      );
+    }
+    return null;
+  };
   const renderNavItem = (s: NavSection) => (
     <button
       key={s.key}
@@ -2471,6 +2863,7 @@ function App() {
     >
       <span className="nav-icon">{s.icon}</span>
       {s.label}
+      {navBadge(s.key)}
     </button>
   );
   const userInitials = currentStaffUser
@@ -2592,6 +2985,12 @@ function App() {
         {isEseCoord && eseNavSections.map(renderNavItem)}
         {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
         {isBehaviorSpec && interventionsNavSections.map(renderNavItem)}
+        {canVerifyPullouts &&
+          renderNavItem({
+            key: "verifyPullouts",
+            label: "Verify Pullouts",
+            icon: IconClipboard,
+          })}
         {isAdmin && (
           <>
             <div className="nav-admin-divider" aria-hidden="true">
@@ -6426,6 +6825,13 @@ function App() {
 
       {activeSection === "requestPullout" && (
         <RequestPulloutSection students={students} />
+      )}
+
+      {activeSection === "verifyPullouts" && canVerifyPullouts && (
+        <VerifyPulloutsSection
+          students={students}
+          onChange={() => setPendingPulloutsTick((t) => t + 1)}
+        />
       )}
 
       {activeSection === "logIntervention" && (

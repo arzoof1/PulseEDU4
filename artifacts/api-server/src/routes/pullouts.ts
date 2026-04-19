@@ -231,4 +231,120 @@ router.post(
   },
 );
 
+// Verifier (admin / dean / MTSS) actions.
+const isVerifier = (s: StaffRow) =>
+  s.isAdmin || s.isDean || s.isMtssCoordinator;
+
+router.patch(
+  "/pullouts/:id/verify",
+  requireStaffMW(isVerifier, "Verifier"),
+  async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const {
+      editedReason,
+      period,
+      referringTeacherName,
+    }: {
+      editedReason?: unknown;
+      period?: unknown;
+      referringTeacherName?: unknown;
+    } = req.body ?? {};
+
+    const [existing] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Pullout not found" });
+      return;
+    }
+    if (existing.status !== "pending") {
+      res.status(409).json({
+        error: `Pullout is ${existing.status}; only pending pullouts can be verified.`,
+      });
+      return;
+    }
+
+    const updates: Partial<typeof pulloutsTable.$inferInsert> = {
+      status: "verified",
+      verifiedById: staff.id,
+      verifiedByName: staff.displayName,
+      verifiedAt: new Date().toISOString(),
+    };
+    if (typeof editedReason === "string" && editedReason.trim()) {
+      updates.editedReason = editedReason.trim();
+    }
+    if (period !== undefined && period !== null && period !== "") {
+      const p = Number(period);
+      if (!Number.isInteger(p) || p < 1 || p > 12) {
+        res.status(400).json({ error: "period must be an integer 1-12" });
+        return;
+      }
+      updates.period = p;
+    }
+    if (
+      typeof referringTeacherName === "string" &&
+      referringTeacherName.trim()
+    ) {
+      updates.referringTeacherName = referringTeacherName.trim();
+    }
+
+    const [row] = await db
+      .update(pulloutsTable)
+      .set(updates)
+      .where(eq(pulloutsTable.id, id))
+      .returning();
+    res.json(row);
+  },
+);
+
+router.patch(
+  "/pullouts/:id/reject",
+  requireStaffMW(isVerifier, "Verifier"),
+  async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const { rejectedReason } = req.body ?? {};
+    if (typeof rejectedReason !== "string" || !rejectedReason.trim()) {
+      res.status(400).json({ error: "rejectedReason is required" });
+      return;
+    }
+    const [existing] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Pullout not found" });
+      return;
+    }
+    if (existing.status !== "pending") {
+      res.status(409).json({
+        error: `Pullout is ${existing.status}; only pending pullouts can be rejected.`,
+      });
+      return;
+    }
+    const [row] = await db
+      .update(pulloutsTable)
+      .set({
+        status: "rejected",
+        rejectedAt: new Date().toISOString(),
+        rejectedReason: rejectedReason.trim(),
+        verifiedById: staff.id,
+        verifiedByName: staff.displayName,
+      })
+      .where(eq(pulloutsTable.id, id))
+      .returning();
+    res.json(row);
+  },
+);
+
 export default router;
