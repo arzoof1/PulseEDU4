@@ -584,7 +584,7 @@ function App() {
           studentId: selectedStudentId,
           destination,
           originRoom,
-          teacherName: selectedTeacher,
+          teacherName: currentStaffUser,
         }),
       });
       if (!res.ok) {
@@ -1004,7 +1004,7 @@ function App() {
               staffFilter === "mine" ? p.teacherName === currentStaffUser : true,
             )
             .filter((p) =>
-              passFilter === "mine" ? p.teacherName === selectedTeacher : true,
+              passFilter === "mine" ? p.teacherName === currentStaffUser : true,
             )
             .map((p) => {
             const isAdmin = currentStaffUser.includes("(Admin)");
