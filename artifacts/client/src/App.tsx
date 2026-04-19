@@ -948,11 +948,12 @@ function App() {
             )
           )}
         </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
+        <div style={{ marginBottom: "0.5rem", color: "var(--text-subtle)" }}>
+          <label style={{ color: "var(--text-subtle)" }}>
             Origin Room:{" "}
             <select
               value={originRoom}
+              style={{ color: "var(--text-subtle)" }}
               onChange={(e) => {
                 const newRoom = e.target.value;
                 setOriginRoom(newRoom);
