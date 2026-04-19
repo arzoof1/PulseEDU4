@@ -3374,6 +3374,11 @@ function App() {
           requiresNote: newIntervRequiresNote,
         }),
       });
+      if (res.status === 401) {
+        throw new Error(
+          "Your session expired. Please refresh the page (or open it in a new tab) and sign in again.",
+        );
+      }
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error || `HTTP ${res.status}`);
@@ -3470,6 +3475,11 @@ function App() {
           category: newPulloutReasonCategory.trim() || "General",
         }),
       });
+      if (res.status === 401) {
+        throw new Error(
+          "Your session expired. Please refresh the page (or open it in a new tab) and sign in again.",
+        );
+      }
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         throw new Error(j.error || `HTTP ${res.status}`);
