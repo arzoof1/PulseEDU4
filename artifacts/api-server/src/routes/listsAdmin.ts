@@ -185,6 +185,23 @@ router.post("/intervention-types", requireInterventionAdmin, async (req, res) =>
   res.status(201).json(row);
 });
 
+router.delete("/intervention-types/:id", requireInterventionAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const [row] = await db
+    .delete(interventionTypesTable)
+    .where(eq(interventionTypesTable.id, id))
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.json({ ok: true, id: row.id });
+});
+
 router.patch("/intervention-types/:id", requireInterventionAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {

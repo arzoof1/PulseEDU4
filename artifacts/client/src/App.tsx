@@ -3404,6 +3404,29 @@ function App() {
     }
   };
 
+  const deleteInterventionType = async (id: number, name: string) => {
+    if (
+      !window.confirm(
+        `Delete intervention "${name}"? This permanently removes it from the picker. Existing logged entries keep the name as a snapshot and are not affected.`,
+      )
+    ) {
+      return;
+    }
+    setIntervListMsg("");
+    try {
+      const res = await fetch(`/api/intervention-types/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      loadInterventionTypes();
+    } catch (e) {
+      setIntervListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const loadPulloutReasons = async () => {
     setPulloutReasonMsg("");
     try {
@@ -4041,6 +4064,7 @@ function App() {
     }
     if (activeSection === "requestPullout") {
       loadPulloutReasons();
+      loadInterventionTypes();
     }
     if (activeSection === "logIntervention") {
       loadInterventionTypes();
@@ -9143,6 +9167,16 @@ function App() {
                           }
                         >
                           {i.active ? "Deactivate" : "Activate"}
+                        </button>{" "}
+                        <button
+                          type="button"
+                          onClick={() => deleteInterventionType(i.id, i.name)}
+                          style={{
+                            color: "crimson",
+                            borderColor: "crimson",
+                          }}
+                        >
+                          Delete
                         </button>
                       </td>
                     </tr>
