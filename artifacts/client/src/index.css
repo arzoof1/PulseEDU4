@@ -139,7 +139,7 @@ strong {
 
 .app-header .brand .ekg-track {
   fill: none;
-  stroke: rgba(239, 68, 68, 0.28);
+  stroke: rgba(14, 116, 144, 0.3);
   stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -147,15 +147,15 @@ strong {
 
 .app-header .brand .ekg-pulse {
   fill: none;
-  stroke: #ef4444;
+  stroke: #0e7490;
   stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 38 260;
   stroke-dashoffset: 298;
   animation: ekg-sweep 2.2s linear infinite;
-  filter: drop-shadow(0 0 4px rgba(239, 68, 68, 0.85))
-    drop-shadow(0 0 1.5px rgba(239, 68, 68, 1));
+  filter: drop-shadow(0 0 4px rgba(14, 116, 144, 0.85))
+    drop-shadow(0 0 1.5px rgba(14, 116, 144, 1));
 }
 
 @keyframes ekg-sweep {
@@ -175,7 +175,16 @@ strong {
 
 .app-header .brand .wordmark .accent {
   color: var(--accent);
-  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.9);
+  font-style: italic;
+  font-weight: 900;
+  letter-spacing: -0.03em;
+  margin-left: 1px;
+  text-shadow:
+    0 0 2px #ffffff,
+    1px 0 0 #ffffff,
+    -1px 0 0 #ffffff,
+    0 1px 0 #ffffff,
+    0 -1px 0 #ffffff;
 }
 
 .app-header .header-controls {
