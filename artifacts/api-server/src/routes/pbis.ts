@@ -95,6 +95,82 @@ router.post("/pbis", async (req, res) => {
   res.status(201).json(entry);
 });
 
+// Bulk award the same reason+points to many students at once.
+// Body: { studentIds: string[], reason: string, points: number }
+// Cap: 200 distinct ids per call. Per-row errors are returned, not thrown.
+router.post("/pbis/bulk", async (req: Request, res: Response) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const { studentIds, reason, points } = req.body ?? {};
+  if (!Array.isArray(studentIds) || studentIds.length === 0) {
+    res
+      .status(400)
+      .json({ error: "studentIds (non-empty array) is required" });
+    return;
+  }
+  if (typeof reason !== "string" || !reason.trim()) {
+    res.status(400).json({ error: "reason is required" });
+    return;
+  }
+  const pts = Number(points);
+  if (!Number.isFinite(pts)) {
+    res.status(400).json({ error: "points must be a number" });
+    return;
+  }
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const raw of studentIds) {
+    if (typeof raw !== "string") continue;
+    const id = raw.trim();
+    if (!id || seen.has(id)) continue;
+    seen.add(id);
+    ids.push(id);
+  }
+  if (ids.length === 0) {
+    res.status(400).json({ error: "No valid studentIds provided" });
+    return;
+  }
+  if (ids.length > 200) {
+    res
+      .status(400)
+      .json({ error: "Bulk awards are capped at 200 students per call" });
+    return;
+  }
+
+  const nowIso = new Date().toISOString();
+  const created: Array<typeof pbisEntriesTable.$inferSelect> = [];
+  const errors: Array<{ studentId: string; error: string }> = [];
+  for (const id of ids) {
+    try {
+      const [row] = await db
+        .insert(pbisEntriesTable)
+        .values({
+          studentId: id,
+          reason: reason.trim(),
+          points: pts,
+          staffId: staff.id,
+          staffName: staff.displayName,
+          createdAt: nowIso,
+        })
+        .returning();
+      created.push(row);
+    } catch (e) {
+      errors.push({
+        studentId: id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+  res.status(201).json({
+    createdCount: created.length,
+    errors,
+    entries: created,
+  });
+});
+
 // Edit an existing PBIS entry. Owner OR admin/PBIS coord. No edits to voided rows.
 router.patch("/pbis/:id", async (req: Request, res: Response) => {
   const staff = await loadSessionStaff(req);

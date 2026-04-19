@@ -457,6 +457,108 @@ function App() {
   const [pbisReportMsg, setPbisReportMsg] = useState("");
   const [pbisReportBusy, setPbisReportBusy] = useState(false);
 
+  // PBIS bulk award state
+  const [bulkSource, setBulkSource] = useState<"section" | "ids">("section");
+  const [bulkSectionId, setBulkSectionId] = useState<number | "">("");
+  const [bulkIdsText, setBulkIdsText] = useState("");
+  const [bulkReasonId, setBulkReasonId] = useState<number | "">("");
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkResult, setBulkResult] = useState<{
+    createdCount: number;
+    errors: { studentId: string; error: string }[];
+  } | null>(null);
+  const [bulkMsg, setBulkMsg] = useState("");
+
+  const loadMySections = async () => {
+    try {
+      const res = await fetch("/api/schedule");
+      if (!res.ok) {
+        setMySections([]);
+        return;
+      }
+      const data = (await res.json()) as { sections?: MySection[] };
+      setMySections(Array.isArray(data.sections) ? data.sections : []);
+    } catch {
+      setMySections([]);
+    }
+  };
+
+  const bulkSelectedIds = (): string[] => {
+    if (bulkSource === "section") {
+      const sec = mySections.find((s) => s.id === bulkSectionId);
+      return sec ? sec.studentIds.slice() : [];
+    }
+    return Array.from(
+      new Set(
+        bulkIdsText
+          .split(/[\s,;\n]+/)
+          .map((s) => s.trim())
+          .filter(Boolean),
+      ),
+    );
+  };
+
+  const submitBulkAward = async () => {
+    setBulkMsg("");
+    setBulkResult(null);
+    const ids = bulkSelectedIds();
+    if (ids.length === 0) {
+      setBulkMsg("Pick a section or enter at least one student ID.");
+      return;
+    }
+    if (typeof bulkReasonId !== "number") {
+      setBulkMsg("Pick a reason.");
+      return;
+    }
+    const reason = pbisReasonsList.find((r) => r.id === bulkReasonId);
+    if (!reason) {
+      setBulkMsg("Reason no longer exists. Refresh and try again.");
+      return;
+    }
+    if (
+      !window.confirm(
+        `Award "${reason.name}" (${reason.defaultPoints} ${
+          reason.defaultPoints === 1 ? "point" : "points"
+        }) to ${ids.length} student${ids.length === 1 ? "" : "s"}?`,
+      )
+    ) {
+      return;
+    }
+    setBulkBusy(true);
+    try {
+      const res = await fetch("/api/pbis/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentIds: ids,
+          reason: reason.name,
+          points: reason.defaultPoints,
+        }),
+      });
+      const j = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        createdCount?: number;
+        errors?: { studentId: string; error: string }[];
+        entries?: PbisEntry[];
+      };
+      if (!res.ok) {
+        setBulkMsg(j.error || `Couldn't award (HTTP ${res.status}).`);
+        return;
+      }
+      setBulkResult({
+        createdCount: j.createdCount ?? 0,
+        errors: j.errors ?? [],
+      });
+      if (j.entries && j.entries.length) {
+        setPbisEntries((prev) => [...prev, ...(j.entries as PbisEntry[])]);
+      }
+    } catch (e) {
+      setBulkMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   // PBIS goals state
   type PbisGoal = {
     id: number;
@@ -1873,6 +1975,7 @@ function App() {
     }
     if (activeSection === "pbis") {
       loadPbisGoals();
+      loadMySections();
     }
     if (activeSection === "interventions" && isBehaviorSpec) {
       loadInterventionTypes();
@@ -5379,6 +5482,123 @@ function App() {
                 })}
             </tbody>
           </table>
+
+          <h3 style={{ marginTop: "1.5rem" }}>Bulk Award</h3>
+          <p style={{ marginTop: 0, color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
+            Award the same reason to a class section or a list of student IDs at once.
+          </p>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              gap: "0.75rem",
+              alignItems: "flex-end",
+            }}
+          >
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ fontSize: "0.8rem" }}>Source</span>
+              <select
+                value={bulkSource}
+                onChange={(e) => {
+                  setBulkSource(e.target.value as "section" | "ids");
+                  setBulkResult(null);
+                  setBulkMsg("");
+                }}
+              >
+                <option value="section">Class section</option>
+                <option value="ids">List of student IDs</option>
+              </select>
+            </label>
+            {bulkSource === "section" ? (
+              <label style={{ display: "flex", flexDirection: "column" }}>
+                <span style={{ fontSize: "0.8rem" }}>Section</span>
+                <select
+                  value={bulkSectionId}
+                  onChange={(e) =>
+                    setBulkSectionId(
+                      e.target.value === "" ? "" : Number(e.target.value),
+                    )
+                  }
+                >
+                  <option value="">— pick —</option>
+                  {mySections
+                    .filter((s) => !s.isPlanning)
+                    .map((s) => (
+                      <option key={s.id} value={s.id}>
+                        P{s.period} · {s.courseName} ({s.studentIds.length})
+                      </option>
+                    ))}
+                </select>
+              </label>
+            ) : (
+              <label style={{ display: "flex", flexDirection: "column", flex: "1 1 240px" }}>
+                <span style={{ fontSize: "0.8rem" }}>Student IDs (comma, space, or newline separated)</span>
+                <textarea
+                  value={bulkIdsText}
+                  onChange={(e) => setBulkIdsText(e.target.value)}
+                  rows={2}
+                  placeholder="e.g. S001, S002, S003"
+                />
+              </label>
+            )}
+            <label style={{ display: "flex", flexDirection: "column" }}>
+              <span style={{ fontSize: "0.8rem" }}>Reason</span>
+              <select
+                value={bulkReasonId}
+                onChange={(e) =>
+                  setBulkReasonId(
+                    e.target.value === "" ? "" : Number(e.target.value),
+                  )
+                }
+              >
+                <option value="">— pick —</option>
+                {pbisReasonsList
+                  .filter((r) => r.active)
+                  .map((r) => (
+                    <option key={r.id} value={r.id}>
+                      {r.name} ({r.defaultPoints})
+                    </option>
+                  ))}
+              </select>
+            </label>
+            <button
+              type="button"
+              onClick={submitBulkAward}
+              disabled={bulkBusy}
+            >
+              {bulkBusy
+                ? "Awarding…"
+                : `Award to ${bulkSelectedIds().length} student${bulkSelectedIds().length === 1 ? "" : "s"}`}
+            </button>
+          </div>
+          {bulkMsg && (
+            <div style={{ color: "#b91c1c", marginTop: "0.4rem", fontSize: "0.85rem" }}>
+              {bulkMsg}
+            </div>
+          )}
+          {bulkResult && (
+            <div style={{ marginTop: "0.4rem", fontSize: "0.85rem" }}>
+              <div style={{ color: "#15803d" }}>
+                Awarded to {bulkResult.createdCount} student
+                {bulkResult.createdCount === 1 ? "" : "s"}.
+              </div>
+              {bulkResult.errors.length > 0 && (
+                <details style={{ marginTop: "0.25rem" }}>
+                  <summary style={{ color: "#b91c1c", cursor: "pointer" }}>
+                    {bulkResult.errors.length} error
+                    {bulkResult.errors.length === 1 ? "" : "s"}
+                  </summary>
+                  <ul style={{ margin: "0.25rem 0 0 1rem" }}>
+                    {bulkResult.errors.map((e) => (
+                      <li key={e.studentId}>
+                        <code>{e.studentId}</code>: {e.error}
+                      </li>
+                    ))}
+                  </ul>
+                </details>
+              )}
+            </div>
+          )}
 
           <h3 style={{ marginTop: "1.5rem" }}>PBIS Report</h3>
           <p style={{ marginTop: 0, color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
