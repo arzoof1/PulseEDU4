@@ -10,9 +10,11 @@
   --text-muted: #64748b;
   --text-subtle: #94a3b8;
 
-  --primary: #2563eb;
-  --primary-hover: #1d4ed8;
-  --primary-soft: #eff6ff;
+  --primary: #0e7490;
+  --primary-hover: #0c627a;
+  --primary-soft: #ecfeff;
+  --accent: #ef4444;
+  --accent-soft: #fee2e2;
 
   --success: #16a34a;
   --success-soft: #dcfce7;
@@ -122,16 +124,56 @@ strong {
 }
 
 .app-header .brand .logo {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: linear-gradient(135deg, #2563eb, #7c3aed);
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #0e7490, #06b6d4);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: white;
+  box-shadow: 0 1px 2px rgba(14, 116, 144, 0.25);
+}
+
+.app-header .brand .ekg {
+  display: block;
+  overflow: visible;
+}
+
+.app-header .brand .ekg-track {
+  fill: none;
+  stroke: rgba(255, 255, 255, 0.35);
+  stroke-width: 2;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.app-header .brand .ekg-pulse {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2.25;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-dasharray: 28 220;
+  stroke-dashoffset: 248;
+  animation: ekg-sweep 2.2s linear infinite;
+  filter: drop-shadow(0 0 3px rgba(255, 255, 255, 0.55));
+}
+
+@keyframes ekg-sweep {
+  from { stroke-dashoffset: 248; }
+  to { stroke-dashoffset: 0; }
+}
+
+.app-header .brand .wordmark {
   font-weight: 700;
-  font-size: 13px;
+  font-size: 1.05rem;
+  letter-spacing: -0.01em;
+  color: var(--text);
+}
+
+.app-header .brand .wordmark .accent {
+  color: var(--accent);
 }
 
 .app-header .header-controls {
@@ -165,7 +207,7 @@ strong {
   width: 22px;
   height: 22px;
   border-radius: 50%;
-  background: linear-gradient(135deg, #2563eb, #06b6d4);
+  background: linear-gradient(135deg, #0e7490, #06b6d4);
   color: white;
   display: inline-flex;
   align-items: center;
@@ -227,7 +269,8 @@ strong {
 .nav-item.active {
   background: var(--primary-soft);
   color: var(--primary);
-  border-color: rgba(37, 99, 235, 0.2);
+  border-color: rgba(14, 116, 144, 0.2);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .nav-item .nav-icon {
