@@ -541,6 +541,13 @@ function App() {
         alert("Started date is required.");
         return;
       }
+      if (
+        endedAtIso &&
+        new Date(endedAtIso).getTime() <= new Date(createdAtIso).getTime()
+      ) {
+        alert("Started time must be before Ended time.");
+        return;
+      }
       const res = await fetch(`/api/hall-passes/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },

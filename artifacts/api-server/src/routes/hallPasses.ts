@@ -122,6 +122,18 @@ router.patch("/hall-passes/:id", async (req, res) => {
         ? "system_ended"
         : "ended";
 
+  const effectiveCreatedAt =
+    createdAt !== undefined ? (createdAt as string) : existing.createdAt;
+  if (
+    newEndedAt !== null &&
+    new Date(newEndedAt).getTime() <= new Date(effectiveCreatedAt).getTime()
+  ) {
+    res
+      .status(400)
+      .json({ error: "Started time must be before Ended time." });
+    return;
+  }
+
   const updates: Partial<typeof hallPassesTable.$inferInsert> = {};
   if (endedAtProvided) {
     updates.endedAt = newEndedAt;
