@@ -1,3 +1,3 @@
 export const config = {
-  defaultHallPassDurationMinutes: 6,
+  defaultHallPassDurationMinutes: 4,
 };
