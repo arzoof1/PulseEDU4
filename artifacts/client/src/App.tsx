@@ -562,6 +562,11 @@ function App() {
     </svg>
   );
 
+  const studentName = (id: string): string => {
+    const s = students.find((x) => x.studentId === id);
+    return s ? `${s.firstName} ${s.lastName}` : id;
+  };
+
   const navSections: {
     key: typeof activeSection;
     label: string;
@@ -901,7 +906,12 @@ function App() {
               p.status === "system_ended" ? "System Ended" : p.status;
             return (
             <tr key={p.id}>
-              <td>{p.studentId}</td>
+              <td>
+                <div style={{ fontWeight: 600 }}>{studentName(p.studentId)}</div>
+                <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+                  {p.studentId}
+                </div>
+              </td>
               <td>{p.teacherName}</td>
               <td>{p.destination}</td>
               <td>{p.originRoom}</td>
@@ -1193,14 +1203,14 @@ function App() {
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
-            <th>studentId</th>
-            <th>teacherName</th>
-            <th>entryType</th>
-            <th>period</th>
-            <th>reason</th>
-            <th>checkInWith</th>
-            <th>notes</th>
-            <th>createdAt</th>
+            <th>Student</th>
+            <th>Teacher</th>
+            <th>Type</th>
+            <th>Period</th>
+            <th>Reason</th>
+            <th>Check-In With</th>
+            <th>Notes</th>
+            <th>Logged</th>
           </tr>
         </thead>
         <tbody>
@@ -1213,14 +1223,19 @@ function App() {
             )
             .map((t) => (
             <tr key={t.id}>
-              <td>{t.studentId}</td>
+              <td>
+                <div style={{ fontWeight: 600 }}>{studentName(t.studentId)}</div>
+                <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+                  {t.studentId}
+                </div>
+              </td>
               <td>{t.teacherName}</td>
               <td>{t.entryType}</td>
               <td>{t.period}</td>
               <td>{t.reason}</td>
               <td>{t.checkInWith ?? "-"}</td>
               <td>{t.notes}</td>
-              <td>{t.createdAt}</td>
+              <td>{fmtTime(t.createdAt)}</td>
             </tr>
           ))}
         </tbody>
@@ -1803,69 +1818,141 @@ function App() {
               })()}
               </>)}
 
-              {studentTab === "supportNotes" && (<>
-              <h3>Support Notes</h3>
-              <form
-                onSubmit={handleSupportNoteSubmit}
-                style={{ marginBottom: "0.5rem" }}
-              >
-                <div style={{ marginBottom: "0.25rem" }}>
-                  <label>
-                    Note Type:{" "}
-                    <select
-                      value={supportNoteType}
-                      onChange={(e) => setSupportNoteType(e.target.value)}
-                    >
-                      {supportNoteTypes.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                <div style={{ marginBottom: "0.25rem" }}>
-                  <label
-                    style={{ display: "block", marginBottom: "0.25rem" }}
-                  >
-                    Note:
-                  </label>
-                  <textarea
-                    value={supportNoteText}
-                    onChange={(e) => setSupportNoteText(e.target.value)}
-                    placeholder="Enter support note here..."
-                    rows={4}
-                    style={{
-                      display: "block",
-                      width: "100%",
-                      maxWidth: "32rem",
-                      minHeight: "5rem",
-                      padding: "0.5rem",
-                      border: "1px solid #888",
-                      borderRadius: "4px",
-                      fontFamily: "inherit",
-                      fontSize: "1rem",
-                      marginBottom: "0.5rem",
-                    }}
-                  />
-                </div>
-                <button type="submit" disabled={!supportNoteText.trim()}>
-                  Add Support Note
-                </button>
-              </form>
-              <ul>
-                {supportNotes
+              {studentTab === "supportNotes" && (() => {
+                const studentNotes = supportNotes
                   .filter((n) => n.studentId === activityStudentId)
                   .slice()
-                  .reverse()
-                  .map((n) => (
-                    <li key={n.id}>
-                      [{n.noteType}] {n.noteText} - by {n.staffName || "-"} -{" "}
-                      {n.createdAt}
-                    </li>
-                  ))}
-              </ul>
-              </>)}
+                  .reverse();
+                return (
+                  <>
+                    <h3>
+                      Support Notes
+                      <span
+                        style={{
+                          color: "var(--text-muted)",
+                          fontWeight: 400,
+                          marginLeft: 8,
+                        }}
+                      >
+                        — {studentName(activityStudentId)}
+                      </span>
+                    </h3>
+                    <form
+                      onSubmit={handleSupportNoteSubmit}
+                      style={{ marginBottom: "1rem" }}
+                    >
+                      <div>
+                        <label>
+                          Note Type:{" "}
+                          <select
+                            value={supportNoteType}
+                            onChange={(e) =>
+                              setSupportNoteType(e.target.value)
+                            }
+                          >
+                            {supportNoteTypes.map((t) => (
+                              <option key={t} value={t}>
+                                {t}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      <div>
+                        <label style={{ display: "block" }}>
+                          Note:
+                        </label>
+                        <textarea
+                          value={supportNoteText}
+                          onChange={(e) => setSupportNoteText(e.target.value)}
+                          placeholder="Enter support note here..."
+                          rows={4}
+                          style={{
+                            display: "block",
+                            width: "100%",
+                            maxWidth: "36rem",
+                            marginTop: 4,
+                          }}
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={!supportNoteText.trim()}
+                      >
+                        Add Support Note
+                      </button>
+                    </form>
+                    {studentNotes.length === 0 ? (
+                      <div
+                        style={{
+                          padding: "1rem",
+                          color: "var(--text-muted)",
+                          background: "var(--surface-2)",
+                          borderRadius: "var(--radius)",
+                          textAlign: "center",
+                          fontSize: 13,
+                        }}
+                      >
+                        No support notes yet for this student.
+                      </div>
+                    ) : (
+                      <div
+                        style={{
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: "0.625rem",
+                        }}
+                      >
+                        {studentNotes.map((n) => (
+                          <div
+                            key={n.id}
+                            style={{
+                              border: "1px solid var(--border)",
+                              borderRadius: "var(--radius)",
+                              padding: "0.75rem 0.875rem",
+                              background: "var(--surface)",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "space-between",
+                                marginBottom: "0.4rem",
+                                gap: "0.5rem",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <span className="badge badge-warning">
+                                {n.noteType}
+                              </span>
+                              <span
+                                style={{
+                                  fontSize: 12,
+                                  color: "var(--text-muted)",
+                                }}
+                              >
+                                {n.staffName || "Unknown"} ·{" "}
+                                {fmtTime(n.createdAt)}
+                              </span>
+                            </div>
+                            <div
+                              style={{
+                                whiteSpace: "pre-wrap",
+                                color: "var(--text)",
+                                fontSize: 14,
+                                lineHeight: 1.5,
+                              }}
+                            >
+                              {n.noteText}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
 
               {studentTab === "pbis" && (<>
               <h3>PBIS Entries</h3>
@@ -2222,17 +2309,22 @@ function App() {
                     : true,
                 )
                 .map((entry) => {
-                const s = students.find(
-                  (s) => s.studentId === entry.studentId,
-                );
                 return (
                   <tr key={entry.id}>
-                    <td>{entry.studentId}</td>
-                    <td>{s ? `${s.firstName} ${s.lastName}` : "-"}</td>
+                    <td>
+                      <div style={{ fontWeight: 600 }}>
+                        {studentName(entry.studentId)}
+                      </div>
+                      <div
+                        style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                      >
+                        {entry.studentId}
+                      </div>
+                    </td>
                     <td>{entry.reason}</td>
                     <td>{entry.points}</td>
                     <td>{entry.staffName || "-"}</td>
-                    <td>{entry.createdAt}</td>
+                    <td>{fmtTime(entry.createdAt)}</td>
                   </tr>
                 );
               })}
