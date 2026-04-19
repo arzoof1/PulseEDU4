@@ -123,13 +123,13 @@ function isCreatedToday(createdAt: string): boolean {
 }
 
 function getTimeStatusColor(pass: HallPass, now: number): string {
-  if (pass.status !== "active") return "gray";
+  if (pass.status !== "active") return "#e2e8f0";
   const totalMs = pass.maxDurationMinutes * 60 * 1000;
   const expiresAt = new Date(pass.createdAt).getTime() + totalMs;
   const remainingMs = expiresAt - now;
-  if (remainingMs <= 0) return "red";
-  if (remainingMs < totalMs / 2) return "yellow";
-  return "green";
+  if (remainingMs <= 0) return "#fee2e2";
+  if (remainingMs < totalMs / 2) return "#fef3c7";
+  return "#dcfce7";
 }
 
 function formatTimeStatus(pass: HallPass, now: number): string {
@@ -523,90 +523,93 @@ function App() {
     }
   };
 
+  const navSections: {
+    key: typeof activeSection;
+    label: string;
+    icon: string;
+  }[] = [
+    { key: "hallPasses", label: "Hall Passes", icon: "🚪" },
+    { key: "tardies", label: "Tardy / Check-Ins", icon: "⏱" },
+    { key: "student", label: "Student Activity", icon: "👤" },
+    { key: "pbis", label: "PBIS Points", icon: "⭐" },
+    { key: "accommodations", label: "Accommodations", icon: "📋" },
+  ];
+  const userInitials = currentStaffUser
+    .replace(/\(.*?\)/g, "")
+    .trim()
+    .split(/\s+/)
+    .map((p) => p[0])
+    .filter(Boolean)
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
   return (
-    <div style={{ padding: "1rem", fontFamily: "sans-serif" }}>
-      <h1>School Operations App - MVP</h1>
+    <div className="app-shell">
+      <header className="app-header">
+        <div className="brand">
+          <span className="logo">SO</span>
+          School Operations
+        </div>
+        <div className="header-controls">
+          <label>
+            Show
+            <select
+              value={dateFilter}
+              onChange={(e) =>
+                setDateFilter(e.target.value as "today" | "all")
+              }
+            >
+              <option value="all">All Records</option>
+              <option value="today">Today Only</option>
+            </select>
+          </label>
+          <label>
+            Staff
+            <select
+              value={staffFilter}
+              onChange={(e) =>
+                setStaffFilter(e.target.value as "all" | "mine")
+              }
+            >
+              <option value="all">All Staff</option>
+              <option value="mine">My Records Only</option>
+            </select>
+          </label>
+          <span className="user-pill">
+            <span className="avatar">{userInitials || "?"}</span>
+            <select
+              value={currentStaffUser}
+              onChange={(e) => setCurrentStaffUser(e.target.value)}
+            >
+              {staffUsers.map((u) => (
+                <option key={u} value={u}>
+                  {u}
+                </option>
+              ))}
+            </select>
+          </span>
+        </div>
+      </header>
 
-      <div style={{ marginBottom: "1rem" }}>
-        <label>
-          <strong>Current Staff User:</strong>{" "}
-          <select
-            value={currentStaffUser}
-            onChange={(e) => setCurrentStaffUser(e.target.value)}
-          >
-            {staffUsers.map((u) => (
-              <option key={u} value={u}>
-                {u}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
-      <div style={{ marginBottom: "1rem" }}>
-        <label>
-          Show:{" "}
-          <select
-            value={dateFilter}
-            onChange={(e) =>
-              setDateFilter(e.target.value as "today" | "all")
+      <aside className="sidebar">
+        <div className="section-label">Workspace</div>
+        {navSections.map((s) => (
+          <button
+            key={s.key}
+            type="button"
+            className={
+              "nav-item" + (activeSection === s.key ? " active" : "")
             }
+            onClick={() => setActiveSection(s.key)}
           >
-            <option value="all">All Records</option>
-            <option value="today">Today Only</option>
-          </select>
-        </label>{" "}
-        <label>
-          Staff:{" "}
-          <select
-            value={staffFilter}
-            onChange={(e) =>
-              setStaffFilter(e.target.value as "all" | "mine")
-            }
-          >
-            <option value="all">All Staff</option>
-            <option value="mine">My Records Only</option>
-          </select>
-        </label>
-      </div>
+            <span className="nav-icon">{s.icon}</span>
+            {s.label}
+          </button>
+        ))}
+      </aside>
 
-      <div style={{ marginBottom: "1rem" }}>
-        <button
-          type="button"
-          onClick={() => setActiveSection("hallPasses")}
-          disabled={activeSection === "hallPasses"}
-        >
-          Hall Passes
-        </button>{" "}
-        <button
-          type="button"
-          onClick={() => setActiveSection("tardies")}
-          disabled={activeSection === "tardies"}
-        >
-          Tardy / Check-Ins
-        </button>{" "}
-        <button
-          type="button"
-          onClick={() => setActiveSection("student")}
-          disabled={activeSection === "student"}
-        >
-          Student Activity
-        </button>{" "}
-        <button
-          type="button"
-          onClick={() => setActiveSection("pbis")}
-          disabled={activeSection === "pbis"}
-        >
-          PBIS Points
-        </button>{" "}
-        <button
-          type="button"
-          onClick={() => setActiveSection("accommodations")}
-          disabled={activeSection === "accommodations"}
-        >
-          Accommodations
-        </button>
-      </div>
+      <main className="app-main">
 
       {activeSection === "hallPasses" && (<>
       {(() => {
@@ -624,32 +627,28 @@ function App() {
             else active++;
           }
         }
-        const boxStyle: React.CSSProperties = {
-          border: "1px solid #ccc",
-          padding: "0.5rem 0.75rem",
-          minWidth: "8rem",
-        };
         return (
-          <section style={{ marginBottom: "1rem" }}>
+          <div className="card">
             <h2>Hall Pass Summary</h2>
-            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-              <div style={boxStyle}>
-                <div>Active Passes</div>
-                <strong>{active}</strong>
+            <div className="stat-grid">
+              <div className="stat-card stat-active">
+                <span className="stat-label">Active Passes</span>
+                <span className="stat-value">{active}</span>
               </div>
-              <div style={boxStyle}>
-                <div>Overdue Passes</div>
-                <strong>{overdue}</strong>
+              <div className="stat-card stat-overdue">
+                <span className="stat-label">Overdue Passes</span>
+                <span className="stat-value">{overdue}</span>
               </div>
-              <div style={boxStyle}>
-                <div>Ended Passes</div>
-                <strong>{ended}</strong>
+              <div className="stat-card stat-ended">
+                <span className="stat-label">Ended Passes</span>
+                <span className="stat-value">{ended}</span>
               </div>
             </div>
-          </section>
+          </div>
         );
       })()}
 
+      <div className="card">
       <h2>Create Hall Pass</h2>
       <form onSubmit={handleSubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
@@ -787,7 +786,9 @@ function App() {
         </div>
         <button type="submit">Create</button>
       </form>
+      </div>
 
+      <div className="card">
       <h2>Hall Passes</h2>
       <div style={{ marginBottom: "0.5rem" }}>
         <button
@@ -905,9 +906,11 @@ function App() {
           })}
         </tbody>
       </table>
+      </div>
       </>)}
 
       {activeSection === "tardies" && (<>
+      <div className="card">
       <h2>Log Tardy / Check-In</h2>
       <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
@@ -1113,7 +1116,9 @@ function App() {
               : "Log Check-Out"}
         </button>
       </form>
+      </div>
 
+      <div className="card">
       <h2>Tardy / Check-Ins</h2>
       <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
         <thead>
@@ -1150,10 +1155,11 @@ function App() {
           ))}
         </tbody>
       </table>
+      </div>
       </>)}
 
       {activeSection === "student" && (
-        <section>
+        <section className="card">
           <h2>Student Activity</h2>
           <div style={{ marginBottom: "0.5rem" }}>
             <label>
@@ -1820,8 +1826,8 @@ function App() {
         </section>
       )}
 
-      {activeSection === "accommodations" && (
-        <section>
+      {activeSection === "accommodations" && (<>
+        <section className="card">
           <h2>Accommodations</h2>
           {(() => {
             const s = students.find(
@@ -2008,10 +2014,10 @@ function App() {
             );
           })()}
         </section>
-      )}
+      </>)}
 
-      {activeSection === "pbis" && (
-        <section>
+      {activeSection === "pbis" && (<>
+        <section className="card">
           <h2>PBIS Points</h2>
           <form onSubmit={handlePbisSubmit} style={{ marginBottom: "1rem" }}>
             <div style={{ marginBottom: "0.5rem" }}>
@@ -2163,7 +2169,8 @@ function App() {
             </tbody>
           </table>
         </section>
-      )}
+      </>)}
+      </main>
     </div>
   );
 }
