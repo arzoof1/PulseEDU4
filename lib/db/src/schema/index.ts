@@ -6,3 +6,4 @@ export * from "./accommodationLogs";
 export * from "./recordEdits";
 export * from "./students";
 export * from "./periodRoster";
+export * from "./schoolSettings";
