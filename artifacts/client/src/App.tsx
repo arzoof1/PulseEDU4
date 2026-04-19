@@ -3431,13 +3431,18 @@ function App() {
     setPulloutReasonMsg("");
     try {
       const res = await fetch("/api/pullout-reasons");
+      if (res.status === 401) {
+        // Session not ready yet (startup race or just-signed-out). The card
+        // itself is gated to signed-in users, so swallow this silently and
+        // wait for the next navigation/refresh to retry.
+        setPulloutReasonList([]);
+        return;
+      }
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         setPulloutReasonList([]);
         setPulloutReasonMsg(
-          res.status === 401
-            ? "Your session expired. Please sign in again."
-            : j.error || `Couldn't load reasons (HTTP ${res.status}).`,
+          j.error || `Couldn't load reasons (HTTP ${res.status}).`,
         );
         return;
       }
