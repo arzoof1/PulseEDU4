@@ -6,6 +6,7 @@ export const staffTable = pgTable("staff", {
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),
   isAdmin: boolean("is_admin").notNull().default(false),
+  isEseCoordinator: boolean("is_ese_coordinator").notNull().default(false),
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),
   active: boolean("active").notNull().default(true),

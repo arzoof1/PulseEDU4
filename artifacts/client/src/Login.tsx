@@ -5,6 +5,7 @@ export interface AuthUser {
   email: string;
   displayName: string;
   isAdmin: boolean;
+  isEseCoordinator: boolean;
 }
 
 export default function Login({

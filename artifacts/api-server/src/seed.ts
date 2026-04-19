@@ -6,263 +6,240 @@ import {
   supportNotesTable,
   accommodationLogsTable,
   studentsTable,
-  periodRosterTable,
+  classSectionsTable,
+  sectionRosterTable,
+  schoolAccommodationsTable,
+  studentAccommodationsTable,
   locationsTable,
   staffDefaultsTable,
   locationAllowedDestinationsTable,
   staffTable,
+  kioskActivationsTable,
+  recordEditsTable,
+  adminNotificationsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { config } from "./data/config";
-import { students as seedStudents } from "./data/students";
-import { periodRoster as seedPeriodRoster } from "./data/schedule";
+import { sql } from "drizzle-orm";
+import { generateSeedData } from "./data/seedGen";
+
+const TEMP_PASSWORD = "pulseed-temp";
 
 export async function seedIfEmpty() {
-  const now = Date.now();
-  const iso = (offsetMin: number) =>
-    new Date(now - offsetMin * 60000).toISOString();
-
-  const [hp] = await db.select().from(hallPassesTable).limit(1);
-  if (!hp) {
-    await db.insert(hallPassesTable).values([
-      {
-        studentId: "S1001",
-        destination: "Restroom",
-        originRoom: "Room 101",
-        teacherName: "Ms. Rivera",
-        status: "active",
-        createdAt: iso(5),
-        maxDurationMinutes: config.defaultHallPassDurationMinutes,
-        endedAt: null,
-      },
-      {
-        studentId: "S1002",
-        destination: "Nurse",
-        originRoom: "Room 204",
-        teacherName: "Mr. Johnson",
-        status: "ended",
-        createdAt: iso(45),
-        maxDurationMinutes: config.defaultHallPassDurationMinutes,
-        endedAt: iso(35),
-      },
-    ]);
-  }
-
-  const [t] = await db.select().from(tardiesTable).limit(1);
-  if (!t) {
-    await db.insert(tardiesTable).values([
-      {
-        studentId: "S1003",
-        teacherName: "Ms. Rivera",
-        period: "1",
-        reason: "Bus late",
-        entryType: "tardy",
-        checkInWith: null,
-        notes: "",
-        createdAt: iso(120),
-      },
-      {
-        studentId: "S1004",
-        teacherName: "Mr. Johnson",
-        period: "2",
-        reason: "Doctor appt",
-        entryType: "checkin",
-        checkInWith: "Front office",
-        notes: "Returned with note",
-        createdAt: iso(90),
-      },
-      {
-        studentId: "S1005",
-        teacherName: "Coach Lee",
-        period: "7",
-        reason: "Early dismissal",
-        entryType: "checkout",
-        checkInWith: "Parent: Karen Brown",
-        notes: "",
-        createdAt: iso(60),
-      },
-    ]);
-  }
-
-  const [p] = await db.select().from(pbisEntriesTable).limit(1);
-  if (!p) {
-    await db.insert(pbisEntriesTable).values([
-      {
-        studentId: "S1001",
-        reason: "Helped a peer",
-        points: 5,
-        staffName: "Ms. Rivera",
-        createdAt: iso(180),
-      },
-      {
-        studentId: "S1006",
-        reason: "On-time all week",
-        points: 3,
-        staffName: "Mr. Johnson",
-        createdAt: iso(60),
-      },
-    ]);
-  }
-
-  const [n] = await db.select().from(supportNotesTable).limit(1);
-  if (!n) {
-    await db.insert(supportNotesTable).values([
-      {
-        studentId: "S1003",
-        noteType: "Behavior",
-        noteText: "Quiet today, seemed tired. Offered breakfast.",
-        staffName: "Ms. Patel (Counselor)",
-        createdAt: iso(240),
-      },
-    ]);
-  }
-
-  const [s] = await db.select().from(studentsTable).limit(1);
-  if (!s) {
-    await db.insert(studentsTable).values(
-      seedStudents.map((row) => ({
-        studentId: row.studentId,
-        firstName: row.firstName,
-        lastName: row.lastName,
-        grade: row.grade,
-        parentName: row.parentName,
-        parentEmail: row.parentEmail,
-        parentPhone: row.parentPhone,
-        accommodations: row.accommodations,
-      })),
-    );
-  }
-
-  const [pr] = await db.select().from(periodRosterTable).limit(1);
-  if (!pr) {
-    const rows: { period: number; studentId: string }[] = [];
-    for (const [periodKey, studentIds] of Object.entries(seedPeriodRoster)) {
-      const period = Number(periodKey);
-      for (const studentId of studentIds) {
-        rows.push({ period, studentId });
-      }
-    }
-    if (rows.length > 0) {
-      await db.insert(periodRosterTable).values(rows);
-    }
-  }
-
-  const [loc] = await db.select().from(locationsTable).limit(1);
-  if (!loc) {
-    await db.insert(locationsTable).values([
-      { name: "Room 101", kind: "classroom", isOrigin: true, isDestination: false },
-      { name: "Room 102", kind: "classroom", isOrigin: true, isDestination: false },
-      { name: "Room 201", kind: "classroom", isOrigin: true, isDestination: false },
-      { name: "Room 202", kind: "classroom", isOrigin: true, isDestination: false },
-      { name: "Room 204", kind: "classroom", isOrigin: true, isDestination: false },
-      { name: "Room 305", kind: "classroom", isOrigin: true, isDestination: false },
-      { name: "Gym", kind: "common_area", isOrigin: true, isDestination: false },
-      { name: "Cafeteria", kind: "common_area", isOrigin: true, isDestination: true },
-      { name: "Library", kind: "common_area", isOrigin: false, isDestination: true },
-      { name: "Media Center", kind: "common_area", isOrigin: false, isDestination: true },
-      { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
-      { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
-      { name: "Nurse", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
-      { name: "Front Office", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
-      { name: "Guidance", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
-    ]);
-  }
-
-  const [lad] = await db
+  const [marker] = await db
     .select()
-    .from(locationAllowedDestinationsTable)
+    .from(schoolAccommodationsTable)
     .limit(1);
-  if (!lad) {
-    const allLocs = await db.select().from(locationsTable);
-    const origins = allLocs.filter((l) => l.isOrigin);
-    const destinations = allLocs.filter((l) => l.isDestination);
-    const rows: { originLocationId: number; destinationLocationId: number }[] =
-      [];
-    for (const o of origins) {
-      for (const d of destinations) {
-        rows.push({ originLocationId: o.id, destinationLocationId: d.id });
+  if (marker) return; // Already seeded
+
+  console.log("[seed] Resetting and rebuilding school data...");
+
+  // Wipe order respects dependencies (children first).
+  await db.delete(kioskActivationsTable);
+  await db.delete(adminNotificationsTable);
+  await db.delete(recordEditsTable);
+  await db.delete(hallPassesTable);
+  await db.delete(tardiesTable);
+  await db.delete(pbisEntriesTable);
+  await db.delete(supportNotesTable);
+  await db.delete(accommodationLogsTable);
+  await db.delete(studentAccommodationsTable);
+  await db.delete(schoolAccommodationsTable);
+  await db.delete(sectionRosterTable);
+  await db.delete(classSectionsTable);
+  await db.delete(staffDefaultsTable);
+  await db.delete(locationAllowedDestinationsTable);
+  await db.delete(locationsTable);
+  await db.delete(studentsTable);
+  await db.delete(staffTable);
+
+  const data = generateSeedData();
+  const tempHash = await bcrypt.hash(TEMP_PASSWORD, 10);
+
+  // ---- Staff: 30 generated teachers + Mr. Davis (admin) + Ms. Garcia (ESE coord)
+  const staffInsert: (typeof staffTable.$inferInsert)[] = data.teachers.map(
+    (t) => ({
+      email: t.email,
+      displayName: t.displayName,
+      passwordHash: tempHash,
+      isAdmin: false,
+      isEseCoordinator: false,
+    }),
+  );
+  staffInsert.push({
+    email: "mr.davis@school.local",
+    displayName: "Mr. Davis (Admin)",
+    passwordHash: tempHash,
+    isAdmin: true,
+    isEseCoordinator: false,
+  });
+  staffInsert.push({
+    email: "ms.garcia@school.local",
+    displayName: "Ms. Garcia (ESE Coordinator)",
+    passwordHash: tempHash,
+    isAdmin: false,
+    isEseCoordinator: true,
+  });
+  const insertedStaff = await db
+    .insert(staffTable)
+    .values(staffInsert)
+    .returning();
+
+  // Map index in data.teachers -> staff.id
+  const teacherStaffIds: number[] = [];
+  for (let i = 0; i < data.teachers.length; i++) {
+    teacherStaffIds.push(insertedStaff[i].id);
+  }
+  const adminStaffId = insertedStaff[data.teachers.length].id;
+  const eseStaffId = insertedStaff[data.teachers.length + 1].id;
+
+  // ---- Students
+  const insertedStudents = await db
+    .insert(studentsTable)
+    .values(
+      data.students.map((s) => ({
+        studentId: s.studentId,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        grade: s.grade,
+        parentName: s.parentName,
+        parentEmail: s.parentEmail,
+        parentPhone: s.parentPhone,
+      })),
+    )
+    .returning();
+  void insertedStudents;
+
+  // ---- Sections (7 per teacher, including planning marker)
+  const sectionInserts: (typeof classSectionsTable.$inferInsert)[] = [];
+  for (let t = 0; t < data.teachers.length; t++) {
+    const teacher = data.teachers[t];
+    for (let p = 1; p <= 7; p++) {
+      sectionInserts.push({
+        teacherStaffId: teacherStaffIds[t],
+        period: p,
+        courseName:
+          p === teacher.planningPeriod
+            ? `Planning P${p}`
+            : `Section P${p}`,
+        isPlanning: p === teacher.planningPeriod,
+      });
+    }
+  }
+  const insertedSections = await db
+    .insert(classSectionsTable)
+    .values(sectionInserts)
+    .returning();
+
+  // Lookup: (teacherStaffId, period) -> sectionId
+  const sectionLookup = new Map<string, number>();
+  for (const s of insertedSections) {
+    sectionLookup.set(`${s.teacherStaffId}:${s.period}`, s.id);
+  }
+
+  // ---- Section roster: walk each student's schedule
+  const rosterInserts: (typeof sectionRosterTable.$inferInsert)[] = [];
+  for (const student of data.students) {
+    for (const [periodStr, teacherIdx] of Object.entries(student.schedule)) {
+      const period = Number(periodStr);
+      const teacher = data.teachers[teacherIdx];
+      // Skip students assigned to a teacher's planning period (shouldn't happen
+      // since generateSeedData filters, but defensive)
+      if (period === teacher.planningPeriod) continue;
+      const sectionId = sectionLookup.get(
+        `${teacherStaffIds[teacherIdx]}:${period}`,
+      );
+      if (sectionId) {
+        rosterInserts.push({ sectionId, studentId: student.studentId });
       }
     }
-    if (rows.length > 0) {
-      await db.insert(locationAllowedDestinationsTable).values(rows);
+  }
+  // Insert in chunks
+  const CHUNK = 1000;
+  for (let i = 0; i < rosterInserts.length; i += CHUNK) {
+    await db
+      .insert(sectionRosterTable)
+      .values(rosterInserts.slice(i, i + CHUNK));
+  }
+
+  // ---- Master accommodations
+  const insertedAccs = await db
+    .insert(schoolAccommodationsTable)
+    .values(
+      data.accommodations.map((a) => ({
+        name: a.name,
+        category: a.category,
+        active: true,
+      })),
+    )
+    .returning();
+
+  // ---- Per-student accommodation assignments
+  const assignInserts: (typeof studentAccommodationsTable.$inferInsert)[] = [];
+  for (const student of data.students) {
+    for (const idx of student.accommodationIndices) {
+      assignInserts.push({
+        studentId: student.studentId,
+        accommodationId: insertedAccs[idx].id,
+        assignedByStaffId: eseStaffId,
+      });
     }
   }
-
-  const [sd] = await db.select().from(staffDefaultsTable).limit(1);
-  if (!sd) {
-    await db.insert(staffDefaultsTable).values([
-      { staffName: "Ms. Rivera", defaultLocationName: "Room 101" },
-      { staffName: "Mr. Johnson", defaultLocationName: "Room 204" },
-      { staffName: "Coach Lee", defaultLocationName: "Gym" },
-      { staffName: "Ms. Patel (Counselor)", defaultLocationName: "Guidance" },
-      { staffName: "Mr. Davis (Admin)", defaultLocationName: "Front Office" },
-      {
-        staffName: "Ms. Garcia (Interventionist)",
-        defaultLocationName: "Room 305",
-      },
-    ]);
+  for (let i = 0; i < assignInserts.length; i += CHUNK) {
+    await db
+      .insert(studentAccommodationsTable)
+      .values(assignInserts.slice(i, i + CHUNK));
   }
 
-  const [staffSeed] = await db.select().from(staffTable).limit(1);
-  if (!staffSeed) {
-    const tempHash = await bcrypt.hash("pulseed-temp", 10);
-    await db.insert(staffTable).values([
-      {
-        email: "ms.rivera@school.local",
-        displayName: "Ms. Rivera",
-        passwordHash: tempHash,
-        isAdmin: false,
-      },
-      {
-        email: "mr.johnson@school.local",
-        displayName: "Mr. Johnson",
-        passwordHash: tempHash,
-        isAdmin: false,
-      },
-      {
-        email: "coach.lee@school.local",
-        displayName: "Coach Lee",
-        passwordHash: tempHash,
-        isAdmin: false,
-      },
-      {
-        email: "ms.patel@school.local",
-        displayName: "Ms. Patel (Counselor)",
-        passwordHash: tempHash,
-        isAdmin: false,
-      },
-      {
-        email: "mr.davis@school.local",
-        displayName: "Mr. Davis (Admin)",
-        passwordHash: tempHash,
-        isAdmin: true,
-      },
-      {
-        email: "ms.garcia@school.local",
-        displayName: "Ms. Garcia (Interventionist)",
-        passwordHash: tempHash,
-        isAdmin: false,
-      },
-    ]);
+  // ---- Locations + allowed destinations + a couple of staff defaults
+  await db.insert(locationsTable).values([
+    { name: "Room 101", kind: "classroom", isOrigin: true, isDestination: false },
+    { name: "Room 102", kind: "classroom", isOrigin: true, isDestination: false },
+    { name: "Room 201", kind: "classroom", isOrigin: true, isDestination: false },
+    { name: "Room 202", kind: "classroom", isOrigin: true, isDestination: false },
+    { name: "Room 204", kind: "classroom", isOrigin: true, isDestination: false },
+    { name: "Room 305", kind: "classroom", isOrigin: true, isDestination: false },
+    { name: "Gym", kind: "common_area", isOrigin: true, isDestination: false },
+    { name: "Cafeteria", kind: "common_area", isOrigin: true, isDestination: true },
+    { name: "Library", kind: "common_area", isOrigin: false, isDestination: true },
+    { name: "Media Center", kind: "common_area", isOrigin: false, isDestination: true },
+    { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
+    { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
+    { name: "Nurse", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+    { name: "Front Office", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+    { name: "Guidance", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+  ]);
+
+  const allLocs = await db.select().from(locationsTable);
+  const origins = allLocs.filter((l) => l.isOrigin);
+  const destinations = allLocs.filter((l) => l.isDestination);
+  const ladRows: { originLocationId: number; destinationLocationId: number }[] =
+    [];
+  for (const o of origins) {
+    for (const d of destinations) {
+      ladRows.push({ originLocationId: o.id, destinationLocationId: d.id });
+    }
+  }
+  if (ladRows.length > 0) {
+    await db.insert(locationAllowedDestinationsTable).values(ladRows);
   }
 
-  const [a] = await db.select().from(accommodationLogsTable).limit(1);
-  if (!a) {
-    await db.insert(accommodationLogsTable).values([
-      {
-        studentId: "S1001",
-        accommodation: "Extended Time",
-        period: 3,
-        staffName: "Ms. Rivera",
-        createdAt: iso(150),
-      },
-      {
-        studentId: "S1004",
-        accommodation: "Extended Time",
-        period: null,
-        staffName: "Ms. Garcia (Interventionist)",
-        createdAt: iso(30),
-      },
-    ]);
-  }
+  await db.insert(staffDefaultsTable).values([
+    { staffName: "Mr. Davis (Admin)", defaultLocationName: "Front Office" },
+    { staffName: "Ms. Garcia (ESE Coordinator)", defaultLocationName: "Room 305" },
+  ]);
+
+  // Reset sequences so subsequent inserts don't collide if we ever re-seed
+  // partially. Safe no-ops if not needed.
+  await db.execute(
+    sql`SELECT setval(pg_get_serial_sequence('students','id'), (SELECT COALESCE(MAX(id),1) FROM students))`,
+  );
+  await db.execute(
+    sql`SELECT setval(pg_get_serial_sequence('staff','id'), (SELECT COALESCE(MAX(id),1) FROM staff))`,
+  );
+
+  console.log(
+    `[seed] Done. Staff: ${insertedStaff.length}, Students: ${data.students.length}, ` +
+      `Sections: ${insertedSections.length}, Roster rows: ${rosterInserts.length}, ` +
+      `Master accommodations: ${insertedAccs.length}, Assignments: ${assignInserts.length}.`,
+  );
 }

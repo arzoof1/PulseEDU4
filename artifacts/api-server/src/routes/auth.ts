@@ -19,6 +19,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     email: row.email,
     displayName: row.displayName,
     isAdmin: row.isAdmin,
+    isEseCoordinator: row.isEseCoordinator,
   };
 }
 

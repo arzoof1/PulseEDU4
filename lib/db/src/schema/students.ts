@@ -9,7 +9,6 @@ export const studentsTable = pgTable("students", {
   parentName: text("parent_name"),
   parentEmail: text("parent_email"),
   parentPhone: text("parent_phone"),
-  accommodations: text("accommodations").array().notNull().default([]),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

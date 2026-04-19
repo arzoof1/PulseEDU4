@@ -49,14 +49,7 @@ const staffUsers = [
   "Ms. Garcia (Interventionist)",
 ];
 
-const staffPeriods: Record<string, number[]> = {
-  "Ms. Rivera": [1, 3, 5],
-  "Mr. Johnson": [2, 4, 6],
-  "Coach Lee": [1, 2, 7],
-  "Ms. Patel (Counselor)": [],
-  "Mr. Davis (Admin)": [],
-  "Ms. Garcia (Interventionist)": [3, 5, 7],
-};
+// (staffPeriods removed; replaced by mySections derived from /api/schedule)
 
 interface Tardy {
   id: number;
@@ -169,6 +162,7 @@ function App() {
     email: string;
     displayName: string;
     isAdmin: boolean;
+    isEseCoordinator: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -176,7 +170,13 @@ function App() {
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
-    "hallPasses" | "tardies" | "student" | "pbis" | "accommodations" | "settings"
+    | "hallPasses"
+    | "tardies"
+    | "student"
+    | "pbis"
+    | "accommodations"
+    | "ese"
+    | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -215,11 +215,62 @@ function App() {
     | "supportNotes"
     | "contact"
   >("summary");
-  const [accView, setAccView] = useState<"student" | "roster">("student");
+  const [accView, setAccView] = useState<"student" | "roster" | "daily">(
+    "student",
+  );
   const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [accStudentId, setAccStudentId] = useState("");
   const [rosterPeriod, setRosterPeriod] = useState("");
-  const [periodRoster, setPeriodRoster] = useState<Record<string, string[]>>({});
+  interface MySection {
+    id: number;
+    period: number;
+    courseName: string;
+    isPlanning: boolean;
+    studentIds: string[];
+  }
+  const [mySections, setMySections] = useState<MySection[]>([]);
+  const periodRoster: Record<string, string[]> = Object.fromEntries(
+    mySections.map((s) => [String(s.period), s.studentIds]),
+  );
+  const myPeriods: number[] = mySections
+    .filter((s) => !s.isPlanning)
+    .map((s) => s.period)
+    .sort((a, b) => a - b);
+  // Daily Class Log state
+  const [dailyPeriod, setDailyPeriod] = useState<string>("");
+  const [dailyAbsent, setDailyAbsent] = useState<Set<string>>(new Set());
+  const [dailySelectedAccs, setDailySelectedAccs] = useState<Set<number>>(
+    new Set(),
+  );
+  const [dailySubmitMsg, setDailySubmitMsg] = useState("");
+  // ESE coordinator state
+  const [schoolAccs, setSchoolAccs] = useState<
+    Array<{
+      id: number;
+      name: string;
+      category: string;
+      active: boolean;
+      inUseCount: number;
+    }>
+  >([]);
+  const [eseTab, setEseTab] = useState<"students" | "master">("students");
+  const [eseStudentSearch, setEseStudentSearch] = useState("");
+  const [eseStudentId, setEseStudentId] = useState("");
+  const [eseStudentAccs, setEseStudentAccs] = useState<
+    Array<{
+      id: number;
+      accommodationId: number;
+      name: string;
+      category: string;
+      assignedAt: string;
+      assignedByStaffId: number | null;
+      removedAt: string | null;
+      removedByStaffId: number | null;
+    }>
+  >([]);
+  const [eseAddSelected, setEseAddSelected] = useState<Set<number>>(new Set());
+  const [eseNewName, setEseNewName] = useState("");
+  const [eseNewCategory, setEseNewCategory] = useState("Strategy");
   const [accommodationLogs, setAccommodationLogs] = useState<
     {
       id: number;
@@ -376,10 +427,7 @@ function App() {
       .then((data) => console.log("Health check response:", data))
       .catch((err) => console.error("Health check failed:", err));
 
-    fetch("/api/students")
-      .then((res) => res.json())
-      .then((data: Student[]) => setStudents(data))
-      .catch((err) => console.error("Failed to load students:", err));
+    loadStudents();
 
     fetch("/api/location-allowed-destinations")
       .then((res) => res.json())
@@ -419,12 +467,14 @@ function App() {
 
     loadAccommodationLogs();
 
-    fetch("/api/schedule")
-      .then((res) => res.json())
-      .then((data: { periodRoster: Record<string, string[]> }) =>
-        setPeriodRoster(data.periodRoster),
+    fetch("/api/schedule", { credentials: "include" })
+      .then((res) => (res.ok ? res.json() : { sections: [] }))
+      .then((data: { sections: MySection[] }) =>
+        setMySections(data.sections ?? []),
       )
       .catch((err) => console.error("Failed to load schedule:", err));
+
+    loadSchoolAccommodations();
 
     loadHallPasses();
 
@@ -432,7 +482,8 @@ function App() {
     loadPbis();
     loadSupportNotes();
     loadSchoolSettings();
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authUser?.id]);
 
   const loadSchoolSettings = () => {
     fetch("/api/school-settings")
@@ -497,6 +548,182 @@ function App() {
       );
   };
 
+  const loadStudents = () => {
+    fetch("/api/students")
+      .then((res) => res.json())
+      .then((data: Student[]) => setStudents(data))
+      .catch((err) => console.error("Failed to load students:", err));
+  };
+
+  const loadSchoolAccommodations = () => {
+    fetch("/api/school-accommodations")
+      .then((res) => res.json())
+      .then((data) => setSchoolAccs(data))
+      .catch((err) =>
+        console.error("Failed to load school accommodations:", err),
+      );
+  };
+
+  const loadEseStudentAccs = (studentId: string) => {
+    if (!studentId) {
+      setEseStudentAccs([]);
+      return;
+    }
+    fetch(`/api/students/${studentId}/accommodations`)
+      .then((res) => res.json())
+      .then((data) => setEseStudentAccs(data))
+      .catch((err) =>
+        console.error("Failed to load student accommodations:", err),
+      );
+  };
+
+  const submitDailyLog = async () => {
+    if (!dailyPeriod) {
+      setDailySubmitMsg("Pick a period first.");
+      return;
+    }
+    if (dailySelectedAccs.size === 0) {
+      setDailySubmitMsg("Select at least one accommodation.");
+      return;
+    }
+    const periodNum = Number(dailyPeriod);
+    const allInPeriod = periodRoster[dailyPeriod] ?? [];
+    const present = allInPeriod.filter((id) => !dailyAbsent.has(id));
+    if (present.length === 0) {
+      setDailySubmitMsg("No present students to log.");
+      return;
+    }
+    setDailySubmitMsg("Submitting...");
+    try {
+      const res = await fetch("/api/accommodation-logs/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          period: periodNum,
+          presentStudentIds: present,
+          accommodationIds: Array.from(dailySelectedAccs),
+        }),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setDailySubmitMsg(
+        `Recorded ${data.inserted} log${data.inserted === 1 ? "" : "s"}` +
+          (data.skippedDuplicate
+            ? ` (skipped ${data.skippedDuplicate} already logged today)`
+            : "") +
+          (data.skippedNotEntitled
+            ? ` (skipped ${data.skippedNotEntitled} not on student's plan)`
+            : ""),
+      );
+      setDailySelectedAccs(new Set());
+      loadAccommodationLogs();
+    } catch (err) {
+      setDailySubmitMsg(
+        `Failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  };
+
+  const eseAssignSelected = async () => {
+    if (!eseStudentId || eseAddSelected.size === 0) return;
+    try {
+      const res = await fetch(
+        `/api/students/${eseStudentId}/accommodations`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            accommodationIds: Array.from(eseAddSelected),
+          }),
+        },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      setEseAddSelected(new Set());
+      loadEseStudentAccs(eseStudentId);
+      loadStudents();
+      loadSchoolAccommodations();
+    } catch (err) {
+      console.error("ESE assign failed:", err);
+      window.alert(
+        "Failed to assign: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+
+  const eseRemoveAssignment = async (assignmentId: number) => {
+    if (!eseStudentId) return;
+    if (
+      !window.confirm(
+        "Remove this accommodation? Removal date will be recorded; the assignment will appear in this student's history.",
+      )
+    )
+      return;
+    try {
+      const res = await fetch(
+        `/api/students/${eseStudentId}/accommodations/${assignmentId}`,
+        { method: "DELETE", credentials: "include" },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      loadEseStudentAccs(eseStudentId);
+      loadStudents();
+      loadSchoolAccommodations();
+    } catch (err) {
+      console.error("ESE remove failed:", err);
+      window.alert(
+        "Failed to remove: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+
+  const eseAddNewMaster = async () => {
+    if (!eseNewName.trim()) return;
+    try {
+      const res = await fetch("/api/school-accommodations", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: eseNewName.trim(),
+          category: eseNewCategory,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      setEseNewName("");
+      loadSchoolAccommodations();
+    } catch (err) {
+      window.alert(
+        "Failed to add: " + (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+
+  const eseToggleMasterActive = async (
+    id: number,
+    nextActive: boolean,
+  ) => {
+    try {
+      const res = await fetch(`/api/school-accommodations/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ active: nextActive }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      loadSchoolAccommodations();
+    } catch (err) {
+      window.alert(
+        "Failed: " + (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+
   const logAccommodationProvided = async (
     studentId: string,
     accommodation: string,
@@ -505,6 +732,7 @@ function App() {
     try {
       const res = await fetch("/api/accommodation-logs", {
         method: "POST",
+        credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           studentId,
@@ -517,6 +745,31 @@ function App() {
       loadAccommodationLogs();
     } catch (err) {
       console.error("Failed to log accommodation:", err);
+    }
+  };
+
+  const logAccommodationRefused = async (
+    studentId: string,
+    accommodation: string,
+    period: number | null,
+  ) => {
+    try {
+      const res = await fetch("/api/accommodation-logs", {
+        method: "POST",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId,
+          accommodation,
+          period,
+          status: "refused",
+          staffName: currentStaffUser,
+        }),
+      });
+      if (!res.ok) throw new Error("Failed to log");
+      loadAccommodationLogs();
+    } catch (err) {
+      console.error("Failed to log refused accommodation:", err);
     }
   };
 
@@ -786,12 +1039,16 @@ function App() {
   };
 
   const isAdmin = authUser?.isAdmin === true;
+  const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
 
   useEffect(() => {
     if (!isAdmin && activeSection === "settings") {
       setActiveSection("hallPasses");
     }
-  }, [isAdmin, activeSection]);
+    if (!isEseCoord && activeSection === "ese") {
+      setActiveSection("hallPasses");
+    }
+  }, [isAdmin, isEseCoord, activeSection]);
 
   type NavSection = {
     key: typeof activeSection;
@@ -804,6 +1061,9 @@ function App() {
     { key: "student", label: "Student Activity", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
+  ];
+  const eseNavSections: NavSection[] = [
+    { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
   ];
   const adminNavSections: NavSection[] = [
     { key: "settings", label: "Settings", icon: IconSettings },
@@ -935,6 +1195,7 @@ function App() {
       <aside className="sidebar">
         <div className="section-label">Workspace</div>
         {baseNavSections.map(renderNavItem)}
+        {isEseCoord && eseNavSections.map(renderNavItem)}
         {isAdmin && (
           <>
             <div className="nav-admin-divider" aria-hidden="true">
@@ -2398,7 +2659,6 @@ function App() {
             const allAccs = Array.from(
               new Set(students.flatMap((st) => st.accommodations ?? [])),
             ).sort();
-            const myPeriods = staffPeriods[currentStaffUser] ?? [];
             const periodIds = rosterPeriod
               ? new Set(periodRoster[rosterPeriod] ?? [])
               : myPeriods.length > 0
@@ -2434,8 +2694,16 @@ function App() {
                     type="button"
                     onClick={() => setAccView("roster")}
                     disabled={accView === "roster"}
+                    style={{ marginRight: "0.25rem" }}
                   >
                     By Accommodation Roster
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAccView("daily")}
+                    disabled={accView === "daily"}
+                  >
+                    Daily Class Log
                   </button>
                 </div>
                 {accView === "student" ? (
@@ -2464,7 +2732,7 @@ function App() {
                     ) : (
                       <ul style={{ margin: 0 }}>
                         {accs.map((a) => (
-                          <li key={a}>
+                          <li key={a} style={{ marginBottom: "0.25rem" }}>
                             {a}{" "}
                             <button
                               type="button"
@@ -2472,14 +2740,24 @@ function App() {
                                 logAccommodationProvided(accStudentId, a, null)
                               }
                             >
-                              Log Accommodation Provided
+                              Log Provided
+                            </button>{" "}
+                            <button
+                              type="button"
+                              onClick={() =>
+                                logAccommodationRefused(accStudentId, a, null)
+                              }
+                              style={{ background: "#fde2e2" }}
+                              title="Mark that the student refused this accommodation today"
+                            >
+                              Refused today
                             </button>
                           </li>
                         ))}
                       </ul>
                     )}
                   </>
-                ) : (
+                ) : accView === "roster" ? (
                   <>
                     <h3 style={{ marginTop: 0 }}>Roster by Accommodation</h3>
                     <div style={{ marginBottom: "0.5rem" }}>
@@ -2490,13 +2768,13 @@ function App() {
                           onChange={(e) => setRosterPeriod(e.target.value)}
                         >
                           <option value="">All My Periods</option>
-                          {(staffPeriods[currentStaffUser] ?? []).map((p) => (
+                          {myPeriods.map((p) => (
                             <option key={p} value={String(p)}>
                               Period {p}
                             </option>
                           ))}
                         </select>
-                        {(staffPeriods[currentStaffUser] ?? []).length === 0 && (
+                        {myPeriods.length === 0 && (
                           <span style={{ marginLeft: "0.5rem", color: "#666" }}>
                             No periods assigned to {currentStaffUser}
                           </span>
@@ -2570,6 +2848,285 @@ function App() {
                       </>
                     )}
                   </>
+                ) : (
+                  (() => {
+                    const allInPeriod = dailyPeriod
+                      ? periodRoster[dailyPeriod] ?? []
+                      : [];
+                    const presentIds = allInPeriod.filter(
+                      (id) => !dailyAbsent.has(id),
+                    );
+                    const presentStudents = presentIds
+                      .map((id) =>
+                        students.find((st) => st.studentId === id),
+                      )
+                      .filter(
+                        (s): s is (typeof students)[number] => s !== undefined,
+                      );
+                    const accUnion = Array.from(
+                      new Set(
+                        presentStudents.flatMap(
+                          (s) => s.accommodations ?? [],
+                        ),
+                      ),
+                    );
+                    const accUnionWithIds = schoolAccs
+                      .filter((sa) => accUnion.includes(sa.name))
+                      .sort((a, b) =>
+                        a.category === b.category
+                          ? a.name.localeCompare(b.name)
+                          : a.category.localeCompare(b.category),
+                      );
+                    const allInPeriodStudents = allInPeriod
+                      .map((id) =>
+                        students.find((st) => st.studentId === id),
+                      )
+                      .filter(
+                        (s): s is (typeof students)[number] => s !== undefined,
+                      );
+                    return (
+                      <>
+                        <h3 style={{ marginTop: 0 }}>Daily Class Log</h3>
+                        <div style={{ marginBottom: "0.75rem" }}>
+                          <label>
+                            Period:{" "}
+                            <select
+                              value={dailyPeriod}
+                              onChange={(e) => {
+                                setDailyPeriod(e.target.value);
+                                setDailyAbsent(new Set());
+                                setDailySelectedAccs(new Set());
+                                setDailySubmitMsg("");
+                              }}
+                            >
+                              <option value="">-- Select period --</option>
+                              {myPeriods.map((p) => (
+                                <option key={p} value={String(p)}>
+                                  Period {p}
+                                </option>
+                              ))}
+                            </select>
+                          </label>
+                          {myPeriods.length === 0 && (
+                            <span
+                              style={{ marginLeft: "0.5rem", color: "#666" }}
+                            >
+                              No teaching periods assigned to you.
+                            </span>
+                          )}
+                        </div>
+                        {!dailyPeriod ? (
+                          <div>Pick a period to start.</div>
+                        ) : (
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "1fr 1fr",
+                              gap: "1rem",
+                            }}
+                          >
+                            <div>
+                              <h4 style={{ margin: "0 0 0.5rem" }}>
+                                Roster ({allInPeriodStudents.length}) — check
+                                students who are absent
+                              </h4>
+                              {allInPeriodStudents.length === 0 ? (
+                                <div>No students in this period.</div>
+                              ) : (
+                                <ul
+                                  style={{
+                                    listStyle: "none",
+                                    padding: 0,
+                                    margin: 0,
+                                    maxHeight: "20rem",
+                                    overflowY: "auto",
+                                    border: "1px solid #ddd",
+                                  }}
+                                >
+                                  {allInPeriodStudents
+                                    .sort((a, b) =>
+                                      a.lastName.localeCompare(b.lastName),
+                                    )
+                                    .map((st) => (
+                                      <li
+                                        key={st.studentId}
+                                        style={{
+                                          padding: "0.25rem 0.5rem",
+                                          borderBottom: "1px solid #eee",
+                                        }}
+                                      >
+                                        <label>
+                                          <input
+                                            type="checkbox"
+                                            checked={dailyAbsent.has(
+                                              st.studentId,
+                                            )}
+                                            onChange={(e) => {
+                                              const next = new Set(
+                                                dailyAbsent,
+                                              );
+                                              if (e.target.checked)
+                                                next.add(st.studentId);
+                                              else next.delete(st.studentId);
+                                              setDailyAbsent(next);
+                                            }}
+                                          />{" "}
+                                          {st.lastName}, {st.firstName}{" "}
+                                          <span style={{ color: "#888" }}>
+                                            ({st.studentId})
+                                          </span>
+                                          {(st.accommodations ?? []).length >
+                                            0 && (
+                                            <span
+                                              style={{
+                                                marginLeft: "0.5rem",
+                                                color: "#0a66c2",
+                                                fontSize: "0.85em",
+                                              }}
+                                            >
+                                              [
+                                              {(st.accommodations ?? []).length}
+                                              ]
+                                            </span>
+                                          )}
+                                        </label>
+                                      </li>
+                                    ))}
+                                </ul>
+                              )}
+                              <div
+                                style={{
+                                  marginTop: "0.5rem",
+                                  fontSize: "0.9em",
+                                  color: "#555",
+                                }}
+                              >
+                                Present today: <strong>{presentIds.length}</strong>{" "}
+                                / Absent: <strong>{dailyAbsent.size}</strong>
+                              </div>
+                            </div>
+                            <div>
+                              <h4 style={{ margin: "0 0 0.5rem" }}>
+                                Accommodations to log for present students
+                              </h4>
+                              {accUnionWithIds.length === 0 ? (
+                                <div>
+                                  No accommodations apply to the present
+                                  students.
+                                </div>
+                              ) : (
+                                <>
+                                  <div style={{ marginBottom: "0.5rem" }}>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDailySelectedAccs(
+                                          new Set(
+                                            accUnionWithIds.map((a) => a.id),
+                                          ),
+                                        )
+                                      }
+                                      style={{ marginRight: "0.25rem" }}
+                                    >
+                                      Select all
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setDailySelectedAccs(new Set())
+                                      }
+                                    >
+                                      Clear
+                                    </button>
+                                  </div>
+                                  <ul
+                                    style={{
+                                      listStyle: "none",
+                                      padding: 0,
+                                      margin: 0,
+                                      maxHeight: "20rem",
+                                      overflowY: "auto",
+                                      border: "1px solid #ddd",
+                                    }}
+                                  >
+                                    {accUnionWithIds.map((a) => (
+                                      <li
+                                        key={a.id}
+                                        style={{
+                                          padding: "0.25rem 0.5rem",
+                                          borderBottom: "1px solid #eee",
+                                        }}
+                                      >
+                                        <label>
+                                          <input
+                                            type="checkbox"
+                                            checked={dailySelectedAccs.has(
+                                              a.id,
+                                            )}
+                                            onChange={(e) => {
+                                              const next = new Set(
+                                                dailySelectedAccs,
+                                              );
+                                              if (e.target.checked)
+                                                next.add(a.id);
+                                              else next.delete(a.id);
+                                              setDailySelectedAccs(next);
+                                            }}
+                                          />{" "}
+                                          <span
+                                            style={{
+                                              color: "#666",
+                                              fontSize: "0.85em",
+                                            }}
+                                          >
+                                            [{a.category}]
+                                          </span>{" "}
+                                          {a.name}
+                                        </label>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </>
+                              )}
+                              <div style={{ marginTop: "0.75rem" }}>
+                                <button
+                                  type="button"
+                                  onClick={submitDailyLog}
+                                  disabled={
+                                    dailySelectedAccs.size === 0 ||
+                                    presentIds.length === 0
+                                  }
+                                  style={{
+                                    background: "#dff0d8",
+                                    padding: "0.5rem 0.75rem",
+                                  }}
+                                >
+                                  Log {dailySelectedAccs.size} accommodation
+                                  {dailySelectedAccs.size === 1 ? "" : "s"} for{" "}
+                                  {presentIds.length} present student
+                                  {presentIds.length === 1 ? "" : "s"}
+                                </button>
+                                {dailySubmitMsg && (
+                                  <div
+                                    style={{
+                                      marginTop: "0.5rem",
+                                      color: dailySubmitMsg.startsWith(
+                                        "Failed",
+                                      )
+                                        ? "#a00"
+                                        : "#080",
+                                    }}
+                                  >
+                                    {dailySubmitMsg}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    );
+                  })()
                 )}
               </section>
             );
@@ -2736,6 +3293,357 @@ function App() {
           </table>
         </section>
       </>)}
+
+      {activeSection === "ese" && isEseCoord && (
+        <section className="card">
+          <h2>ESE Coordinator</h2>
+          <div style={{ marginBottom: "1rem" }}>
+            <button
+              type="button"
+              onClick={() => setEseTab("students")}
+              disabled={eseTab === "students"}
+              style={{ marginRight: "0.25rem" }}
+            >
+              Student Assignments
+            </button>
+            <button
+              type="button"
+              onClick={() => setEseTab("master")}
+              disabled={eseTab === "master"}
+            >
+              Master Accommodations List
+            </button>
+          </div>
+
+          {eseTab === "students" ? (
+            <div>
+              <div style={{ marginBottom: "0.5rem" }}>
+                <input
+                  type="text"
+                  placeholder="Search student by name or ID"
+                  value={eseStudentSearch}
+                  onChange={(e) => setEseStudentSearch(e.target.value)}
+                  style={{ width: "20rem" }}
+                />
+              </div>
+              {eseStudentSearch && !eseStudentId && (
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: "0.25rem 0",
+                    border: "1px solid #ccc",
+                    maxWidth: "30rem",
+                    maxHeight: "12rem",
+                    overflowY: "auto",
+                  }}
+                >
+                  {students
+                    .filter((s) => {
+                      const q = eseStudentSearch.toLowerCase();
+                      return (
+                        s.firstName.toLowerCase().includes(q) ||
+                        s.lastName.toLowerCase().includes(q) ||
+                        s.studentId.toLowerCase().includes(q)
+                      );
+                    })
+                    .slice(0, 50)
+                    .map((s) => (
+                      <li key={s.id}>
+                        <button
+                          type="button"
+                          style={{
+                            width: "100%",
+                            textAlign: "left",
+                            padding: "0.25rem 0.5rem",
+                            background: "none",
+                            border: "none",
+                            cursor: "pointer",
+                          }}
+                          onClick={() => {
+                            setEseStudentId(s.studentId);
+                            setEseStudentSearch(
+                              `${s.studentId} - ${s.firstName} ${s.lastName}`,
+                            );
+                            setEseAddSelected(new Set());
+                            loadEseStudentAccs(s.studentId);
+                          }}
+                        >
+                          {s.studentId} — {s.firstName} {s.lastName}
+                        </button>
+                      </li>
+                    ))}
+                </ul>
+              )}
+              {eseStudentId && (
+                <div>
+                  <div style={{ marginBottom: "0.5rem" }}>
+                    Selected: <strong>{eseStudentSearch}</strong>{" "}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setEseStudentId("");
+                        setEseStudentSearch("");
+                        setEseStudentAccs([]);
+                        setEseAddSelected(new Set());
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "1fr 1fr",
+                      gap: "1rem",
+                    }}
+                  >
+                    <div>
+                      <h4 style={{ margin: "0 0 0.5rem" }}>
+                        Current & Past Assignments
+                      </h4>
+                      {eseStudentAccs.length === 0 ? (
+                        <div>None on file.</div>
+                      ) : (
+                        <ul
+                          style={{
+                            listStyle: "none",
+                            padding: 0,
+                            margin: 0,
+                            border: "1px solid #ddd",
+                            maxHeight: "20rem",
+                            overflowY: "auto",
+                          }}
+                        >
+                          {eseStudentAccs.map((a) => (
+                            <li
+                              key={a.id}
+                              style={{
+                                padding: "0.4rem 0.5rem",
+                                borderBottom: "1px solid #eee",
+                                background: a.removedAt ? "#f5f5f5" : "white",
+                                color: a.removedAt ? "#888" : "inherit",
+                              }}
+                            >
+                              <div>
+                                <span
+                                  style={{
+                                    color: "#666",
+                                    fontSize: "0.85em",
+                                  }}
+                                >
+                                  [{a.category}]
+                                </span>{" "}
+                                <strong>{a.name}</strong>
+                                {a.removedAt && (
+                                  <span
+                                    style={{
+                                      marginLeft: "0.5rem",
+                                      fontStyle: "italic",
+                                    }}
+                                  >
+                                    (removed{" "}
+                                    {new Date(
+                                      a.removedAt,
+                                    ).toLocaleDateString()}
+                                    )
+                                  </span>
+                                )}
+                              </div>
+                              <div
+                                style={{
+                                  fontSize: "0.8em",
+                                  color: "#777",
+                                }}
+                              >
+                                Assigned{" "}
+                                {new Date(a.assignedAt).toLocaleDateString()}
+                              </div>
+                              {!a.removedAt && (
+                                <div style={{ marginTop: "0.25rem" }}>
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      eseRemoveAssignment(a.id)
+                                    }
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              )}
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </div>
+                    <div>
+                      <h4 style={{ margin: "0 0 0.5rem" }}>
+                        Add Accommodations
+                      </h4>
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          padding: 0,
+                          margin: 0,
+                          border: "1px solid #ddd",
+                          maxHeight: "20rem",
+                          overflowY: "auto",
+                        }}
+                      >
+                        {schoolAccs
+                          .filter((sa) => sa.active)
+                          .filter(
+                            (sa) =>
+                              !eseStudentAccs.some(
+                                (e) =>
+                                  e.accommodationId === sa.id && !e.removedAt,
+                              ),
+                          )
+                          .sort((a, b) =>
+                            a.category === b.category
+                              ? a.name.localeCompare(b.name)
+                              : a.category.localeCompare(b.category),
+                          )
+                          .map((sa) => (
+                            <li
+                              key={sa.id}
+                              style={{
+                                padding: "0.25rem 0.5rem",
+                                borderBottom: "1px solid #eee",
+                              }}
+                            >
+                              <label>
+                                <input
+                                  type="checkbox"
+                                  checked={eseAddSelected.has(sa.id)}
+                                  onChange={(e) => {
+                                    const next = new Set(eseAddSelected);
+                                    if (e.target.checked) next.add(sa.id);
+                                    else next.delete(sa.id);
+                                    setEseAddSelected(next);
+                                  }}
+                                />{" "}
+                                <span
+                                  style={{
+                                    color: "#666",
+                                    fontSize: "0.85em",
+                                  }}
+                                >
+                                  [{sa.category}]
+                                </span>{" "}
+                                {sa.name}
+                              </label>
+                            </li>
+                          ))}
+                      </ul>
+                      <div style={{ marginTop: "0.5rem" }}>
+                        <button
+                          type="button"
+                          onClick={eseAssignSelected}
+                          disabled={eseAddSelected.size === 0}
+                        >
+                          Assign {eseAddSelected.size} accommodation
+                          {eseAddSelected.size === 1 ? "" : "s"}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div>
+              <h3 style={{ marginTop: 0 }}>Master Accommodations</h3>
+              <div
+                style={{
+                  marginBottom: "0.75rem",
+                  padding: "0.5rem",
+                  border: "1px solid #ddd",
+                }}
+              >
+                <strong>Add new:</strong>{" "}
+                <input
+                  type="text"
+                  placeholder="Name"
+                  value={eseNewName}
+                  onChange={(e) => setEseNewName(e.target.value)}
+                />{" "}
+                <select
+                  value={eseNewCategory}
+                  onChange={(e) => setEseNewCategory(e.target.value)}
+                >
+                  <option value="IEP">IEP</option>
+                  <option value="504">504</option>
+                  <option value="ELL">ELL</option>
+                  <option value="Strategy">Strategy</option>
+                </select>{" "}
+                <button
+                  type="button"
+                  onClick={eseAddNewMaster}
+                  disabled={!eseNewName.trim()}
+                >
+                  Add
+                </button>
+              </div>
+              <table
+                style={{ width: "100%", borderCollapse: "collapse" }}
+              >
+                <thead>
+                  <tr style={{ background: "#f0f0f0" }}>
+                    <th style={{ textAlign: "left", padding: "0.4rem" }}>
+                      Category
+                    </th>
+                    <th style={{ textAlign: "left", padding: "0.4rem" }}>
+                      Name
+                    </th>
+                    <th style={{ textAlign: "left", padding: "0.4rem" }}>
+                      Active
+                    </th>
+                    <th style={{ textAlign: "left", padding: "0.4rem" }}>
+                      In Use
+                    </th>
+                    <th style={{ textAlign: "left", padding: "0.4rem" }}>
+                      Action
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {schoolAccs
+                    .slice()
+                    .sort((a, b) =>
+                      a.category === b.category
+                        ? a.name.localeCompare(b.name)
+                        : a.category.localeCompare(b.category),
+                    )
+                    .map((a) => (
+                      <tr
+                        key={a.id}
+                        style={{ borderBottom: "1px solid #eee" }}
+                      >
+                        <td style={{ padding: "0.4rem" }}>{a.category}</td>
+                        <td style={{ padding: "0.4rem" }}>{a.name}</td>
+                        <td style={{ padding: "0.4rem" }}>
+                          {a.active ? "Yes" : "No"}
+                        </td>
+                        <td style={{ padding: "0.4rem" }}>{a.inUseCount}</td>
+                        <td style={{ padding: "0.4rem" }}>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              eseToggleMasterActive(a.id, !a.active)
+                            }
+                          >
+                            {a.active ? "Deactivate" : "Activate"}
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </section>
+      )}
 
       {activeSection === "settings" && isAdmin && (
         <div className="card" style={{ marginBottom: "1rem" }}>
