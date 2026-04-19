@@ -5,8 +5,12 @@ import {
   pbisEntriesTable,
   supportNotesTable,
   accommodationLogsTable,
+  studentsTable,
+  periodRosterTable,
 } from "@workspace/db";
 import { config } from "./data/config";
+import { students as seedStudents } from "./data/students";
+import { periodRoster as seedPeriodRoster } from "./data/schedule";
 
 export async function seedIfEmpty() {
   const now = Date.now();
@@ -106,6 +110,36 @@ export async function seedIfEmpty() {
         createdAt: iso(240),
       },
     ]);
+  }
+
+  const [s] = await db.select().from(studentsTable).limit(1);
+  if (!s) {
+    await db.insert(studentsTable).values(
+      seedStudents.map((row) => ({
+        studentId: row.studentId,
+        firstName: row.firstName,
+        lastName: row.lastName,
+        grade: row.grade,
+        parentName: row.parentName,
+        parentEmail: row.parentEmail,
+        parentPhone: row.parentPhone,
+        accommodations: row.accommodations,
+      })),
+    );
+  }
+
+  const [pr] = await db.select().from(periodRosterTable).limit(1);
+  if (!pr) {
+    const rows: { period: number; studentId: string }[] = [];
+    for (const [periodKey, studentIds] of Object.entries(seedPeriodRoster)) {
+      const period = Number(periodKey);
+      for (const studentId of studentIds) {
+        rows.push({ period, studentId });
+      }
+    }
+    if (rows.length > 0) {
+      await db.insert(periodRosterTable).values(rows);
+    }
   }
 
   const [a] = await db.select().from(accommodationLogsTable).limit(1);
