@@ -457,6 +457,136 @@ function App() {
   const [pbisReportMsg, setPbisReportMsg] = useState("");
   const [pbisReportBusy, setPbisReportBusy] = useState(false);
 
+  // PBIS milestones (parent-email triggers)
+  type PbisMilestone = {
+    id: number;
+    points: number;
+    active: boolean;
+    createdAt: string;
+  };
+  type MilestoneResult = {
+    milestonePoints: number;
+    status: "sent" | "skipped" | "error";
+    emailTo: string | null;
+    errorMsg: string | null;
+  };
+  type PbisMilestoneEmailRow = {
+    id: number;
+    studentId: string;
+    milestonePoints: number;
+    sentAt: string;
+    emailTo: string | null;
+    status: string;
+    errorMsg: string | null;
+  };
+  const [pbisMilestones, setPbisMilestones] = useState<PbisMilestone[]>([]);
+  const [newMilestonePoints, setNewMilestonePoints] = useState<number>(25);
+  const [milestoneListMsg, setMilestoneListMsg] = useState("");
+  const [milestoneEmailLog, setMilestoneEmailLog] = useState<
+    PbisMilestoneEmailRow[]
+  >([]);
+  const [recentMilestoneToasts, setRecentMilestoneToasts] = useState<
+    { id: string; text: string; tone: "ok" | "warn" | "err" }[]
+  >([]);
+
+  const loadPbisMilestones = async () => {
+    try {
+      const res = await fetch("/api/pbis-milestones");
+      if (!res.ok) return;
+      const data = (await res.json()) as PbisMilestone[];
+      setPbisMilestones(Array.isArray(data) ? data : []);
+    } catch {
+      /* ignore */
+    }
+  };
+  const loadMilestoneEmails = async () => {
+    try {
+      const res = await fetch("/api/pbis-milestone-emails");
+      if (!res.ok) return;
+      const data = (await res.json()) as PbisMilestoneEmailRow[];
+      setMilestoneEmailLog(Array.isArray(data) ? data : []);
+    } catch {
+      /* ignore */
+    }
+  };
+  const addMilestone = async () => {
+    setMilestoneListMsg("");
+    try {
+      const res = await fetch("/api/pbis-milestones", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ points: newMilestonePoints }),
+      });
+      const j = (await res.json().catch(() => ({}))) as
+        | PbisMilestone
+        | { error?: string };
+      if (!res.ok) {
+        setMilestoneListMsg(
+          ("error" in j && j.error) || `Couldn't add (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      setPbisMilestones((prev) =>
+        [...prev, j as PbisMilestone].sort((a, b) => a.points - b.points),
+      );
+      setNewMilestonePoints(25);
+    } catch (e) {
+      setMilestoneListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const toggleMilestone = async (m: PbisMilestone) => {
+    setMilestoneListMsg("");
+    try {
+      const res = await fetch(`/api/pbis-milestones/${m.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: !m.active }),
+      });
+      const j = (await res.json().catch(() => ({}))) as
+        | PbisMilestone
+        | { error?: string };
+      if (!res.ok) {
+        setMilestoneListMsg(
+          ("error" in j && j.error) || `Couldn't save (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      setPbisMilestones((prev) =>
+        prev.map((x) => (x.id === m.id ? (j as PbisMilestone) : x)),
+      );
+    } catch (e) {
+      setMilestoneListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+  const announceMilestoneResults = (
+    studentLabel: string,
+    results: MilestoneResult[] | undefined,
+  ) => {
+    if (!results || results.length === 0) return;
+    const toasts = results.map((r) => {
+      if (r.status === "sent") {
+        return {
+          id: `${studentLabel}-${r.milestonePoints}-${Date.now()}-${Math.random()}`,
+          text: `📧 Sent ${r.milestonePoints}-pt milestone email for ${studentLabel} to ${r.emailTo}`,
+          tone: "ok" as const,
+        };
+      }
+      if (r.status === "skipped") {
+        return {
+          id: `${studentLabel}-${r.milestonePoints}-${Date.now()}-${Math.random()}`,
+          text: `⚠️ Skipped ${r.milestonePoints}-pt email for ${studentLabel}: ${r.errorMsg ?? "skipped"}`,
+          tone: "warn" as const,
+        };
+      }
+      return {
+        id: `${studentLabel}-${r.milestonePoints}-${Date.now()}-${Math.random()}`,
+        text: `❌ ${r.milestonePoints}-pt email for ${studentLabel} failed: ${r.errorMsg ?? "error"}`,
+        tone: "err" as const,
+      };
+    });
+    setRecentMilestoneToasts((prev) => [...toasts, ...prev].slice(0, 6));
+  };
+
   // PBIS leaderboard state
   type LeaderboardPeriod = "week" | "month" | "quarter" | "all";
   type LeaderboardData = {
@@ -578,6 +708,7 @@ function App() {
         createdCount?: number;
         errors?: { studentId: string; error: string }[];
         entries?: PbisEntry[];
+        milestoneProcessing?: string;
       };
       if (!res.ok) {
         setBulkMsg(j.error || `Couldn't award (HTTP ${res.status}).`);
@@ -589,6 +720,18 @@ function App() {
       });
       if (j.entries && j.entries.length) {
         setPbisEntries((prev) => [...prev, ...(j.entries as PbisEntry[])]);
+      }
+      if (j.milestoneProcessing === "queued") {
+        setRecentMilestoneToasts((prev) =>
+          [
+            {
+              id: `bulk-queued-${Date.now()}`,
+              text: "📧 Milestone parent emails are processing in the background. See PBIS Lists › Recent milestone emails.",
+              tone: "ok" as const,
+            },
+            ...prev,
+          ].slice(0, 6),
+        );
       }
     } catch (e) {
       setBulkMsg(e instanceof Error ? e.message : String(e));
@@ -1769,6 +1912,13 @@ function App() {
         }),
       });
       if (!res.ok) throw new Error("Failed to save PBIS entry");
+      const j = (await res.json().catch(() => ({}))) as {
+        milestoneResults?: MilestoneResult[];
+      };
+      announceMilestoneResults(
+        studentName(pbisStudentId) || pbisStudentId,
+        j.milestoneResults,
+      );
       loadPbis();
       setPbisStudentId("");
       setPbisStudentSearch("");
@@ -2010,6 +2160,8 @@ function App() {
   useEffect(() => {
     if (activeSection === "pbisLists" && isPbisCoord) {
       loadPbisReasons();
+      loadPbisMilestones();
+      loadMilestoneEmails();
     }
     if (activeSection === "pbis") {
       loadPbisGoals();
@@ -4967,6 +5119,41 @@ function App() {
       {activeSection === "pbis" && (<>
         <section className="card">
           <h2>PBIS Points</h2>
+          {recentMilestoneToasts.length > 0 && (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.75rem" }}>
+              {recentMilestoneToasts.map((t) => (
+                <div
+                  key={t.id}
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    borderRadius: "0.35rem",
+                    fontSize: "0.85rem",
+                    background:
+                      t.tone === "ok"
+                        ? "#dcfce7"
+                        : t.tone === "warn"
+                          ? "#fef3c7"
+                          : "#fee2e2",
+                    color:
+                      t.tone === "ok"
+                        ? "#166534"
+                        : t.tone === "warn"
+                          ? "#92400e"
+                          : "#991b1b",
+                  }}
+                >
+                  {t.text}
+                </div>
+              ))}
+              <button
+                type="button"
+                onClick={() => setRecentMilestoneToasts([])}
+                style={{ alignSelf: "flex-start", fontSize: "0.8rem" }}
+              >
+                Dismiss
+              </button>
+            </div>
+          )}
           <form onSubmit={handlePbisSubmit} style={{ marginBottom: "1rem" }}>
             <div style={{ marginBottom: "0.5rem" }}>
               <label>
@@ -6702,6 +6889,127 @@ function App() {
                       </td>
                     </tr>
                   ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {activeSection === "pbisLists" && isPbisCoord && (
+        <section className="card" style={{ marginTop: "1rem" }}>
+          <h2>Milestone Parent Emails</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            When a student's <em>all-time, non-voided</em> PBIS total reaches a
+            milestone for the first time, a positive note is automatically sent
+            to the parent email on file. Each milestone fires at most once per
+            student.
+          </p>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Points threshold</div>
+              <input
+                type="number"
+                min={1}
+                value={newMilestonePoints}
+                onChange={(e) =>
+                  setNewMilestonePoints(Number(e.target.value) || 0)
+                }
+                style={{ width: "8rem" }}
+              />
+            </label>
+            <button type="button" onClick={addMilestone}>
+              Add milestone
+            </button>
+          </div>
+          {milestoneListMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {milestoneListMsg}
+            </div>
+          )}
+          {pbisMilestones.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>
+              No milestones configured yet. (Suggestion: 25, 50, 100.)
+            </div>
+          ) : (
+            <table style={{ borderCollapse: "collapse", maxWidth: "32rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>Points</th>
+                  <th style={{ padding: "0.4rem" }}>Active</th>
+                  <th style={{ padding: "0.4rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pbisMilestones.map((m) => (
+                  <tr key={m.id} style={{ borderBottom: "1px solid #eee" }}>
+                    <td style={{ padding: "0.4rem" }}>{m.points}</td>
+                    <td style={{ padding: "0.4rem" }}>
+                      {m.active ? "Yes" : "No"}
+                    </td>
+                    <td style={{ padding: "0.4rem" }}>
+                      <button type="button" onClick={() => toggleMilestone(m)}>
+                        {m.active ? "Deactivate" : "Activate"}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+
+          <h3 style={{ marginTop: "1.25rem" }}>Recent milestone emails</h3>
+          <button
+            type="button"
+            onClick={loadMilestoneEmails}
+            style={{ marginBottom: "0.5rem" }}
+          >
+            Refresh
+          </button>
+          {milestoneEmailLog.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
+          ) : (
+            <table style={{ borderCollapse: "collapse", width: "100%", maxWidth: "56rem" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>When</th>
+                  <th style={{ padding: "0.4rem" }}>Student</th>
+                  <th style={{ padding: "0.4rem" }}>Milestone</th>
+                  <th style={{ padding: "0.4rem" }}>Status</th>
+                  <th style={{ padding: "0.4rem" }}>To / note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {milestoneEmailLog.map((r) => (
+                  <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
+                    <td style={{ padding: "0.4rem", whiteSpace: "nowrap" }}>
+                      {new Date(r.sentAt).toLocaleString()}
+                    </td>
+                    <td style={{ padding: "0.4rem" }}>
+                      {studentName(r.studentId) || r.studentId}{" "}
+                      <span style={{ color: "var(--muted, #64748b)", fontSize: "0.8rem" }}>
+                        {r.studentId}
+                      </span>
+                    </td>
+                    <td style={{ padding: "0.4rem" }}>{r.milestonePoints} pts</td>
+                    <td style={{ padding: "0.4rem" }}>{r.status}</td>
+                    <td style={{ padding: "0.4rem" }}>
+                      {r.emailTo ?? ""}
+                      {r.errorMsg ? (
+                        <div style={{ color: "#b91c1c", fontSize: "0.8rem" }}>
+                          {r.errorMsg}
+                        </div>
+                      ) : null}
+                    </td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           )}

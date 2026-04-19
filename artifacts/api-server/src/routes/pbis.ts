@@ -6,6 +6,10 @@ import {
   recordEditsTable,
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import {
+  processMilestonesForStudent,
+  processMilestonesForStudents,
+} from "../lib/pbisMilestones";
 
 const router: IRouter = Router();
 
@@ -177,7 +181,8 @@ router.post("/pbis", async (req, res) => {
     })
     .returning();
 
-  res.status(201).json(entry);
+  const milestoneResults = await processMilestonesForStudent(studentId);
+  res.status(201).json({ ...entry, milestoneResults });
 });
 
 // Bulk award the same reason+points to many students at once.
@@ -249,10 +254,19 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
       });
     }
   }
+  // Decouple bulk milestone email processing from the response. Up to ~200
+  // students with one Resend send each can take a long time; let the request
+  // return immediately and run the processing in the background. Results land
+  // in pbis_milestone_emails (visible in PBIS Lists -> Milestone Parent Emails).
+  const idsToProcess = created.map((c) => c.studentId);
+  void processMilestonesForStudents(idsToProcess).catch((err) => {
+    console.error("[bulk milestones] background failure", err);
+  });
   res.status(201).json({
     createdCount: created.length,
     errors,
     entries: created,
+    milestoneProcessing: "queued",
   });
 });
 
