@@ -9,6 +9,7 @@ import {
   periodRosterTable,
   locationsTable,
   staffDefaultsTable,
+  locationAllowedDestinationsTable,
 } from "@workspace/db";
 import { config } from "./data/config";
 import { students as seedStudents } from "./data/students";
@@ -163,6 +164,26 @@ export async function seedIfEmpty() {
       { name: "Front Office", kind: "office", isOrigin: false, isDestination: true },
       { name: "Guidance", kind: "office", isOrigin: false, isDestination: true },
     ]);
+  }
+
+  const [lad] = await db
+    .select()
+    .from(locationAllowedDestinationsTable)
+    .limit(1);
+  if (!lad) {
+    const allLocs = await db.select().from(locationsTable);
+    const origins = allLocs.filter((l) => l.isOrigin);
+    const destinations = allLocs.filter((l) => l.isDestination);
+    const rows: { originLocationId: number; destinationLocationId: number }[] =
+      [];
+    for (const o of origins) {
+      for (const d of destinations) {
+        rows.push({ originLocationId: o.id, destinationLocationId: d.id });
+      }
+    }
+    if (rows.length > 0) {
+      await db.insert(locationAllowedDestinationsTable).values(rows);
+    }
   }
 
   const [sd] = await db.select().from(staffDefaultsTable).limit(1);

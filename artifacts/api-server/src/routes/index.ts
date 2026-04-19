@@ -11,6 +11,7 @@ import accommodationLogsRouter from "./accommodationLogs";
 import schoolSettingsRouter from "./schoolSettings";
 import locationsRouter from "./locations";
 import staffDefaultsRouter from "./staffDefaults";
+import locationAllowedDestinationsRouter from "./locationAllowedDestinations";
 
 const router: IRouter = Router();
 
@@ -26,5 +27,6 @@ router.use(accommodationLogsRouter);
 router.use(schoolSettingsRouter);
 router.use(locationsRouter);
 router.use(staffDefaultsRouter);
+router.use(locationAllowedDestinationsRouter);
 
 export default router;
