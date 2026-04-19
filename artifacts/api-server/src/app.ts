@@ -8,6 +8,10 @@ import { logger } from "./lib/logger";
 
 const app: Express = express();
 
+// Required so express-session honors X-Forwarded-Proto from the Replit proxy
+// (TLS terminates upstream, so without this `secure: true` cookies are dropped).
+app.set("trust proxy", 1);
+
 const sessionSecret = process.env.SESSION_SECRET;
 if (!sessionSecret) {
   throw new Error("SESSION_SECRET environment variable is required");
