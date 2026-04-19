@@ -2,6 +2,10 @@ import { Router, type IRouter } from "express";
 import { db, hallPassesTable, recordEditsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { config } from "../data/config";
+import {
+  findPolarityConflict,
+  polarityConflictMessage,
+} from "./polarityPairs";
 
 const router: IRouter = Router();
 
@@ -44,6 +48,14 @@ router.post("/hall-passes", async (req, res) => {
       error:
         "contactedAcknowledged must be true when destinationTeacher is set",
     });
+    return;
+  }
+
+  // Polarity / keep-apart enforcement: refuse to issue a pass if any of this
+  // student's paired partners is currently out on a pass.
+  const conflict = await findPolarityConflict(studentId);
+  if (conflict) {
+    res.status(409).json({ error: polarityConflictMessage(conflict) });
     return;
   }
 

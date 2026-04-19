@@ -25,6 +25,7 @@ import digestRouter from "./digest";
 import adminStaffRouter from "./adminStaff";
 import parentEmailRouter from "./parentEmail";
 import pulloutReasonsRouter from "./pulloutReasons";
+import polarityPairsRouter from "./polarityPairs";
 
 const router: IRouter = Router();
 
@@ -54,5 +55,6 @@ router.use(digestRouter);
 router.use(adminStaffRouter);
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
+router.use(polarityPairsRouter);
 
 export default router;

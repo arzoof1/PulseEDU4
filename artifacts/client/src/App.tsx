@@ -1877,6 +1877,102 @@ function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) 
   );
 }
 
+// Compact student typeahead picker used by the Keep-Apart Pairs card. Filters
+// the existing students list by id / first name / last name and writes the
+// selected studentId via setSelected. We render this as a sibling component
+// (rather than inline) only because we need two independent instances on the
+// same row.
+function PolarityStudentPicker({
+  label,
+  students,
+  search,
+  setSearch,
+  setSelected,
+}: {
+  label: string;
+  students: Student[];
+  search: string;
+  setSearch: (v: string) => void;
+  setSelected: (v: string) => void;
+}) {
+  const q = search.trim().toLowerCase();
+  const matches = q
+    ? students
+        .filter(
+          (s) =>
+            s.firstName.toLowerCase().includes(q) ||
+            s.lastName.toLowerCase().includes(q) ||
+            s.studentId.toLowerCase().includes(q),
+        )
+        .slice(0, 8)
+    : [];
+  // Detect when `search` already equals a fully-formatted picked label so we
+  // don't keep showing the dropdown after a click.
+  const looksPicked = /\(\s*S\d+\s*\)$/.test(search) || /^S\d+\s+-/.test(search);
+  return (
+    <label style={{ position: "relative" }}>
+      <div style={{ fontSize: "0.85rem" }}>{label}</div>
+      <input
+        type="text"
+        value={search}
+        placeholder="Type name or ID"
+        onChange={(e) => {
+          setSearch(e.target.value);
+          setSelected("");
+        }}
+        style={{ width: "100%" }}
+      />
+      {q && !looksPicked && (
+        <ul
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            zIndex: 10,
+            background: "var(--bg, #fff)",
+            border: "1px solid #ccc",
+            borderRadius: "0.25rem",
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            maxHeight: "12rem",
+            overflowY: "auto",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+          }}
+        >
+          {matches.length === 0 && (
+            <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
+              No matches
+            </li>
+          )}
+          {matches.map((s) => (
+            <li key={s.studentId}>
+              <button
+                type="button"
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "0.25rem 0.5rem",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+                onClick={() => {
+                  setSelected(s.studentId);
+                  setSearch(`${s.firstName} ${s.lastName} (${s.studentId})`);
+                }}
+              >
+                {s.firstName} {s.lastName} ({s.studentId})
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </label>
+  );
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
@@ -2115,6 +2211,26 @@ function App() {
     active: boolean;
   };
   const [interventionList, setInterventionList] = useState<InterventionType[]>([]);
+  // Polarity (keep-apart) pairs: students who must not both be on a hall pass
+  // at the same time. Managed in the Interventions tab.
+  type PolarityPair = {
+    id: number;
+    studentIdA: string;
+    studentAFirstName: string | null;
+    studentALastName: string | null;
+    studentIdB: string;
+    studentBFirstName: string | null;
+    studentBLastName: string | null;
+    note: string | null;
+    createdAt: string;
+  };
+  const [polarityPairs, setPolarityPairs] = useState<PolarityPair[]>([]);
+  const [polaritySearchA, setPolaritySearchA] = useState("");
+  const [polaritySelectedA, setPolaritySelectedA] = useState("");
+  const [polaritySearchB, setPolaritySearchB] = useState("");
+  const [polaritySelectedB, setPolaritySelectedB] = useState("");
+  const [polarityNote, setPolarityNote] = useState("");
+  const [polarityMsg, setPolarityMsg] = useState("");
   const [intervListMsg, setIntervListMsg] = useState("");
   const [newIntervName, setNewIntervName] = useState("");
   const [newIntervCategory, setNewIntervCategory] = useState("Classroom");
@@ -3318,6 +3434,86 @@ function App() {
     }
   };
 
+  const loadPolarityPairs = async () => {
+    setPolarityMsg("");
+    try {
+      const res = await fetch("/api/polarity-pairs");
+      if (res.status === 401) {
+        setPolarityPairs([]);
+        return;
+      }
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setPolarityPairs([]);
+        setPolarityMsg(
+          j.error || `Couldn't load keep-apart pairs (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      const data = (await res.json()) as PolarityPair[];
+      setPolarityPairs(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setPolarityPairs([]);
+      setPolarityMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const addPolarityPair = async () => {
+    setPolarityMsg("");
+    const a = polaritySelectedA.trim();
+    const b = polaritySelectedB.trim();
+    if (!a || !b) {
+      setPolarityMsg("Pick both students from the dropdown.");
+      return;
+    }
+    if (a === b) {
+      setPolarityMsg("Pick two different students.");
+      return;
+    }
+    try {
+      const res = await fetch("/api/polarity-pairs", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentIdA: a,
+          studentIdB: b,
+          note: polarityNote.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setPolarityMsg(j.error || `Add failed (HTTP ${res.status}).`);
+        return;
+      }
+      setPolaritySearchA("");
+      setPolaritySelectedA("");
+      setPolaritySearchB("");
+      setPolaritySelectedB("");
+      setPolarityNote("");
+      await loadPolarityPairs();
+    } catch (e) {
+      setPolarityMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const deletePolarityPair = async (id: number) => {
+    if (!confirm("Remove this keep-apart pair?")) return;
+    setPolarityMsg("");
+    try {
+      const res = await fetch(`/api/polarity-pairs/${id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setPolarityMsg(j.error || `Delete failed (HTTP ${res.status}).`);
+        return;
+      }
+      await loadPolarityPairs();
+    } catch (e) {
+      setPolarityMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const addPbisReason = async () => {
     const name = newPbisReasonName.trim();
     if (!name) {
@@ -4119,6 +4315,7 @@ function App() {
     if (activeSection === "interventions" && canManageBehaviorLists) {
       loadInterventionTypes();
       loadPulloutReasons();
+      loadPolarityPairs();
     }
     if (activeSection === "requestPullout") {
       loadPulloutReasons();
@@ -9252,6 +9449,117 @@ function App() {
                       </td>
                     </tr>
                   ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {activeSection === "interventions" && canManageBehaviorLists && (
+        <section className="card">
+          <h2>Keep-Apart Pairs</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Two students who must <strong>not</strong> both be out on a hall
+            pass at the same time (e.g. recently in a fight, or otherwise need
+            separation). When one student in a pair is on an active pass,
+            attempts to issue a pass to the other student — from a teacher
+            screen or a kiosk — will be blocked with an explanation.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 1fr auto",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              maxWidth: "60rem",
+            }}
+          >
+            <PolarityStudentPicker
+              label="Student A"
+              students={students}
+              search={polaritySearchA}
+              setSearch={setPolaritySearchA}
+              setSelected={setPolaritySelectedA}
+            />
+            <PolarityStudentPicker
+              label="Student B"
+              students={students}
+              search={polaritySearchB}
+              setSearch={setPolaritySearchB}
+              setSelected={setPolaritySelectedB}
+            />
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Note (optional)</div>
+              <input
+                type="text"
+                value={polarityNote}
+                onChange={(e) => setPolarityNote(e.target.value)}
+                placeholder="Why are they paired?"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <button type="button" onClick={addPolarityPair}>
+              Add Pair
+            </button>
+          </div>
+          {polarityMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {polarityMsg}
+            </div>
+          )}
+
+          {polarityPairs.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>
+              No keep-apart pairs yet.
+            </div>
+          ) : (
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                maxWidth: "60rem",
+              }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>Student A</th>
+                  <th style={{ padding: "0.4rem" }}>Student B</th>
+                  <th style={{ padding: "0.4rem" }}>Note</th>
+                  <th style={{ padding: "0.4rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {polarityPairs.map((p) => {
+                  const nameA =
+                    p.studentAFirstName && p.studentALastName
+                      ? `${p.studentAFirstName} ${p.studentALastName} (${p.studentIdA})`
+                      : p.studentIdA;
+                  const nameB =
+                    p.studentBFirstName && p.studentBLastName
+                      ? `${p.studentBFirstName} ${p.studentBLastName} (${p.studentIdB})`
+                      : p.studentIdB;
+                  return (
+                    <tr key={p.id} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem" }}>{nameA}</td>
+                      <td style={{ padding: "0.4rem" }}>{nameB}</td>
+                      <td style={{ padding: "0.4rem" }}>{p.note ?? ""}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <button
+                          type="button"
+                          onClick={() => deletePolarityPair(p.id)}
+                          style={{
+                            color: "crimson",
+                            borderColor: "crimson",
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           )}

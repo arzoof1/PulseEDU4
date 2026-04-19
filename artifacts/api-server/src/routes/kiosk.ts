@@ -15,6 +15,10 @@ import {
 import { and, eq, isNull, gt, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
+import {
+  findPolarityConflict,
+  polarityConflictMessage,
+} from "./polarityPairs";
 
 const ACTIVATION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -447,6 +451,13 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     res.status(409).json({
       error: `Student ${studentId.trim()} already has an active pass to ${open.destination}. End it before issuing another.`,
     });
+    return;
+  }
+
+  // Polarity / keep-apart enforcement.
+  const conflict = await findPolarityConflict(studentId.trim());
+  if (conflict) {
+    res.status(409).json({ error: polarityConflictMessage(conflict) });
     return;
   }
 
