@@ -20,6 +20,7 @@ interface AllowedRow {
 }
 
 const TOKEN_KEY = "pulseed.kiosk.token";
+const DEVICE_ID_KEY = "pulseed.kiosk.device_id";
 
 function getStoredToken(): string | null {
   try {
@@ -41,6 +42,37 @@ function clearStoredToken() {
   } catch {
     // ignore
   }
+}
+
+function getOrCreateDeviceFingerprint(): string {
+  try {
+    const existing = localStorage.getItem(DEVICE_ID_KEY);
+    if (existing) return existing;
+    const fresh =
+      typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : Math.random().toString(36).slice(2) + Date.now().toString(36);
+    localStorage.setItem(DEVICE_ID_KEY, fresh);
+    return fresh;
+  } catch {
+    // Cookies/localStorage disabled — best-effort, ephemeral id.
+    return "ephemeral-" + Math.random().toString(36).slice(2);
+  }
+}
+
+function getDeviceLabel(): string {
+  // Best-effort human-readable label so an admin can tell devices apart in
+  // the Active Kiosks list. Stays short and never includes anything secret.
+  const platform =
+    (navigator as Navigator & { userAgentData?: { platform?: string } })
+      .userAgentData?.platform ||
+    navigator.platform ||
+    "Unknown device";
+  const screenSize =
+    typeof screen !== "undefined"
+      ? `${screen.width}\u00d7${screen.height}`
+      : "?";
+  return `${platform} \u00b7 ${screenSize}`.slice(0, 200);
 }
 
 type Phase =
@@ -156,6 +188,8 @@ function ActivationScreen({
       const body: Record<string, string> = {
         email: email.trim(),
         password,
+        deviceFingerprint: getOrCreateDeviceFingerprint(),
+        deviceLabel: getDeviceLabel(),
       };
       if (room) body.room = room;
       const res = await fetch("/api/kiosk/activate", {

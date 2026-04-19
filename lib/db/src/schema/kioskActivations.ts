@@ -15,6 +15,8 @@ export const kioskActivationsTable = pgTable("kiosk_activations", {
     .notNull()
     .defaultNow(),
   expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  deviceLabel: text("device_label"),
+  deviceFingerprint: text("device_fingerprint"),
   deactivatedAt: timestamp("deactivated_at", { withTimezone: true }),
   deactivatedByStaffId: integer("deactivated_by_staff_id"),
 });

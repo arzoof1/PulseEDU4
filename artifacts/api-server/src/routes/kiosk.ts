@@ -62,7 +62,8 @@ async function requireAdmin(
 }
 
 router.post("/kiosk/activate", async (req, res) => {
-  const { email, password, room } = req.body ?? {};
+  const { email, password, room, deviceLabel, deviceFingerprint } =
+    req.body ?? {};
 
   if (
     typeof email !== "string" ||
@@ -150,11 +151,22 @@ router.post("/kiosk/activate", async (req, res) => {
 
   const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
 
+  const cleanDeviceLabel =
+    typeof deviceLabel === "string" && deviceLabel.trim()
+      ? deviceLabel.trim().slice(0, 200)
+      : null;
+  const cleanDeviceFingerprint =
+    typeof deviceFingerprint === "string" && deviceFingerprint.trim()
+      ? deviceFingerprint.trim().slice(0, 100)
+      : null;
+
   await db.insert(kioskActivationsTable).values({
     tokenHash,
     room: chosenRoom,
     staffId: staff.id,
     expiresAt,
+    deviceLabel: cleanDeviceLabel,
+    deviceFingerprint: cleanDeviceFingerprint,
   });
 
   res.status(201).json({
@@ -194,6 +206,7 @@ router.get("/kiosk/activation/:token", async (req, res) => {
     staffName: staff?.displayName ?? null,
     activatedAt: act.activatedAt,
     expiresAt: act.expiresAt,
+    deviceLabel: act.deviceLabel,
   });
 });
 
