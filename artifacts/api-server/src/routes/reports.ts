@@ -347,8 +347,8 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     .where(
       and(
         eq(accommodationLogsTable.staffId, teacher.id),
-        sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) >= ${from}`,
-        sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) <= ${to}`,
+        sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) >= ${fromRaw}`,
+        sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) <= ${toRaw}`,
         periodFilter != null
           ? eq(accommodationLogsTable.period, periodFilter)
           : sql`true`,

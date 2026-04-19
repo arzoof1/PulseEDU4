@@ -2229,7 +2229,17 @@ function App() {
                       marginBottom: "1rem",
                     }}
                   >
-                    <h3 style={{ marginTop: 0 }}>Student Daily Summary</h3>
+                    <h3 style={{ marginTop: 0 }}>
+                      Student Daily Summary
+                      <button
+                        type="button"
+                        className="no-print"
+                        onClick={() => window.print()}
+                        style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                      >
+                        Print
+                      </button>
+                    </h3>
                     <ul style={{ margin: 0 }}>
                       <li>Student Name: {studentName}</li>
                       <li>Hall Passes {label}: {sPasses.length}</li>
@@ -2905,7 +2915,7 @@ function App() {
                   marginBottom: "1rem",
                 }}
               >
-                <div style={{ marginBottom: "0.75rem" }}>
+                <div className="no-print" style={{ marginBottom: "0.75rem" }}>
                   <button
                     type="button"
                     onClick={() => setAccView("student")}
@@ -2991,7 +3001,17 @@ function App() {
                   </>
                 ) : accView === "roster" ? (
                   <>
-                    <h3 style={{ marginTop: 0 }}>Roster by Accommodation</h3>
+                    <h3 style={{ marginTop: 0 }}>
+                      Roster by Accommodation
+                      <button
+                        type="button"
+                        className="no-print"
+                        onClick={() => window.print()}
+                        style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                      >
+                        Print
+                      </button>
+                    </h3>
                     <div style={{ marginBottom: "0.5rem" }}>
                       <label>
                         Period:{" "}
@@ -3118,7 +3138,17 @@ function App() {
                       );
                     return (
                       <>
-                        <h3 style={{ marginTop: 0 }}>Daily Class Log</h3>
+                        <h3 style={{ marginTop: 0 }}>
+                          Daily Class Log
+                          <button
+                            type="button"
+                            className="no-print"
+                            onClick={() => window.print()}
+                            style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                          >
+                            Print
+                          </button>
+                        </h3>
                         <div style={{ marginBottom: "0.75rem" }}>
                           <label>
                             Period:{" "}
@@ -3391,7 +3421,17 @@ function App() {
                     };
                     return (
                       <>
-                        <h3 style={{ marginTop: 0 }}>Accommodation Reports</h3>
+                        <h3 style={{ marginTop: 0 }}>
+                          Accommodation Reports
+                          <button
+                            type="button"
+                            className="no-print"
+                            onClick={() => window.print()}
+                            style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                          >
+                            Print
+                          </button>
+                        </h3>
 
                         {/* ---- Filter bar ---- */}
                         <div
@@ -4048,7 +4088,7 @@ function App() {
       {activeSection === "ese" && isEseCoord && (
         <section className="card">
           <h2>ESE Coordinator</h2>
-          <div style={{ marginBottom: "1rem" }}>
+          <div className="no-print" style={{ marginBottom: "1rem" }}>
             <button
               type="button"
               onClick={() => setEseTab("students")}
@@ -4066,6 +4106,7 @@ function App() {
             </button>
           </div>
 
+          {/* Note: nav buttons above are hidden in print via .no-print on parent */}
           {eseTab === "students" ? (
             <div>
               <div style={{ marginBottom: "0.5rem" }}>
@@ -4304,7 +4345,17 @@ function App() {
             </div>
           ) : (
             <div>
-              <h3 style={{ marginTop: 0 }}>Master Accommodations</h3>
+              <h3 style={{ marginTop: 0 }}>
+                Master Accommodations
+                <button
+                  type="button"
+                  className="no-print"
+                  onClick={() => window.print()}
+                  style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                >
+                  Print
+                </button>
+              </h3>
               <div
                 style={{
                   marginBottom: "0.75rem",

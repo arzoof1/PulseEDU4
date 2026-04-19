@@ -702,6 +702,85 @@ ul[style*="listStyle: none"] li button:hover {
   margin-bottom: 1rem;
 }
 
+/* ===== Print ===== */
+@media print {
+  @page {
+    margin: 0.5in;
+  }
+  html,
+  body,
+  #root {
+    height: auto !important;
+    background: #fff !important;
+  }
+  body {
+    font-size: 11px;
+    color: #000;
+  }
+  .app-shell {
+    display: block !important;
+    grid-template-columns: none !important;
+    grid-template-rows: none !important;
+    min-height: auto !important;
+  }
+  .app-header,
+  .sidebar,
+  .no-print {
+    display: none !important;
+  }
+  .app-main {
+    padding: 0 !important;
+    overflow: visible !important;
+  }
+  .card {
+    background: #fff !important;
+    border: none !important;
+    box-shadow: none !important;
+    padding: 0 !important;
+    margin: 0 0 0.75rem 0 !important;
+    overflow: visible !important;
+    page-break-inside: auto;
+  }
+  /* Don't break tables awkwardly */
+  table {
+    border: 1px solid #999 !important;
+    border-radius: 0 !important;
+    page-break-inside: auto;
+  }
+  thead {
+    display: table-header-group;
+  }
+  tr,
+  td,
+  th {
+    page-break-inside: avoid;
+  }
+  /* Force background colors (e.g. coverage grid, recent feed status) to print */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+  /* Inputs / buttons used as filter context still render but flat */
+  button,
+  input,
+  select {
+    border: 1px solid #999 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+  }
+  button:disabled {
+    background: #eee !important;
+    color: #000 !important;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    color: #000 !important;
+  }
+}
+
 @media (max-width: 800px) {
   .app-shell {
     grid-template-columns: 1fr;
