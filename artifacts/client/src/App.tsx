@@ -160,17 +160,56 @@ type InterventionTypeLite = {
   active: boolean;
 };
 
+type PulloutReasonLite = {
+  id: number;
+  name: string;
+  category: string;
+  active: boolean;
+};
+
 function RequestPulloutSection({
   students,
   interventionTypes,
+  reasonOptions,
 }: {
   students: Student[];
   interventionTypes: InterventionTypeLite[];
+  reasonOptions: PulloutReasonLite[];
 }) {
   const [studentSearch, setStudentSearch] = useState("");
   const [studentId, setStudentId] = useState<string>("");
   const [period, setPeriod] = useState<string>("");
-  const [reason, setReason] = useState<string>("");
+  const [reasonChoice, setReasonChoice] = useState<string>("");
+  const [reasonOther, setReasonOther] = useState<string>("");
+  const reason =
+    reasonChoice.toLowerCase() === "other"
+      ? reasonOther.trim()
+        ? `Other: ${reasonOther.trim()}`
+        : ""
+      : reasonChoice;
+  const activeReasonOptions = useMemo(
+    () =>
+      reasonOptions
+        .filter((r) => r.active)
+        .sort((a, b) => {
+          const ao = a.name.toLowerCase() === "other" ? 1 : 0;
+          const bo = b.name.toLowerCase() === "other" ? 1 : 0;
+          if (ao !== bo) return ao - bo;
+          if (a.category !== b.category)
+            return a.category.localeCompare(b.category);
+          return a.name.localeCompare(b.name);
+        }),
+    [reasonOptions],
+  );
+  const groupedReasons = useMemo(() => {
+    const map = new Map<string, PulloutReasonLite[]>();
+    for (const r of activeReasonOptions) {
+      const arr = map.get(r.category) ?? [];
+      arr.push(r);
+      map.set(r.category, arr);
+    }
+    return Array.from(map.entries());
+  }, [activeReasonOptions]);
   const [selectedInterventionIds, setSelectedInterventionIds] = useState<
     Set<number>
   >(new Set());
@@ -334,7 +373,8 @@ function RequestPulloutSection({
         setStudentId("");
         setStudentSearch("");
         setPeriod("");
-        setReason("");
+        setReasonChoice("");
+        setReasonOther("");
         setSelectedInterventionIds(new Set());
         setOtherIntervention("");
         setAcknowledgeNoIntervention(false);
@@ -426,12 +466,47 @@ function RequestPulloutSection({
         </label>
         <label style={{ display: "grid", gap: 4 }}>
           <span>Reason for pullout</span>
-          <textarea
-            value={reason}
-            onChange={(e) => setReason(e.target.value)}
-            rows={3}
-            placeholder="What's happening that requires the student to leave class?"
-          />
+          {activeReasonOptions.length === 0 ? (
+            <textarea
+              value={reasonOther}
+              onChange={(e) => {
+                setReasonChoice("Other");
+                setReasonOther(e.target.value);
+              }}
+              rows={3}
+              placeholder="What's happening that requires the student to leave class?"
+            />
+          ) : (
+            <select
+              value={reasonChoice}
+              onChange={(e) => {
+                setReasonChoice(e.target.value);
+                if (e.target.value.toLowerCase() !== "other") {
+                  setReasonOther("");
+                }
+              }}
+            >
+              <option value="">— select a reason —</option>
+              {groupedReasons.map(([category, items]) => (
+                <optgroup key={category} label={category}>
+                  {items.map((r) => (
+                    <option key={r.id} value={r.name}>
+                      {r.name}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          )}
+          {reasonChoice.toLowerCase() === "other" && (
+            <input
+              type="text"
+              value={reasonOther}
+              onChange={(e) => setReasonOther(e.target.value)}
+              placeholder="Describe the reason in your own words…"
+              autoFocus
+            />
+          )}
         </label>
         <fieldset
           style={{
@@ -2044,6 +2119,21 @@ function App() {
   const [newIntervName, setNewIntervName] = useState("");
   const [newIntervCategory, setNewIntervCategory] = useState("Classroom");
   const [newIntervRequiresNote, setNewIntervRequiresNote] = useState(false);
+
+  // Pullout Reasons master list (managed by admin or behavior specialist)
+  type PulloutReason = {
+    id: number;
+    name: string;
+    category: string;
+    active: boolean;
+  };
+  const [pulloutReasonList, setPulloutReasonList] = useState<PulloutReason[]>(
+    [],
+  );
+  const [pulloutReasonMsg, setPulloutReasonMsg] = useState("");
+  const [newPulloutReasonName, setNewPulloutReasonName] = useState("");
+  const [newPulloutReasonCategory, setNewPulloutReasonCategory] =
+    useState("Behavior");
   const [eseNewName, setEseNewName] = useState("");
   const [eseNewCategory, setEseNewCategory] = useState("Strategy");
   const [accommodationLogs, setAccommodationLogs] = useState<
@@ -3314,6 +3404,73 @@ function App() {
     }
   };
 
+  const loadPulloutReasons = async () => {
+    setPulloutReasonMsg("");
+    try {
+      const res = await fetch("/api/pullout-reasons");
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setPulloutReasonList([]);
+        setPulloutReasonMsg(
+          res.status === 401
+            ? "Your session expired. Please sign in again."
+            : j.error || `Couldn't load reasons (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      const data = (await res.json()) as PulloutReason[];
+      setPulloutReasonList(Array.isArray(data) ? data : []);
+    } catch (e) {
+      setPulloutReasonList([]);
+      setPulloutReasonMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const addPulloutReason = async () => {
+    const name = newPulloutReasonName.trim();
+    if (!name) {
+      setPulloutReasonMsg("Name is required.");
+      return;
+    }
+    setPulloutReasonMsg("");
+    try {
+      const res = await fetch("/api/pullout-reasons", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          category: newPulloutReasonCategory.trim() || "General",
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      setNewPulloutReasonName("");
+      loadPulloutReasons();
+    } catch (e) {
+      setPulloutReasonMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const togglePulloutReasonActive = async (id: number, active: boolean) => {
+    setPulloutReasonMsg("");
+    try {
+      const res = await fetch(`/api/pullout-reasons/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      loadPulloutReasons();
+    } catch (e) {
+      setPulloutReasonMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const loadEseStudentAccs = (studentId: string) => {
     if (!studentId) {
       setEseStudentAccs([]);
@@ -3880,6 +4037,10 @@ function App() {
     }
     if (activeSection === "interventions" && isBehaviorSpec) {
       loadInterventionTypes();
+      loadPulloutReasons();
+    }
+    if (activeSection === "requestPullout") {
+      loadPulloutReasons();
     }
     if (activeSection === "logIntervention") {
       loadInterventionTypes();
@@ -8004,6 +8165,7 @@ function App() {
         <RequestPulloutSection
           students={students}
           interventionTypes={interventionList}
+          reasonOptions={pulloutReasonList}
         />
       )}
 
@@ -8981,6 +9143,108 @@ function App() {
                           }
                         >
                           {i.active ? "Deactivate" : "Activate"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {activeSection === "interventions" && isBehaviorSpec && (
+        <section className="card">
+          <h2>Pullout Reasons</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Manage the quick-pick reasons teachers see when requesting a
+            behavior-specialist pullout. Deactivate reasons to hide them from
+            the form without losing past records.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr auto",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              maxWidth: "48rem",
+            }}
+          >
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Name</div>
+              <input
+                type="text"
+                value={newPulloutReasonName}
+                onChange={(e) => setNewPulloutReasonName(e.target.value)}
+                placeholder="e.g. Threats"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Category</div>
+              <input
+                type="text"
+                value={newPulloutReasonCategory}
+                onChange={(e) => setNewPulloutReasonCategory(e.target.value)}
+                placeholder="Behavior"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <button type="button" onClick={addPulloutReason}>
+              Add Reason
+            </button>
+          </div>
+          {pulloutReasonMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {pulloutReasonMsg}
+            </div>
+          )}
+
+          {pulloutReasonList.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>
+              No reasons yet.
+            </div>
+          ) : (
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                maxWidth: "48rem",
+              }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>Category</th>
+                  <th style={{ padding: "0.4rem" }}>Reason</th>
+                  <th style={{ padding: "0.4rem" }}>Active</th>
+                  <th style={{ padding: "0.4rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pulloutReasonList
+                  .slice()
+                  .sort((a, b) =>
+                    a.category === b.category
+                      ? a.name.localeCompare(b.name)
+                      : a.category.localeCompare(b.category),
+                  )
+                  .map((r) => (
+                    <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem" }}>{r.category}</td>
+                      <td style={{ padding: "0.4rem" }}>{r.name}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {r.active ? "Yes" : "No"}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            togglePulloutReasonActive(r.id, !r.active)
+                          }
+                        >
+                          {r.active ? "Deactivate" : "Activate"}
                         </button>
                       </td>
                     </tr>
