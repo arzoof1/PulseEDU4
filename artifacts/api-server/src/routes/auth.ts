@@ -20,6 +20,8 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     displayName: row.displayName,
     isAdmin: row.isAdmin,
     isEseCoordinator: row.isEseCoordinator,
+    isPbisCoordinator: row.isPbisCoordinator,
+    isBehaviorSpecialist: row.isBehaviorSpecialist,
   };
 }
 

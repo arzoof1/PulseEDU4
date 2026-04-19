@@ -163,6 +163,8 @@ function App() {
     displayName: string;
     isAdmin: boolean;
     isEseCoordinator: boolean;
+    isPbisCoordinator: boolean;
+    isBehaviorSpecialist: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -205,6 +207,8 @@ function App() {
     | "pbis"
     | "accommodations"
     | "ese"
+    | "pbisLists"
+    | "interventions"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -349,6 +353,34 @@ function App() {
     }>
   >([]);
   const [eseAddSelected, setEseAddSelected] = useState<Set<number>>(new Set());
+
+  // PBIS Reasons master list (managed by admin or PBIS coordinator)
+  type PbisReason = {
+    id: number;
+    name: string;
+    category: string;
+    defaultPoints: number;
+    active: boolean;
+  };
+  const [pbisReasonsList, setPbisReasonsList] = useState<PbisReason[]>([]);
+  const [pbisListMsg, setPbisListMsg] = useState("");
+  const [newPbisReasonName, setNewPbisReasonName] = useState("");
+  const [newPbisReasonCategory, setNewPbisReasonCategory] = useState("Character");
+  const [newPbisReasonPoints, setNewPbisReasonPoints] = useState<number>(1);
+
+  // Classroom Intervention Types master list (managed by admin or behavior specialist)
+  type InterventionType = {
+    id: number;
+    name: string;
+    category: string;
+    requiresNote: boolean;
+    active: boolean;
+  };
+  const [interventionList, setInterventionList] = useState<InterventionType[]>([]);
+  const [intervListMsg, setIntervListMsg] = useState("");
+  const [newIntervName, setNewIntervName] = useState("");
+  const [newIntervCategory, setNewIntervCategory] = useState("Classroom");
+  const [newIntervRequiresNote, setNewIntervRequiresNote] = useState(false);
   const [eseNewName, setEseNewName] = useState("");
   const [eseNewCategory, setEseNewCategory] = useState("Strategy");
   const [accommodationLogs, setAccommodationLogs] = useState<
@@ -830,6 +862,120 @@ function App() {
       );
   };
 
+  const loadPbisReasons = () => {
+    fetch("/api/pbis-reasons")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) =>
+        setPbisReasonsList(Array.isArray(data) ? (data as PbisReason[]) : []),
+      )
+      .catch(() => setPbisReasonsList([]));
+  };
+
+  const loadInterventionTypes = () => {
+    fetch("/api/intervention-types")
+      .then((res) => (res.ok ? res.json() : []))
+      .then((data) =>
+        setInterventionList(
+          Array.isArray(data) ? (data as InterventionType[]) : [],
+        ),
+      )
+      .catch(() => setInterventionList([]));
+  };
+
+  const addPbisReason = async () => {
+    const name = newPbisReasonName.trim();
+    if (!name) {
+      setPbisListMsg("Name is required.");
+      return;
+    }
+    setPbisListMsg("");
+    try {
+      const res = await fetch("/api/pbis-reasons", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          category: newPbisReasonCategory.trim() || "General",
+          defaultPoints: Number(newPbisReasonPoints) || 1,
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      setNewPbisReasonName("");
+      setNewPbisReasonPoints(1);
+      loadPbisReasons();
+    } catch (e) {
+      setPbisListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const togglePbisReasonActive = async (id: number, active: boolean) => {
+    setPbisListMsg("");
+    try {
+      const res = await fetch(`/api/pbis-reasons/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      loadPbisReasons();
+    } catch (e) {
+      setPbisListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const addInterventionType = async () => {
+    const name = newIntervName.trim();
+    if (!name) {
+      setIntervListMsg("Name is required.");
+      return;
+    }
+    setIntervListMsg("");
+    try {
+      const res = await fetch("/api/intervention-types", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name,
+          category: newIntervCategory.trim() || "Classroom",
+          requiresNote: newIntervRequiresNote,
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      setNewIntervName("");
+      setNewIntervRequiresNote(false);
+      loadInterventionTypes();
+    } catch (e) {
+      setIntervListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const toggleInterventionActive = async (id: number, active: boolean) => {
+    setIntervListMsg("");
+    try {
+      const res = await fetch(`/api/intervention-types/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${res.status}`);
+      }
+      loadInterventionTypes();
+    } catch (e) {
+      setIntervListMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
   const loadEseStudentAccs = (studentId: string) => {
     if (!studentId) {
       setEseStudentAccs([]);
@@ -1306,6 +1452,8 @@ function App() {
 
   const isAdmin = authUser?.isAdmin === true;
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
+  const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
+  const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
 
   useEffect(() => {
     if (!isAdmin && activeSection === "settings") {
@@ -1314,7 +1462,23 @@ function App() {
     if (!isEseCoord && activeSection === "ese") {
       setActiveSection("hallPasses");
     }
-  }, [isAdmin, isEseCoord, activeSection]);
+    if (!isPbisCoord && activeSection === "pbisLists") {
+      setActiveSection("hallPasses");
+    }
+    if (!isBehaviorSpec && activeSection === "interventions") {
+      setActiveSection("hallPasses");
+    }
+  }, [isAdmin, isEseCoord, isPbisCoord, isBehaviorSpec, activeSection]);
+
+  useEffect(() => {
+    if (activeSection === "pbisLists" && isPbisCoord) {
+      loadPbisReasons();
+    }
+    if (activeSection === "interventions" && isBehaviorSpec) {
+      loadInterventionTypes();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, isPbisCoord, isBehaviorSpec]);
 
   type NavSection = {
     key: typeof activeSection;
@@ -1330,6 +1494,12 @@ function App() {
   ];
   const eseNavSections: NavSection[] = [
     { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
+  ];
+  const pbisListsNavSections: NavSection[] = [
+    { key: "pbisLists", label: "PBIS Lists", icon: IconStar },
+  ];
+  const interventionsNavSections: NavSection[] = [
+    { key: "interventions", label: "Interventions", icon: IconClipboard },
   ];
   const adminNavSections: NavSection[] = [
     { key: "settings", label: "Settings", icon: IconSettings },
@@ -1462,6 +1632,8 @@ function App() {
         <div className="section-label">Workspace</div>
         {baseNavSections.map(renderNavItem)}
         {isEseCoord && eseNavSections.map(renderNavItem)}
+        {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
+        {isBehaviorSpec && interventionsNavSections.map(renderNavItem)}
         {isAdmin && (
           <>
             <div className="nav-admin-divider" aria-hidden="true">
@@ -4763,6 +4935,227 @@ function App() {
                 </tbody>
               </table>
             </div>
+          )}
+        </section>
+      )}
+
+      {activeSection === "pbisLists" && isPbisCoord && (
+        <section className="card">
+          <h2>PBIS Reasons</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Manage the positive-behavior reasons teachers can pick when awarding
+            PBIS points. Inactive reasons are hidden from teachers but kept for
+            historical reports.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr 6rem auto",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              maxWidth: "48rem",
+            }}
+          >
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Name</div>
+              <input
+                type="text"
+                value={newPbisReasonName}
+                onChange={(e) => setNewPbisReasonName(e.target.value)}
+                placeholder="e.g. Cleaned up workspace"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Category</div>
+              <input
+                type="text"
+                value={newPbisReasonCategory}
+                onChange={(e) => setNewPbisReasonCategory(e.target.value)}
+                placeholder="Character"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Points</div>
+              <input
+                type="number"
+                value={newPbisReasonPoints}
+                onChange={(e) =>
+                  setNewPbisReasonPoints(Number(e.target.value) || 0)
+                }
+                style={{ width: "100%" }}
+              />
+            </label>
+            <button type="button" onClick={addPbisReason}>
+              Add Reason
+            </button>
+          </div>
+          {pbisListMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {pbisListMsg}
+            </div>
+          )}
+
+          {pbisReasonsList.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>No reasons yet.</div>
+          ) : (
+            <table
+              style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>Category</th>
+                  <th style={{ padding: "0.4rem" }}>Reason</th>
+                  <th style={{ padding: "0.4rem" }}>Points</th>
+                  <th style={{ padding: "0.4rem" }}>Active</th>
+                  <th style={{ padding: "0.4rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {pbisReasonsList
+                  .slice()
+                  .sort((a, b) =>
+                    a.category === b.category
+                      ? a.name.localeCompare(b.name)
+                      : a.category.localeCompare(b.category),
+                  )
+                  .map((r) => (
+                    <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem" }}>{r.category}</td>
+                      <td style={{ padding: "0.4rem" }}>{r.name}</td>
+                      <td style={{ padding: "0.4rem" }}>{r.defaultPoints}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {r.active ? "Yes" : "No"}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            togglePbisReasonActive(r.id, !r.active)
+                          }
+                        >
+                          {r.active ? "Deactivate" : "Activate"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {activeSection === "interventions" && isBehaviorSpec && (
+        <section className="card">
+          <h2>Classroom Interventions</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Manage the intervention types teachers can pick when logging a
+            classroom intervention. Mark <em>requires note</em> if a written
+            explanation should always accompany the entry.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 1fr auto auto",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              maxWidth: "48rem",
+            }}
+          >
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Name</div>
+              <input
+                type="text"
+                value={newIntervName}
+                onChange={(e) => setNewIntervName(e.target.value)}
+                placeholder="e.g. Loud during instruction"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Category</div>
+              <input
+                type="text"
+                value={newIntervCategory}
+                onChange={(e) => setNewIntervCategory(e.target.value)}
+                placeholder="Classroom"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: "0.25rem" }}
+            >
+              <input
+                type="checkbox"
+                checked={newIntervRequiresNote}
+                onChange={(e) => setNewIntervRequiresNote(e.target.checked)}
+              />
+              <span style={{ fontSize: "0.85rem" }}>Requires note</span>
+            </label>
+            <button type="button" onClick={addInterventionType}>
+              Add Intervention
+            </button>
+          </div>
+          {intervListMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {intervListMsg}
+            </div>
+          )}
+
+          {interventionList.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>
+              No interventions yet.
+            </div>
+          ) : (
+            <table
+              style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>Category</th>
+                  <th style={{ padding: "0.4rem" }}>Intervention</th>
+                  <th style={{ padding: "0.4rem" }}>Note req.</th>
+                  <th style={{ padding: "0.4rem" }}>Active</th>
+                  <th style={{ padding: "0.4rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {interventionList
+                  .slice()
+                  .sort((a, b) =>
+                    a.category === b.category
+                      ? a.name.localeCompare(b.name)
+                      : a.category.localeCompare(b.category),
+                  )
+                  .map((i) => (
+                    <tr key={i.id} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem" }}>{i.category}</td>
+                      <td style={{ padding: "0.4rem" }}>{i.name}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {i.requiresNote ? "Yes" : "No"}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {i.active ? "Yes" : "No"}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            toggleInterventionActive(i.id, !i.active)
+                          }
+                        >
+                          {i.active ? "Deactivate" : "Activate"}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
           )}
         </section>
       )}

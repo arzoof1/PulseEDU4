@@ -6,6 +6,8 @@ export interface AuthUser {
   displayName: string;
   isAdmin: boolean;
   isEseCoordinator: boolean;
+  isPbisCoordinator: boolean;
+  isBehaviorSpecialist: boolean;
 }
 
 export default function Login({
