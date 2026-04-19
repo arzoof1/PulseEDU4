@@ -978,6 +978,12 @@ function App() {
         <tbody>
           {hallPasses
             .filter((p) =>
+              dateFilter === "today" ? isCreatedToday(p.createdAt) : true,
+            )
+            .filter((p) =>
+              staffFilter === "mine" ? p.teacherName === currentStaffUser : true,
+            )
+            .filter((p) =>
               passFilter === "mine" ? p.teacherName === selectedTeacher : true,
             )
             .map((p) => {
