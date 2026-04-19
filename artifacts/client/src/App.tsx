@@ -4528,6 +4528,71 @@ function App() {
                 )
               )}
             </div>
+            {pbisStudentId &&
+              (() => {
+                const forStudent = pbisEntries
+                  .filter((e) => e.studentId === pbisStudentId)
+                  .slice()
+                  .sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+                const total = forStudent.reduce(
+                  (sum, e) => sum + (e.points || 0),
+                  0,
+                );
+                const recent = forStudent.slice(0, 5);
+                return (
+                  <div
+                    style={{
+                      margin: "0.5rem 0 0.75rem 0",
+                      padding: "0.5rem 0.75rem",
+                      background: "var(--surface-soft, #f6f8fb)",
+                      border: "1px solid var(--border, #e2e8f0)",
+                      borderRadius: 6,
+                      maxWidth: "32rem",
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: "0.25rem" }}>
+                      Running total: {total}{" "}
+                      {total === 1 ? "point" : "points"}{" "}
+                      <span
+                        style={{
+                          fontWeight: 400,
+                          color: "var(--muted, #64748b)",
+                        }}
+                      >
+                        ({forStudent.length}{" "}
+                        {forStudent.length === 1 ? "entry" : "entries"})
+                      </span>
+                    </div>
+                    {recent.length === 0 ? (
+                      <div
+                        style={{
+                          fontSize: "0.85rem",
+                          color: "var(--muted, #64748b)",
+                        }}
+                      >
+                        No PBIS entries yet for this student.
+                      </div>
+                    ) : (
+                      <ul
+                        style={{
+                          margin: 0,
+                          paddingLeft: "1.1rem",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        {recent.map((e) => (
+                          <li key={e.id}>
+                            <strong>{e.reason}</strong> · {e.points}{" "}
+                            {e.points === 1 ? "pt" : "pts"} ·{" "}
+                            {new Date(e.createdAt).toLocaleString()} ·{" "}
+                            {e.staffName || "—"}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                );
+              })()}
             <div style={{ marginBottom: "0.5rem" }}>
               <label>
                 PBIS Recognition:{" "}
