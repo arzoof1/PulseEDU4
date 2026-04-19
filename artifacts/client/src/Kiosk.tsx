@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 interface SchoolSettings {
   schoolName: string;
@@ -80,10 +80,17 @@ type Phase =
   | { kind: "activate" }
   | { kind: "ready"; token: string; room: string; staffName: string | null };
 
+type Mode = "out" | "back";
+
 type Status =
   | { kind: "idle" }
   | { kind: "submitting" }
-  | { kind: "success"; studentId: string; destination: string }
+  | {
+      kind: "success";
+      mode: Mode;
+      studentId: string;
+      destination: string;
+    }
   | { kind: "error"; message: string };
 
 export default function Kiosk() {
@@ -323,7 +330,9 @@ function KioskBody({
   const [now, setNow] = useState(new Date());
   const [studentId, setStudentId] = useState("");
   const [destination, setDestination] = useState("");
+  const [mode, setMode] = useState<Mode>("out");
   const [status, setStatus] = useState<Status>({ kind: "idle" });
+  const studentIdInputRef = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     fetch("/api/school-settings")
@@ -371,6 +380,7 @@ function KioskBody({
   function resetForm() {
     setStudentId("");
     setDestination("");
+    setMode("out");
     setStatus({ kind: "idle" });
   }
 
@@ -382,37 +392,47 @@ function KioskBody({
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!studentId.trim() || !destination) return;
+    if (!studentId.trim()) return;
+    if (mode === "out" && !destination) return;
     setStatus({ kind: "submitting" });
     try {
-      const res = await fetch("/api/kiosk/hall-passes", {
+      const url =
+        mode === "out"
+          ? "/api/kiosk/hall-passes"
+          : "/api/kiosk/hall-passes/return";
+      const body: Record<string, string> =
+        mode === "out"
+          ? { studentId: studentId.trim(), token, destination }
+          : { studentId: studentId.trim(), token };
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          studentId: studentId.trim(),
-          token,
-          destination,
-        }),
+        body: JSON.stringify(body),
       });
       if (res.status === 401) {
-        const body = await res.json().catch(() => ({}));
-        if (body.revoked) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
           onRevoked();
           return;
         }
       }
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
+        const b = await res.json().catch(() => ({}));
         setStatus({
           kind: "error",
-          message: body.error ?? `Request failed (${res.status})`,
+          message: b.error ?? `Request failed (${res.status})`,
         });
         return;
       }
+      const data = (await res.json().catch(() => ({}))) as {
+        destination?: string;
+      };
       setStatus({
         kind: "success",
+        mode,
         studentId: studentId.trim(),
-        destination,
+        destination:
+          mode === "out" ? destination : (data.destination ?? "(unknown)"),
       });
     } catch (err) {
       setStatus({
@@ -461,6 +481,7 @@ function KioskBody({
 
       {status.kind === "success" ? (
         <SuccessCard
+          mode={status.mode}
           studentId={status.studentId}
           destination={status.destination}
           onReset={resetForm}
@@ -479,8 +500,35 @@ function KioskBody({
             gap: "1rem",
           }}
         >
+          <div style={{ display: "flex", gap: "0.5rem" }}>
+            <ModeButton
+              active={mode === "out"}
+              onClick={() => {
+                if (status.kind === "submitting") return;
+                setMode("out");
+                setStatus({ kind: "idle" });
+                studentIdInputRef.current?.focus();
+              }}
+            >
+              I'm leaving
+            </ModeButton>
+            <ModeButton
+              active={mode === "back"}
+              onClick={() => {
+                if (status.kind === "submitting") return;
+                setMode("back");
+                setDestination("");
+                setStatus({ kind: "idle" });
+                studentIdInputRef.current?.focus();
+              }}
+            >
+              I'm back
+            </ModeButton>
+          </div>
+
           <Field label="Student ID">
             <input
+              ref={studentIdInputRef}
               type="text"
               inputMode="numeric"
               autoComplete="off"
@@ -493,31 +541,33 @@ function KioskBody({
             />
           </Field>
 
-          <Field label="Where are you going?">
-            <select
-              value={destination}
-              onChange={(e) => setDestination(e.target.value)}
-              style={inputStyle}
-              disabled={status.kind === "submitting"}
-            >
-              <option value="">Select a destination…</option>
-              {destinationOptions.map((d) => (
-                <option key={d.id} value={d.name}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-            {originLocation && destinationOptions.length === 0 && (
-              <div style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 6 }}>
-                No student-visible destinations are configured for this room.
-              </div>
-            )}
-            {!originLocation && locations.length > 0 && (
-              <div style={{ fontSize: "0.85rem", color: "#fca5a5", marginTop: 6 }}>
-                "{room}" is not a known location. Ask an admin.
-              </div>
-            )}
-          </Field>
+          {mode === "out" && (
+            <Field label="Where are you going?">
+              <select
+                value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+                style={inputStyle}
+                disabled={status.kind === "submitting"}
+              >
+                <option value="">Select a destination…</option>
+                {destinationOptions.map((d) => (
+                  <option key={d.id} value={d.name}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+              {originLocation && destinationOptions.length === 0 && (
+                <div style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 6 }}>
+                  No student-visible destinations are configured for this room.
+                </div>
+              )}
+              {!originLocation && locations.length > 0 && (
+                <div style={{ fontSize: "0.85rem", color: "#fca5a5", marginTop: 6 }}>
+                  "{room}" is not a known location. Ask an admin.
+                </div>
+              )}
+            </Field>
+          )}
 
           {status.kind === "error" && <ErrorBox>{status.message}</ErrorBox>}
 
@@ -526,16 +576,22 @@ function KioskBody({
             disabled={
               status.kind === "submitting" ||
               !studentId.trim() ||
-              !destination
+              (mode === "out" && !destination)
             }
             style={primaryBtn(
               status.kind === "submitting" ||
                 !studentId.trim() ||
-                !destination,
+                (mode === "out" && !destination),
               { padding: "0.9rem 1rem", fontSize: "1.1rem" },
             )}
           >
-            {status.kind === "submitting" ? "Creating pass…" : "Get Pass"}
+            {status.kind === "submitting"
+              ? mode === "out"
+                ? "Creating pass…"
+                : "Signing back in…"
+              : mode === "out"
+                ? "Get Pass"
+                : "Sign Back In"}
           </button>
         </form>
       )}
@@ -698,6 +754,38 @@ function DeactivateModal({
 
 /* ---------------------------------- bits ---------------------------------- */
 
+function ModeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        flex: 1,
+        background: active ? "#3b82f6" : "rgba(255,255,255,0.06)",
+        color: active ? "#fff" : "rgba(255,255,255,0.75)",
+        border: active
+          ? "1px solid #3b82f6"
+          : "1px solid rgba(255,255,255,0.18)",
+        borderRadius: 8,
+        padding: "0.7rem 1rem",
+        fontSize: "1rem",
+        fontWeight: 600,
+        cursor: "pointer",
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
 function GearButton({ onClick }: { onClick: () => void }) {
   return (
     <button
@@ -824,10 +912,12 @@ function primaryBtn(
 }
 
 function SuccessCard({
+  mode,
   studentId,
   destination,
   onReset,
 }: {
+  mode: Mode;
   studentId: string;
   destination: string;
   onReset: () => void;
@@ -846,10 +936,20 @@ function SuccessCard({
       <div
         style={{ fontSize: "1.5rem", fontWeight: 600, marginBottom: "0.5rem" }}
       >
-        Pass created
+        {mode === "out" ? "Pass created" : "Welcome back"}
       </div>
       <div style={{ opacity: 0.85, marginBottom: "1.5rem" }}>
-        Student <strong>{studentId}</strong> → <strong>{destination}</strong>
+        {mode === "out" ? (
+          <>
+            Student <strong>{studentId}</strong> →{" "}
+            <strong>{destination}</strong>
+          </>
+        ) : (
+          <>
+            Student <strong>{studentId}</strong> signed back in from{" "}
+            <strong>{destination}</strong>
+          </>
+        )}
       </div>
       <div
         style={{ fontSize: "0.85rem", opacity: 0.55, marginBottom: "1rem" }}

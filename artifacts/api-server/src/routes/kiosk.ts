@@ -468,4 +468,79 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   res.status(201).json(pass);
 });
 
+// Student "I'm back" flow: ends the student's currently-active hall pass from
+// the kiosk. Validates the kiosk token the same way as pass creation does.
+router.post("/kiosk/hall-passes/return", async (req, res) => {
+  const { studentId, token } = req.body ?? {};
+
+  if (typeof studentId !== "string" || !studentId.trim()) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  if (typeof token !== "string" || token.length < 16) {
+    res.status(401).json({
+      error: "Kiosk activation token is required",
+      revoked: true,
+    });
+    return;
+  }
+
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res.status(401).json({
+      error: "Kiosk activation not found, revoked, or expired",
+      revoked: true,
+    });
+    return;
+  }
+
+  const trimmedId = studentId.trim();
+  // Scope to passes that originated from THIS kiosk's room so "I'm back"
+  // means "back to the room this kiosk is in." A pass from Room 102 can't
+  // be ended from a Cafeteria kiosk — they have to use the right one.
+  const activePasses = (await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.studentId, trimmedId),
+        eq(hallPassesTable.status, "active"),
+        eq(hallPassesTable.originRoom, act.room),
+      ),
+    )) as Array<InferSelectModel<typeof hallPassesTable>>;
+
+  if (activePasses.length === 0) {
+    res.status(404).json({
+      error: `No active hall pass found for student ${trimmedId} from ${act.room}.`,
+    });
+    return;
+  }
+
+  // If multiple are somehow active, end the oldest one (the one they actually
+  // left on first). Future passes will be cleaned up on next return tap.
+  const target = activePasses.sort((a, b) =>
+    a.createdAt.localeCompare(b.createdAt),
+  )[0];
+
+  const [updated] = await db
+    .update(hallPassesTable)
+    .set({
+      status: "ended",
+      endedAt: new Date().toISOString(),
+    })
+    .where(eq(hallPassesTable.id, target.id))
+    .returning();
+
+  res.json(updated);
+});
+
 export default router;
