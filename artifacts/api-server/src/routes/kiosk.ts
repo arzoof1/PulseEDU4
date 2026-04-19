@@ -276,18 +276,68 @@ router.post(
 );
 
 router.post("/kiosk/hall-passes", async (req, res) => {
-  const { studentId, originRoom, destination } = req.body ?? {};
+  const {
+    studentId,
+    destination,
+    token,
+    originRoom: legacyOriginRoom,
+  } = req.body ?? {};
 
   if (
     typeof studentId !== "string" ||
-    typeof originRoom !== "string" ||
     typeof destination !== "string" ||
     !studentId.trim() ||
-    !originRoom.trim() ||
     !destination.trim()
   ) {
     res.status(400).json({
-      error: "studentId, originRoom, and destination are required",
+      error: "studentId and destination are required",
+    });
+    return;
+  }
+
+  let originRoom: string;
+  let kioskAttributionName: string;
+
+  if (typeof token === "string" && token.length >= 16) {
+    const [act] = await db
+      .select()
+      .from(kioskActivationsTable)
+      .where(
+        and(
+          eq(kioskActivationsTable.tokenHash, hashToken(token)),
+          isNull(kioskActivationsTable.deactivatedAt),
+        ),
+      );
+    if (!act) {
+      res.status(401).json({
+        error: "Kiosk activation not found or revoked",
+        revoked: true,
+      });
+      return;
+    }
+    const [actStaff] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, act.staffId));
+    originRoom = act.room;
+    kioskAttributionName = actStaff
+      ? `${actStaff.displayName} (K)`
+      : `Kiosk: ${act.room}`;
+  } else if (
+    typeof legacyOriginRoom === "string" &&
+    legacyOriginRoom.trim()
+  ) {
+    originRoom = legacyOriginRoom.trim();
+    const [defaultStaff] = await db
+      .select()
+      .from(staffDefaultsTable)
+      .where(eq(staffDefaultsTable.defaultLocationName, originRoom));
+    kioskAttributionName = defaultStaff
+      ? `${defaultStaff.staffName} (K)`
+      : `Kiosk: ${originRoom}`;
+  } else {
+    res.status(400).json({
+      error: "token or originRoom is required",
     });
     return;
   }
@@ -352,22 +402,13 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
-  const [defaultStaff] = await db
-    .select()
-    .from(staffDefaultsTable)
-    .where(eq(staffDefaultsTable.defaultLocationName, originRoom));
-
-  const teacherName = defaultStaff
-    ? `${defaultStaff.staffName} (K)`
-    : `Kiosk: ${originRoom}`;
-
   const [pass] = await db
     .insert(hallPassesTable)
     .values({
       studentId: studentId.trim(),
       destination,
       originRoom,
-      teacherName,
+      teacherName: kioskAttributionName,
       destinationTeacher: null,
       contactedAcknowledged: false,
       status: "active",
