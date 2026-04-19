@@ -881,7 +881,7 @@ function App() {
             <th>Destination</th>
             <th>Origin</th>
             <th>Status</th>
-            <th>Max</th>
+            <th>Dur.</th>
             <th>Started</th>
             <th>Ended</th>
             <th>Time</th>
@@ -916,7 +916,27 @@ function App() {
               <td>{p.destination}</td>
               <td>{p.originRoom}</td>
               <td><span className={statusClass}>{statusLabel}</span></td>
-              <td>{p.maxDurationMinutes}m</td>
+              <td>
+                {(() => {
+                  const start = new Date(p.createdAt).getTime();
+                  const end = p.endedAt
+                    ? new Date(p.endedAt).getTime()
+                    : now;
+                  const mins = Math.max(0, Math.round((end - start) / 60000));
+                  return p.status === "active" ? (
+                    <span
+                      style={{
+                        fontStyle: "italic",
+                        color: "var(--text-muted)",
+                      }}
+                    >
+                      {mins}m
+                    </span>
+                  ) : (
+                    <span>{mins}m</span>
+                  );
+                })()}
+              </td>
               <td>{fmtTime(p.createdAt)}</td>
               <td>
                 {isEditing ? (
