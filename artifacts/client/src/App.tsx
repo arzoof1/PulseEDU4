@@ -173,17 +173,21 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
     const list = q
       ? students.filter(
           (s) =>
-            s.name.toLowerCase().includes(q) ||
-            s.id.toLowerCase().includes(q),
+            `${s.firstName} ${s.lastName}`.toLowerCase().includes(q) ||
+            s.studentId.toLowerCase().includes(q),
         )
       : students;
     return list.slice(0, 50);
   }, [students, studentSearch]);
 
   const selectedStudent = useMemo(
-    () => students.find((s) => s.id === studentId) ?? null,
+    () => students.find((s) => s.studentId === studentId) ?? null,
     [students, studentId],
   );
+
+  const selectedStudentLabel = selectedStudent
+    ? `${selectedStudent.firstName} ${selectedStudent.lastName}`
+    : "";
 
   // Fetch preflight when student changes.
   useEffect(() => {
@@ -313,8 +317,8 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
           >
             <option value="">— select a student —</option>
             {sortedStudents.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.id})
+              <option key={s.id} value={s.studentId}>
+                {s.firstName} {s.lastName} ({s.studentId})
               </option>
             ))}
           </select>
@@ -335,8 +339,8 @@ function RequestPulloutSection({ students }: { students: Student[] }) {
             }}
           >
             {preflight.hasRecentIntervention
-              ? `✓ At least one classroom intervention is logged for ${selectedStudent.name} within the past ${preflight.windowDays} days.`
-              : `⚠ No classroom interventions are logged for ${selectedStudent.name} in the past ${preflight.windowDays} days.`}
+              ? `✓ At least one classroom intervention is logged for ${selectedStudentLabel} within the past ${preflight.windowDays} days.`
+              : `⚠ No classroom interventions are logged for ${selectedStudentLabel} in the past ${preflight.windowDays} days.`}
           </div>
         )}
         <label style={{ display: "grid", gap: 4 }}>
@@ -466,8 +470,10 @@ function VerifyPulloutsSection({
   >({});
   const [busyId, setBusyId] = useState<number | null>(null);
 
-  const studentName = (id: string) =>
-    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+  const studentName = (id: string) => {
+    const s = students.find((x) => x.studentId === id);
+    return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -774,8 +780,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   const [busyId, setBusyId] = useState<number | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const studentName = (id: string) =>
-    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+  const studentName = (id: string) => {
+    const s = students.find((x) => x.studentId === id);
+    return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -1045,8 +1053,10 @@ function BehaviorReviewSection({
   const [notes, setNotes] = useState<Record<number, string>>({});
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
-  const studentName = (id: string) =>
-    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+  const studentName = (id: string) => {
+    const s = students.find((x) => x.studentId === id);
+    return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
+  };
 
   const refresh = async () => {
     setLoading(true);
@@ -1295,8 +1305,10 @@ function PulloutReportSection({ students }: { students: Student[] }) {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  const studentName = (id: string) =>
-    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+  const studentName = (id: string) => {
+    const s = students.find((x) => x.studentId === id);
+    return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
+  };
 
   useEffect(() => {
     let cancelled = false;
