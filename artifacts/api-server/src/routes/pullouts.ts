@@ -12,6 +12,7 @@ import {
   interventionEntriesTable,
 } from "@workspace/db";
 import { eq, and, gte, desc } from "drizzle-orm";
+import { sendPulloutArrivalEmail } from "../lib/pulloutEmail";
 
 const router: IRouter = Router();
 
@@ -341,6 +342,125 @@ router.patch(
         verifiedById: staff.id,
         verifiedByName: staff.displayName,
       })
+      .where(eq(pulloutsTable.id, id))
+      .returning();
+    res.json(row);
+  },
+);
+
+// ISS dashboard actions: mark arrived / returned / closed.
+const isIssActor = (s: StaffRow) =>
+  s.isAdmin ||
+  s.isIssTeacher ||
+  s.isBehaviorSpecialist ||
+  s.isDean ||
+  s.isMtssCoordinator;
+
+router.patch(
+  "/pullouts/:id/arrived",
+  requireStaffMW(isIssActor, "ISS dashboard role"),
+  async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [existing] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Pullout not found" });
+      return;
+    }
+    if (existing.status !== "verified" && existing.status !== "enroute") {
+      res.status(409).json({
+        error: `Pullout is ${existing.status}; only verified or en-route pullouts can be marked arrived.`,
+      });
+      return;
+    }
+    const nowIso = new Date().toISOString();
+    await db
+      .update(pulloutsTable)
+      .set({
+        status: "arrived",
+        arrivedAt: nowIso,
+        arrivedById: staff.id,
+        arrivedByName: staff.displayName,
+      })
+      .where(eq(pulloutsTable.id, id));
+    // Send parent email synchronously so the operator sees the result.
+    const emailResult = await sendPulloutArrivalEmail(id);
+    const [row] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    res.json({ pullout: row, parentEmail: emailResult });
+  },
+);
+
+router.patch(
+  "/pullouts/:id/returned",
+  requireStaffMW(isIssActor, "ISS dashboard role"),
+  async (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [existing] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Pullout not found" });
+      return;
+    }
+    if (existing.status !== "arrived") {
+      res.status(409).json({
+        error: `Pullout is ${existing.status}; only arrived pullouts can be marked returned.`,
+      });
+      return;
+    }
+    const [row] = await db
+      .update(pulloutsTable)
+      .set({ status: "returned", returnedAt: new Date().toISOString() })
+      .where(eq(pulloutsTable.id, id))
+      .returning();
+    res.json(row);
+  },
+);
+
+router.patch(
+  "/pullouts/:id/closed",
+  requireStaffMW(isIssActor, "ISS dashboard role"),
+  async (req: Request, res: Response) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [existing] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Pullout not found" });
+      return;
+    }
+    if (
+      existing.status === "closed" ||
+      existing.status === "rejected"
+    ) {
+      res.status(409).json({
+        error: `Pullout is already ${existing.status}.`,
+      });
+      return;
+    }
+    const [row] = await db
+      .update(pulloutsTable)
+      .set({ status: "closed", closedAt: new Date().toISOString() })
       .where(eq(pulloutsTable.id, id))
       .returning();
     res.json(row);

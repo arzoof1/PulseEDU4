@@ -750,6 +750,265 @@ function VerifyPulloutsSection({
   );
 }
 
+function IssDashboardSection({ students }: { students: Student[] }) {
+  const [rows, setRows] = useState<PulloutRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const studentName = (id: string) =>
+    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+
+  const refresh = async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/pullouts?scope=active");
+      if (!r.ok) {
+        setMsg({ ok: false, text: "Could not load ISS dashboard." });
+        setRows([]);
+      } else {
+        setRows(await r.json());
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+  }, []);
+
+  const act = async (
+    p: PulloutRow,
+    action: "arrived" | "returned" | "closed",
+  ) => {
+    setBusyId(p.id);
+    setMsg(null);
+    try {
+      const r = await fetch(`/api/pullouts/${p.id}/${action}`, {
+        method: "PATCH",
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || `Could not ${action}.` });
+      } else if (action === "arrived") {
+        const er = data?.parentEmail;
+        if (er?.status === "sent") {
+          setMsg({
+            ok: true,
+            text: `Arrived. Parent email sent to ${er.emailTo}.`,
+          });
+        } else if (er?.status === "skipped") {
+          setMsg({
+            ok: true,
+            text: `Arrived. Parent email skipped: ${er.errorMsg}.`,
+          });
+        } else if (er?.status === "error") {
+          setMsg({
+            ok: false,
+            text: `Arrived, but parent email failed: ${er.errorMsg}.`,
+          });
+        } else {
+          setMsg({ ok: true, text: "Marked arrived." });
+        }
+        await refresh();
+      } else {
+        setMsg({ ok: true, text: `Marked ${action}.` });
+        await refresh();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const onTheWay = rows.filter(
+    (r) => r.status === "verified" || r.status === "enroute",
+  );
+  const arrived = rows.filter((r) => r.status === "arrived");
+
+  const renderCard = (
+    p: PulloutRow,
+    actions: { label: string; action: "arrived" | "returned" | "closed" }[],
+  ) => (
+    <div
+      key={p.id}
+      style={{
+        border: "1px solid var(--border, #e2e8f0)",
+        borderRadius: 8,
+        padding: "0.65rem 0.9rem",
+        background: "var(--surface, white)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 8,
+        }}
+      >
+        <div>
+          <strong>{studentName(p.studentId)}</strong>{" "}
+          <span style={{ color: "#64748b" }}>
+            (#{p.studentId}) · pullout #{p.id}
+          </span>
+        </div>
+        <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
+          {p.referringTeacherName}
+          {p.period ? ` · period ${p.period}` : ""}
+        </div>
+      </div>
+      <div style={{ marginTop: 4, fontSize: "0.92rem" }}>
+        <em>Reason:</em> {p.editedReason ?? p.reason}
+      </div>
+      {p.status === "arrived" && (
+        <div
+          style={{ marginTop: 4, fontSize: "0.85rem", color: "#475569" }}
+        >
+          Arrived {new Date(p.arrivedAt!).toLocaleTimeString()}{" "}
+          {p.parentEmailStatus === "sent" && (
+            <span style={{ color: "#065f46" }}>
+              · parent email sent to {p.parentEmailTo}
+            </span>
+          )}
+          {p.parentEmailStatus === "skipped" && (
+            <span style={{ color: "#854d0e" }}>
+              · parent email skipped ({p.parentEmailErrorMsg})
+            </span>
+          )}
+          {p.parentEmailStatus === "error" && (
+            <span style={{ color: "#b91c1c" }}>
+              · parent email failed ({p.parentEmailErrorMsg})
+            </span>
+          )}
+        </div>
+      )}
+      <div
+        style={{
+          display: "flex",
+          gap: "0.5rem",
+          marginTop: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        {actions.map((a) => (
+          <button
+            key={a.action}
+            type="button"
+            disabled={busyId === p.id}
+            className={a.action === "arrived" ? "btn-primary" : undefined}
+            onClick={() => act(p, a.action)}
+            style={
+              a.action === "arrived"
+                ? undefined
+                : {
+                    background: "transparent",
+                    color: "#1f2937",
+                    border: "1px solid var(--border, #cbd5e1)",
+                    borderRadius: 6,
+                    padding: "0.35rem 0.75rem",
+                    cursor: "pointer",
+                  }
+            }
+          >
+            {busyId === p.id ? "…" : a.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  return (
+    <section className="card">
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "baseline",
+        }}
+      >
+        <h2>ISS Dashboard</h2>
+        <button
+          type="button"
+          onClick={refresh}
+          style={{
+            background: "transparent",
+            border: "1px solid var(--border, #cbd5e1)",
+            borderRadius: 6,
+            padding: "0.3rem 0.7rem",
+            cursor: "pointer",
+            fontSize: "0.85rem",
+          }}
+        >
+          Refresh
+        </button>
+      </div>
+      <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
+        Track verified pullouts. Marking <strong>Arrived</strong> sends the
+        parent notification automatically.
+      </p>
+      {msg && (
+        <div
+          style={{
+            margin: "0.5rem 0 1rem",
+            padding: "0.5rem 0.75rem",
+            background: msg.ok ? "#ecfdf5" : "#fef2f2",
+            border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}`,
+            color: msg.ok ? "#065f46" : "#b91c1c",
+            borderRadius: 6,
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+      {loading ? (
+        <div style={{ color: "var(--text-subtle, #64748b)" }}>Loading…</div>
+      ) : (
+        <>
+          <h3 style={{ marginTop: "1rem" }}>
+            On the way ({onTheWay.length})
+          </h3>
+          {onTheWay.length === 0 ? (
+            <div style={{ color: "var(--text-subtle, #64748b)" }}>
+              Nothing on the way.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              {onTheWay.map((p) =>
+                renderCard(p, [
+                  { label: "Mark Arrived", action: "arrived" },
+                  { label: "Cancel (close)", action: "closed" },
+                ]),
+              )}
+            </div>
+          )}
+          <h3 style={{ marginTop: "1.25rem" }}>
+            Arrived ({arrived.length})
+          </h3>
+          {arrived.length === 0 ? (
+            <div style={{ color: "var(--text-subtle, #64748b)" }}>
+              No students currently in the room.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: "0.75rem" }}>
+              {arrived.map((p) =>
+                renderCard(p, [
+                  { label: "Mark Returned", action: "returned" },
+                  { label: "Close", action: "closed" },
+                ]),
+              )}
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
@@ -817,6 +1076,7 @@ function App() {
     | "logIntervention"
     | "requestPullout"
     | "verifyPullouts"
+    | "issDashboard"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -2747,7 +3007,8 @@ function App() {
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
   const canVerifyPullouts = isAdmin || isDean || isMtss;
-  void isIssTeacher;
+  const canViewIssDashboard =
+    isAdmin || isIssTeacher || isBehaviorSpec || isDean || isMtss;
 
   // Pending pullout count for the verifier badge.
   const [pendingPulloutCount, setPendingPulloutCount] = useState<number>(0);
@@ -2989,6 +3250,12 @@ function App() {
           renderNavItem({
             key: "verifyPullouts",
             label: "Verify Pullouts",
+            icon: IconClipboard,
+          })}
+        {canViewIssDashboard &&
+          renderNavItem({
+            key: "issDashboard",
+            label: "ISS Dashboard",
             icon: IconClipboard,
           })}
         {isAdmin && (
@@ -6832,6 +7099,10 @@ function App() {
           students={students}
           onChange={() => setPendingPulloutsTick((t) => t + 1)}
         />
+      )}
+
+      {activeSection === "issDashboard" && canViewIssDashboard && (
+        <IssDashboardSection students={students} />
       )}
 
       {activeSection === "logIntervention" && (
