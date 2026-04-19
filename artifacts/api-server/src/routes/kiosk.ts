@@ -437,25 +437,30 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
+  // Normalize the student-typed ID to uppercase so a kid who types "s2003"
+  // matches the canonical "S2003" in the roster (and so the pass row, the
+  // duplicate-active check, and the polarity check all use the same form).
+  const normalizedStudentId = studentId.trim().toUpperCase();
+
   const existingActive = (await db
     .select()
     .from(hallPassesTable)
     .where(
       and(
-        eq(hallPassesTable.studentId, studentId.trim()),
+        eq(hallPassesTable.studentId, normalizedStudentId),
         eq(hallPassesTable.status, "active"),
       ),
     )) as Array<InferSelectModel<typeof hallPassesTable>>;
   if (existingActive.length > 0) {
     const open = existingActive[0];
     res.status(409).json({
-      error: `Student ${studentId.trim()} already has an active pass to ${open.destination}. End it before issuing another.`,
+      error: `Student ${normalizedStudentId} already has an active pass to ${open.destination}. End it before issuing another.`,
     });
     return;
   }
 
   // Polarity / keep-apart enforcement.
-  const conflict = await findPolarityConflict(studentId.trim());
+  const conflict = await findPolarityConflict(normalizedStudentId);
   if (conflict) {
     res.status(409).json({ error: polarityConflictMessage(conflict) });
     return;
@@ -464,7 +469,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   const [pass] = await db
     .insert(hallPassesTable)
     .values({
-      studentId: studentId.trim(),
+      studentId: normalizedStudentId,
       destination,
       originRoom,
       teacherName: kioskAttributionName,
@@ -480,7 +485,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   const [student] = await db
     .select({ firstName: studentsTable.firstName })
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, studentId.trim()));
+    .where(eq(studentsTable.studentId, normalizedStudentId));
 
   res.status(201).json({
     ...pass,
@@ -523,7 +528,9 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     return;
   }
 
-  const trimmedId = studentId.trim();
+  // Match the kiosk-create flow: uppercase the typed ID so a kid who types
+  // "s2003" still finds their active "S2003" pass.
+  const trimmedId = studentId.trim().toUpperCase();
   // Scope to passes that originated from THIS kiosk's room so "I'm back"
   // means "back to the room this kiosk is in." A pass from Room 102 can't
   // be ended from a Cafeteria kiosk — they have to use the right one.
