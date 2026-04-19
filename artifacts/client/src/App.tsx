@@ -165,8 +165,17 @@ function App() {
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
   const [activeSection, setActiveSection] = useState<
-    "hallPasses" | "tardies" | "student" | "pbis" | "accommodations"
+    "hallPasses" | "tardies" | "student" | "pbis" | "accommodations" | "settings"
   >("hallPasses");
+  const [schoolSettings, setSchoolSettings] = useState<{
+    schoolName: string;
+    fromName: string;
+    emailSignature: string;
+  }>({ schoolName: "", fromName: "", emailSignature: "" });
+  const [settingsStatus, setSettingsStatus] = useState<
+    "idle" | "saving" | "saved" | "error"
+  >("idle");
+  const [settingsError, setSettingsError] = useState("");
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [studentTab, setStudentTab] = useState<
@@ -290,7 +299,48 @@ function App() {
     loadTardies();
     loadPbis();
     loadSupportNotes();
+    loadSchoolSettings();
   }, []);
+
+  const loadSchoolSettings = () => {
+    fetch("/api/school-settings")
+      .then((res) => res.json())
+      .then((data) =>
+        setSchoolSettings({
+          schoolName: data.schoolName ?? "",
+          fromName: data.fromName ?? "",
+          emailSignature: data.emailSignature ?? "",
+        }),
+      )
+      .catch((err) => console.error("Failed to load school settings:", err));
+  };
+
+  const saveSchoolSettings = async () => {
+    setSettingsStatus("saving");
+    setSettingsError("");
+    try {
+      const res = await fetch("/api/school-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(schoolSettings),
+      });
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(text || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      setSchoolSettings({
+        schoolName: data.schoolName ?? "",
+        fromName: data.fromName ?? "",
+        emailSignature: data.emailSignature ?? "",
+      });
+      setSettingsStatus("saved");
+      setTimeout(() => setSettingsStatus("idle"), 2000);
+    } catch (err) {
+      setSettingsStatus("error");
+      setSettingsError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const loadTardies = () => {
     fetch("/api/tardies")
@@ -568,6 +618,14 @@ function App() {
     return s ? `${s.firstName} ${s.lastName}` : id;
   };
 
+  const isAdmin = currentStaffUser.includes("(Admin)");
+
+  useEffect(() => {
+    if (!isAdmin && activeSection === "settings") {
+      setActiveSection("hallPasses");
+    }
+  }, [isAdmin, activeSection]);
+
   const navSections: {
     key: typeof activeSection;
     label: string;
@@ -578,6 +636,9 @@ function App() {
     { key: "student", label: "Student Activity", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
+    ...(isAdmin
+      ? ([{ key: "settings", label: "Settings", icon: IconClipboard }] as const)
+      : []),
   ];
   const userInitials = currentStaffUser
     .replace(/\(.*?\)/g, "")
@@ -2379,6 +2440,80 @@ function App() {
           </table>
         </section>
       </>)}
+
+      {activeSection === "settings" && isAdmin && (
+        <div className="card">
+          <h2>School Settings</h2>
+          <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+            These values appear in parent emails and other school-branded
+            messages.
+          </p>
+          <div style={{ display: "grid", gap: "0.75rem", maxWidth: 520 }}>
+            <label style={{ display: "grid", gap: "0.25rem" }}>
+              <span>School Name</span>
+              <input
+                type="text"
+                value={schoolSettings.schoolName}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    schoolName: e.target.value,
+                  })
+                }
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.25rem" }}>
+              <span>From Name (sender shown in parent inbox)</span>
+              <input
+                type="text"
+                value={schoolSettings.fromName}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    fromName: e.target.value,
+                  })
+                }
+              />
+            </label>
+            <label style={{ display: "grid", gap: "0.25rem" }}>
+              <span>Email Signature</span>
+              <textarea
+                rows={4}
+                value={schoolSettings.emailSignature}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    emailSignature: e.target.value,
+                  })
+                }
+              />
+            </label>
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.75rem",
+              }}
+            >
+              <button
+                type="button"
+                onClick={saveSchoolSettings}
+                disabled={settingsStatus === "saving"}
+              >
+                {settingsStatus === "saving" ? "Saving…" : "Save Settings"}
+              </button>
+              {settingsStatus === "saved" && (
+                <span style={{ color: "var(--ok, #0a7a3b)" }}>Saved</span>
+              )}
+              {settingsStatus === "error" && (
+                <span style={{ color: "var(--danger, #b00020)" }}>
+                  {settingsError || "Save failed"}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       </main>
     </div>
   );
