@@ -458,6 +458,7 @@ function VerifyPulloutsSection({
 
   const refresh = async () => {
     setLoading(true);
+    setMsg(null);
     try {
       const r = await fetch("/api/pullouts?scope=pending");
       if (!r.ok) {
@@ -761,6 +762,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
 
   const refresh = async () => {
     setLoading(true);
+    setMsg(null);
     try {
       const r = await fetch("/api/pullouts?scope=active");
       if (!r.ok) {
