@@ -120,6 +120,10 @@ router.get(
       res.status(403).json({ error: "Behavior specialist or admin only" });
       return;
     }
+    if (scope === "unreviewed" && !isReviewer) {
+      res.status(403).json({ error: "Behavior specialist or admin only" });
+      return;
+    }
 
     const all = await db
       .select()
@@ -138,6 +142,10 @@ router.get(
           r.status === "verified" ||
           r.status === "enroute" ||
           r.status === "arrived",
+      );
+    } else if (scope === "unreviewed") {
+      rows = all.filter(
+        (r) => r.status === "closed" && r.reviewedAt == null,
       );
     }
     res.json(rows);
@@ -574,6 +582,60 @@ router.patch(
     const [row] = await db
       .update(pulloutsTable)
       .set({ status: "closed", closedAt: new Date().toISOString() })
+      .where(eq(pulloutsTable.id, id))
+      .returning();
+    res.json(row);
+  },
+);
+
+// Behavior Specialist / Admin: mark a closed pullout as reviewed.
+router.patch(
+  "/pullouts/:id/review",
+  requireStaffMW(
+    (s) => s.isAdmin || s.isBehaviorSpecialist,
+    "Behavior specialist or admin",
+  ),
+  async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id < 1) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const reviewNotesRaw = req.body?.reviewNotes;
+    const reviewNotes =
+      typeof reviewNotesRaw === "string" && reviewNotesRaw.trim()
+        ? reviewNotesRaw.trim().slice(0, 2000)
+        : null;
+
+    const [existing] = await db
+      .select()
+      .from(pulloutsTable)
+      .where(eq(pulloutsTable.id, id));
+    if (!existing) {
+      res.status(404).json({ error: "Pullout not found" });
+      return;
+    }
+    if (existing.status !== "closed") {
+      res.status(409).json({
+        error: `Pullout is ${existing.status}; only closed pullouts can be reviewed.`,
+      });
+      return;
+    }
+    if (existing.reviewedAt != null) {
+      res
+        .status(409)
+        .json({ error: "Pullout has already been reviewed." });
+      return;
+    }
+    const [row] = await db
+      .update(pulloutsTable)
+      .set({
+        reviewedAt: new Date().toISOString(),
+        reviewedById: staff.id,
+        reviewedByName: staff.displayName,
+        reviewNotes,
+      })
       .where(eq(pulloutsTable.id, id))
       .returning();
     res.json(row);

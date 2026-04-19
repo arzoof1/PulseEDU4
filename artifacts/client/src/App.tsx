@@ -428,6 +428,10 @@ type PulloutRow = {
   parentEmailStatus: string | null;
   parentEmailErrorMsg: string | null;
   parentEmailTo: string | null;
+  reviewedAt: string | null;
+  reviewedById: number | null;
+  reviewedByName: string | null;
+  reviewNotes: string | null;
 };
 
 function VerifyPulloutsSection({
@@ -1011,6 +1015,162 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   );
 }
 
+function BehaviorReviewSection({
+  students,
+  onChange,
+}: {
+  students: Student[];
+  onChange: () => void;
+}) {
+  const [rows, setRows] = useState<PulloutRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const studentName = (id: string) =>
+    students.find((s) => s.id === id)?.name ?? `Student ${id}`;
+
+  const refresh = async () => {
+    setLoading(true);
+    setMsg(null);
+    try {
+      const r = await fetch("/api/pullouts?scope=unreviewed");
+      if (!r.ok) {
+        setMsg({ ok: false, text: "Could not load review queue." });
+        setRows([]);
+      } else {
+        const data: PulloutRow[] = await r.json();
+        setRows(data);
+        const seed: Record<number, string> = {};
+        for (const p of data) seed[p.id] = "";
+        setNotes(seed);
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const review = async (p: PulloutRow) => {
+    setBusyId(p.id);
+    setMsg(null);
+    try {
+      const body = notes[p.id]?.trim()
+        ? { reviewNotes: notes[p.id].trim() }
+        : {};
+      const r = await fetch(`/api/pullouts/${p.id}/review`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not mark reviewed." });
+      } else {
+        setMsg({ ok: true, text: `Marked reviewed.` });
+        await refresh();
+        onChange();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <section className="card">
+      <h2>Behavior Review</h2>
+      <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
+        Closed pullouts awaiting behavior-specialist review. Add optional
+        notes for your records, then mark reviewed to clear from the queue.
+      </p>
+      {msg && (
+        <p style={{ color: msg.ok ? "green" : "crimson" }}>{msg.text}</p>
+      )}
+      {loading ? (
+        <p>Loading…</p>
+      ) : rows.length === 0 ? (
+        <p>No pullouts awaiting review. 🎉</p>
+      ) : (
+        <table
+          border={1}
+          cellPadding={6}
+          style={{ borderCollapse: "collapse", width: "100%" }}
+        >
+          <thead>
+            <tr>
+              <th>student</th>
+              <th>requested</th>
+              <th>teacher</th>
+              <th>period</th>
+              <th>reason</th>
+              <th>parent email</th>
+              <th>review notes</th>
+              <th>action</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((p) => (
+              <tr key={p.id}>
+                <td>
+                  {p.studentId}
+                  <br />
+                  <span style={{ color: "#64748b" }}>
+                    {studentName(p.studentId)}
+                  </span>
+                </td>
+                <td>{p.requestedAt}</td>
+                <td>{p.referringTeacherName || "-"}</td>
+                <td>{p.period ?? "-"}</td>
+                <td style={{ maxWidth: "16rem" }}>
+                  {p.editedReason ?? p.reason}
+                </td>
+                <td>
+                  {p.parentEmailStatus
+                    ? `${p.parentEmailStatus}${p.parentEmailTo ? ` → ${p.parentEmailTo}` : ""}`
+                    : "-"}
+                </td>
+                <td>
+                  <textarea
+                    rows={2}
+                    style={{ width: "14rem" }}
+                    placeholder="Optional notes"
+                    value={notes[p.id] ?? ""}
+                    onChange={(e) =>
+                      setNotes((prev) => ({
+                        ...prev,
+                        [p.id]: e.target.value,
+                      }))
+                    }
+                    disabled={busyId === p.id}
+                  />
+                </td>
+                <td>
+                  <button
+                    type="button"
+                    disabled={busyId === p.id}
+                    onClick={() => review(p)}
+                  >
+                    {busyId === p.id ? "…" : "Mark Reviewed"}
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
 function StudentPulloutsTab({ studentId }: { studentId: string }) {
   const [rows, setRows] = useState<PulloutRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1309,6 +1469,7 @@ function App() {
     | "requestPullout"
     | "verifyPullouts"
     | "issDashboard"
+    | "behaviorReview"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -3264,6 +3425,29 @@ function App() {
     };
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
+  // Unreviewed pullout count for the behavior-review badge.
+  const canReviewPullouts = isAdmin || isBehaviorSpec;
+  const [unreviewedPulloutCount, setUnreviewedPulloutCount] =
+    useState<number>(0);
+  const [unreviewedPulloutsTick, setUnreviewedPulloutsTick] = useState(0);
+  useEffect(() => {
+    if (!canReviewPullouts) {
+      setUnreviewedPulloutCount(0);
+      return;
+    }
+    let cancelled = false;
+    fetch("/api/pullouts?scope=unreviewed")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: unknown) => {
+        if (cancelled) return;
+        if (Array.isArray(rows)) setUnreviewedPulloutCount(rows.length);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [canReviewPullouts, unreviewedPulloutsTick]);
+
   useEffect(() => {
     if (!isAdmin && activeSection === "settings") {
       setActiveSection("hallPasses");
@@ -3327,24 +3511,22 @@ function App() {
     { key: "settings", label: "Settings", icon: IconSettings },
   ];
   const navBadge = (key: typeof activeSection) => {
+    const badgeStyle: React.CSSProperties = {
+      marginLeft: 6,
+      background: "#dc2626",
+      color: "white",
+      borderRadius: 999,
+      padding: "0 7px",
+      fontSize: "0.72rem",
+      fontWeight: 700,
+      lineHeight: "18px",
+      display: "inline-block",
+    };
     if (key === "verifyPullouts" && pendingPulloutCount > 0) {
-      return (
-        <span
-          style={{
-            marginLeft: 6,
-            background: "#dc2626",
-            color: "white",
-            borderRadius: 999,
-            padding: "0 7px",
-            fontSize: "0.72rem",
-            fontWeight: 700,
-            lineHeight: "18px",
-            display: "inline-block",
-          }}
-        >
-          {pendingPulloutCount}
-        </span>
-      );
+      return <span style={badgeStyle}>{pendingPulloutCount}</span>;
+    }
+    if (key === "behaviorReview" && unreviewedPulloutCount > 0) {
+      return <span style={badgeStyle}>{unreviewedPulloutCount}</span>;
     }
     return null;
   };
@@ -3489,6 +3671,12 @@ function App() {
           renderNavItem({
             key: "issDashboard",
             label: "ISS Dashboard",
+            icon: IconClipboard,
+          })}
+        {canReviewPullouts &&
+          renderNavItem({
+            key: "behaviorReview",
+            label: "Behavior Review",
             icon: IconClipboard,
           })}
         {isAdmin && (
@@ -7344,6 +7532,13 @@ function App() {
           <PulloutReportSection students={students} />
           <IssDashboardSection students={students} />
         </>
+      )}
+
+      {activeSection === "behaviorReview" && canReviewPullouts && (
+        <BehaviorReviewSection
+          students={students}
+          onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
+        />
       )}
 
       {activeSection === "logIntervention" && (

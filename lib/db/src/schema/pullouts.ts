@@ -30,6 +30,10 @@ export const pulloutsTable = pgTable(
     parentEmailStatus: text("parent_email_status"),
     parentEmailErrorMsg: text("parent_email_error_msg"),
     parentEmailTo: text("parent_email_to"),
+    reviewedAt: text("reviewed_at"),
+    reviewedById: integer("reviewed_by_id"),
+    reviewedByName: text("reviewed_by_name"),
+    reviewNotes: text("review_notes"),
   },
   (t) => ({
     studentIdx: index("pullouts_student_idx").on(t.studentId),
