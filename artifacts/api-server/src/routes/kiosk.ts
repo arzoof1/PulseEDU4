@@ -276,12 +276,7 @@ router.post(
 );
 
 router.post("/kiosk/hall-passes", async (req, res) => {
-  const {
-    studentId,
-    destination,
-    token,
-    originRoom: legacyOriginRoom,
-  } = req.body ?? {};
+  const { studentId, destination, token } = req.body ?? {};
 
   if (
     typeof studentId !== "string" ||
@@ -295,52 +290,38 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
-  let originRoom: string;
-  let kioskAttributionName: string;
-
-  if (typeof token === "string" && token.length >= 16) {
-    const [act] = await db
-      .select()
-      .from(kioskActivationsTable)
-      .where(
-        and(
-          eq(kioskActivationsTable.tokenHash, hashToken(token)),
-          isNull(kioskActivationsTable.deactivatedAt),
-        ),
-      );
-    if (!act) {
-      res.status(401).json({
-        error: "Kiosk activation not found or revoked",
-        revoked: true,
-      });
-      return;
-    }
-    const [actStaff] = await db
-      .select()
-      .from(staffTable)
-      .where(eq(staffTable.id, act.staffId));
-    originRoom = act.room;
-    kioskAttributionName = actStaff
-      ? `${actStaff.displayName} (K)`
-      : `Kiosk: ${act.room}`;
-  } else if (
-    typeof legacyOriginRoom === "string" &&
-    legacyOriginRoom.trim()
-  ) {
-    originRoom = legacyOriginRoom.trim();
-    const [defaultStaff] = await db
-      .select()
-      .from(staffDefaultsTable)
-      .where(eq(staffDefaultsTable.defaultLocationName, originRoom));
-    kioskAttributionName = defaultStaff
-      ? `${defaultStaff.staffName} (K)`
-      : `Kiosk: ${originRoom}`;
-  } else {
-    res.status(400).json({
-      error: "token or originRoom is required",
+  if (typeof token !== "string" || token.length < 16) {
+    res.status(401).json({
+      error: "Kiosk activation token is required",
+      revoked: true,
     });
     return;
   }
+
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+      ),
+    );
+  if (!act) {
+    res.status(401).json({
+      error: "Kiosk activation not found or revoked",
+      revoked: true,
+    });
+    return;
+  }
+  const [actStaff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, act.staffId));
+  const originRoom = act.room;
+  const kioskAttributionName = actStaff
+    ? `${actStaff.displayName} (K)`
+    : `Kiosk: ${act.room}`;
 
   const [origin] = await db
     .select()

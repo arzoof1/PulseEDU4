@@ -245,7 +245,6 @@ function App() {
   const [apiDestinationMap, setApiDestinationMap] = useState<
     Record<string, string[]>
   >({});
-  const [kioskOriginRooms, setKioskOriginRooms] = useState<string[]>([]);
   const [copiedRoom, setCopiedRoom] = useState<string | null>(null);
 
   useEffect(() => {
@@ -348,26 +347,6 @@ function App() {
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
-
-    fetch("/api/locations")
-      .then((res) => res.json())
-      .then(
-        (
-          data: {
-            name: string;
-            isOrigin: boolean;
-            active: boolean;
-          }[],
-        ) => {
-          setKioskOriginRooms(
-            data
-              .filter((l) => l.isOrigin && l.active)
-              .map((l) => l.name)
-              .sort((a, b) => a.localeCompare(b)),
-          );
-        },
-      )
-      .catch((err) => console.error("Failed to load locations:", err));
 
     fetch("/api/location-allowed-destinations")
       .then((res) => res.json())
@@ -2808,78 +2787,58 @@ function App() {
         </div>
       )}
 
-      {activeSection === "settings" && isAdmin && (
-        <div className="card" style={{ marginBottom: "1rem" }}>
-          <h2>Kiosk URLs</h2>
-          <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-            Open one of these on a classroom Chromebook (full-screen) so
-            students can request hall passes without a teacher device.
-            Destinations are limited to those marked student-visible for that
-            room.
-          </p>
-          {kioskOriginRooms.length === 0 ? (
-            <p style={{ color: "var(--text-subtle)" }}>
-              No origin rooms found.
+      {activeSection === "settings" && isAdmin && (() => {
+        const kioskUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk`;
+        return (
+          <div className="card" style={{ marginBottom: "1rem" }}>
+            <h2>Kiosk URL</h2>
+            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+              Open this on a classroom Chromebook (full-screen). The teacher
+              in the room signs in once to activate the device — the room is
+              picked up from their default location, or from a one-time
+              picker if they don't have one set yet.
             </p>
-          ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
-              <thead>
-                <tr>
-                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
-                    Room
-                  </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
-                    Kiosk URL
-                  </th>
-                  <th style={{ padding: "0.5rem" }}></th>
-                </tr>
-              </thead>
-              <tbody>
-                {kioskOriginRooms.map((room) => {
-                  const url = `${window.location.origin}${import.meta.env.BASE_URL}kiosk?room=${encodeURIComponent(room)}`;
-                  return (
-                    <tr key={room} style={{ borderTop: "1px solid var(--border)" }}>
-                      <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
-                        {room}
-                      </td>
-                      <td style={{ padding: "0.5rem" }}>
-                        <code
-                          style={{
-                            fontSize: "0.85rem",
-                            wordBreak: "break-all",
-                          }}
-                        >
-                          {url}
-                        </code>
-                      </td>
-                      <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(url);
-                              setCopiedRoom(room);
-                              setTimeout(() => setCopiedRoom(null), 1500);
-                            } catch {
-                              setCopiedRoom(null);
-                            }
-                          }}
-                          style={{ marginRight: "0.5rem" }}
-                        >
-                          {copiedRoom === room ? "Copied!" : "Copy"}
-                        </button>
-                        <a href={url} target="_blank" rel="noreferrer">
-                          Open
-                        </a>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          )}
-        </div>
-      )}
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                alignItems: "center",
+                flexWrap: "wrap",
+              }}
+            >
+              <code
+                style={{
+                  fontSize: "0.9rem",
+                  wordBreak: "break-all",
+                  background: "var(--surface-subtle, rgba(0,0,0,0.04))",
+                  padding: "0.5rem 0.75rem",
+                  borderRadius: 6,
+                  flex: "1 1 320px",
+                }}
+              >
+                {kioskUrl}
+              </code>
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(kioskUrl);
+                    setCopiedRoom("__kiosk__");
+                    setTimeout(() => setCopiedRoom(null), 1500);
+                  } catch {
+                    setCopiedRoom(null);
+                  }
+                }}
+              >
+                {copiedRoom === "__kiosk__" ? "Copied!" : "Copy"}
+              </button>
+              <a href={kioskUrl} target="_blank" rel="noreferrer">
+                Open
+              </a>
+            </div>
+          </div>
+        );
+      })()}
 
       {activeSection === "settings" && isAdmin && (
         <div className="card">
