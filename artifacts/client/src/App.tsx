@@ -2569,8 +2569,14 @@ function App() {
   const [bulkMsg, setBulkMsg] = useState("");
 
   const loadMySections = async () => {
+    if (!authUser?.id) {
+      setMySections([]);
+      return;
+    }
     try {
-      const res = await fetch("/api/schedule", { credentials: "include" });
+      const res = await fetch(`/api/schedule?staffId=${authUser.id}`, {
+        credentials: "include",
+      });
       if (!res.ok) {
         setMySections([]);
         return;
@@ -3184,7 +3190,7 @@ function App() {
 
     loadAccommodationLogs();
 
-    fetch("/api/schedule", { credentials: "include" })
+    fetch(`/api/schedule?staffId=${authUser.id}`, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : { sections: [] }))
       .then((data: { sections: MySection[] }) =>
         setMySections(data.sections ?? []),

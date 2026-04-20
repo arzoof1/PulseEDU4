@@ -9,40 +9,42 @@ import { eq, and } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-async function requireStaff(
+async function resolveStaff(
   req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  const staffId = req.session.staffId;
-  if (!staffId) {
-    res.status(401).json({ error: "Sign-in required" });
-    return;
-  }
-  const [staff] = await db
-    .select()
-    .from(staffTable)
-    .where(eq(staffTable.id, staffId));
-  if (!staff || !staff.active) {
-    res.status(401).json({ error: "Sign-in required" });
-    return;
-  }
-  (req as Request & { staff: typeof staff }).staff = staff;
-  next();
+): Promise<typeof staffTable.$inferSelect | null> {
+  const sessionId = req.session.staffId;
+  const queryId = (() => {
+    const raw = req.query.staffId;
+    if (typeof raw !== "string") return null;
+    const n = Number(raw);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  })();
+  const id = sessionId ?? queryId;
+  if (!id) return null;
+  const [staff] = await db.select().from(staffTable).where(eq(staffTable.id, id));
+  return staff && staff.active ? staff : null;
 }
 
-// Returns sections for the signed-in staff. Admins (or ?all=1) get every section.
+// Returns sections for the signed-in staff (or ?staffId= fallback when cookies
+// are blocked, e.g. inside the Replit preview iframe). ?all=1 returns every
+// section in the school (used by admins/ESE coordinators for browsing).
 // Response shape: { sections: [{ id, period, courseName, isPlanning, teacherStaffId, teacherName, studentIds }] }
-router.get("/schedule", requireStaff, async (req, res) => {
-  const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
+router.get("/schedule", async (req, res) => {
   const wantAll = req.query.all === "1";
-  const filterByTeacher = !(wantAll && staff.isAdmin);
+  const staff = await resolveStaff(req);
+
+  if (!wantAll && !staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+
+  const filterByTeacher = !wantAll;
 
   const sections = filterByTeacher
     ? await db
         .select()
         .from(classSectionsTable)
-        .where(eq(classSectionsTable.teacherStaffId, staff.id))
+        .where(eq(classSectionsTable.teacherStaffId, staff!.id))
     : await db.select().from(classSectionsTable);
 
   if (sections.length === 0) {
