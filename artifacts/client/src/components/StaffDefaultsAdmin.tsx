@@ -10,16 +10,15 @@ type StaffDefaultRow = {
 };
 
 interface Props {
-  staffUsers: StaffUser[];
   originLocations: string[];
   onSaved?: () => void;
 }
 
 export default function StaffDefaultsAdmin({
-  staffUsers,
   originLocations,
   onSaved,
 }: Props) {
+  const [staffUsers, setStaffUsers] = useState<StaffUser[]>([]);
   const [rows, setRows] = useState<StaffDefaultRow[]>([]);
   const [savingFor, setSavingFor] = useState<number | null>(null);
   const [filter, setFilter] = useState("");
@@ -28,6 +27,17 @@ export default function StaffDefaultsAdmin({
     fetch("/api/staff-defaults")
       .then((r) => r.json())
       .then((data: StaffDefaultRow[]) => setRows(data))
+      .catch(() => {});
+    fetch("/api/admin/staff", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((data: Array<{ id: number; displayName: string; active?: boolean }>) =>
+        setStaffUsers(
+          data
+            .filter((s) => s.active !== false)
+            .map((s) => ({ id: s.id, displayName: s.displayName }))
+            .sort((a, b) => a.displayName.localeCompare(b.displayName)),
+        ),
+      )
       .catch(() => {});
   }, []);
 

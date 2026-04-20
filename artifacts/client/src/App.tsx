@@ -2009,6 +2009,7 @@ function App() {
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
+  const [passListView, setPassListView] = useState<"active" | "log">("active");
   // Hall pass reports state.
   const [hpReportDate, setHpReportDate] = useState<string>(() =>
     new Date().toISOString().slice(0, 10),
@@ -3249,6 +3250,13 @@ function App() {
       setHpView("overview");
     }
   }, [authUser?.id, authUser?.isAdmin, authUser?.isEseCoordinator, hpView]);
+
+  // On sign-in, default the Hall Passes scope to "mine" for teachers and
+  // "all" for admins. Users can still flip the toggle either way after.
+  useEffect(() => {
+    if (!authUser) return;
+    setPassFilter(authUser.isAdmin ? "all" : "mine");
+  }, [authUser?.id, authUser?.isAdmin]);
 
   const reportReqIdRef = useRef(0);
   const loadReport = async () => {
@@ -4715,377 +4723,360 @@ function App() {
         }}
       />
 
-      {false && (
       <div className="card">
-      <h2>Create Hall Pass</h2>
-      <form onSubmit={handleSubmit} style={{ marginBottom: "1rem" }}>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Student:{" "}
-            <input
-              type="text"
-              placeholder="Search by name or ID"
-              value={studentSearch}
-              onChange={(e) => {
-                setStudentSearch(e.target.value);
-                setSelectedStudentId("");
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: "0.75rem",
+            flexWrap: "wrap",
+            gap: "0.5rem",
+          }}
+        >
+          <div style={{ display: "flex", gap: "0.75rem", alignItems: "center" }}>
+            <h2 style={{ margin: 0 }}>
+              {passListView === "active" ? "Out Right Now" : "Pass Log"}
+            </h2>
+            <div
+              style={{
+                display: "inline-flex",
+                border: "1px solid var(--border)",
+                borderRadius: 6,
+                overflow: "hidden",
               }}
-            />
-          </label>
-          {selectedStudentId ? (
-            <div style={{ marginTop: "0.25rem" }}>
-              Selected: <strong>{selectedStudentId}</strong>{" "}
-              {(() => {
-                const s = students.find(
-                  (s) => s.studentId === selectedStudentId,
-                );
-                return s ? `- ${s.firstName} ${s.lastName}` : "";
-              })()}{" "}
+            >
               <button
                 type="button"
-                onClick={() => {
-                  setSelectedStudentId("");
-                  setStudentSearch("");
-                }}
+                onClick={() => setPassListView("active")}
+                disabled={passListView === "active"}
+                style={{ border: "none", padding: "0.25rem 0.6rem" }}
               >
-                Clear
+                Active now
+              </button>
+              <button
+                type="button"
+                onClick={() => setPassListView("log")}
+                disabled={passListView === "log"}
+                style={{ border: "none", padding: "0.25rem 0.6rem" }}
+              >
+                Full log
               </button>
             </div>
-          ) : (
-            studentSearch && (
-              <ul
-                style={{
-                  listStyle: "none",
-                  padding: 0,
-                  margin: "0.25rem 0",
-                  border: "1px solid #ccc",
-                  maxWidth: "20rem",
-                }}
-              >
-                {students
-                  .filter((s) => {
-                    const q = studentSearch.toLowerCase();
-                    return (
-                      s.firstName.toLowerCase().includes(q) ||
-                      s.lastName.toLowerCase().includes(q) ||
-                      s.studentId.toLowerCase().includes(q)
-                    );
-                  })
-                  .map((s) => (
-                    <li key={s.id}>
-                      <button
-                        type="button"
-                        style={{
-                          width: "100%",
-                          textAlign: "left",
-                          padding: "0.25rem 0.5rem",
-                          background: "none",
-                          border: "none",
-                          cursor: "pointer",
-                        }}
-                        onClick={() => {
-                          setSelectedStudentId(s.studentId);
-                          setStudentSearch(
-                            `${s.studentId} - ${s.firstName} ${s.lastName}`,
-                          );
-                        }}
-                      >
-                        {s.studentId} - {s.firstName} {s.lastName}
-                      </button>
-                    </li>
-                  ))}
-                {students.filter((s) => {
-                  const q = studentSearch.toLowerCase();
-                  return (
-                    s.firstName.toLowerCase().includes(q) ||
-                    s.lastName.toLowerCase().includes(q) ||
-                    s.studentId.toLowerCase().includes(q)
-                  );
-                }).length === 0 && (
-                  <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
-                    No matches
-                  </li>
-                )}
-              </ul>
-            )
-          )}
-        </div>
-        <div style={{ marginBottom: "0.5rem", color: "var(--text-subtle)" }}>
-          <label style={{ color: "var(--text-subtle)" }}>
-            Origin Room:{" "}
-            <select
-              value={originRoom}
-              style={{ color: "var(--text-subtle)" }}
-              onChange={(e) => {
-                const newRoom = e.target.value;
-                setOriginRoom(newRoom);
-                const allowed = effectiveDestinationsByRoom[newRoom] ?? [];
-                if (destination && !allowed.includes(destination)) {
-                  setDestination("");
-                }
-              }}
-              required
-            >
-              <option value="">-- select an origin room --</option>
-              {Object.keys(effectiveDestinationsByRoom)
-                .sort((a, b) => a.localeCompare(b))
-                .map((room) => (
-                <option key={room} value={room}>
-                  {room}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Destination:{" "}
-            <select
-              value={destination}
-              onChange={(e) => setDestination(e.target.value)}
-              required
-              disabled={!originRoom}
-            >
-              <option value="">-- select a destination --</option>
-              {(effectiveDestinationsByRoom[originRoom] ?? []).map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <div style={{ marginBottom: "0.5rem" }}>
-          <label>
-            Destination Teacher (optional):{" "}
-            <select
-              value={destinationTeacher}
-              onChange={(e) => {
-                setDestinationTeacher(e.target.value);
-                setContactedAck(false);
-              }}
-            >
-              <option value="">-- none --</option>
-              {staffUsers
-                .filter((u) => u !== currentStaffUser)
-                .map((u) => (
-                  <option key={u} value={u}>
-                    {u}
-                  </option>
-                ))}
-            </select>
-          </label>
-        </div>
-        {destinationTeacher && (
-          <div style={{ marginBottom: "0.5rem" }}>
-            <label>
-              <input
-                type="checkbox"
-                checked={contactedAck}
-                onChange={(e) => setContactedAck(e.target.checked)}
-              />{" "}
-              I've contacted {destinationTeacher}
-            </label>
           </div>
-        )}
-        <button
-          type="submit"
-          disabled={Boolean(destinationTeacher) && !contactedAck}
-          title={
-            destinationTeacher && !contactedAck
-              ? `Confirm you've contacted ${destinationTeacher} to enable.`
-              : undefined
-          }
-        >
-          Create
-        </button>
-      </form>
-      </div>
-      )}
+          <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+            <span style={{ fontSize: 12, color: "var(--text-subtle)" }}>
+              Show:
+            </span>
+            <button
+              type="button"
+              onClick={() => setPassFilter("mine")}
+              disabled={passFilter === "mine"}
+            >
+              Mine
+            </button>
+            <button
+              type="button"
+              onClick={() => setPassFilter("all")}
+              disabled={passFilter === "all"}
+            >
+              All staff
+            </button>
+          </div>
+        </div>
 
-      <div className="card">
-      <h2>Hall Passes</h2>
-      <div style={{ marginBottom: "0.5rem" }}>
-        <button
-          type="button"
-          onClick={() => setPassFilter("all")}
-          disabled={passFilter === "all"}
-        >
-          All Passes
-        </button>{" "}
-        <button
-          type="button"
-          onClick={() => setPassFilter("mine")}
-          disabled={passFilter === "mine"}
-        >
-          My Passes
-        </button>
-      </div>
-      <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
-        <thead>
-          <tr>
-            <th>Student</th>
-            <th>Teacher</th>
-            <th>Destination</th>
-            <th>Origin</th>
-            <th>Status</th>
-            <th>Dur.</th>
-            <th>Started</th>
-            <th>Ended</th>
-            <th>Time</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
-          {hallPasses
-            .filter((p) =>
-              dateFilter === "today" ? isCreatedToday(p.createdAt) : true,
-            )
-            .filter((p) =>
-              staffFilter === "mine" ? p.teacherName === currentStaffUser : true,
-            )
-            .filter((p) =>
-              passFilter === "mine" ? p.teacherName === currentStaffUser : true,
-            )
-            .map((p) => {
-            const isAdmin = authUser?.isAdmin === true;
-            const isEditing = editingPassId === p.id;
-            const statusClass =
-              p.status === "active"
-                ? "badge badge-active"
-                : p.status === "system_ended"
-                  ? "badge badge-overdue"
-                  : "badge badge-ended";
-            const statusLabel =
-              p.status === "system_ended" ? "System Ended" : p.status;
-            return (
-            <tr key={p.id}>
-              <td>
-                <div style={{ fontWeight: 600 }}>{studentName(p.studentId)}</div>
-                <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                  {p.studentId}
+        {passListView === "active" ? (
+          (() => {
+            const visible = hallPasses
+              .filter((p) => p.status === "active")
+              .filter((p) =>
+                passFilter === "mine"
+                  ? p.teacherName === currentStaffUser
+                  : true,
+              )
+              .sort(
+                (a, b) =>
+                  new Date(a.createdAt).getTime() -
+                  new Date(b.createdAt).getTime(),
+              );
+            if (visible.length === 0) {
+              return (
+                <div
+                  style={{
+                    color: "var(--text-subtle)",
+                    padding: "0.75rem 0",
+                  }}
+                >
+                  No active passes right now.
                 </div>
-              </td>
-              <td>{p.teacherName}</td>
-              <td>
-                <div>{p.destination}</div>
-                {p.destinationTeacher && (
-                  <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                    → {p.destinationTeacher}
-                  </div>
-                )}
-              </td>
-              <td>{p.originRoom}</td>
-              <td><span className={statusClass}>{statusLabel}</span></td>
-              <td>
-                {(() => {
-                  const start = new Date(p.createdAt).getTime();
-                  const end = p.endedAt
-                    ? new Date(p.endedAt).getTime()
-                    : now;
-                  const mins = Math.max(0, Math.round((end - start) / 60000));
-                  return p.status === "active" ? (
-                    <span
+              );
+            }
+            return (
+              <div style={{ display: "grid", gap: "0.5rem" }}>
+                {visible.map((p) => {
+                  const bg = getTimeStatusColor(p, now);
+                  const status = formatTimeStatus(p, now);
+                  const overdue = status === "Overdue";
+                  return (
+                    <div
+                      key={p.id}
                       style={{
-                        fontStyle: "italic",
-                        color: "var(--text-muted)",
+                        display: "grid",
+                        gridTemplateColumns:
+                          "minmax(180px,1.2fr) minmax(180px,1.4fr) minmax(110px,auto) auto",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                        padding: "0.6rem 0.75rem",
+                        borderRadius: 8,
+                        background: bg,
+                        border: "1px solid var(--border)",
                       }}
                     >
-                      {mins}m
-                    </span>
-                  ) : (
-                    <span>{mins}m</span>
-                  );
-                })()}
-              </td>
-              <td>
-                {isEditing ? (
-                  <input
-                    type="datetime-local"
-                    value={editCreatedAt}
-                    onChange={(e) => setEditCreatedAt(e.target.value)}
-                  />
-                ) : (
-                  fmtTime(p.createdAt)
-                )}
-              </td>
-              <td>
-                {isEditing ? (
-                  <input
-                    type="datetime-local"
-                    value={editEndedAt}
-                    onChange={(e) => setEditEndedAt(e.target.value)}
-                  />
-                ) : (
-                  fmtTime(p.endedAt)
-                )}
-              </td>
-              <td style={{ backgroundColor: getTimeStatusColor(p, now) }}>
-                {formatTimeStatus(p, now)}
-              </td>
-              <td>
-                {isEditing ? (
-                  <>
-                    <button onClick={() => handleSavePassEdit(p.id)}>
-                      Save
-                    </button>{" "}
-                    <button
-                      onClick={() => {
-                        setEditingPassId(null);
-                        setEditEndedAt("");
-                        setEditCreatedAt("");
-                      }}
-                    >
-                      Cancel
-                    </button>{" "}
-                    <button onClick={() => setEditEndedAt("")}>
-                      Clear (reopen)
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    {p.status === "active" ? (
-                      <button onClick={() => handleEndPass(p.id)}>
-                        End Pass
-                      </button>
-                    ) : (
-                      "-"
-                    )}
-                    {isAdmin && (
-                      <>
-                        {" "}
-                        <button
-                          onClick={() => {
-                            setEditingPassId(p.id);
-                            setEditEndedAt(
-                              p.endedAt
-                                ? new Date(p.endedAt)
-                                    .toISOString()
-                                    .slice(0, 16)
-                                : "",
-                            );
-                            setEditCreatedAt(
-                              p.createdAt
-                                ? new Date(p.createdAt)
-                                    .toISOString()
-                                    .slice(0, 16)
-                                : "",
-                            );
+                      <div>
+                        <div style={{ fontWeight: 600 }}>
+                          {studentName(p.studentId)}
+                        </div>
+                        <div
+                          style={{
+                            fontSize: 11,
+                            color: "var(--text-subtle)",
                           }}
                         >
-                          Edit
-                        </button>
-                      </>
-                    )}
-                  </>
-                )}
-              </td>
-            </tr>
+                          {p.studentId} · from {p.originRoom}
+                        </div>
+                      </div>
+                      <div>
+                        <div>→ {p.destination}</div>
+                        {p.destinationTeacher && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                            }}
+                          >
+                            with {p.destinationTeacher}
+                          </div>
+                        )}
+                        {passFilter === "all" && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                            }}
+                          >
+                            issued by {p.teacherName}
+                          </div>
+                        )}
+                      </div>
+                      <div
+                        style={{
+                          fontWeight: overdue ? 700 : 500,
+                          color: overdue ? "var(--accent)" : undefined,
+                        }}
+                      >
+                        {status}
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => handleEndPass(p.id)}
+                      >
+                        End Pass
+                      </button>
+                    </div>
+                  );
+                })}
+              </div>
             );
-          })}
-        </tbody>
-      </table>
+          })()
+        ) : (
+          <table
+            border={1}
+            cellPadding={6}
+            style={{ borderCollapse: "collapse", width: "100%" }}
+          >
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Teacher</th>
+                <th>Destination</th>
+                <th>Origin</th>
+                <th>Status</th>
+                <th>Dur.</th>
+                <th>Started</th>
+                <th>Ended</th>
+                <th>Time</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {hallPasses
+                .filter((p) =>
+                  dateFilter === "today"
+                    ? isCreatedToday(p.createdAt)
+                    : true,
+                )
+                .filter((p) =>
+                  passFilter === "mine"
+                    ? p.teacherName === currentStaffUser
+                    : true,
+                )
+                .map((p) => {
+                  const isAdmin = authUser?.isAdmin === true;
+                  const isEditing = editingPassId === p.id;
+                  const statusClass =
+                    p.status === "active"
+                      ? "badge badge-active"
+                      : p.status === "system_ended"
+                        ? "badge badge-overdue"
+                        : "badge badge-ended";
+                  const statusLabel =
+                    p.status === "system_ended" ? "System Ended" : p.status;
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <div style={{ fontWeight: 600 }}>
+                          {studentName(p.studentId)}
+                        </div>
+                        <div
+                          style={{ fontSize: 11, color: "var(--text-subtle)" }}
+                        >
+                          {p.studentId}
+                        </div>
+                      </td>
+                      <td>{p.teacherName}</td>
+                      <td>
+                        <div>{p.destination}</div>
+                        {p.destinationTeacher && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                            }}
+                          >
+                            → {p.destinationTeacher}
+                          </div>
+                        )}
+                      </td>
+                      <td>{p.originRoom}</td>
+                      <td>
+                        <span className={statusClass}>{statusLabel}</span>
+                      </td>
+                      <td>
+                        {(() => {
+                          const start = new Date(p.createdAt).getTime();
+                          const end = p.endedAt
+                            ? new Date(p.endedAt).getTime()
+                            : now;
+                          const mins = Math.max(
+                            0,
+                            Math.round((end - start) / 60000),
+                          );
+                          return p.status === "active" ? (
+                            <span
+                              style={{
+                                fontStyle: "italic",
+                                color: "var(--text-muted)",
+                              }}
+                            >
+                              {mins}m
+                            </span>
+                          ) : (
+                            <span>{mins}m</span>
+                          );
+                        })()}
+                      </td>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            type="datetime-local"
+                            value={editCreatedAt}
+                            onChange={(e) => setEditCreatedAt(e.target.value)}
+                          />
+                        ) : (
+                          fmtTime(p.createdAt)
+                        )}
+                      </td>
+                      <td>
+                        {isEditing ? (
+                          <input
+                            type="datetime-local"
+                            value={editEndedAt}
+                            onChange={(e) => setEditEndedAt(e.target.value)}
+                          />
+                        ) : (
+                          fmtTime(p.endedAt)
+                        )}
+                      </td>
+                      <td
+                        style={{ backgroundColor: getTimeStatusColor(p, now) }}
+                      >
+                        {formatTimeStatus(p, now)}
+                      </td>
+                      <td>
+                        {isEditing ? (
+                          <>
+                            <button onClick={() => handleSavePassEdit(p.id)}>
+                              Save
+                            </button>{" "}
+                            <button
+                              onClick={() => {
+                                setEditingPassId(null);
+                                setEditEndedAt("");
+                                setEditCreatedAt("");
+                              }}
+                            >
+                              Cancel
+                            </button>{" "}
+                            <button onClick={() => setEditEndedAt("")}>
+                              Clear (reopen)
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            {p.status === "active" ? (
+                              <button onClick={() => handleEndPass(p.id)}>
+                                End Pass
+                              </button>
+                            ) : (
+                              "-"
+                            )}
+                            {isAdmin && (
+                              <>
+                                {" "}
+                                <button
+                                  onClick={() => {
+                                    setEditingPassId(p.id);
+                                    setEditEndedAt(
+                                      p.endedAt
+                                        ? new Date(p.endedAt)
+                                            .toISOString()
+                                            .slice(0, 16)
+                                        : "",
+                                    );
+                                    setEditCreatedAt(
+                                      p.createdAt
+                                        ? new Date(p.createdAt)
+                                            .toISOString()
+                                            .slice(0, 16)
+                                        : "",
+                                    );
+                                  }}
+                                >
+                                  Edit
+                                </button>
+                              </>
+                            )}
+                          </>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+            </tbody>
+          </table>
+        )}
       </div>
+
       </>)}
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && (
         <div className="card">
@@ -10044,9 +10035,6 @@ function App() {
           onChange={setTeacherAllowlistMap}
         />
         <StaffDefaultsAdmin
-          staffUsers={staffUsers
-            .filter((s) => typeof s.id === "number")
-            .map((s) => ({ id: s.id as number, displayName: s.displayName }))}
           originLocations={Object.keys(effectiveDestinationsByRoom).sort((a, b) =>
             a.localeCompare(b),
           )}
