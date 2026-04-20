@@ -4548,9 +4548,11 @@ function App() {
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
-  const canVerifyPullouts = isAdmin || isDean || isMtss;
-  const canViewIssDashboard =
-    isAdmin || isIssTeacher || isBehaviorSpec || isDean || isMtss;
+  // Capability-based gates (replace previous role checks). Admin still gets
+  // all of these via the role-preset seed.
+  const canRequestPullout = authUser?.capPulloutsRequest === true;
+  const canVerifyPullouts = authUser?.capPulloutsVerify === true;
+  const canViewIssDashboard = authUser?.capIssDashboard === true;
 
   // Pending pullout count for the verifier badge.
   const [pendingPulloutCount, setPendingPulloutCount] = useState<number>(0);
@@ -4574,7 +4576,7 @@ function App() {
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
   // Unreviewed pullout count for the behavior-review badge.
-  const canReviewPullouts = isAdmin || isBehaviorSpec;
+  const canReviewPullouts = authUser?.capPulloutsReview === true;
   const [unreviewedPulloutCount, setUnreviewedPulloutCount] =
     useState<number>(0);
   const [unreviewedPulloutsTick, setUnreviewedPulloutsTick] = useState(0);
@@ -4609,12 +4611,32 @@ function App() {
     if (!canManageBehaviorLists && activeSection === "interventions") {
       setActiveSection("hallPasses");
     }
+    if (!canRequestPullout && activeSection === "requestPullout") {
+      setActiveSection("hallPasses");
+    }
+    if (!canVerifyPullouts && activeSection === "verifyPullouts") {
+      setActiveSection("hallPasses");
+    }
+    if (!canViewIssDashboard && activeSection === "issDashboard") {
+      setActiveSection("hallPasses");
+    }
+    if (!canReviewPullouts && activeSection === "behaviorReview") {
+      setActiveSection("hallPasses");
+    }
+    if (!canLogIntervention && activeSection === "logIntervention") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
     isPbisCoord,
     isBehaviorSpec,
     canManageBehaviorLists,
+    canRequestPullout,
+    canVerifyPullouts,
+    canViewIssDashboard,
+    canReviewPullouts,
+    canLogIntervention,
     activeSection,
   ]);
 
@@ -4659,6 +4681,12 @@ function App() {
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
   ];
+  // Filter rules for capability-gated base nav items.
+  const baseNavGate = (key: typeof activeSection): boolean => {
+    if (key === "logIntervention") return canLogIntervention;
+    if (key === "requestPullout") return canRequestPullout;
+    return true;
+  };
   const eseNavSections: NavSection[] = [
     { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
   ];
@@ -4828,11 +4856,7 @@ function App() {
         return (
           <aside className="sidebar">
             <div className="section-label">Workspace</div>
-            {baseNavSections
-              .filter(
-                (s) => s.key !== "logIntervention" || canLogIntervention,
-              )
-              .map(renderNavItem)}
+            {baseNavSections.filter((s) => baseNavGate(s.key)).map(renderNavItem)}
             {hasBelowEkg && (
               <>
                 <div className="nav-admin-divider" aria-hidden="true">
@@ -8774,7 +8798,7 @@ function App() {
         </section>
       </>)}
 
-      {activeSection === "requestPullout" && (
+      {activeSection === "requestPullout" && canRequestPullout && (
         <RequestPulloutSection
           students={students}
           interventionTypes={interventionList}
