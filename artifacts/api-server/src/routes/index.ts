@@ -26,6 +26,7 @@ import adminStaffRouter from "./adminStaff";
 import parentEmailRouter from "./parentEmail";
 import pulloutReasonsRouter from "./pulloutReasons";
 import polarityPairsRouter from "./polarityPairs";
+import teacherAllowlistRouter from "./teacherAllowlist";
 
 const router: IRouter = Router();
 
@@ -56,5 +57,6 @@ router.use(adminStaffRouter);
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
 router.use(polarityPairsRouter);
+router.use(teacherAllowlistRouter);
 
 export default router;

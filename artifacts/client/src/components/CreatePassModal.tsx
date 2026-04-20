@@ -24,6 +24,10 @@ interface Props {
   defaultOriginRoom: string;
   currentStaffUser: string;
   staffUsers: string[];
+  /** Names of destinations the current teacher is configured to send to without contact-ack. */
+  nearDestinations: string[];
+  /** When true (e.g. Hall Pass admin), the contact-ack is never required. */
+  bypassContactAck: boolean;
   onCreate: (payload: CreatePassPayload) => Promise<void> | void;
 }
 
@@ -58,6 +62,8 @@ export default function CreatePassModal({
   defaultOriginRoom,
   currentStaffUser,
   staffUsers,
+  nearDestinations,
+  bypassContactAck,
   onCreate,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -68,7 +74,6 @@ export default function CreatePassModal({
   const [destQuery, setDestQuery] = useState("");
   const [destination, setDestination] = useState("");
   const [minutes, setMinutes] = useState<number>(DEFAULT_MIN);
-  const [destinationTeacher, setDestinationTeacher] = useState<string>("");
   const [contactedAck, setContactedAck] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -83,7 +88,6 @@ export default function CreatePassModal({
     setDestQuery("");
     setDestination("");
     setMinutes(DEFAULT_MIN);
-    setDestinationTeacher("");
     setContactedAck(false);
     setError(null);
     setSubmitting(false);
@@ -119,20 +123,33 @@ export default function CreatePassModal({
       .slice(0, 8);
   }, [students, studentQuery]);
 
-  const filteredDestinations = useMemo(() => {
-    const q = destQuery.trim().toLowerCase();
-    if (!q) return availableDestinations;
-    return availableDestinations.filter((d) => d.toLowerCase().includes(q));
-  }, [availableDestinations, destQuery]);
+  const nearSet = useMemo(() => {
+    const set = new Set<string>();
+    const source =
+      nearDestinations.length > 0 ? nearDestinations : availableDestinations;
+    for (const d of source) set.add(d);
+    return set;
+  }, [nearDestinations, availableDestinations]);
 
-  const teacherChoices = useMemo(
-    () => staffUsers.filter((u) => u && u !== currentStaffUser),
-    [staffUsers, currentStaffUser],
-  );
+  const groupedDestinations = useMemo(() => {
+    const q = destQuery.trim().toLowerCase();
+    const filtered = q
+      ? availableDestinations.filter((d) => d.toLowerCase().includes(q))
+      : availableDestinations;
+    const near = filtered.filter((d) => nearSet.has(d));
+    const other = filtered.filter((d) => !nearSet.has(d));
+    return { near, other };
+  }, [availableDestinations, destQuery, nearSet]);
+
+  // staffUsers prop kept for forward-compat; teacher-notify dropdown was
+  // removed in favor of the off-route contact-ack flow.
+  void staffUsers;
 
   if (!open) return null;
 
-  const needsContactAck = Boolean(destinationTeacher) && !contactedAck;
+  const isOffRoute = Boolean(destination) && !nearSet.has(destination);
+  const showContactAck = isOffRoute && !bypassContactAck;
+  const needsContactAck = showContactAck && !contactedAck;
 
   const handleSend = async () => {
     if (!selectedStudent || !destination || !originRoom) return;
@@ -145,8 +162,8 @@ export default function CreatePassModal({
         destination,
         originRoom,
         maxDurationMinutes: minutes,
-        destinationTeacher: destinationTeacher || null,
-        contactedAcknowledged: destinationTeacher ? contactedAck : false,
+        destinationTeacher: null,
+        contactedAcknowledged: showContactAck ? contactedAck : false,
       });
       onClose();
     } catch (e: unknown) {
@@ -283,29 +300,75 @@ export default function CreatePassModal({
               {!originRoom && (
                 <p className="cp-empty">Select an origin room to continue.</p>
               )}
-              <ul className="cp-list">
-                {originRoom &&
-                  filteredDestinations.map((d) => (
-                    <li key={d}>
-                      <button
-                        type="button"
-                        className="cp-list-item"
-                        onClick={() => {
-                          setDestination(d);
-                          setStep(3);
-                        }}
-                      >
-                        <span className="cp-dest-dot" aria-hidden="true" />
-                        <span className="cp-list-text">
-                          <strong>{d}</strong>
-                        </span>
-                      </button>
-                    </li>
-                  ))}
-                {originRoom && filteredDestinations.length === 0 && (
-                  <li className="cp-empty">No destinations match.</li>
-                )}
-              </ul>
+              {originRoom && (
+                <div className="cp-groups">
+                  {groupedDestinations.near.length > 0 && (
+                    <>
+                      <div className="cp-group-label">Near you</div>
+                      <ul className="cp-list">
+                        {groupedDestinations.near.map((d) => (
+                          <li key={d}>
+                            <button
+                              type="button"
+                              className="cp-list-item"
+                              onClick={() => {
+                                setDestination(d);
+                                setContactedAck(false);
+                                setStep(3);
+                              }}
+                            >
+                              <span
+                                className="cp-dest-dot cp-dest-dot-near"
+                                aria-hidden="true"
+                              />
+                              <span className="cp-list-text">
+                                <strong>{d}</strong>
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {groupedDestinations.other.length > 0 && (
+                    <>
+                      <div className="cp-group-label">Other locations</div>
+                      <ul className="cp-list">
+                        {groupedDestinations.other.map((d) => (
+                          <li key={d}>
+                            <button
+                              type="button"
+                              className="cp-list-item"
+                              onClick={() => {
+                                setDestination(d);
+                                setContactedAck(false);
+                                setStep(3);
+                              }}
+                            >
+                              <span
+                                className="cp-dest-dot cp-dest-dot-other"
+                                aria-hidden="true"
+                              />
+                              <span className="cp-list-text">
+                                <strong>{d}</strong>
+                                {!bypassContactAck && (
+                                  <span className="cp-list-sub">
+                                    Requires contact confirmation
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
+                  {groupedDestinations.near.length === 0 &&
+                    groupedDestinations.other.length === 0 && (
+                      <p className="cp-empty">No destinations match.</p>
+                    )}
+                </div>
+              )}
             </>
           )}
 
@@ -353,37 +416,25 @@ export default function CreatePassModal({
                 </div>
               </div>
 
-              <div className="cp-teacher">
-                <label className="cp-teacher-label" htmlFor="cp-dest-teacher">
-                  Notify a teacher? <span className="cp-optional">(optional)</span>
-                </label>
-                <select
-                  id="cp-dest-teacher"
-                  className="cp-input"
-                  value={destinationTeacher}
-                  onChange={(e) => {
-                    setDestinationTeacher(e.target.value);
-                    setContactedAck(false);
-                  }}
-                >
-                  <option value="">— none —</option>
-                  {teacherChoices.map((u) => (
-                    <option key={u} value={u}>
-                      {u}
-                    </option>
-                  ))}
-                </select>
-                {destinationTeacher && (
+              {showContactAck && (
+                <div className="cp-offroute">
+                  <div className="cp-offroute-title">
+                    Off‑route destination
+                  </div>
+                  <p className="cp-offroute-text">
+                    {destination} isn't on your nearby list. Please contact
+                    someone there before sending.
+                  </p>
                   <label className="cp-ack">
                     <input
                       type="checkbox"
                       checked={contactedAck}
                       onChange={(e) => setContactedAck(e.target.checked)}
                     />
-                    <span>I've contacted {destinationTeacher}</span>
+                    <span>I've contacted them</span>
                   </label>
-                )}
-              </div>
+                </div>
+              )}
 
               {error && <div className="cp-error">{error}</div>}
 
@@ -394,7 +445,7 @@ export default function CreatePassModal({
                 disabled={submitting || needsContactAck}
                 title={
                   needsContactAck
-                    ? `Confirm you've contacted ${destinationTeacher} to enable.`
+                    ? "Confirm you've contacted the destination to enable."
                     : undefined
                 }
               >

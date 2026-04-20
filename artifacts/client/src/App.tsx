@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
+import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -1978,6 +1979,9 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
+  const [teacherAllowlistMap, setTeacherAllowlistMap] = useState<
+    Record<string, string[]>
+  >({});
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [editCreatedAt, setEditCreatedAt] = useState<string>("");
@@ -3081,6 +3085,27 @@ function App() {
       )
       .catch((err) =>
         console.error("Failed to load location destinations:", err),
+      );
+
+    fetch("/api/teacher-allowlist")
+      .then((res) => (res.ok ? res.json() : []))
+      .then(
+        (
+          data: { staffName: string; destinationName: string }[],
+        ) => {
+          const map: Record<string, string[]> = {};
+          for (const row of Array.isArray(data) ? data : []) {
+            if (!map[row.staffName]) map[row.staffName] = [];
+            map[row.staffName].push(row.destinationName);
+          }
+          for (const k of Object.keys(map)) {
+            map[k].sort((a, b) => a.localeCompare(b));
+          }
+          setTeacherAllowlistMap(map);
+        },
+      )
+      .catch((err) =>
+        console.error("Failed to load teacher allowlist:", err),
       );
 
     fetch("/api/staff-defaults")
@@ -4636,6 +4661,8 @@ function App() {
         defaultOriginRoom={originRoom || (staffDefaults[currentStaffUser] ?? "")}
         currentStaffUser={currentStaffUser}
         staffUsers={staffUsers}
+        nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
+        bypassContactAck={Boolean(authUser?.isAdmin)}
         onCreate={async (payload) => {
           const res = await fetch("/api/hall-passes", {
             method: "POST",
@@ -9974,6 +10001,18 @@ function App() {
       {activeSection === "settings" && isAdmin && (
         <>
         <StaffRolesAdmin currentStaffId={authUser?.id ?? null} />
+        <TeacherAllowlistAdmin
+          staffUsers={staffUsers}
+          allDestinations={(() => {
+            const set = new Set<string>();
+            for (const arr of Object.values(effectiveDestinationsByRoom)) {
+              for (const d of arr) set.add(d);
+            }
+            return Array.from(set).sort((a, b) => a.localeCompare(b));
+          })()}
+          allowlistMap={teacherAllowlistMap}
+          onChange={setTeacherAllowlistMap}
+        />
         <div className="card" style={{ marginTop: "1rem" }}>
           <h2>School Settings</h2>
           <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>

@@ -24,3 +24,4 @@ export * from "./pbisMilestones";
 export * from "./pullouts";
 export * from "./pulloutReasons";
 export * from "./polarityPairs";
+export * from "./teacherDestinationAllowlist";
