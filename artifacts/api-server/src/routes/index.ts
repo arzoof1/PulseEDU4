@@ -27,7 +27,6 @@ import parentEmailRouter from "./parentEmail";
 import pulloutReasonsRouter from "./pulloutReasons";
 import polarityPairsRouter from "./polarityPairs";
 import teacherAllowlistRouter from "./teacherAllowlist";
-import districtIntegrationsRouter from "./districtIntegrations";
 
 const router: IRouter = Router();
 
@@ -59,6 +58,5 @@ router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
 router.use(polarityPairsRouter);
 router.use(teacherAllowlistRouter);
-router.use(districtIntegrationsRouter);
 
 export default router;

@@ -3,7 +3,6 @@ import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
-import IntegrationsAdmin from "./components/IntegrationsAdmin";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -10064,7 +10063,6 @@ function App() {
               .catch(() => {});
           }}
         />
-        <IntegrationsAdmin />
         <div className="card" style={{ marginTop: "1rem" }}>
           <h2>School Settings</h2>
           <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
