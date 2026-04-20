@@ -101,11 +101,15 @@ router.get(
     const staff = (req as Request & { staff: StaffRow }).staff;
     const scope = String(req.query.scope ?? "mine");
 
-    // Capability-based gates (replace previous role checks). Admin still
-    // gets all of these via the role-preset seed.
-    const isVerifier = staff.capPulloutsVerify;
-    const isIssView = staff.capIssDashboard;
-    const isReviewer = staff.capPulloutsReview;
+    const isVerifier =
+      staff.isAdmin || staff.isDean || staff.isMtssCoordinator;
+    const isIssView =
+      staff.isAdmin ||
+      staff.isIssTeacher ||
+      staff.isBehaviorSpecialist ||
+      staff.isDean ||
+      staff.isMtssCoordinator;
+    const isReviewer = staff.isAdmin || staff.isBehaviorSpecialist;
 
     if (scope === "pending" && !isVerifier) {
       res.status(403).json({ error: "Verifier only" });
@@ -156,10 +160,6 @@ router.post(
   requireStaffMW(),
   async (req: Request, res: Response) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
-    if (!staff.capPulloutsRequest) {
-      res.status(403).json({ error: "Requesting pullouts is not granted" });
-      return;
-    }
     const {
       studentId,
       reason,
@@ -198,12 +198,12 @@ router.post(
       return;
     }
 
-    // Default referring teacher is the requester. Anyone with verifier
-    // capability may submit on behalf of another teacher.
+    // Default referring teacher is the requester. Admin/Dean/MTSS may submit
+    // on behalf of another teacher.
     let refStaffId: number | null = staff.id;
     let refName: string = staff.displayName;
     if (
-      staff.capPulloutsVerify &&
+      (staff.isAdmin || staff.isDean || staff.isMtssCoordinator) &&
       typeof referringTeacherStaffId === "number"
     ) {
       const [other] = await db
@@ -248,9 +248,9 @@ router.post(
   },
 );
 
-// Verifier actions — gated by capPulloutsVerify (admin gets it via the
-// role-preset seed; deans and MTSS coordinators do too).
-const isVerifier = (s: StaffRow) => s.capPulloutsVerify;
+// Verifier (admin / dean / MTSS) actions.
+const isVerifier = (s: StaffRow) =>
+  s.isAdmin || s.isDean || s.isMtssCoordinator;
 
 router.patch(
   "/pullouts/:id/verify",
@@ -388,7 +388,15 @@ router.get(
 // exposed to all teachers.
 router.get(
   "/pullouts/report",
-  requireStaffMW((s) => s.capIssDashboard, "ISS dashboard access"),
+  requireStaffMW(
+    (s) =>
+      s.isAdmin ||
+      s.isBehaviorSpecialist ||
+      s.isDean ||
+      s.isMtssCoordinator ||
+      s.isIssTeacher,
+    "ISS dashboard role",
+  ),
   async (req: Request, res: Response) => {
     let days = Number(req.query.days ?? 30);
     if (!Number.isFinite(days) || days < 1 || days > 365) days = 30;
@@ -469,13 +477,17 @@ router.get(
   },
 );
 
-// ISS dashboard actions: mark arrived / returned / closed. Gated by
-// capIssDashboard (admin/ISS/BS/Dean/MTSS get it via role-preset seed).
-const isIssActor = (s: StaffRow) => s.capIssDashboard;
+// ISS dashboard actions: mark arrived / returned / closed.
+const isIssActor = (s: StaffRow) =>
+  s.isAdmin ||
+  s.isIssTeacher ||
+  s.isBehaviorSpecialist ||
+  s.isDean ||
+  s.isMtssCoordinator;
 
 router.patch(
   "/pullouts/:id/arrived",
-  requireStaffMW(isIssActor, "ISS dashboard access"),
+  requireStaffMW(isIssActor, "ISS dashboard role"),
   async (req: Request, res: Response) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);
@@ -519,7 +531,7 @@ router.patch(
 
 router.patch(
   "/pullouts/:id/returned",
-  requireStaffMW(isIssActor, "ISS dashboard access"),
+  requireStaffMW(isIssActor, "ISS dashboard role"),
   async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
@@ -551,7 +563,7 @@ router.patch(
 
 router.patch(
   "/pullouts/:id/closed",
-  requireStaffMW(isIssActor, "ISS dashboard access"),
+  requireStaffMW(isIssActor, "ISS dashboard role"),
   async (req: Request, res: Response) => {
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
@@ -587,7 +599,10 @@ router.patch(
 // Behavior Specialist / Admin: mark a closed pullout as reviewed.
 router.patch(
   "/pullouts/:id/review",
-  requireStaffMW((s) => s.capPulloutsReview, "Pullout review access"),
+  requireStaffMW(
+    (s) => s.isAdmin || s.isBehaviorSpecialist,
+    "Behavior specialist or admin",
+  ),
   async (req: Request, res: Response) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
     const id = Number(req.params.id);

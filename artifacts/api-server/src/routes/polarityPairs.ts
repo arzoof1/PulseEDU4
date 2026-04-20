@@ -55,13 +55,10 @@ function requireRole(
   };
 }
 
-// Capability-based gate (replaces the previous role-based check). The
-// capInterventionManage capability is the new source of truth for "can
-// manage Interventions including the Keep-Apart Pairs"; admins still get
-// it via the role-preset seed.
 const requirePolarityAdmin = requireRole(
-  (s) => s.capInterventionManage,
-  "Staff with Interventions Manage access",
+  (s) =>
+    s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator || s.isDean,
+  "Admin, behavior specialist, MTSS coordinator, or dean",
 );
 
 // Normalize so [a,b] always has a <= b. Eliminates ambiguity around order.

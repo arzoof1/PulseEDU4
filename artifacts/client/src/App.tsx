@@ -1648,61 +1648,15 @@ type StaffAdminRow = {
   isIssTeacher: boolean;
   isDean: boolean;
   isMtssCoordinator: boolean;
-  capHallPasses: boolean;
-  capHallPassesViewAll: boolean;
-  capTardies: boolean;
-  capStudentActivity: boolean;
-  capPbisAward: boolean;
-  capPbisManage: boolean;
-  capParentEmail: boolean;
-  capSupportNotes: boolean;
-  capAccommodationLog: boolean;
-  capAccommodationManage: boolean;
-  capPulloutsRequest: boolean;
-  capPulloutsVerify: boolean;
-  capPulloutsReview: boolean;
-  capInterventionLog: boolean;
-  capInterventionManage: boolean;
-  capReports: boolean;
-  capIssDashboard: boolean;
-  capKioskActivate: boolean;
-  capManageLocations: boolean;
 };
 
-type StaffBoolField = keyof Omit<
-  StaffAdminRow,
-  "id" | "email" | "displayName"
->;
-type StaffRoleField =
-  | "isAdmin"
-  | "isDean"
-  | "isMtssCoordinator"
-  | "isBehaviorSpecialist"
-  | "isIssTeacher"
-  | "isPbisCoordinator"
-  | "isEseCoordinator";
-type StaffCapField =
-  | "capHallPasses"
-  | "capHallPassesViewAll"
-  | "capTardies"
-  | "capStudentActivity"
-  | "capPbisAward"
-  | "capPbisManage"
-  | "capParentEmail"
-  | "capSupportNotes"
-  | "capAccommodationLog"
-  | "capAccommodationManage"
-  | "capPulloutsRequest"
-  | "capPulloutsVerify"
-  | "capPulloutsReview"
-  | "capInterventionLog"
-  | "capInterventionManage"
-  | "capReports"
-  | "capIssDashboard"
-  | "capKioskActivate"
-  | "capManageLocations";
-
-const STAFF_ROLE_FIELDS: { key: StaffRoleField; label: string }[] = [
+const STAFF_ROLE_FIELDS: {
+  key: keyof Omit<
+    StaffAdminRow,
+    "id" | "email" | "displayName" | "active"
+  >;
+  label: string;
+}[] = [
   { key: "isAdmin", label: "Admin" },
   { key: "isDean", label: "Dean" },
   { key: "isMtssCoordinator", label: "MTSS Coord." },
@@ -1711,69 +1665,6 @@ const STAFF_ROLE_FIELDS: { key: StaffRoleField; label: string }[] = [
   { key: "isPbisCoordinator", label: "PBIS Coord." },
   { key: "isEseCoordinator", label: "ESE Coord." },
 ];
-
-// Page-level capabilities. Each row is one column header in the Page Access
-// table. `short` is the column header (kept tight so 19 columns fit), `full`
-// is the tooltip / accessible label.
-const STAFF_CAP_FIELDS: {
-  key: StaffCapField;
-  short: string;
-  full: string;
-}[] = [
-  { key: "capHallPasses", short: "Hall Passes", full: "Hall Passes (issue & end your own passes)" },
-  { key: "capHallPassesViewAll", short: "All Passes", full: "Hall Passes — view all active passes school-wide" },
-  { key: "capTardies", short: "Tardies", full: "Tardies / Check-ins" },
-  { key: "capStudentActivity", short: "Student Activity", full: "Student Activity (search a student & see their history)" },
-  { key: "capPbisAward", short: "PBIS Award", full: "PBIS — award points to students" },
-  { key: "capPbisManage", short: "PBIS Manage", full: "PBIS — manage categories, leaderboard, configuration" },
-  { key: "capParentEmail", short: "Parent Email", full: "Parent Email (send messages from templates)" },
-  { key: "capSupportNotes", short: "Support Notes", full: "Support Notes" },
-  { key: "capAccommodationLog", short: "Accom. Log", full: "Accommodations — log usage" },
-  { key: "capAccommodationManage", short: "Accom. Manage", full: "Accommodations — manage accommodation plans" },
-  { key: "capPulloutsRequest", short: "Pullout Request", full: "Pullouts — request a pullout" },
-  { key: "capPulloutsVerify", short: "Pullout Verify", full: "Pullouts — verify / approve pullout requests" },
-  { key: "capPulloutsReview", short: "Pullout Review", full: "Pullouts — review closed pullouts" },
-  { key: "capInterventionLog", short: "Interv. Log", full: "Interventions — log an intervention" },
-  { key: "capInterventionManage", short: "Interv. Manage", full: "Interventions — manage intervention catalog & Keep-Apart pairs" },
-  { key: "capReports", short: "Reports", full: "Reports" },
-  { key: "capIssDashboard", short: "ISS Dashboard", full: "ISS Dashboard" },
-  { key: "capKioskActivate", short: "Kiosk", full: "Kiosk — activate the kiosk on this device" },
-  { key: "capManageLocations", short: "Locations", full: "Manage Locations (hall pass destinations)" },
-];
-
-// When an admin turns a role checkbox ON, also flip these capabilities ON.
-// Turning a role OFF only clears the role flag — it leaves the caps alone so
-// individually-granted access isn't yanked. This mirrors the seed mapping
-// used to populate cap_* from the existing role flags.
-const ROLE_PRESETS: Record<StaffRoleField, StaffCapField[]> = {
-  isAdmin: [
-    "capHallPasses",
-    "capHallPassesViewAll",
-    "capTardies",
-    "capStudentActivity",
-    "capPbisAward",
-    "capPbisManage",
-    "capParentEmail",
-    "capSupportNotes",
-    "capAccommodationLog",
-    "capAccommodationManage",
-    "capPulloutsRequest",
-    "capPulloutsVerify",
-    "capPulloutsReview",
-    "capInterventionLog",
-    "capInterventionManage",
-    "capReports",
-    "capIssDashboard",
-    "capKioskActivate",
-    "capManageLocations",
-  ],
-  isDean: ["capPulloutsVerify", "capInterventionManage"],
-  isMtssCoordinator: ["capPulloutsVerify", "capInterventionManage"],
-  isBehaviorSpecialist: ["capPulloutsReview", "capInterventionManage"],
-  isIssTeacher: ["capIssDashboard"],
-  isPbisCoordinator: ["capPbisManage"],
-  isEseCoordinator: ["capHallPassesViewAll", "capAccommodationManage"],
-};
 
 function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) {
   const [rows, setRows] = useState<StaffAdminRow[]>([]);
@@ -1815,12 +1706,10 @@ function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) 
     );
   }, [rows, filter]);
 
-  // Send any subset of boolean updates for one staff row. Used for both
-  // single-checkbox toggles and the role-preset shortcut (which sends the
-  // role flag plus the caps that role grants in a single PATCH).
-  const updateRow = async (
+  const toggle = async (
     row: StaffAdminRow,
-    updates: Partial<Record<StaffBoolField, boolean>>,
+    field: keyof StaffAdminRow,
+    next: boolean,
   ) => {
     setBusyId(row.id);
     setMsg(null);
@@ -1828,7 +1717,7 @@ function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) 
       const r = await fetch(`/api/admin/staff/${row.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(updates),
+        body: JSON.stringify({ [field]: next }),
       });
       const data = await r.json().catch(() => ({}));
       if (!r.ok) {
@@ -1843,309 +1732,148 @@ function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) 
     }
   };
 
-  const toggleCap = (row: StaffAdminRow, field: StaffCapField, next: boolean) =>
-    updateRow(row, { [field]: next } as Partial<Record<StaffBoolField, boolean>>);
-
-  const toggleActive = (row: StaffAdminRow, next: boolean) =>
-    updateRow(row, { active: next });
-
-  // Toggling a role ON also flips that role's preset capabilities ON.
-  // Toggling a role OFF only clears the role flag — caps stay as they are
-  // (so individually-granted access isn't yanked when the label is removed).
-  const toggleRole = (row: StaffAdminRow, field: StaffRoleField, next: boolean) => {
-    const updates: Partial<Record<StaffBoolField, boolean>> = { [field]: next };
-    if (next) {
-      for (const cap of ROLE_PRESETS[field]) updates[cap] = true;
-    }
-    return updateRow(row, updates);
-  };
-
   return (
-    <>
-      <div className="card" style={{ marginTop: "1rem" }}>
-        <h2>Staff & Access</h2>
-        <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-          Each column below is one page in the app — check the box to give a
-          staff member access to that page. The Roles table further down is
-          for legacy labels and quick presets: turning a role on will also
-          check that role's matching page-access boxes here.
-        </p>
-        {msg && (
-          <div
+    <div className="card" style={{ marginTop: "1rem" }}>
+      <h2>Staff & Roles</h2>
+      <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+        Toggle which staff can verify pullouts (Admin / Dean / MTSS), run the
+        ISS Dashboard (ISS Teacher / Behavior Specialist), and review closed
+        pullouts (Behavior Specialist). Admins can also deactivate accounts.
+      </p>
+      {msg && (
+        <div
+          style={{
+            padding: "0.5rem 0.75rem",
+            borderRadius: 6,
+            marginBottom: "0.75rem",
+            background: msg.ok ? "#ecfdf5" : "#fef2f2",
+            border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}`,
+            color: msg.ok ? "#065f46" : "#991b1b",
+          }}
+        >
+          {msg.text}
+        </div>
+      )}
+      <div style={{ marginBottom: "0.5rem" }}>
+        <input
+          type="text"
+          placeholder="Filter by name or email…"
+          value={filter}
+          onChange={(e) => setFilter(e.target.value)}
+          style={{ width: "100%", maxWidth: 360 }}
+        />
+      </div>
+      {loading ? (
+        <p>Loading…</p>
+      ) : filtered.length === 0 ? (
+        <p style={{ color: "var(--text-subtle)" }}>No staff match.</p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table
             style={{
-              padding: "0.5rem 0.75rem",
-              borderRadius: 6,
-              marginBottom: "0.75rem",
-              background: msg.ok ? "#ecfdf5" : "#fef2f2",
-              border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}`,
-              color: msg.ok ? "#065f46" : "#991b1b",
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: "0.9rem",
             }}
           >
-            {msg.text}
-          </div>
-        )}
-        <div style={{ marginBottom: "0.5rem" }}>
-          <input
-            type="text"
-            placeholder="Filter by name or email…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            style={{ width: "100%", maxWidth: 360 }}
-          />
-        </div>
-        {loading ? (
-          <p>Loading…</p>
-        ) : filtered.length === 0 ? (
-          <p style={{ color: "var(--text-subtle)" }}>No staff match.</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "0.85rem",
-              }}
-            >
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
+            <thead>
+              <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
+                <th style={{ padding: "0.4rem 0.5rem" }}>Staff</th>
+                {STAFF_ROLE_FIELDS.map((f) => (
                   <th
+                    key={f.key}
+                    style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}
+                  >
+                    {f.label}
+                  </th>
+                ))}
+                <th style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}>
+                  Active
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((row) => {
+                const isSelf = currentStaffId === row.id;
+                const dim = !row.active;
+                return (
+                  <tr
+                    key={row.id}
                     style={{
-                      padding: "0.4rem 0.5rem",
-                      position: "sticky",
-                      left: 0,
-                      background: "white",
-                      zIndex: 1,
-                      minWidth: 220,
+                      borderBottom: "1px solid #f1f5f9",
+                      opacity: dim ? 0.5 : 1,
                     }}
                   >
-                    Staff
-                  </th>
-                  {STAFF_CAP_FIELDS.map((f) => (
-                    <th
-                      key={f.key}
-                      title={f.full}
-                      style={{
-                        padding: "0.4rem 0.4rem",
-                        textAlign: "center",
-                        fontWeight: 600,
-                        whiteSpace: "nowrap",
-                      }}
-                    >
-                      {f.short}
-                    </th>
-                  ))}
-                  <th
-                    style={{
-                      padding: "0.4rem 0.5rem",
-                      textAlign: "center",
-                      borderLeft: "1px solid #e5e7eb",
-                    }}
-                  >
-                    Active
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((row) => {
-                  const isSelf = currentStaffId === row.id;
-                  const dim = !row.active;
-                  return (
-                    <tr
-                      key={row.id}
-                      style={{
-                        borderBottom: "1px solid #f1f5f9",
-                        opacity: dim ? 0.5 : 1,
-                      }}
-                    >
-                      <td
+                    <td style={{ padding: "0.4rem 0.5rem" }}>
+                      <div style={{ fontWeight: 600 }}>
+                        {row.displayName}
+                        {isSelf && (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: "0.75rem",
+                              color: "var(--text-subtle)",
+                            }}
+                          >
+                            (you)
+                          </span>
+                        )}
+                      </div>
+                      <div
                         style={{
-                          padding: "0.4rem 0.5rem",
-                          position: "sticky",
-                          left: 0,
-                          background: "white",
-                          zIndex: 1,
+                          fontSize: "0.8rem",
+                          color: "var(--text-subtle)",
                         }}
                       >
-                        <div style={{ fontWeight: 600 }}>
-                          {row.displayName}
-                          {isSelf && (
-                            <span
-                              style={{
-                                marginLeft: 6,
-                                fontSize: "0.75rem",
-                                color: "var(--text-subtle)",
-                              }}
-                            >
-                              (you)
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "0.78rem",
-                            color: "var(--text-subtle)",
-                          }}
-                        >
-                          {row.email}
-                        </div>
-                      </td>
-                      {STAFF_CAP_FIELDS.map((f) => (
-                        <td
-                          key={f.key}
-                          title={f.full}
-                          style={{
-                            padding: "0.3rem 0.4rem",
-                            textAlign: "center",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={Boolean(row[f.key])}
-                            disabled={busyId === row.id}
-                            onChange={(e) =>
-                              toggleCap(row, f.key, e.target.checked)
-                            }
-                          />
-                        </td>
-                      ))}
+                        {row.email}
+                      </div>
+                    </td>
+                    {STAFF_ROLE_FIELDS.map((f) => (
                       <td
-                        style={{
-                          padding: "0.3rem 0.5rem",
-                          textAlign: "center",
-                          borderLeft: "1px solid #e5e7eb",
-                        }}
+                        key={f.key}
+                        style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}
                       >
                         <input
                           type="checkbox"
-                          checked={row.active}
-                          disabled={busyId === row.id || isSelf}
+                          checked={Boolean(row[f.key])}
+                          disabled={
+                            busyId === row.id ||
+                            (isSelf && f.key === "isAdmin" && row.isAdmin)
+                          }
                           title={
-                            isSelf
-                              ? "You cannot deactivate your own account."
+                            isSelf && f.key === "isAdmin"
+                              ? "You cannot remove your own admin role."
                               : undefined
                           }
                           onChange={(e) =>
-                            toggleActive(row, e.target.checked)
+                            toggle(row, f.key, e.target.checked)
                           }
                         />
                       </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-
-      <div className="card" style={{ marginTop: "1rem" }}>
-        <h2>Roles (presets & labels)</h2>
-        <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-          Roles act as quick-set presets for the Page Access table above.
-          Turning a role on will also check the relevant page-access boxes
-          for that staff member; turning a role off only removes the label —
-          page access stays as it is. Admins can also deactivate accounts
-          from the table above.
-        </p>
-        {loading ? (
-          <p>Loading…</p>
-        ) : filtered.length === 0 ? (
-          <p style={{ color: "var(--text-subtle)" }}>No staff match.</p>
-        ) : (
-          <div style={{ overflowX: "auto" }}>
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "0.9rem",
-              }}
-            >
-              <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                  <th style={{ padding: "0.4rem 0.5rem", minWidth: 220 }}>
-                    Staff
-                  </th>
-                  {STAFF_ROLE_FIELDS.map((f) => (
-                    <th
-                      key={f.key}
-                      style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}
-                    >
-                      {f.label}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((row) => {
-                  const isSelf = currentStaffId === row.id;
-                  const dim = !row.active;
-                  return (
-                    <tr
-                      key={row.id}
-                      style={{
-                        borderBottom: "1px solid #f1f5f9",
-                        opacity: dim ? 0.5 : 1,
-                      }}
-                    >
-                      <td style={{ padding: "0.4rem 0.5rem" }}>
-                        <div style={{ fontWeight: 600 }}>
-                          {row.displayName}
-                          {isSelf && (
-                            <span
-                              style={{
-                                marginLeft: 6,
-                                fontSize: "0.75rem",
-                                color: "var(--text-subtle)",
-                              }}
-                            >
-                              (you)
-                            </span>
-                          )}
-                        </div>
-                        <div
-                          style={{
-                            fontSize: "0.8rem",
-                            color: "var(--text-subtle)",
-                          }}
-                        >
-                          {row.email}
-                        </div>
-                      </td>
-                      {STAFF_ROLE_FIELDS.map((f) => (
-                        <td
-                          key={f.key}
-                          style={{
-                            padding: "0.4rem 0.5rem",
-                            textAlign: "center",
-                          }}
-                        >
-                          <input
-                            type="checkbox"
-                            checked={Boolean(row[f.key])}
-                            disabled={
-                              busyId === row.id ||
-                              (isSelf && f.key === "isAdmin" && row.isAdmin)
-                            }
-                            title={
-                              isSelf && f.key === "isAdmin"
-                                ? "You cannot remove your own admin role."
-                                : undefined
-                            }
-                            onChange={(e) =>
-                              toggleRole(row, f.key, e.target.checked)
-                            }
-                          />
-                        </td>
-                      ))}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </div>
-    </>
+                    ))}
+                    <td style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}>
+                      <input
+                        type="checkbox"
+                        checked={row.active}
+                        disabled={busyId === row.id || isSelf}
+                        title={
+                          isSelf
+                            ? "You cannot deactivate your own account."
+                            : undefined
+                        }
+                        onChange={(e) =>
+                          toggle(row, "active", e.target.checked)
+                        }
+                      />
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2258,8 +1986,6 @@ function App() {
     id: number;
     email: string;
     displayName: string;
-    // Legacy role flags — still surfaced as labels and as the source of
-    // truth for any page whose gate hasn't been migrated to caps yet.
     isAdmin: boolean;
     isEseCoordinator: boolean;
     isPbisCoordinator: boolean;
@@ -2267,26 +1993,6 @@ function App() {
     isIssTeacher: boolean;
     isDean: boolean;
     isMtssCoordinator: boolean;
-    // Per-page capabilities — used by pages that have been migrated.
-    capHallPasses: boolean;
-    capHallPassesViewAll: boolean;
-    capTardies: boolean;
-    capStudentActivity: boolean;
-    capPbisAward: boolean;
-    capPbisManage: boolean;
-    capParentEmail: boolean;
-    capSupportNotes: boolean;
-    capAccommodationLog: boolean;
-    capAccommodationManage: boolean;
-    capPulloutsRequest: boolean;
-    capPulloutsVerify: boolean;
-    capPulloutsReview: boolean;
-    capInterventionLog: boolean;
-    capInterventionManage: boolean;
-    capReports: boolean;
-    capIssDashboard: boolean;
-    capKioskActivate: boolean;
-    capManageLocations: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -3338,32 +3044,11 @@ function App() {
   };
 
   useEffect(() => {
-    // Refetch the signed-in user's profile (including capability flags) on
-    // initial mount and whenever the tab regains focus. This way, when an
-    // admin toggles a page-access cap in another tab, the affected user's
-    // sidebar updates the next time they click back into their tab —
-    // instead of needing a manual refresh.
-    let cancelled = false;
-    const refetchAuth = (initial = false) => {
-      fetch("/api/auth/me")
-        .then((res) => (res.ok ? res.json() : null))
-        .then((user) => {
-          if (!cancelled) setAuthUser(user);
-        })
-        .catch(() => {
-          if (!cancelled) setAuthUser(null);
-        })
-        .finally(() => {
-          if (initial && !cancelled) setAuthLoading(false);
-        });
-    };
-    refetchAuth(true);
-    const onFocus = () => refetchAuth(false);
-    window.addEventListener("focus", onFocus);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("focus", onFocus);
-    };
+    fetch("/api/auth/me")
+      .then((res) => (res.ok ? res.json() : null))
+      .then((user) => setAuthUser(user))
+      .catch(() => setAuthUser(null))
+      .finally(() => setAuthLoading(false));
   }, []);
 
   useEffect(() => {
@@ -4538,21 +4223,17 @@ function App() {
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
-  // Capability-based gate (replaces the previous role check). Drives the
-  // Interventions admin tab — catalog + Keep-Apart Pairs. Admins still get
-  // it via the role-preset seed.
-  const canManageBehaviorLists = authUser?.capInterventionManage === true;
-  // Whether the current staff member can log a classroom intervention.
-  // Used to hide the "Log Intervention" nav item if the cap is revoked.
-  const canLogIntervention = authUser?.capInterventionLog === true;
+  const canManageBehaviorLists =
+    isAdmin ||
+    isBehaviorSpec ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isDean === true;
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
-  // Capability-based gates (replace previous role checks). Admin still gets
-  // all of these via the role-preset seed.
-  const canRequestPullout = authUser?.capPulloutsRequest === true;
-  const canVerifyPullouts = authUser?.capPulloutsVerify === true;
-  const canViewIssDashboard = authUser?.capIssDashboard === true;
+  const canVerifyPullouts = isAdmin || isDean || isMtss;
+  const canViewIssDashboard =
+    isAdmin || isIssTeacher || isBehaviorSpec || isDean || isMtss;
 
   // Pending pullout count for the verifier badge.
   const [pendingPulloutCount, setPendingPulloutCount] = useState<number>(0);
@@ -4576,7 +4257,7 @@ function App() {
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
   // Unreviewed pullout count for the behavior-review badge.
-  const canReviewPullouts = authUser?.capPulloutsReview === true;
+  const canReviewPullouts = isAdmin || isBehaviorSpec;
   const [unreviewedPulloutCount, setUnreviewedPulloutCount] =
     useState<number>(0);
   const [unreviewedPulloutsTick, setUnreviewedPulloutsTick] = useState(0);
@@ -4611,32 +4292,12 @@ function App() {
     if (!canManageBehaviorLists && activeSection === "interventions") {
       setActiveSection("hallPasses");
     }
-    if (!canRequestPullout && activeSection === "requestPullout") {
-      setActiveSection("hallPasses");
-    }
-    if (!canVerifyPullouts && activeSection === "verifyPullouts") {
-      setActiveSection("hallPasses");
-    }
-    if (!canViewIssDashboard && activeSection === "issDashboard") {
-      setActiveSection("hallPasses");
-    }
-    if (!canReviewPullouts && activeSection === "behaviorReview") {
-      setActiveSection("hallPasses");
-    }
-    if (!canLogIntervention && activeSection === "logIntervention") {
-      setActiveSection("hallPasses");
-    }
   }, [
     isAdmin,
     isEseCoord,
     isPbisCoord,
     isBehaviorSpec,
     canManageBehaviorLists,
-    canRequestPullout,
-    canVerifyPullouts,
-    canViewIssDashboard,
-    canReviewPullouts,
-    canLogIntervention,
     activeSection,
   ]);
 
@@ -4681,12 +4342,6 @@ function App() {
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
   ];
-  // Filter rules for capability-gated base nav items.
-  const baseNavGate = (key: typeof activeSection): boolean => {
-    if (key === "logIntervention") return canLogIntervention;
-    if (key === "requestPullout") return canRequestPullout;
-    return true;
-  };
   const eseNavSections: NavSection[] = [
     { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
   ];
@@ -4856,7 +4511,7 @@ function App() {
         return (
           <aside className="sidebar">
             <div className="section-label">Workspace</div>
-            {baseNavSections.filter((s) => baseNavGate(s.key)).map(renderNavItem)}
+            {baseNavSections.map(renderNavItem)}
             {hasBelowEkg && (
               <>
                 <div className="nav-admin-divider" aria-hidden="true">
@@ -8798,7 +8453,7 @@ function App() {
         </section>
       </>)}
 
-      {activeSection === "requestPullout" && canRequestPullout && (
+      {activeSection === "requestPullout" && (
         <RequestPulloutSection
           students={students}
           interventionTypes={interventionList}

@@ -47,14 +47,7 @@ async function requireStaff(
 router.get("/interventions", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  // Either capability grants the right to read this endpoint at all.
-  if (!staff.capInterventionLog && !staff.capInterventionManage) {
-    res.status(403).json({ error: "Interventions access not granted" });
-    return;
-  }
-  // School-wide reader = anyone with the manage capability (admin, BS, MTSS,
-  // dean by default seed). Everyone else sees only their own entries.
-  const isPrivileged = staff.capInterventionManage;
+  const isPrivileged = staff.isAdmin || staff.isBehaviorSpecialist;
   const rows = await db
     .select()
     .from(interventionEntriesTable)
@@ -71,10 +64,6 @@ router.get("/interventions", requireStaff, async (req, res) => {
 router.post("/interventions", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  if (!staff.capInterventionLog) {
-    res.status(403).json({ error: "Logging interventions is not granted" });
-    return;
-  }
   const { studentId, interventionTypeId, note } = req.body ?? {};
 
   if (typeof studentId !== "string" || !studentId.trim()) {
