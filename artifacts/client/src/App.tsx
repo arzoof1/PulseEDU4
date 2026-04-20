@@ -3338,11 +3338,32 @@ function App() {
   };
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((user) => setAuthUser(user))
-      .catch(() => setAuthUser(null))
-      .finally(() => setAuthLoading(false));
+    // Refetch the signed-in user's profile (including capability flags) on
+    // initial mount and whenever the tab regains focus. This way, when an
+    // admin toggles a page-access cap in another tab, the affected user's
+    // sidebar updates the next time they click back into their tab —
+    // instead of needing a manual refresh.
+    let cancelled = false;
+    const refetchAuth = (initial = false) => {
+      fetch("/api/auth/me")
+        .then((res) => (res.ok ? res.json() : null))
+        .then((user) => {
+          if (!cancelled) setAuthUser(user);
+        })
+        .catch(() => {
+          if (!cancelled) setAuthUser(null);
+        })
+        .finally(() => {
+          if (initial && !cancelled) setAuthLoading(false);
+        });
+    };
+    refetchAuth(true);
+    const onFocus = () => refetchAuth(false);
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
   }, []);
 
   useEffect(() => {
