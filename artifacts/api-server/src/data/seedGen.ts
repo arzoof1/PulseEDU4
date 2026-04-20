@@ -1,7 +1,11 @@
 // Deterministic seed data generator for PulseED.
-// 30 teachers + 1 admin + 1 ESE coordinator. 7 periods/teacher with 1 random
-// planning period. ~600 students, ~20 per non-planning section. ~25% of
-// students get 1-3 accommodations from a master list spanning IEP/504/ELL/Strategy.
+// 35 teachers + 1 admin + 1 ESE coordinator. Each teacher has 7 periods: 6
+// teaching + 1 planning. Planning periods are distributed evenly across the 7
+// periods (5 teachers per period) so every period has exactly 30 teaching
+// teachers. 600 students, each enrolled in all 7 periods via round-robin
+// section assignment, yielding exactly 20 students per non-planning section.
+// ~25% of students get 1-3 accommodations from a master list spanning
+// IEP/504/ELL/Strategy.
 
 function makeRng(seed: number): () => number {
   let s = seed >>> 0;
@@ -116,13 +120,25 @@ export function generateSeedData(opts?: {
   accommodationRate?: number;
   seed?: number;
 }): SeedData {
-  const numTeachers = opts?.numTeachers ?? 30;
+  const numTeachers = opts?.numTeachers ?? 35;
   const numStudents = opts?.numStudents ?? 600;
   const accommodationRate = opts?.accommodationRate ?? 0.25;
   const rng = makeRng(opts?.seed ?? 42);
 
-  // Build teachers (30). Mr. Davis admin and Ms. Garcia ESE coord are added
-  // separately so the testable accounts from the previous seed still log in.
+  // Distribute planning periods evenly across the 7 periods so every period
+  // has the same number of teaching teachers. With 35 teachers / 7 periods,
+  // each period gets exactly 5 teachers on planning, leaving 30 teaching.
+  const teacherOrder = shuffle(
+    rng,
+    Array.from({ length: numTeachers }, (_, i) => i),
+  );
+  const planningByTeacher: number[] = new Array(numTeachers);
+  for (let i = 0; i < numTeachers; i++) {
+    planningByTeacher[teacherOrder[i]] = (i % 7) + 1;
+  }
+
+  // Build teachers. Mr. Davis admin and Ms. Garcia ESE coord are added
+  // separately in seed.ts so the testable accounts still log in.
   const teachers: SeedTeacher[] = [];
   const usedEmails = new Set<string>();
   for (let i = 0; i < numTeachers; i++) {
@@ -131,7 +147,7 @@ export function generateSeedData(opts?: {
     let email = `${first.toLowerCase()}.${last.toLowerCase()}${i}@school.local`;
     while (usedEmails.has(email)) email = `${email}.x`;
     usedEmails.add(email);
-    const planning = 1 + Math.floor(rng() * 7);
+    const planning = planningByTeacher[i];
     const teachingPeriods = [1, 2, 3, 4, 5, 6, 7].filter((p) => p !== planning);
     teachers.push({
       email,
@@ -143,7 +159,20 @@ export function generateSeedData(opts?: {
     });
   }
 
-  // Build students.
+  // Per-period rotation lists so we can round-robin students into sections
+  // and end up with an even ~20 students per non-planning section.
+  const teachersByPeriod: Record<number, number[]> = {};
+  const periodCounters: Record<number, number> = {};
+  for (let p = 1; p <= 7; p++) {
+    const list: number[] = [];
+    for (let t = 0; t < numTeachers; t++) {
+      if (teachers[t].teachingPeriods.includes(p)) list.push(t);
+    }
+    teachersByPeriod[p] = shuffle(rng, list);
+    periodCounters[p] = 0;
+  }
+
+  // Build students with balanced section assignment.
   const students: SeedStudent[] = [];
   for (let i = 0; i < numStudents; i++) {
     const studentId = `S${(2000 + i).toString()}`;
@@ -151,19 +180,16 @@ export function generateSeedData(opts?: {
     const last = pick(rng, LAST_NAMES);
     const grade = 9 + Math.floor(rng() * 4);
 
-    // For each period, pick a teacher whose teachingPeriods includes that period.
     const schedule: Record<number, number> = {};
     for (let period = 1; period <= 7; period++) {
-      const eligible: number[] = [];
-      for (let t = 0; t < teachers.length; t++) {
-        if (teachers[t].teachingPeriods.includes(period)) eligible.push(t);
-      }
-      if (eligible.length > 0) {
-        schedule[period] = eligible[Math.floor(rng() * eligible.length)];
+      const list = teachersByPeriod[period];
+      if (list.length > 0) {
+        schedule[period] = list[periodCounters[period] % list.length];
+        periodCounters[period]++;
       }
     }
 
-    // Accommodations
+    // Accommodations: ~25% of students get 1-3 accommodations.
     const accommodationIndices: number[] = [];
     if (rng() < accommodationRate) {
       const count = 1 + Math.floor(rng() * 3); // 1-3
