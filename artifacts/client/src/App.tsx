@@ -2106,6 +2106,10 @@ function App() {
   const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [accStudentId, setAccStudentId] = useState("");
   const [rosterPeriod, setRosterPeriod] = useState("");
+  const [rosterAbsentIds, setRosterAbsentIds] = useState<Set<string>>(
+    new Set(),
+  );
+  const [rosterAbsentConfirmed, setRosterAbsentConfirmed] = useState(false);
   const [classViewPeriod, setClassViewPeriod] = useState<number | null>(null);
   const [classViewHoverId, setClassViewHoverId] = useState<string | null>(null);
   const [classViewTeacherId, setClassViewTeacherId] = useState<number | null>(
@@ -7134,7 +7138,11 @@ function App() {
                         Period:{" "}
                         <select
                           value={rosterPeriod}
-                          onChange={(e) => setRosterPeriod(e.target.value)}
+                          onChange={(e) => {
+                            setRosterPeriod(e.target.value);
+                            setRosterAbsentIds(new Set());
+                            setRosterAbsentConfirmed(false);
+                          }}
                         >
                           <option value="">All My Periods</option>
                           {myPeriods.map((p) => (
@@ -7155,9 +7163,11 @@ function App() {
                         Accommodation:{" "}
                         <select
                           value={rosterAccommodation}
-                          onChange={(e) =>
-                            setRosterAccommodation(e.target.value)
-                          }
+                          onChange={(e) => {
+                            setRosterAccommodation(e.target.value);
+                            setRosterAbsentIds(new Set());
+                            setRosterAbsentConfirmed(false);
+                          }}
                         >
                           <option value="">-- Select --</option>
                           {allAccs.map((a) => (
@@ -7171,50 +7181,165 @@ function App() {
                     {!rosterAccommodation ? null : rosterStudents.length === 0 ? (
                       <div>No students found for this accommodation</div>
                     ) : (
-                      <>
-                        <div style={{ marginBottom: "0.5rem" }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              const ok = window.confirm(
-                                `Are all students present? Log this accommodation as provided for all ${rosterStudents.length} listed students?`,
-                              );
-                              if (!ok) return;
-                              const period = rosterPeriod
-                                ? Number(rosterPeriod)
-                                : null;
-                              rosterStudents.forEach((st) =>
-                                logAccommodationProvided(
-                                  st.studentId,
-                                  rosterAccommodation,
-                                  period,
-                                ),
-                              );
-                            }}
-                          >
-                            Log Provided for All Listed Students
-                          </button>
-                        </div>
-                        <ul style={{ margin: 0 }}>
-                          {rosterStudents.map((st) => (
-                            <li key={st.studentId}>
-                              {st.firstName} {st.lastName} ({st.studentId}){" "}
+                      (() => {
+                        const presentStudents = rosterStudents.filter(
+                          (st) => !rosterAbsentIds.has(st.studentId),
+                        );
+                        const period = rosterPeriod
+                          ? Number(rosterPeriod)
+                          : null;
+                        return (
+                          <>
+                            <div
+                              style={{
+                                marginBottom: "0.75rem",
+                                padding: "0.5rem 0.75rem",
+                                background: rosterAbsentConfirmed
+                                  ? "rgba(13, 148, 136, 0.08)"
+                                  : "rgba(234, 179, 8, 0.08)",
+                                border: `1px solid ${
+                                  rosterAbsentConfirmed
+                                    ? "rgba(13, 148, 136, 0.4)"
+                                    : "rgba(234, 179, 8, 0.4)"
+                                }`,
+                                borderRadius: 6,
+                              }}
+                            >
+                              <label
+                                style={{
+                                  display: "flex",
+                                  gap: "0.5rem",
+                                  alignItems: "center",
+                                  cursor: "pointer",
+                                  fontSize: 14,
+                                }}
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={rosterAbsentConfirmed}
+                                  onChange={(e) =>
+                                    setRosterAbsentConfirmed(e.target.checked)
+                                  }
+                                />
+                                <span>
+                                  I've indicated all absent students by
+                                  checking the box
+                                  {rosterAbsentIds.size > 0 && (
+                                    <em
+                                      style={{
+                                        color: "var(--text-subtle)",
+                                        marginLeft: 4,
+                                      }}
+                                    >
+                                      ({rosterAbsentIds.size} marked absent)
+                                    </em>
+                                  )}
+                                </span>
+                              </label>
+                            </div>
+                            <div style={{ marginBottom: "0.5rem" }}>
                               <button
                                 type="button"
-                                onClick={() =>
-                                  logAccommodationProvided(
-                                    st.studentId,
-                                    rosterAccommodation,
-                                    rosterPeriod ? Number(rosterPeriod) : null,
-                                  )
+                                disabled={
+                                  !rosterAbsentConfirmed ||
+                                  presentStudents.length === 0
                                 }
+                                onClick={() => {
+                                  const ok = window.confirm(
+                                    `Log this accommodation as provided for all ${presentStudents.length} present students?`,
+                                  );
+                                  if (!ok) return;
+                                  presentStudents.forEach((st) =>
+                                    logAccommodationProvided(
+                                      st.studentId,
+                                      rosterAccommodation,
+                                      period,
+                                    ),
+                                  );
+                                }}
                               >
-                                Log Provided
+                                Log Provided for All Present Students
+                                {rosterAbsentConfirmed
+                                  ? ` (${presentStudents.length})`
+                                  : ""}
                               </button>
-                            </li>
-                          ))}
-                        </ul>
-                      </>
+                            </div>
+                            <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
+                              {rosterStudents.map((st) => {
+                                const absent = rosterAbsentIds.has(
+                                  st.studentId,
+                                );
+                                return (
+                                  <li
+                                    key={st.studentId}
+                                    style={{
+                                      display: "flex",
+                                      alignItems: "center",
+                                      gap: "0.5rem",
+                                      padding: "0.25rem 0",
+                                      opacity: absent ? 0.55 : 1,
+                                    }}
+                                  >
+                                    <label
+                                      style={{
+                                        display: "flex",
+                                        gap: "0.25rem",
+                                        alignItems: "center",
+                                        cursor: "pointer",
+                                        fontSize: 12,
+                                        color: "var(--text-subtle)",
+                                      }}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={absent}
+                                        onChange={(e) => {
+                                          setRosterAbsentIds((prev) => {
+                                            const next = new Set(prev);
+                                            if (e.target.checked) {
+                                              next.add(st.studentId);
+                                            } else {
+                                              next.delete(st.studentId);
+                                            }
+                                            return next;
+                                          });
+                                          setRosterAbsentConfirmed(false);
+                                        }}
+                                      />
+                                      Absent
+                                    </label>
+                                    <span
+                                      style={{
+                                        textDecoration: absent
+                                          ? "line-through"
+                                          : "none",
+                                        flex: 1,
+                                      }}
+                                    >
+                                      {st.firstName} {st.lastName} ({st.studentId})
+                                    </span>
+                                    <button
+                                      type="button"
+                                      disabled={
+                                        !rosterAbsentConfirmed || absent
+                                      }
+                                      onClick={() =>
+                                        logAccommodationProvided(
+                                          st.studentId,
+                                          rosterAccommodation,
+                                          period,
+                                        )
+                                      }
+                                    >
+                                      Log Provided
+                                    </button>
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                          </>
+                        );
+                      })()
                     )}
                   </>
                 ) : accView === "daily" ? (
