@@ -30,12 +30,12 @@ const SUB = (text) =>
   });
 
 const children = [
-  TITLE("PulseED"),
+  TITLE("PulseEDU"),
   SUB("School Operations App — Internal Test Build (April 2026)"),
 
   H("What it is"),
   P(
-    "PulseED is a single-page web app that gives a school's staff one unified place to track everyday student-flow events: hall passes, tardies, PBIS points, behavior incidents, accommodations, pullout services, and parent communication. It replaces a stack of paper logs, spreadsheets, and ad-hoc emails with one shared real-time record that any staff member can see and act on from a phone, tablet, Chromebook, or kiosk."
+    "PulseEDU is a single-page web app that gives a school's staff one unified place to track everyday student-flow events: hall passes, tardies, PBIS points, behavior incidents, accommodations, pullout services, and parent communication. It replaces a stack of paper logs, spreadsheets, and ad-hoc emails with one shared real-time record that any staff member can see and act on from a phone, tablet, Chromebook, or kiosk."
   ),
   P(
     "Access is governed by per-page capabilities. Job titles (Teacher, Dean, Behavior Specialist, ESE Coordinator, PBIS Coordinator, Admin) are presets that pre-flip the right capabilities, but admins can hand-tune any individual staff member's access on the Page Access table."
@@ -145,7 +145,7 @@ const children = [
   BULLET("The current test build runs against a demo dataset of ~600 fictional students so testers can exercise every flow without touching real student data."),
 
   H("UI conventions"),
-  BULLET("Top header: PulseED brand, a global \"show today / show all\" filter, a global \"my records / all staff\" filter, and the user's identity / sign-out pill."),
+  BULLET("Top header: PulseEDU brand, a global \"show today / show all\" filter, a global \"my records / all staff\" filter, and the user's identity / sign-out pill."),
   BULLET("Left sidebar: the Workspace section (the modules a user can use to take action), and below the EKG divider the Tools section (admin / oversight items, only shown to staff with the relevant capability)."),
   BULLET("Sticky table headers — column headers stay visible as you scroll long lists."),
   BULLET("Print-friendly: each card prints cleanly without the sidebar, header, or interactive controls (useful for accommodation rosters, ISS lists, etc.)."),
@@ -171,13 +171,13 @@ const children = [
 
   H("Tech, in plain English"),
   P(
-    "PulseED is a React single-page app on the front end, an Express API on the back end, and a Postgres database — all in one deployable bundle. Authentication is session cookies with bcrypt password hashing. Email is via Resend. Scheduled jobs use node-cron. The whole thing lives in a pnpm monorepo so the front end, API, and shared database schema can evolve together without drift."
+    "PulseEDU is a React single-page app on the front end, an Express API on the back end, and a Postgres database — all in one deployable bundle. Authentication is session cookies with bcrypt password hashing. Email is via Resend. Scheduled jobs use node-cron. The whole thing lives in a pnpm monorepo so the front end, API, and shared database schema can evolve together without drift."
   ),
 ];
 
 const doc = new Document({
-  creator: "PulseED",
-  title: "PulseED — App Overview",
+  creator: "PulseEDU",
+  title: "PulseEDU — App Overview",
   description: "Internal test build overview",
   styles: {
     default: {
@@ -188,6 +188,6 @@ const doc = new Document({
 });
 
 const buffer = await Packer.toBuffer(doc);
-const out = "exports/PulseED-Overview.docx";
+const out = "exports/PulseEDU-Overview.docx";
 writeFileSync(out, buffer);
 console.log("Wrote", out, buffer.length, "bytes");

@@ -4770,7 +4770,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="brand" aria-label="PulseED">
+        <div className="brand" aria-label="PulseEDU">
           <svg
             className="ekg-layer ekg-bg"
             viewBox="0 0 220 40"
@@ -4783,7 +4783,7 @@ function App() {
             />
           </svg>
           <span className="wordmark">
-            Pulse<span className="accent">ED</span>
+            Pulse<span className="accent">EDU</span>
           </span>
           <svg
             className="ekg-layer ekg-fg"
@@ -6309,7 +6309,7 @@ function App() {
                   .join("\n");
 
                 const signature =
-                  schoolSettings.emailSignature || "Thank you,\nPulseED";
+                  schoolSettings.emailSignature || "Thank you,\nPulseEDU";
                 let templateSubject = "Student Activity Update";
                 let templateBody = "";
                 if (emailMessageType === "positive") {

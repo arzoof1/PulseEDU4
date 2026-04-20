@@ -6,3 +6,9 @@ id = "gjoYm41VO4-iK_BrRq_HE"
 uri = "file://exports/PulseED-Overview.docx"
 type = "word_document"
 title = "PulseED — App Overview (Word document)"
+
+[[outputs]]
+id = "8k_zQ2qbqCbO6LTpH_JIf"
+uri = "file://exports/PulseEDU-Overview.docx"
+type = "word_document"
+title = "PulseEDU — App Overview (Word document, rebranded)"
