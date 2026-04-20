@@ -246,21 +246,12 @@ export default function CreatePassModal({
       : availableDestinations;
     const near = filtered.filter((d) => nearSet.has(d));
     const other = filtered.filter((d) => !nearSet.has(d));
-    const teachers = canChangeTeacher
-      ? staffUsers
-          .filter((s) => s && s !== selectedTeacher)
-          .filter((s) => !q || s.toLowerCase().includes(q))
-          .sort((a, b) => a.localeCompare(b))
-      : [];
+    const teachers = staffUsers
+      .filter((s) => s && s !== selectedTeacher)
+      .filter((s) => !q || s.toLowerCase().includes(q))
+      .sort((a, b) => a.localeCompare(b));
     return { near, other, teachers };
-  }, [
-    availableDestinations,
-    destQuery,
-    nearSet,
-    canChangeTeacher,
-    staffUsers,
-    selectedTeacher,
-  ]);
+  }, [availableDestinations, destQuery, nearSet, staffUsers, selectedTeacher]);
 
   const filteredTeachers = useMemo(() => {
     const q = teacherQuery.trim().toLowerCase();
