@@ -353,12 +353,12 @@ function KioskBody({
       .then((d: SchoolSettings) => setSchool(d))
       .catch(() => setSchool(null));
     fetch("/api/locations")
-      .then((r) => r.json())
-      .then((d: LocationRow[]) => setLocations(d))
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setLocations(Array.isArray(d) ? (d as LocationRow[]) : []))
       .catch(() => setLocations([]));
     fetch("/api/location-allowed-destinations")
-      .then((r) => r.json())
-      .then((d: AllowedRow[]) => setAllowed(d))
+      .then((r) => (r.ok ? r.json() : []))
+      .then((d) => setAllowed(Array.isArray(d) ? (d as AllowedRow[]) : []))
       .catch(() => setAllowed([]));
   }, []);
 
