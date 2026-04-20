@@ -2570,7 +2570,7 @@ function App() {
 
   const loadMySections = async () => {
     try {
-      const res = await fetch("/api/schedule");
+      const res = await fetch("/api/schedule", { credentials: "include" });
       if (!res.ok) {
         setMySections([]);
         return;
@@ -6759,24 +6759,40 @@ function App() {
                               >
                                 Teacher:
                               </span>
-                              <select
-                                value={classViewTeacherId ?? ""}
+                              <input
+                                type="text"
+                                list="acc-teacher-options"
+                                placeholder="Type teacher name…"
+                                defaultValue={
+                                  teacherOptions.find(
+                                    (t) => t.id === classViewTeacherId,
+                                  )?.name ?? ""
+                                }
                                 onChange={(e) => {
-                                  const v = e.target.value;
-                                  setClassViewTeacherId(
-                                    v === "" ? null : Number(v),
+                                  const v = e.target.value.trim();
+                                  if (v === "") {
+                                    setClassViewTeacherId(null);
+                                    setClassViewPeriod(null);
+                                    setClassViewHoverId(null);
+                                    return;
+                                  }
+                                  const match = teacherOptions.find(
+                                    (t) =>
+                                      t.name.toLowerCase() === v.toLowerCase(),
                                   );
-                                  setClassViewPeriod(null);
-                                  setClassViewHoverId(null);
+                                  if (match) {
+                                    setClassViewTeacherId(match.id);
+                                    setClassViewPeriod(null);
+                                    setClassViewHoverId(null);
+                                  }
                                 }}
-                              >
-                                <option value="">— select —</option>
+                                style={{ minWidth: 200 }}
+                              />
+                              <datalist id="acc-teacher-options">
                                 {teacherOptions.map((t) => (
-                                  <option key={t.id} value={t.id}>
-                                    {t.name}
-                                  </option>
+                                  <option key={t.id} value={t.name} />
                                 ))}
-                              </select>
+                              </datalist>
                             </div>
                           )}
                         </div>
@@ -7012,17 +7028,54 @@ function App() {
                     <div style={{ marginBottom: "0.5rem" }}>
                       <label>
                         Student:{" "}
-                        <select
-                          value={accStudentId}
-                          onChange={(e) => setAccStudentId(e.target.value)}
-                        >
-                          <option value="">-- Select --</option>
+                        <input
+                          type="text"
+                          list="acc-student-options"
+                          placeholder="Type name or ID…"
+                          defaultValue={(() => {
+                            const s = students.find(
+                              (st) => st.studentId === accStudentId,
+                            );
+                            return s
+                              ? `${s.firstName} ${s.lastName} (${s.studentId})`
+                              : "";
+                          })()}
+                          onChange={(e) => {
+                            const v = e.target.value.trim();
+                            if (v === "") {
+                              setAccStudentId("");
+                              return;
+                            }
+                            const m = v.match(/\(([^)]+)\)\s*$/);
+                            if (m && students.some((st) => st.studentId === m[1])) {
+                              setAccStudentId(m[1]);
+                              return;
+                            }
+                            const lower = v.toLowerCase();
+                            const direct = students.find(
+                              (st) => st.studentId.toLowerCase() === lower,
+                            );
+                            if (direct) {
+                              setAccStudentId(direct.studentId);
+                              return;
+                            }
+                            const byName = students.find(
+                              (st) =>
+                                `${st.firstName} ${st.lastName}`.toLowerCase() ===
+                                lower,
+                            );
+                            if (byName) setAccStudentId(byName.studentId);
+                          }}
+                          style={{ minWidth: 260 }}
+                        />
+                        <datalist id="acc-student-options">
                           {students.map((st) => (
-                            <option key={st.studentId} value={st.studentId}>
-                              {st.firstName} {st.lastName} ({st.studentId})
-                            </option>
+                            <option
+                              key={st.studentId}
+                              value={`${st.firstName} ${st.lastName} (${st.studentId})`}
+                            />
                           ))}
-                        </select>
+                        </datalist>
                       </label>
                     </div>
                     {!accStudentId ? (
