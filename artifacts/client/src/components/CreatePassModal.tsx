@@ -34,12 +34,16 @@ interface Props {
   nearDestinations: string[];
   /** When true (e.g. Hall Pass admin), the contact-ack is never required. */
   bypassContactAck: boolean;
+  /** Maximum minutes a teacher can request (set in school settings). */
+  maxMinutes?: number;
+  /** Default starting value for the time slider. */
+  defaultMinutes?: number;
   onCreate: (payload: CreatePassPayload) => Promise<void> | void;
 }
 
 const MIN_MIN = 1;
-const MAX_MIN = 30;
-const DEFAULT_MIN = 5;
+const FALLBACK_MAX = 30;
+const FALLBACK_DEFAULT = 5;
 
 function RoomCombobox({
   rooms,
@@ -152,8 +156,18 @@ export default function CreatePassModal({
   canChangeTeacher,
   nearDestinations,
   bypassContactAck,
+  maxMinutes,
+  defaultMinutes,
   onCreate,
 }: Props) {
+  const MAX_MIN = Math.max(
+    MIN_MIN,
+    Math.min(240, Math.trunc(maxMinutes ?? FALLBACK_MAX)),
+  );
+  const DEFAULT_MIN = Math.max(
+    MIN_MIN,
+    Math.min(MAX_MIN, Math.trunc(defaultMinutes ?? FALLBACK_DEFAULT)),
+  );
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [studentQuery, setStudentQuery] = useState("");
   const [selectedStudent, setSelectedStudent] =

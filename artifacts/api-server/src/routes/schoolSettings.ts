@@ -19,9 +19,16 @@ router.get("/school-settings", async (_req, res) => {
   res.json(row);
 });
 
-router.put("/school-settings", async (req, res) => {
+router.put("/school-settings", async (req, res): Promise<void> => {
   const current = await getOrCreate();
-  const { schoolName, fromName, emailSignature, periodCount } = req.body ?? {};
+  const {
+    schoolName,
+    fromName,
+    emailSignature,
+    periodCount,
+    hallPassMaxMinutes,
+    hallPassDefaultMinutes,
+  } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
   if (typeof schoolName === "string" && schoolName.trim()) {
@@ -40,15 +47,43 @@ router.put("/school-settings", async (req, res) => {
       periodCount < 1 ||
       periodCount > 12
     ) {
-      return res
+      res
         .status(400)
         .json({ error: "periodCount must be an integer between 1 and 12" });
+      return;
     }
     updates.periodCount = periodCount;
   }
+  if (hallPassMaxMinutes !== undefined) {
+    if (
+      typeof hallPassMaxMinutes !== "number" ||
+      !Number.isInteger(hallPassMaxMinutes) ||
+      hallPassMaxMinutes < 1 ||
+      hallPassMaxMinutes > 240
+    ) {
+      res.status(400).json({
+        error: "hallPassMaxMinutes must be an integer between 1 and 240",
+      });
+    }
+    updates.hallPassMaxMinutes = hallPassMaxMinutes;
+  }
+  if (hallPassDefaultMinutes !== undefined) {
+    if (
+      typeof hallPassDefaultMinutes !== "number" ||
+      !Number.isInteger(hallPassDefaultMinutes) ||
+      hallPassDefaultMinutes < 1 ||
+      hallPassDefaultMinutes > 240
+    ) {
+      res.status(400).json({
+        error:
+          "hallPassDefaultMinutes must be an integer between 1 and 240",
+      });
+    }
+    updates.hallPassDefaultMinutes = hallPassDefaultMinutes;
+  }
 
   if (Object.keys(updates).length === 0) {
-    return res.json(current);
+    res.json(current);
   }
 
   const [updated] = await db
