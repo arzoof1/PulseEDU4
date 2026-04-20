@@ -31,7 +31,12 @@ seedIfEmpty()
 
       // Daily pullout digest. Defaults to 16:00 (4pm) school local time.
       // Override with DIGEST_CRON / DIGEST_TZ env vars. Skip in test.
-      if (process.env.NODE_ENV !== "test") {
+      // TEMP (launch test window): set DIGEST_DISABLED=1 to skip scheduling.
+      // Remove the env-var guard once internal testing wraps up.
+      if (
+        process.env.NODE_ENV !== "test" &&
+        process.env.DIGEST_DISABLED !== "1"
+      ) {
         const expr = process.env.DIGEST_CRON ?? "0 16 * * 1-5";
         const tz = process.env.DIGEST_TZ ?? "America/New_York";
         try {

@@ -4850,14 +4850,20 @@ function App() {
       </header>
 
       {(() => {
+        const canManageAccommodations =
+          authUser?.capAccommodationManage === true;
+        const canManagePbis = authUser?.capPbisManage === true;
+        const canSeeSettings =
+          authUser?.capManageStaff === true ||
+          authUser?.capManageLocations === true;
         const hasBelowEkg =
-          isEseCoord ||
-          isPbisCoord ||
+          canManageAccommodations ||
+          canManagePbis ||
           canManageBehaviorLists ||
           canVerifyPullouts ||
           canViewIssDashboard ||
           canReviewPullouts ||
-          isAdmin;
+          canSeeSettings;
         return (
           <aside className="sidebar">
             <div className="section-label">Workspace</div>
@@ -4877,8 +4883,8 @@ function App() {
                   </svg>
                 </div>
                 <div className="section-label nav-admin-label">Tools</div>
-                {isEseCoord && eseNavSections.map(renderNavItem)}
-                {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
+                {canManageAccommodations && eseNavSections.map(renderNavItem)}
+                {canManagePbis && pbisListsNavSections.map(renderNavItem)}
                 {canManageBehaviorLists &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
@@ -4899,7 +4905,7 @@ function App() {
                     label: "Behavior Review",
                     icon: IconClipboard,
                   })}
-                {isAdmin && adminNavSections.map(renderNavItem)}
+                {canSeeSettings && adminNavSections.map(renderNavItem)}
               </>
             )}
           </aside>
