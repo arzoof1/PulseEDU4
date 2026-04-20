@@ -2108,6 +2108,31 @@ function App() {
   const [rosterPeriod, setRosterPeriod] = useState("");
   const [classViewPeriod, setClassViewPeriod] = useState<number | null>(null);
   const [classViewHoverId, setClassViewHoverId] = useState<string | null>(null);
+  const [classViewTeacherId, setClassViewTeacherId] = useState<number | null>(
+    null,
+  );
+  interface AllSection {
+    id: number;
+    period: number;
+    courseName: string;
+    isPlanning: boolean;
+    teacherStaffId: number;
+    teacherName: string;
+    studentIds: string[];
+  }
+  const [allSections, setAllSections] = useState<AllSection[]>([]);
+  useEffect(() => {
+    if (!authUser?.isAdmin && !authUser?.isEseCoordinator) {
+      setAllSections([]);
+      return;
+    }
+    fetch("/api/schedule?all=1", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { sections: [] }))
+      .then((data: { sections?: AllSection[] }) =>
+        setAllSections(Array.isArray(data.sections) ? data.sections : []),
+      )
+      .catch(() => setAllSections([]));
+  }, [authUser?.id, authUser?.isAdmin, authUser?.isEseCoordinator]);
   type SchoolAccommodation = {
     id: number;
     name: string;
@@ -6556,11 +6581,41 @@ function App() {
                     const isEseCoord =
                       authUser?.isEseCoordinator === true ||
                       authUser?.isAdmin === true;
-                    const teachingPeriods = mySections
+                    // Admin/ESE coordinator can browse any teacher's roster.
+                    // Teachers see their own sections.
+                    const teacherOptions = isEseCoord
+                      ? Array.from(
+                          new Map(
+                            allSections.map(
+                              (s) =>
+                                [
+                                  s.teacherStaffId,
+                                  s.teacherName,
+                                ] as const,
+                            ),
+                          ).entries(),
+                        )
+                          .map(([id, name]) => ({ id, name }))
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                      : [];
+                    const sourceSections: Array<{
+                      id: number;
+                      period: number;
+                      courseName: string;
+                      isPlanning: boolean;
+                      studentIds: string[];
+                    }> = isEseCoord
+                      ? classViewTeacherId == null
+                        ? []
+                        : allSections.filter(
+                            (s) => s.teacherStaffId === classViewTeacherId,
+                          )
+                      : mySections;
+                    const teachingPeriods = sourceSections
                       .filter((s) => !s.isPlanning)
                       .map((s) => s.period)
                       .sort((a, b) => a - b);
-                    const planningPeriods = mySections
+                    const planningPeriods = sourceSections
                       .filter((s) => s.isPlanning)
                       .map((s) => s.period);
                     const effectivePeriod =
@@ -6568,7 +6623,7 @@ function App() {
                       teachingPeriods.includes(classViewPeriod)
                         ? classViewPeriod
                         : (teachingPeriods[0] ?? null);
-                    const section = mySections.find(
+                    const section = sourceSections.find(
                       (s) => s.period === effectivePeriod && !s.isPlanning,
                     );
                     const roster = section
@@ -6613,77 +6668,138 @@ function App() {
                     );
                     return (
                       <>
-                        <h3 style={{ marginTop: 0 }}>Class View</h3>
                         <div
                           style={{
                             display: "flex",
-                            flexWrap: "wrap",
-                            gap: 6,
+                            justifyContent: "space-between",
                             alignItems: "center",
                             marginBottom: "0.75rem",
+                            flexWrap: "wrap",
+                            gap: "0.5rem",
                           }}
                         >
-                          <span
+                          <div
                             style={{
-                              fontSize: 12,
-                              color: "var(--text-subtle)",
-                              marginRight: 4,
+                              display: "flex",
+                              gap: "0.75rem",
+                              alignItems: "center",
+                              flexWrap: "wrap",
                             }}
                           >
-                            Period:
-                          </span>
-                          {[1, 2, 3, 4, 5, 6, 7].map((p) => {
-                            const isPlanning = planningPeriods.includes(p);
-                            const isMine = teachingPeriods.includes(p);
-                            const isActive = effectivePeriod === p;
-                            return (
-                              <button
-                                key={p}
-                                type="button"
-                                onClick={() => {
-                                  if (!isMine) return;
-                                  setClassViewPeriod(p);
-                                  setClassViewHoverId(null);
-                                }}
-                                disabled={!isMine}
-                                title={
-                                  isPlanning
-                                    ? "Planning period"
-                                    : !isMine
-                                      ? "Not assigned this period"
-                                      : ""
-                                }
+                            <h3 style={{ margin: 0 }}>Class View</h3>
+                            <div
+                              style={{
+                                display: "inline-flex",
+                                border: "1px solid var(--border)",
+                                borderRadius: 6,
+                                overflow: "hidden",
+                              }}
+                            >
+                              {[1, 2, 3, 4, 5, 6, 7].map((p) => {
+                                const isPlanning = planningPeriods.includes(p);
+                                const hasSection =
+                                  teachingPeriods.includes(p);
+                                const isActive = effectivePeriod === p;
+                                const disabled = !hasSection;
+                                return (
+                                  <button
+                                    key={p}
+                                    type="button"
+                                    onClick={() => {
+                                      if (disabled) return;
+                                      setClassViewPeriod(p);
+                                      setClassViewHoverId(null);
+                                    }}
+                                    disabled={disabled}
+                                    title={
+                                      isPlanning
+                                        ? "Planning period"
+                                        : !hasSection
+                                          ? isEseCoord && !classViewTeacherId
+                                            ? "Pick a teacher first"
+                                            : "Not assigned this period"
+                                          : ""
+                                    }
+                                    style={{
+                                      border: "none",
+                                      borderRight:
+                                        p < 7
+                                          ? "1px solid var(--border)"
+                                          : "none",
+                                      padding: "0.25rem 0.7rem",
+                                      background: isActive
+                                        ? "var(--primary)"
+                                        : "transparent",
+                                      color: isActive ? "white" : undefined,
+                                      cursor: disabled
+                                        ? "not-allowed"
+                                        : "pointer",
+                                    }}
+                                  >
+                                    P{p}
+                                    {isPlanning ? " (Plan)" : ""}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                          {isEseCoord && (
+                            <div
+                              style={{
+                                display: "flex",
+                                gap: "0.4rem",
+                                alignItems: "center",
+                              }}
+                            >
+                              <span
                                 style={{
-                                  padding: "0.25rem 0.6rem",
-                                  borderRadius: 6,
-                                  border: "1px solid var(--border)",
-                                  background: isActive
-                                    ? "var(--primary)"
-                                    : "transparent",
-                                  color: isActive
-                                    ? "white"
-                                    : isMine
-                                      ? undefined
-                                      : "var(--text-subtle)",
-                                  cursor: isMine ? "pointer" : "not-allowed",
-                                  opacity: isMine ? 1 : 0.5,
+                                  fontSize: 12,
+                                  color: "var(--text-subtle)",
                                 }}
                               >
-                                P{p}
-                                {isPlanning ? " (Plan)" : ""}
-                              </button>
-                            );
-                          })}
+                                Teacher:
+                              </span>
+                              <select
+                                value={classViewTeacherId ?? ""}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setClassViewTeacherId(
+                                    v === "" ? null : Number(v),
+                                  );
+                                  setClassViewPeriod(null);
+                                  setClassViewHoverId(null);
+                                }}
+                              >
+                                <option value="">— select —</option>
+                                {teacherOptions.map((t) => (
+                                  <option key={t.id} value={t.id}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          )}
                         </div>
 
-                        {!section ? (
+                        {isEseCoord && classViewTeacherId == null ? (
                           <div
                             style={{
                               color: "var(--text-subtle)",
                               padding: "0.75rem 0",
                             }}
                           >
-                            No class assigned for this period.
+                            Choose a teacher to view their class roster.
+                          </div>
+                        ) : !section ? (
+                          <div
+                            style={{
+                              color: "var(--text-subtle)",
+                              padding: "0.75rem 0",
+                            }}
+                          >
+                            {sourceSections.length === 0
+                              ? "No classes assigned to this teacher."
+                              : "No class for this period."}
                           </div>
                         ) : roster.length === 0 ? (
                           <div
