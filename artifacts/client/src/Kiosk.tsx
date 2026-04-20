@@ -501,7 +501,7 @@ function KioskBody({
           marginBottom: "0.5rem",
         }}
       >
-        {school?.schoolName ?? "PulseEDU"} · Hall Pass Kiosk
+        {school?.schoolName ?? "PulseED"} · Hall Pass Kiosk
       </div>
       <h1
         style={{

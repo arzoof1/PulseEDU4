@@ -137,7 +137,7 @@ export async function sendDailyDigestEmail(
   }
 
   const [settings] = await db.select().from(schoolSettingsTable);
-  const schoolName = settings?.schoolName ?? "PulseEDU";
+  const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
 
   const dayLabel = new Date(startIso).toLocaleDateString(undefined, {
@@ -177,7 +177,7 @@ export async function sendDailyDigestEmail(
     }
   }
   lines.push("");
-  lines.push(`Open PulseEDU → ISS Dashboard for live status.`);
+  lines.push(`Open PulseED → ISS Dashboard for live status.`);
   const body = lines.join("\n");
 
   const html =
@@ -202,7 +202,7 @@ export async function sendDailyDigestEmail(
           .map((r) => `<li>"${r.reason}" — ${r.count}</li>`)
           .join("")}</ul>`
       : "") +
-    `<p>Open PulseEDU → <em>ISS Dashboard</em> for live status.</p>`;
+    `<p>Open PulseED → <em>ISS Dashboard</em> for live status.</p>`;
 
   const recipientStr = recipients.join(", ");
   try {

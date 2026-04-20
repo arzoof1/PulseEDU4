@@ -4770,7 +4770,7 @@ function App() {
   return (
     <div className="app-shell">
       <header className="app-header">
-        <div className="brand" aria-label="PulseEDU">
+        <div className="brand" aria-label="PulseED">
           <svg
             className="ekg-layer ekg-bg"
             viewBox="0 0 220 40"
@@ -4783,7 +4783,7 @@ function App() {
             />
           </svg>
           <span className="wordmark">
-            Pulse<span className="accent">EDU</span>
+            Pulse<span className="accent">ED</span>
           </span>
           <svg
             className="ekg-layer ekg-fg"
@@ -4850,20 +4850,14 @@ function App() {
       </header>
 
       {(() => {
-        const canManageAccommodations =
-          authUser?.capAccommodationManage === true;
-        const canManagePbis = authUser?.capPbisManage === true;
-        const canSeeSettings =
-          authUser?.capManageStaff === true ||
-          authUser?.capManageLocations === true;
         const hasBelowEkg =
-          canManageAccommodations ||
-          canManagePbis ||
+          isEseCoord ||
+          isPbisCoord ||
           canManageBehaviorLists ||
           canVerifyPullouts ||
           canViewIssDashboard ||
           canReviewPullouts ||
-          canSeeSettings;
+          isAdmin;
         return (
           <aside className="sidebar">
             <div className="section-label">Workspace</div>
@@ -4883,8 +4877,8 @@ function App() {
                   </svg>
                 </div>
                 <div className="section-label nav-admin-label">Tools</div>
-                {canManageAccommodations && eseNavSections.map(renderNavItem)}
-                {canManagePbis && pbisListsNavSections.map(renderNavItem)}
+                {isEseCoord && eseNavSections.map(renderNavItem)}
+                {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
                 {canManageBehaviorLists &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
@@ -4905,7 +4899,7 @@ function App() {
                     label: "Behavior Review",
                     icon: IconClipboard,
                   })}
-                {canSeeSettings && adminNavSections.map(renderNavItem)}
+                {isAdmin && adminNavSections.map(renderNavItem)}
               </>
             )}
           </aside>
@@ -6309,7 +6303,7 @@ function App() {
                   .join("\n");
 
                 const signature =
-                  schoolSettings.emailSignature || "Thank you,\nPulseEDU";
+                  schoolSettings.emailSignature || "Thank you,\nPulseED";
                 let templateSubject = "Student Activity Update";
                 let templateBody = "";
                 if (emailMessageType === "positive") {

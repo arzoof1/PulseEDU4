@@ -223,15 +223,15 @@ export async function sendPulloutDispatchEmail(
 
   const subject = `[${schoolName}] Pullout requested: ${studentLabel} (${periodText})`;
   const body =
-    `A new pullout request has been submitted in PulseEDU.\n\n` +
+    `A new pullout request has been submitted in PulseED.\n\n` +
     `Student: ${studentLabel}\n` +
     `Referring teacher: ${teacherText}\n` +
     `${periodText}\n` +
     `Submitted by: ${p.requestedByName}\n` +
     `Reason: "${reasonText}"\n\n` +
-    `Open PulseEDU → Verify Pullouts to verify and dispatch to ISS.`;
+    `Open PulseED → Verify Pullouts to verify and dispatch to ISS.`;
   const html =
-    `<p>A new pullout request has been submitted in PulseEDU.</p>` +
+    `<p>A new pullout request has been submitted in PulseED.</p>` +
     `<ul>` +
     `<li><strong>Student:</strong> ${studentLabel}</li>` +
     `<li><strong>Referring teacher:</strong> ${teacherText}</li>` +
@@ -239,7 +239,7 @@ export async function sendPulloutDispatchEmail(
     `<li><strong>Submitted by:</strong> ${p.requestedByName}</li>` +
     `<li><strong>Reason:</strong> "${reasonText}"</li>` +
     `</ul>` +
-    `<p>Open PulseEDU → <em>Verify Pullouts</em> to verify and dispatch to ISS.</p>`;
+    `<p>Open PulseED → <em>Verify Pullouts</em> to verify and dispatch to ISS.</p>`;
 
   const recipientStr = recipients.join(", ");
   try {
