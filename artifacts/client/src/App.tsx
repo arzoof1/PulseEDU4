@@ -2258,6 +2258,8 @@ function App() {
     id: number;
     email: string;
     displayName: string;
+    // Legacy role flags — still surfaced as labels and as the source of
+    // truth for any page whose gate hasn't been migrated to caps yet.
     isAdmin: boolean;
     isEseCoordinator: boolean;
     isPbisCoordinator: boolean;
@@ -2265,6 +2267,26 @@ function App() {
     isIssTeacher: boolean;
     isDean: boolean;
     isMtssCoordinator: boolean;
+    // Per-page capabilities — used by pages that have been migrated.
+    capHallPasses: boolean;
+    capHallPassesViewAll: boolean;
+    capTardies: boolean;
+    capStudentActivity: boolean;
+    capPbisAward: boolean;
+    capPbisManage: boolean;
+    capParentEmail: boolean;
+    capSupportNotes: boolean;
+    capAccommodationLog: boolean;
+    capAccommodationManage: boolean;
+    capPulloutsRequest: boolean;
+    capPulloutsVerify: boolean;
+    capPulloutsReview: boolean;
+    capInterventionLog: boolean;
+    capInterventionManage: boolean;
+    capReports: boolean;
+    capIssDashboard: boolean;
+    capKioskActivate: boolean;
+    capManageLocations: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -4495,11 +4517,13 @@ function App() {
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
-  const canManageBehaviorLists =
-    isAdmin ||
-    isBehaviorSpec ||
-    authUser?.isMtssCoordinator === true ||
-    authUser?.isDean === true;
+  // Capability-based gate (replaces the previous role check). Drives the
+  // Interventions admin tab — catalog + Keep-Apart Pairs. Admins still get
+  // it via the role-preset seed.
+  const canManageBehaviorLists = authUser?.capInterventionManage === true;
+  // Whether the current staff member can log a classroom intervention.
+  // Used to hide the "Log Intervention" nav item if the cap is revoked.
+  const canLogIntervention = authUser?.capInterventionLog === true;
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
@@ -4783,7 +4807,11 @@ function App() {
         return (
           <aside className="sidebar">
             <div className="section-label">Workspace</div>
-            {baseNavSections.map(renderNavItem)}
+            {baseNavSections
+              .filter(
+                (s) => s.key !== "logIntervention" || canLogIntervention,
+              )
+              .map(renderNavItem)}
             {hasBelowEkg && (
               <>
                 <div className="nav-admin-divider" aria-hidden="true">

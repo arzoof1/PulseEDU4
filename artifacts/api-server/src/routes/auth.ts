@@ -18,6 +18,8 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     id: row.id,
     email: row.email,
     displayName: row.displayName,
+    // Legacy role flags — still surfaced as labels and as the source of
+    // truth for any page whose gate hasn't been migrated to caps yet.
     isAdmin: row.isAdmin,
     isEseCoordinator: row.isEseCoordinator,
     isPbisCoordinator: row.isPbisCoordinator,
@@ -25,6 +27,27 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isIssTeacher: row.isIssTeacher,
     isDean: row.isDean,
     isMtssCoordinator: row.isMtssCoordinator,
+    // Per-page capabilities — the new mechanism. Pages are migrated from
+    // role gates to cap gates one at a time.
+    capHallPasses: row.capHallPasses,
+    capHallPassesViewAll: row.capHallPassesViewAll,
+    capTardies: row.capTardies,
+    capStudentActivity: row.capStudentActivity,
+    capPbisAward: row.capPbisAward,
+    capPbisManage: row.capPbisManage,
+    capParentEmail: row.capParentEmail,
+    capSupportNotes: row.capSupportNotes,
+    capAccommodationLog: row.capAccommodationLog,
+    capAccommodationManage: row.capAccommodationManage,
+    capPulloutsRequest: row.capPulloutsRequest,
+    capPulloutsVerify: row.capPulloutsVerify,
+    capPulloutsReview: row.capPulloutsReview,
+    capInterventionLog: row.capInterventionLog,
+    capInterventionManage: row.capInterventionManage,
+    capReports: row.capReports,
+    capIssDashboard: row.capIssDashboard,
+    capKioskActivate: row.capKioskActivate,
+    capManageLocations: row.capManageLocations,
   };
 }
 
