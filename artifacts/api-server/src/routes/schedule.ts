@@ -15,6 +15,7 @@ async function requireStaff(
   next: NextFunction,
 ) {
   const staffId = req.session.staffId;
+  console.log("[schedule.requireStaff] sessionID=", req.sessionID, "staffId=", staffId, "cookieHeader=", req.headers.cookie?.slice(0, 60));
   if (!staffId) {
     res.status(401).json({ error: "Sign-in required" });
     return;
@@ -23,6 +24,7 @@ async function requireStaff(
     .select()
     .from(staffTable)
     .where(eq(staffTable.id, staffId));
+  console.log("[schedule.requireStaff] staffRow:", staff?.id, staff?.email, "active=", staff?.active);
   if (!staff || !staff.active) {
     res.status(401).json({ error: "Sign-in required" });
     return;
