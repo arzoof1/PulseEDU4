@@ -23,35 +23,35 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   return s && s.active ? s : null;
 }
 
-function requireCapManageStaff() {
+function requireAdmin() {
   return async (req: Request, res: Response, next: NextFunction) => {
     const staff = await loadStaff(req);
     if (!staff) {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!staff.capManageStaff) {
-      res.status(403).json({ error: "Manage Staff capability required" });
+    if (!staff.isAdmin) {
+      res.status(403).json({ error: "Admin only" });
       return;
     }
     next();
   };
 }
 
-// Preview today's digest without sending. Manage Staff cap required.
+// Preview today's digest without sending. Admin only.
 router.get(
   "/digest/today",
-  requireCapManageStaff(),
+  requireAdmin(),
   async (_req: Request, res: Response) => {
     const d = await buildDailyDigest(new Date());
     res.json(d);
   },
 );
 
-// Send the digest now. Manage Staff cap required.
+// Send the digest now. Admin only. Used for manual fire and testing.
 router.post(
   "/digest/send-now",
-  requireCapManageStaff(),
+  requireAdmin(),
   async (_req: Request, res: Response) => {
     const result = await sendDailyDigestEmail(new Date());
     res.json(result);

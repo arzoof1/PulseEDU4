@@ -111,7 +111,7 @@ router.post("/pbis-goals/:id/archive", requireStaff, async (req, res) => {
     return;
   }
   const isOwner = goal.createdById !== null && goal.createdById === staff.id;
-  if (!staff.capPbisManage && !isOwner) {
+  if (!staff.isAdmin && !staff.isPbisCoordinator && !isOwner) {
     res.status(403).json({ error: "Not your goal" });
     return;
   }

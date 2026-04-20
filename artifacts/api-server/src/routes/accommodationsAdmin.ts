@@ -12,7 +12,7 @@ import { and, eq, isNull, sql, desc, inArray } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-async function requireSignedIn(
+async function requireEseOrAdmin(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -30,30 +30,8 @@ async function requireSignedIn(
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
-  (req as Request & { staff: typeof staff }).staff = staff;
-  next();
-}
-
-async function requireAccommodationManage(
-  req: Request,
-  res: Response,
-  next: NextFunction,
-) {
-  const staffId = req.session.staffId;
-  if (!staffId) {
-    res.status(401).json({ error: "Sign-in required" });
-    return;
-  }
-  const [staff] = await db
-    .select()
-    .from(staffTable)
-    .where(eq(staffTable.id, staffId));
-  if (!staff || !staff.active) {
-    res.status(401).json({ error: "Sign-in required" });
-    return;
-  }
-  if (!staff.capAccommodationManage) {
-    res.status(403).json({ error: "Managing accommodations is not granted" });
+  if (!staff.isAdmin && !staff.isEseCoordinator) {
+    res.status(403).json({ error: "ESE coordinator or admin only" });
     return;
   }
   (req as Request & { staff: typeof staff }).staff = staff;
@@ -62,9 +40,7 @@ async function requireAccommodationManage(
 
 // ---- Master list ----
 
-// Master list is read by every accommodation-aware screen (logging,
-// reporting, kiosk picker), so any signed-in staff member can read it.
-router.get("/school-accommodations", requireSignedIn, async (_req, res) => {
+router.get("/school-accommodations", async (_req, res) => {
   const rows = await db
     .select()
     .from(schoolAccommodationsTable)
@@ -84,7 +60,7 @@ router.get("/school-accommodations", requireSignedIn, async (_req, res) => {
   );
 });
 
-router.post("/school-accommodations", requireAccommodationManage, async (req, res) => {
+router.post("/school-accommodations", requireEseOrAdmin, async (req, res) => {
   const { name, category } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -109,7 +85,7 @@ router.post("/school-accommodations", requireAccommodationManage, async (req, re
   res.status(201).json(row);
 });
 
-router.patch("/school-accommodations/:id", requireAccommodationManage, async (req, res) => {
+router.patch("/school-accommodations/:id", requireEseOrAdmin, async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -143,7 +119,7 @@ router.patch("/school-accommodations/:id", requireAccommodationManage, async (re
 // since this exposes full assignment history including removed entries.
 router.get(
   "/students/:studentId/accommodations",
-  requireAccommodationManage,
+  requireEseOrAdmin,
   async (req, res) => {
     const studentId = req.params.studentId;
     const rows = await db
@@ -175,7 +151,7 @@ router.get(
 // already actively assigned. Body: { accommodationIds: number[] }
 router.post(
   "/students/:studentId/accommodations",
-  requireAccommodationManage,
+  requireEseOrAdmin,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
     const studentId = req.params.studentId;
@@ -223,7 +199,7 @@ router.post(
 // Soft-remove an active assignment.
 router.delete(
   "/students/:studentId/accommodations/:assignmentId",
-  requireAccommodationManage,
+  requireEseOrAdmin,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
     const studentId = req.params.studentId;

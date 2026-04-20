@@ -50,10 +50,6 @@ router.post(
   requireAuth(),
   async (req: Request, res: Response) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
-    if (!staff.capParentEmail) {
-      res.status(403).json({ error: "Parent email is not granted" });
-      return;
-    }
     const { studentId, recipient, subject, body } = req.body ?? {};
 
     const sId = typeof studentId === "string" ? studentId.trim() : "";

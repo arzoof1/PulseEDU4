@@ -61,11 +61,6 @@ export const staffTable = pgTable("staff", {
     .default(false),
   capIssDashboard: boolean("cap_iss_dashboard").notNull().default(false),
   capManageLocations: boolean("cap_manage_locations").notNull().default(false),
-  // Manage Staff = the admin-bucket cap. Gates: admin staff CRUD,
-  // daily-digest preview/send, kiosk activation oversight, admin
-  // notifications, schedule "?all=1" override. Self-lockout guarded in
-  // adminStaff.ts so an actor cannot revoke their own grant.
-  capManageStaff: boolean("cap_manage_staff").notNull().default(false),
 
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),

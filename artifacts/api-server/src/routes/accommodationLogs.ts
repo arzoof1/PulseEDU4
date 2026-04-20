@@ -34,7 +34,7 @@ async function requireStaff(
   next();
 }
 
-router.get("/accommodation-logs", requireStaff, async (req, res) => {
+router.get("/accommodation-logs", async (req, res) => {
   const { studentId } = req.query;
   if (typeof studentId === "string" && studentId) {
     const rows = await db
@@ -52,10 +52,6 @@ router.get("/accommodation-logs", requireStaff, async (req, res) => {
 // Auth required; staff name comes from session.
 router.post("/accommodation-logs", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
-  if (!staff.capAccommodationLog) {
-    res.status(403).json({ error: "Logging accommodations is not granted" });
-    return;
-  }
   const { studentId, accommodation, accommodationId, period, status } =
     req.body ?? {};
 
@@ -130,10 +126,6 @@ router.post(
   requireStaff,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
-    if (!staff.capAccommodationLog) {
-      res.status(403).json({ error: "Logging accommodations is not granted" });
-      return;
-    }
     const { period, presentStudentIds, accommodationIds } = req.body ?? {};
 
     if (typeof period !== "number" || !Number.isInteger(period) || period < 1) {

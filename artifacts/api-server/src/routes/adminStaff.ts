@@ -19,15 +19,15 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   return s && s.active ? s : null;
 }
 
-function requireCapManageStaff() {
+function requireAdmin() {
   return async (req: Request, res: Response, next: NextFunction) => {
     const staff = await loadStaff(req);
     if (!staff) {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!staff.capManageStaff) {
-      res.status(403).json({ error: "Manage Staff capability required" });
+    if (!staff.isAdmin) {
+      res.status(403).json({ error: "Admin only" });
       return;
     }
     (req as Request & { staff: StaffRow }).staff = staff;
@@ -70,7 +70,6 @@ const CAP_FLAGS = [
   "capIssDashboard",
   "capKioskActivate",
   "capManageLocations",
-  "capManageStaff",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -122,13 +121,12 @@ const STAFF_LIST_PROJECTION = {
   capIssDashboard: staffTable.capIssDashboard,
   capKioskActivate: staffTable.capKioskActivate,
   capManageLocations: staffTable.capManageLocations,
-  capManageStaff: staffTable.capManageStaff,
 } as const;
 
 // List all staff with their role + capability flags. Admin only.
 router.get(
   "/admin/staff",
-  requireCapManageStaff(),
+  requireAdmin(),
   async (_req: Request, res: Response) => {
     const rows = await db
       .select(STAFF_LIST_PROJECTION)
@@ -143,7 +141,7 @@ router.get(
 // in one PATCH (used by the role-preset shortcut in the UI).
 router.patch(
   "/admin/staff/:id",
-  requireCapManageStaff(),
+  requireAdmin(),
   async (req: Request, res: Response) => {
     const targetId = Number(req.params.id);
     if (!Number.isFinite(targetId)) {
@@ -158,14 +156,13 @@ router.patch(
 
     const actor = (req as Request & { staff: StaffRow }).staff;
 
-    // Don't let the actor revoke their own Manage Staff capability or
-    // deactivate themselves — prevents lockout from the staff admin page.
+    // Don't let an admin demote themselves or deactivate themselves —
+    // prevents lockout.
     if (targetId === actor.id) {
-      if (updates.capManageStaff === false) {
-        res.status(409).json({
-          error:
-            "You cannot revoke your own Manage Staff capability.",
-        });
+      if (updates.isAdmin === false) {
+        res
+          .status(409)
+          .json({ error: "You cannot remove your own admin role." });
         return;
       }
       if (updates.active === false) {

@@ -84,8 +84,8 @@ function eachDateInclusive(fromIso: string, toIso: string): string[] {
 router.get("/reports/teachers", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  if (!staff.capReports) {
-    res.status(403).json({ error: "Reports access is not granted" });
+  if (!staff.isAdmin && !staff.isEseCoordinator) {
+    res.status(403).json({ error: "Admin or ESE coordinator only" });
     return;
   }
   const rows = await db
@@ -135,8 +135,8 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
 
   // ---- mode dispatch ----
   if (mode === "student") {
-    if (!staff.capReports) {
-      res.status(403).json({ error: "Reports access is not granted" });
+    if (!staff.isAdmin && !staff.isEseCoordinator) {
+      res.status(403).json({ error: "Admin or ESE coordinator only" });
       return;
     }
     res.status(501).json({ error: "Student-mode reports not yet implemented" });
@@ -154,9 +154,8 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     return;
   }
 
-  // capReports grants school-wide view; without it, a teacher can only
-  // request their own teacherId.
-  const isPrivileged = staff.capReports;
+  // Teacher can only see their own data; admin / ESE can see anyone's.
+  const isPrivileged = staff.isAdmin || staff.isEseCoordinator;
   if (!isPrivileged && teacherIdNum !== staff.id) {
     res.status(403).json({ error: "You may only view your own usage" });
     return;
@@ -417,8 +416,8 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
 router.get("/reports/hall-passes", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  if (!staff.capReports) {
-    res.status(403).json({ error: "Reports access is not granted" });
+  if (!staff.isAdmin && !staff.isEseCoordinator) {
+    res.status(403).json({ error: "Admin or ESE coordinator only" });
     return;
   }
   const dateRaw = req.query.date ? String(req.query.date) : todayIsoDate();
@@ -563,9 +562,8 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
     return;
   }
 
-  // capReports grants school-wide PBIS report view (any teacher filter,
-  // any student); without it, a user is pinned to their own awarded entries.
-  const isPrivileged = staff.capReports;
+  const isPrivileged =
+    staff.isAdmin || staff.isEseCoordinator || staff.isPbisCoordinator;
 
   const reasonFilter =
     typeof req.query.reason === "string" && req.query.reason.trim()

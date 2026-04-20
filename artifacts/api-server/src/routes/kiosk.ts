@@ -50,7 +50,7 @@ async function requireStaff(
   next();
 }
 
-async function requireCapManageStaff(
+async function requireAdmin(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -58,8 +58,8 @@ async function requireCapManageStaff(
   await requireStaff(req, res, () => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
-    if (!staff.capManageStaff) {
-      res.status(403).json({ error: "Manage Staff capability required" });
+    if (!staff.isAdmin) {
+      res.status(403).json({ error: "Admin only" });
       return;
     }
     next();
@@ -93,14 +93,6 @@ router.post("/kiosk/activate", async (req, res) => {
   const ok = await bcrypt.compare(password, staff.passwordHash);
   if (!ok) {
     res.status(401).json({ error: "Invalid email or password" });
-    return;
-  }
-
-  // Capability-based: the activating staff member must hold capKioskActivate.
-  if (!staff.capKioskActivate) {
-    res
-      .status(403)
-      .json({ error: "Kiosk activation is not granted for this account" });
     return;
   }
 
@@ -254,7 +246,7 @@ router.post("/kiosk/deactivate", requireStaff, async (req, res) => {
   res.status(204).end();
 });
 
-router.get("/kiosk/activations", requireCapManageStaff, async (req, res) => {
+router.get("/kiosk/activations", requireAdmin, async (req, res) => {
   const onlyActive = (req.query.status ?? "active") === "active";
   const baseWhere = onlyActive
     ? and(
@@ -285,7 +277,7 @@ router.get("/kiosk/activations", requireCapManageStaff, async (req, res) => {
 
 router.post(
   "/kiosk/activations/:id/deactivate",
-  requireCapManageStaff,
+  requireAdmin,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
@@ -315,7 +307,7 @@ router.post(
   },
 );
 
-router.get("/admin/notifications", requireCapManageStaff, async (_req, res) => {
+router.get("/admin/notifications", requireAdmin, async (_req, res) => {
   const rows = await db
     .select()
     .from(adminNotificationsTable)
@@ -326,7 +318,7 @@ router.get("/admin/notifications", requireCapManageStaff, async (_req, res) => {
 
 router.post(
   "/admin/notifications/:id/resolve",
-  requireCapManageStaff,
+  requireAdmin,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
