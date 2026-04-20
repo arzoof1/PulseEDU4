@@ -351,28 +351,30 @@ export default function CreatePassModal({
                     <strong>{selectedTeacher}</strong>
                   )}
                 </div>
-                <div className="cp-context-row">
-                  <span className="cp-context-label">Room</span>
-                  {allRooms.length > 0 ? (
-                    <select
-                      className="cp-room-select"
-                      value={originRoom}
-                      onChange={(e) => {
-                        setOriginRoom(e.target.value);
-                        setDestination("");
-                      }}
-                    >
-                      <option value="">— select origin —</option>
-                      {allRooms.map((r) => (
-                        <option key={r} value={r}>
-                          {r}
-                        </option>
-                      ))}
-                    </select>
-                  ) : (
-                    <strong>{originRoom || "—"}</strong>
-                  )}
-                </div>
+                {!canChangeTeacher && (
+                  <div className="cp-context-row">
+                    <span className="cp-context-label">Room</span>
+                    {allRooms.length > 0 ? (
+                      <select
+                        className="cp-room-select"
+                        value={originRoom}
+                        onChange={(e) => {
+                          setOriginRoom(e.target.value);
+                          setDestination("");
+                        }}
+                      >
+                        <option value="">— select origin —</option>
+                        {allRooms.map((r) => (
+                          <option key={r} value={r}>
+                            {r}
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <strong>{originRoom || "—"}</strong>
+                    )}
+                  </div>
+                )}
               </div>
 
               <input
@@ -380,12 +382,12 @@ export default function CreatePassModal({
                 placeholder="Search destinations"
                 value={destQuery}
                 onChange={(e) => setDestQuery(e.target.value)}
-                disabled={!originRoom}
+                disabled={!originRoom && !canChangeTeacher}
               />
-              {!originRoom && (
+              {!originRoom && !canChangeTeacher && (
                 <p className="cp-empty">Select an origin room to continue.</p>
               )}
-              {originRoom && (
+              {(originRoom || canChangeTeacher) && (
                 <div className="cp-groups">
                   {groupedDestinations.near.length > 0 && (
                     <>
