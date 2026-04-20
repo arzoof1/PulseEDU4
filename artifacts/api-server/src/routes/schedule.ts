@@ -36,7 +36,7 @@ async function requireStaff(
 router.get("/schedule", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
   const wantAll = req.query.all === "1";
-  const filterByTeacher = !(wantAll && staff.isAdmin);
+  const filterByTeacher = !(wantAll && staff.capManageStaff);
 
   const sections = filterByTeacher
     ? await db

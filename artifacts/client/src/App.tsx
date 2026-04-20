@@ -1667,6 +1667,7 @@ type StaffAdminRow = {
   capIssDashboard: boolean;
   capKioskActivate: boolean;
   capManageLocations: boolean;
+  capManageStaff: boolean;
 };
 
 type StaffBoolField = keyof Omit<
@@ -1700,7 +1701,8 @@ type StaffCapField =
   | "capReports"
   | "capIssDashboard"
   | "capKioskActivate"
-  | "capManageLocations";
+  | "capManageLocations"
+  | "capManageStaff";
 
 const STAFF_ROLE_FIELDS: { key: StaffRoleField; label: string }[] = [
   { key: "isAdmin", label: "Admin" },
@@ -1739,6 +1741,7 @@ const STAFF_CAP_FIELDS: {
   { key: "capIssDashboard", short: "ISS Dashboard", full: "ISS Dashboard" },
   { key: "capKioskActivate", short: "Kiosk", full: "Kiosk — activate the kiosk on this device" },
   { key: "capManageLocations", short: "Locations", full: "Manage Locations (hall pass destinations)" },
+  { key: "capManageStaff", short: "Manage Staff", full: "Manage Staff — admin staff CRUD, daily digest, kiosk oversight, schedule school-wide view" },
 ];
 
 // When an admin turns a role checkbox ON, also flip these capabilities ON.
@@ -1766,6 +1769,7 @@ const ROLE_PRESETS: Record<StaffRoleField, StaffCapField[]> = {
     "capIssDashboard",
     "capKioskActivate",
     "capManageLocations",
+    "capManageStaff",
   ],
   isDean: ["capPulloutsVerify", "capInterventionManage"],
   isMtssCoordinator: ["capPulloutsVerify", "capInterventionManage"],
@@ -2287,6 +2291,7 @@ function App() {
     capIssDashboard: boolean;
     capKioskActivate: boolean;
     capManageLocations: boolean;
+    capManageStaff: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";

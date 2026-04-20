@@ -50,7 +50,7 @@ async function requireStaff(
   next();
 }
 
-async function requireAdmin(
+async function requireCapManageStaff(
   req: Request,
   res: Response,
   next: NextFunction,
@@ -58,8 +58,8 @@ async function requireAdmin(
   await requireStaff(req, res, () => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
-    if (!staff.isAdmin) {
-      res.status(403).json({ error: "Admin only" });
+    if (!staff.capManageStaff) {
+      res.status(403).json({ error: "Manage Staff capability required" });
       return;
     }
     next();
@@ -254,7 +254,7 @@ router.post("/kiosk/deactivate", requireStaff, async (req, res) => {
   res.status(204).end();
 });
 
-router.get("/kiosk/activations", requireAdmin, async (req, res) => {
+router.get("/kiosk/activations", requireCapManageStaff, async (req, res) => {
   const onlyActive = (req.query.status ?? "active") === "active";
   const baseWhere = onlyActive
     ? and(
@@ -285,7 +285,7 @@ router.get("/kiosk/activations", requireAdmin, async (req, res) => {
 
 router.post(
   "/kiosk/activations/:id/deactivate",
-  requireAdmin,
+  requireCapManageStaff,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
@@ -315,7 +315,7 @@ router.post(
   },
 );
 
-router.get("/admin/notifications", requireAdmin, async (_req, res) => {
+router.get("/admin/notifications", requireCapManageStaff, async (_req, res) => {
   const rows = await db
     .select()
     .from(adminNotificationsTable)
@@ -326,7 +326,7 @@ router.get("/admin/notifications", requireAdmin, async (_req, res) => {
 
 router.post(
   "/admin/notifications/:id/resolve",
-  requireAdmin,
+  requireCapManageStaff,
   async (req, res) => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;

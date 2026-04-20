@@ -43,14 +43,11 @@ function requireReasonAdmin() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (
-      !staff.isAdmin &&
-      !staff.isBehaviorSpecialist &&
-      !staff.isMtssCoordinator &&
-      !staff.isDean
-    ) {
+    // Curating the master list of pullout reasons is the same audience
+    // that reviews/audits pullouts, so reuse capPulloutsReview.
+    if (!staff.capPulloutsReview) {
       res.status(403).json({
-        error: "Admin, behavior specialist, MTSS coordinator, or dean only",
+        error: "Pullouts Review capability required",
       });
       return;
     }

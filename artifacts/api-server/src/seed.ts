@@ -65,19 +65,34 @@ export async function seedIfEmpty() {
       isEseCoordinator: false,
     }),
   );
+  // Admin gets every restricted-by-default cap turned on so they can
+  // actually use the admin pages from a fresh seed. Mirrors ROLE_PRESETS
+  // for isAdmin in the client. Default-true caps are inherited.
   staffInsert.push({
     email: "mr.davis@school.local",
     displayName: "Mr. Davis (Admin)",
     passwordHash: tempHash,
     isAdmin: true,
     isEseCoordinator: false,
+    capHallPassesViewAll: true,
+    capPbisManage: true,
+    capAccommodationManage: true,
+    capPulloutsVerify: true,
+    capPulloutsReview: true,
+    capInterventionManage: true,
+    capIssDashboard: true,
+    capManageLocations: true,
+    capManageStaff: true,
   });
+  // ESE Coordinator: hall-pass oversight + accommodations management.
   staffInsert.push({
     email: "ms.garcia@school.local",
     displayName: "Ms. Garcia (ESE Coordinator)",
     passwordHash: tempHash,
     isAdmin: false,
     isEseCoordinator: true,
+    capHallPassesViewAll: true,
+    capAccommodationManage: true,
   });
   const insertedStaff = await db
     .insert(staffTable)
