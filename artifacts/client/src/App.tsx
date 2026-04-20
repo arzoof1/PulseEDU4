@@ -2103,13 +2103,7 @@ function App() {
   const [accView, setAccView] = useState<
     "classView" | "student" | "roster" | "daily" | "reports"
   >("classView");
-  const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [accStudentId, setAccStudentId] = useState("");
-  const [rosterPeriod, setRosterPeriod] = useState("");
-  const [rosterAbsentIds, setRosterAbsentIds] = useState<Set<string>>(
-    new Set(),
-  );
-  const [rosterAbsentConfirmed, setRosterAbsentConfirmed] = useState(false);
   const [classViewPeriod, setClassViewPeriod] = useState<number | null>(null);
   const [classViewHoverId, setClassViewHoverId] = useState<string | null>(null);
   const [classViewTeacherId, setClassViewTeacherId] = useState<number | null>(
@@ -2176,6 +2170,7 @@ function App() {
   // Daily Class Log state
   const [dailyPeriod, setDailyPeriod] = useState<string>("");
   const [dailyAbsent, setDailyAbsent] = useState<Set<string>>(new Set());
+  const [dailyAbsentConfirmed, setDailyAbsentConfirmed] = useState(false);
   const [dailySelectedAccs, setDailySelectedAccs] = useState<Set<number>>(
     new Set(),
   );
@@ -6520,23 +6515,6 @@ function App() {
               (st) => st.studentId === accStudentId,
             );
             const accs = s?.accommodations ?? [];
-            const allAccs = Array.from(
-              new Set(students.flatMap((st) => st.accommodations ?? [])),
-            ).sort();
-            const periodIds = rosterPeriod
-              ? new Set(periodRoster[rosterPeriod] ?? [])
-              : myPeriods.length > 0
-                ? new Set(
-                    myPeriods.flatMap((p) => periodRoster[String(p)] ?? []),
-                  )
-                : null;
-            const rosterStudents = rosterAccommodation
-              ? students.filter(
-                  (st) =>
-                    (st.accommodations ?? []).includes(rosterAccommodation) &&
-                    (!periodIds || periodIds.has(st.studentId)),
-                )
-              : [];
             return (
               <section
                 style={{
@@ -6564,19 +6542,11 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAccView("roster")}
-                    disabled={accView === "roster"}
-                    style={{ marginRight: "0.25rem" }}
-                  >
-                    By Accommodation Roster
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setAccView("daily")}
                     disabled={accView === "daily"}
                     style={{ marginRight: "0.25rem" }}
                   >
-                    Daily Class Log
+                    Class Log
                   </button>
                   <button
                     type="button"
@@ -7120,228 +7090,6 @@ function App() {
                       </ul>
                     )}
                   </>
-                ) : accView === "roster" ? (
-                  <>
-                    <h3 style={{ marginTop: 0 }}>
-                      Roster by Accommodation
-                      <button
-                        type="button"
-                        className="no-print"
-                        onClick={() => window.print()}
-                        style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
-                      >
-                        Print
-                      </button>
-                    </h3>
-                    <div style={{ marginBottom: "0.5rem" }}>
-                      <label>
-                        Period:{" "}
-                        <select
-                          value={rosterPeriod}
-                          onChange={(e) => {
-                            setRosterPeriod(e.target.value);
-                            setRosterAbsentIds(new Set());
-                            setRosterAbsentConfirmed(false);
-                          }}
-                        >
-                          <option value="">All My Periods</option>
-                          {myPeriods.map((p) => (
-                            <option key={p} value={String(p)}>
-                              Period {p}
-                            </option>
-                          ))}
-                        </select>
-                        {myPeriods.length === 0 && (
-                          <span style={{ marginLeft: "0.5rem", color: "#666" }}>
-                            No periods assigned to {currentStaffUser}
-                          </span>
-                        )}
-                      </label>
-                    </div>
-                    <div style={{ marginBottom: "0.5rem" }}>
-                      <label>
-                        Accommodation:{" "}
-                        <select
-                          value={rosterAccommodation}
-                          onChange={(e) => {
-                            setRosterAccommodation(e.target.value);
-                            setRosterAbsentIds(new Set());
-                            setRosterAbsentConfirmed(false);
-                          }}
-                        >
-                          <option value="">-- Select --</option>
-                          {allAccs.map((a) => (
-                            <option key={a} value={a}>
-                              {a}
-                            </option>
-                          ))}
-                        </select>
-                      </label>
-                    </div>
-                    {!rosterAccommodation ? null : rosterStudents.length === 0 ? (
-                      <div>No students found for this accommodation</div>
-                    ) : (
-                      (() => {
-                        const presentStudents = rosterStudents.filter(
-                          (st) => !rosterAbsentIds.has(st.studentId),
-                        );
-                        const period = rosterPeriod
-                          ? Number(rosterPeriod)
-                          : null;
-                        return (
-                          <>
-                            <div
-                              style={{
-                                marginBottom: "0.75rem",
-                                padding: "0.5rem 0.75rem",
-                                background: rosterAbsentConfirmed
-                                  ? "rgba(13, 148, 136, 0.08)"
-                                  : "rgba(234, 179, 8, 0.08)",
-                                border: `1px solid ${
-                                  rosterAbsentConfirmed
-                                    ? "rgba(13, 148, 136, 0.4)"
-                                    : "rgba(234, 179, 8, 0.4)"
-                                }`,
-                                borderRadius: 6,
-                              }}
-                            >
-                              <label
-                                style={{
-                                  display: "flex",
-                                  gap: "0.5rem",
-                                  alignItems: "center",
-                                  cursor: "pointer",
-                                  fontSize: 14,
-                                }}
-                              >
-                                <input
-                                  type="checkbox"
-                                  checked={rosterAbsentConfirmed}
-                                  onChange={(e) =>
-                                    setRosterAbsentConfirmed(e.target.checked)
-                                  }
-                                />
-                                <span>
-                                  I've indicated all absent students by
-                                  checking the box
-                                  {rosterAbsentIds.size > 0 && (
-                                    <em
-                                      style={{
-                                        color: "var(--text-subtle)",
-                                        marginLeft: 4,
-                                      }}
-                                    >
-                                      ({rosterAbsentIds.size} marked absent)
-                                    </em>
-                                  )}
-                                </span>
-                              </label>
-                            </div>
-                            <div style={{ marginBottom: "0.5rem" }}>
-                              <button
-                                type="button"
-                                disabled={
-                                  !rosterAbsentConfirmed ||
-                                  presentStudents.length === 0
-                                }
-                                onClick={() => {
-                                  const ok = window.confirm(
-                                    `Log this accommodation as provided for all ${presentStudents.length} present students?`,
-                                  );
-                                  if (!ok) return;
-                                  presentStudents.forEach((st) =>
-                                    logAccommodationProvided(
-                                      st.studentId,
-                                      rosterAccommodation,
-                                      period,
-                                    ),
-                                  );
-                                }}
-                              >
-                                Log Provided for All Present Students
-                                {rosterAbsentConfirmed
-                                  ? ` (${presentStudents.length})`
-                                  : ""}
-                              </button>
-                            </div>
-                            <ul style={{ margin: 0, paddingLeft: 0, listStyle: "none" }}>
-                              {rosterStudents.map((st) => {
-                                const absent = rosterAbsentIds.has(
-                                  st.studentId,
-                                );
-                                return (
-                                  <li
-                                    key={st.studentId}
-                                    style={{
-                                      display: "flex",
-                                      alignItems: "center",
-                                      gap: "0.5rem",
-                                      padding: "0.25rem 0",
-                                      opacity: absent ? 0.55 : 1,
-                                    }}
-                                  >
-                                    <label
-                                      style={{
-                                        display: "flex",
-                                        gap: "0.25rem",
-                                        alignItems: "center",
-                                        cursor: "pointer",
-                                        fontSize: 12,
-                                        color: "var(--text-subtle)",
-                                      }}
-                                    >
-                                      <input
-                                        type="checkbox"
-                                        checked={absent}
-                                        onChange={(e) => {
-                                          setRosterAbsentIds((prev) => {
-                                            const next = new Set(prev);
-                                            if (e.target.checked) {
-                                              next.add(st.studentId);
-                                            } else {
-                                              next.delete(st.studentId);
-                                            }
-                                            return next;
-                                          });
-                                          setRosterAbsentConfirmed(false);
-                                        }}
-                                      />
-                                      Absent
-                                    </label>
-                                    <span
-                                      style={{
-                                        textDecoration: absent
-                                          ? "line-through"
-                                          : "none",
-                                        flex: 1,
-                                      }}
-                                    >
-                                      {st.firstName} {st.lastName} ({st.studentId})
-                                    </span>
-                                    <button
-                                      type="button"
-                                      disabled={
-                                        !rosterAbsentConfirmed || absent
-                                      }
-                                      onClick={() =>
-                                        logAccommodationProvided(
-                                          st.studentId,
-                                          rosterAccommodation,
-                                          period,
-                                        )
-                                      }
-                                    >
-                                      Log Provided
-                                    </button>
-                                  </li>
-                                );
-                              })}
-                            </ul>
-                          </>
-                        );
-                      })()
-                    )}
-                  </>
                 ) : accView === "daily" ? (
                   (() => {
                     const allInPeriod = dailyPeriod
@@ -7371,17 +7119,46 @@ function App() {
                           ? a.name.localeCompare(b.name)
                           : a.category.localeCompare(b.category),
                       );
+                    const trackedCats = new Set<
+                      SchoolAccommodation["category"]
+                    >(["IEP", "504", "ELL"]);
+                    const studentTrackedCats = (
+                      st: (typeof students)[number],
+                    ): SchoolAccommodation["category"][] => {
+                      const seen = new Set<SchoolAccommodation["category"]>();
+                      for (const name of st.accommodations ?? []) {
+                        const cat = accCategoryByName.get(name);
+                        if (cat && trackedCats.has(cat)) seen.add(cat);
+                      }
+                      return ["IEP", "504", "ELL"].filter((c) =>
+                        seen.has(c as SchoolAccommodation["category"]),
+                      ) as SchoolAccommodation["category"][];
+                    };
                     const allInPeriodStudents = allInPeriod
                       .map((id) =>
                         students.find((st) => st.studentId === id),
                       )
                       .filter(
                         (s): s is (typeof students)[number] => s !== undefined,
-                      );
+                      )
+                      .filter((st) => studentTrackedCats(st).length > 0);
+                    const presentEligibleCount = allInPeriodStudents.filter(
+                      (st) => !dailyAbsent.has(st.studentId),
+                    ).length;
+                    const catColor = (
+                      c: SchoolAccommodation["category"],
+                    ): string =>
+                      c === "IEP"
+                        ? "#0e7490"
+                        : c === "504"
+                          ? "#7c3aed"
+                          : c === "ELL"
+                            ? "#0891b2"
+                            : "#64748b";
                     return (
                       <>
                         <h3 style={{ marginTop: 0 }}>
-                          Daily Class Log
+                          Class Log
                           <button
                             type="button"
                             className="no-print"
@@ -7399,6 +7176,7 @@ function App() {
                               onChange={(e) => {
                                 setDailyPeriod(e.target.value);
                                 setDailyAbsent(new Set());
+                                setDailyAbsentConfirmed(false);
                                 setDailySelectedAccs(new Set());
                                 setDailySubmitMsg("");
                               }}
@@ -7431,11 +7209,66 @@ function App() {
                           >
                             <div>
                               <h4 style={{ margin: "0 0 0.5rem" }}>
-                                Roster ({allInPeriodStudents.length}) — check
-                                students who are absent
+                                Students with accommodations (
+                                {allInPeriodStudents.length}) — check absentees
                               </h4>
+                              <div
+                                style={{
+                                  marginBottom: "0.5rem",
+                                  padding: "0.5rem 0.75rem",
+                                  background: dailyAbsentConfirmed
+                                    ? "rgba(13, 148, 136, 0.08)"
+                                    : "rgba(234, 179, 8, 0.08)",
+                                  border: `1px solid ${
+                                    dailyAbsentConfirmed
+                                      ? "rgba(13, 148, 136, 0.4)"
+                                      : "rgba(234, 179, 8, 0.4)"
+                                  }`,
+                                  borderRadius: 6,
+                                }}
+                              >
+                                <label
+                                  style={{
+                                    display: "flex",
+                                    gap: "0.5rem",
+                                    alignItems: "center",
+                                    cursor: "pointer",
+                                    fontSize: 14,
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={dailyAbsentConfirmed}
+                                    onChange={(e) =>
+                                      setDailyAbsentConfirmed(
+                                        e.target.checked,
+                                      )
+                                    }
+                                    disabled={
+                                      allInPeriodStudents.length === 0
+                                    }
+                                  />
+                                  <span>
+                                    I've indicated all absent students by
+                                    checking the box
+                                    {dailyAbsent.size > 0 && (
+                                      <em
+                                        style={{
+                                          color: "#666",
+                                          marginLeft: 4,
+                                        }}
+                                      >
+                                        ({dailyAbsent.size} marked absent)
+                                      </em>
+                                    )}
+                                  </span>
+                                </label>
+                              </div>
                               {allInPeriodStudents.length === 0 ? (
-                                <div>No students in this period.</div>
+                                <div>
+                                  No students in this period have an IEP, 504,
+                                  or ELL accommodation on file.
+                                </div>
                               ) : (
                                 <ul
                                   style={{
@@ -7459,7 +7292,18 @@ function App() {
                                           borderBottom: "1px solid #eee",
                                         }}
                                       >
-                                        <label>
+                                        <label
+                                          style={{
+                                            display: "flex",
+                                            alignItems: "center",
+                                            gap: "0.4rem",
+                                            opacity: dailyAbsent.has(
+                                              st.studentId,
+                                            )
+                                              ? 0.55
+                                              : 1,
+                                          }}
+                                        >
                                           <input
                                             type="checkbox"
                                             checked={dailyAbsent.has(
@@ -7473,26 +7317,40 @@ function App() {
                                                 next.add(st.studentId);
                                               else next.delete(st.studentId);
                                               setDailyAbsent(next);
+                                              setDailyAbsentConfirmed(false);
                                             }}
-                                          />{" "}
-                                          {st.lastName}, {st.firstName}{" "}
-                                          <span style={{ color: "#888" }}>
-                                            ({st.studentId})
+                                          />
+                                          <span
+                                            style={{
+                                              flex: 1,
+                                              textDecoration: dailyAbsent.has(
+                                                st.studentId,
+                                              )
+                                                ? "line-through"
+                                                : "none",
+                                            }}
+                                          >
+                                            {st.lastName}, {st.firstName}{" "}
+                                            <span style={{ color: "#888" }}>
+                                              ({st.studentId})
+                                            </span>
                                           </span>
-                                          {(st.accommodations ?? []).length >
-                                            0 && (
+                                          {studentTrackedCats(st).map((c) => (
                                             <span
+                                              key={c}
                                               style={{
-                                                marginLeft: "0.5rem",
-                                                color: "#0a66c2",
-                                                fontSize: "0.85em",
+                                                background: catColor(c),
+                                                color: "#fff",
+                                                borderRadius: 4,
+                                                padding: "1px 5px",
+                                                fontSize: "0.7em",
+                                                fontWeight: 600,
+                                                letterSpacing: "0.02em",
                                               }}
                                             >
-                                              [
-                                              {(st.accommodations ?? []).length}
-                                              ]
+                                              {c}
                                             </span>
-                                          )}
+                                          ))}
                                         </label>
                                       </li>
                                     ))}
@@ -7597,19 +7455,37 @@ function App() {
                                   type="button"
                                   onClick={submitDailyLog}
                                   disabled={
+                                    !dailyAbsentConfirmed ||
                                     dailySelectedAccs.size === 0 ||
-                                    presentIds.length === 0
+                                    presentEligibleCount === 0
                                   }
                                   style={{
                                     background: "#dff0d8",
                                     padding: "0.5rem 0.75rem",
                                   }}
+                                  title={
+                                    !dailyAbsentConfirmed
+                                      ? "Confirm absences first"
+                                      : undefined
+                                  }
                                 >
-                                  Log {dailySelectedAccs.size} accommodation
-                                  {dailySelectedAccs.size === 1 ? "" : "s"} for{" "}
-                                  {presentIds.length} present student
-                                  {presentIds.length === 1 ? "" : "s"}
+                                  Apply {dailySelectedAccs.size} accommodation
+                                  {dailySelectedAccs.size === 1 ? "" : "s"} to{" "}
+                                  {presentEligibleCount} present student
+                                  {presentEligibleCount === 1 ? "" : "s"}
                                 </button>
+                                {!dailyAbsentConfirmed && (
+                                  <div
+                                    style={{
+                                      marginTop: "0.4rem",
+                                      fontSize: "0.85em",
+                                      color: "#92400e",
+                                    }}
+                                  >
+                                    Confirm the absence checkbox above to
+                                    enable Apply.
+                                  </div>
+                                )}
                                 {dailySubmitMsg && (
                                   <div
                                     style={{
