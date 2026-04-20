@@ -3381,14 +3381,11 @@ function App() {
     loadStudents();
 
     fetch("/api/location-allowed-destinations")
-      .then((res) => (res.ok ? res.json() : []))
+      .then((res) => res.json())
       .then(
         (
-          raw: unknown,
+          data: { originName: string; destinationName: string }[],
         ) => {
-          const data = Array.isArray(raw)
-            ? (raw as { originName: string; destinationName: string }[])
-            : [];
           const map: Record<string, string[]> = {};
           for (const row of data) {
             if (!map[row.originName]) map[row.originName] = [];
@@ -3405,12 +3402,9 @@ function App() {
       );
 
     fetch("/api/staff-defaults")
-      .then((res) => (res.ok ? res.json() : []))
+      .then((res) => res.json())
       .then(
-        (raw: unknown) => {
-          const data = Array.isArray(raw)
-            ? (raw as { staffName: string; defaultLocationName: string | null }[])
-            : [];
+        (data: { staffName: string; defaultLocationName: string | null }[]) => {
           const map: Record<string, string> = {};
           for (const row of data) {
             if (row.defaultLocationName) {
