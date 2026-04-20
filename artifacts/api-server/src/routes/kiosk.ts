@@ -96,6 +96,14 @@ router.post("/kiosk/activate", async (req, res) => {
     return;
   }
 
+  // Capability-based: the activating staff member must hold capKioskActivate.
+  if (!staff.capKioskActivate) {
+    res
+      .status(403)
+      .json({ error: "Kiosk activation is not granted for this account" });
+    return;
+  }
+
   const [defaultRow] = await db
     .select()
     .from(staffDefaultsTable)
