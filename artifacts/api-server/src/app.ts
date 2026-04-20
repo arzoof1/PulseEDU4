@@ -58,11 +58,11 @@ app.use(
     rolling: true,
     cookie: {
       httpOnly: true,
-      // SameSite=None + Secure lets the session cookie work both inside the
-      // Replit workspace preview iframe (cross-site context) and in a normal
-      // standalone tab. Both dev and prod are served over HTTPS so Secure is
-      // safe to require.
-      sameSite: "none",
+      // Use SameSite=Lax so the cookie works for same-site requests (the
+      // common case in both dev and prod). SameSite=None requires the browser
+      // to allow third-party cookies, which is increasingly blocked by
+      // default and was breaking the session inside the Replit preview iframe.
+      sameSite: "lax",
       secure: true,
       maxAge: 1000 * 60 * 60 * 24 * 14,
     },
