@@ -41,6 +41,86 @@ const MIN_MIN = 1;
 const MAX_MIN = 30;
 const DEFAULT_MIN = 5;
 
+function RoomCombobox({
+  rooms,
+  value,
+  onChange,
+}: {
+  rooms: string[];
+  value: string;
+  onChange: (next: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [query, setQuery] = useState("");
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    return q ? rooms.filter((r) => r.toLowerCase().includes(q)) : rooms;
+  }, [rooms, query]);
+
+  return (
+    <div className="cp-teacher-picker" ref={wrapRef}>
+      {!open ? (
+        <button
+          type="button"
+          className="cp-teacher-chip"
+          onClick={() => {
+            setQuery("");
+            setOpen(true);
+          }}
+          title="Change room"
+        >
+          <strong>{value || "— select —"}</strong>
+          <span className="cp-teacher-chip-edit">change</span>
+        </button>
+      ) : (
+        <div className="cp-teacher-pop">
+          <input
+            className="cp-input cp-teacher-input"
+            placeholder="Search rooms"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            autoFocus
+          />
+          <ul className="cp-list cp-teacher-list">
+            {filtered.map((r) => (
+              <li key={r}>
+                <button
+                  type="button"
+                  className="cp-list-item"
+                  onClick={() => {
+                    onChange(r);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="cp-list-text">
+                    <strong>{r}</strong>
+                  </span>
+                </button>
+              </li>
+            ))}
+            {filtered.length === 0 && (
+              <li>
+                <p className="cp-empty">No rooms match.</p>
+              </li>
+            )}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const EkgBar = () => (
   <svg
     className="cp-ekg"
@@ -152,8 +232,21 @@ export default function CreatePassModal({
       : availableDestinations;
     const near = filtered.filter((d) => nearSet.has(d));
     const other = filtered.filter((d) => !nearSet.has(d));
-    return { near, other };
-  }, [availableDestinations, destQuery, nearSet]);
+    const teachers = canChangeTeacher
+      ? staffUsers
+          .filter((s) => s && s !== selectedTeacher)
+          .filter((s) => !q || s.toLowerCase().includes(q))
+          .sort((a, b) => a.localeCompare(b))
+      : [];
+    return { near, other, teachers };
+  }, [
+    availableDestinations,
+    destQuery,
+    nearSet,
+    canChangeTeacher,
+    staffUsers,
+    selectedTeacher,
+  ]);
 
   const filteredTeachers = useMemo(() => {
     const q = teacherQuery.trim().toLowerCase();
@@ -351,28 +444,17 @@ export default function CreatePassModal({
                     <strong>{selectedTeacher}</strong>
                   )}
                 </div>
-                {!canChangeTeacher && (
+                {!canChangeTeacher && allRooms.length > 0 && (
                   <div className="cp-context-row">
                     <span className="cp-context-label">Room</span>
-                    {allRooms.length > 0 ? (
-                      <select
-                        className="cp-room-select"
-                        value={originRoom}
-                        onChange={(e) => {
-                          setOriginRoom(e.target.value);
-                          setDestination("");
-                        }}
-                      >
-                        <option value="">— select origin —</option>
-                        {allRooms.map((r) => (
-                          <option key={r} value={r}>
-                            {r}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <strong>{originRoom || "—"}</strong>
-                    )}
+                    <RoomCombobox
+                      rooms={allRooms}
+                      value={originRoom}
+                      onChange={(r) => {
+                        setOriginRoom(r);
+                        setDestination("");
+                      }}
+                    />
                   </div>
                 )}
               </div>
@@ -450,8 +532,42 @@ export default function CreatePassModal({
                       </ul>
                     </>
                   )}
+                  {groupedDestinations.teachers.length > 0 && (
+                    <>
+                      <div className="cp-group-label">Send back to teacher</div>
+                      <ul className="cp-list">
+                        {groupedDestinations.teachers.map((name) => (
+                          <li key={`t:${name}`}>
+                            <button
+                              type="button"
+                              className="cp-list-item"
+                              onClick={() => {
+                                setDestination(name);
+                                setContactedAck(false);
+                                setStep(3);
+                              }}
+                            >
+                              <span
+                                className="cp-dest-dot cp-dest-dot-near"
+                                aria-hidden="true"
+                              />
+                              <span className="cp-list-text">
+                                <strong>{name}</strong>
+                                {staffDefaults[name] && (
+                                  <span className="cp-list-sub">
+                                    {staffDefaults[name]}
+                                  </span>
+                                )}
+                              </span>
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </>
+                  )}
                   {groupedDestinations.near.length === 0 &&
-                    groupedDestinations.other.length === 0 && (
+                    groupedDestinations.other.length === 0 &&
+                    groupedDestinations.teachers.length === 0 && (
                       <p className="cp-empty">No destinations match.</p>
                     )}
                 </div>
@@ -470,7 +586,12 @@ export default function CreatePassModal({
                 </div>
                 <div className="cp-context-row">
                   <span className="cp-context-label">From</span>
-                  <strong>{originRoom}</strong>
+                  <strong>
+                    {selectedTeacher}
+                    {originRoom && originRoom !== selectedTeacher
+                      ? ` — ${originRoom}`
+                      : ""}
+                  </strong>
                 </div>
                 <div className="cp-context-row">
                   <span className="cp-context-label">To</span>
