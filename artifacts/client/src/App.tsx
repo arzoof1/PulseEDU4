@@ -4661,6 +4661,8 @@ function App() {
         defaultOriginRoom={originRoom || (staffDefaults[currentStaffUser] ?? "")}
         currentStaffUser={currentStaffUser}
         staffUsers={staffUsers}
+        staffDefaults={staffDefaults}
+        canChangeTeacher={Boolean(authUser?.isAdmin)}
         nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
         bypassContactAck={Boolean(authUser?.isAdmin)}
         onCreate={async (payload) => {
@@ -4671,7 +4673,7 @@ function App() {
               studentId: payload.studentId,
               destination: payload.destination,
               originRoom: payload.originRoom,
-              teacherName: currentStaffUser,
+              teacherName: payload.fromTeacher || currentStaffUser,
               destinationTeacher: payload.destinationTeacher,
               contactedAcknowledged: payload.contactedAcknowledged,
               maxDurationMinutes: payload.maxDurationMinutes,

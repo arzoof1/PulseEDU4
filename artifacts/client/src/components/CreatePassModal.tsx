@@ -14,6 +14,8 @@ export interface CreatePassPayload {
   maxDurationMinutes: number;
   destinationTeacher: string | null;
   contactedAcknowledged: boolean;
+  /** Teacher selected in the From combobox (admins can change this). */
+  fromTeacher: string;
 }
 
 interface Props {
@@ -24,6 +26,10 @@ interface Props {
   defaultOriginRoom: string;
   currentStaffUser: string;
   staffUsers: string[];
+  /** Map of teacher name → their default room (used when From-teacher changes). */
+  staffDefaults: Record<string, string>;
+  /** When true, the user can pick a different teacher in the From combobox. */
+  canChangeTeacher: boolean;
   /** Names of destinations the current teacher is configured to send to without contact-ack. */
   nearDestinations: string[];
   /** When true (e.g. Hall Pass admin), the contact-ack is never required. */
@@ -62,6 +68,8 @@ export default function CreatePassModal({
   defaultOriginRoom,
   currentStaffUser,
   staffUsers,
+  staffDefaults,
+  canChangeTeacher,
   nearDestinations,
   bypassContactAck,
   onCreate,
@@ -70,6 +78,9 @@ export default function CreatePassModal({
   const [studentQuery, setStudentQuery] = useState("");
   const [selectedStudent, setSelectedStudent] =
     useState<CreatePassStudent | null>(null);
+  const [selectedTeacher, setSelectedTeacher] = useState(currentStaffUser);
+  const [teacherQuery, setTeacherQuery] = useState("");
+  const [teacherPickerOpen, setTeacherPickerOpen] = useState(false);
   const [originRoom, setOriginRoom] = useState(defaultOriginRoom);
   const [destQuery, setDestQuery] = useState("");
   const [destination, setDestination] = useState("");
@@ -84,6 +95,9 @@ export default function CreatePassModal({
     setStep(1);
     setStudentQuery("");
     setSelectedStudent(null);
+    setSelectedTeacher(currentStaffUser);
+    setTeacherQuery("");
+    setTeacherPickerOpen(false);
     setOriginRoom(defaultOriginRoom);
     setDestQuery("");
     setDestination("");
@@ -92,7 +106,7 @@ export default function CreatePassModal({
     setError(null);
     setSubmitting(false);
     setTimeout(() => studentInputRef.current?.focus(), 50);
-  }, [open, defaultOriginRoom]);
+  }, [open, defaultOriginRoom, currentStaffUser]);
 
   const allRooms = useMemo(
     () => Object.keys(destinationsByRoom).sort((a, b) => a.localeCompare(b)),
@@ -141,9 +155,24 @@ export default function CreatePassModal({
     return { near, other };
   }, [availableDestinations, destQuery, nearSet]);
 
-  // staffUsers prop kept for forward-compat; teacher-notify dropdown was
-  // removed in favor of the off-route contact-ack flow.
-  void staffUsers;
+  const filteredTeachers = useMemo(() => {
+    const q = teacherQuery.trim().toLowerCase();
+    const list = q
+      ? staffUsers.filter((s) => s.toLowerCase().includes(q))
+      : staffUsers;
+    return list.slice(0, 8);
+  }, [staffUsers, teacherQuery]);
+
+  const pickTeacher = (name: string) => {
+    setSelectedTeacher(name);
+    const def = staffDefaults[name];
+    if (def) {
+      setOriginRoom(def);
+      setDestination("");
+    }
+    setTeacherQuery("");
+    setTeacherPickerOpen(false);
+  };
 
   if (!open) return null;
 
@@ -164,6 +193,7 @@ export default function CreatePassModal({
         maxDurationMinutes: minutes,
         destinationTeacher: null,
         contactedAcknowledged: showContactAck ? contactedAck : false,
+        fromTeacher: selectedTeacher,
       });
       onClose();
     } catch (e: unknown) {
@@ -268,6 +298,61 @@ export default function CreatePassModal({
                 </div>
                 <div className="cp-context-row">
                   <span className="cp-context-label">From</span>
+                  {canChangeTeacher ? (
+                    <div className="cp-teacher-picker">
+                      {!teacherPickerOpen ? (
+                        <button
+                          type="button"
+                          className="cp-teacher-chip"
+                          onClick={() => setTeacherPickerOpen(true)}
+                          title="Change teacher"
+                        >
+                          <strong>{selectedTeacher}</strong>
+                          <span className="cp-teacher-chip-edit">change</span>
+                        </button>
+                      ) : (
+                        <div className="cp-teacher-pop">
+                          <input
+                            className="cp-input cp-teacher-input"
+                            placeholder="Search teachers"
+                            value={teacherQuery}
+                            onChange={(e) => setTeacherQuery(e.target.value)}
+                            autoFocus
+                          />
+                          <ul className="cp-list cp-teacher-list">
+                            {filteredTeachers.map((name) => (
+                              <li key={name}>
+                                <button
+                                  type="button"
+                                  className="cp-list-item"
+                                  onClick={() => pickTeacher(name)}
+                                >
+                                  <span className="cp-list-text">
+                                    <strong>{name}</strong>
+                                    {staffDefaults[name] && (
+                                      <span className="cp-list-sub">
+                                        {staffDefaults[name]}
+                                      </span>
+                                    )}
+                                  </span>
+                                </button>
+                              </li>
+                            ))}
+                            {filteredTeachers.length === 0 && (
+                              <li>
+                                <p className="cp-empty">No teachers match.</p>
+                              </li>
+                            )}
+                          </ul>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <strong>{selectedTeacher}</strong>
+                  )}
+                </div>
+                <div className="cp-context-row">
+                  <span className="cp-context-label">Room</span>
                   {allRooms.length > 0 ? (
                     <select
                       className="cp-room-select"
@@ -285,7 +370,7 @@ export default function CreatePassModal({
                       ))}
                     </select>
                   ) : (
-                    <strong>{originRoom || currentStaffUser}</strong>
+                    <strong>{originRoom || "—"}</strong>
                   )}
                 </div>
               </div>
