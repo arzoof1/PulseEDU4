@@ -2101,11 +2101,34 @@ function App() {
     | "pullouts"
   >("summary");
   const [accView, setAccView] = useState<
-    "student" | "roster" | "daily" | "reports"
-  >("student");
+    "classView" | "student" | "roster" | "daily" | "reports"
+  >("classView");
   const [rosterAccommodation, setRosterAccommodation] = useState("");
   const [accStudentId, setAccStudentId] = useState("");
   const [rosterPeriod, setRosterPeriod] = useState("");
+  const [classViewPeriod, setClassViewPeriod] = useState<number | null>(null);
+  const [classViewHoverId, setClassViewHoverId] = useState<string | null>(null);
+  type SchoolAccommodation = {
+    id: number;
+    name: string;
+    category: "IEP" | "504" | "ELL" | "Strategy";
+  };
+  const [schoolAccommodations, setSchoolAccommodations] = useState<
+    SchoolAccommodation[]
+  >([]);
+  useEffect(() => {
+    fetch("/api/school-accommodations", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: SchoolAccommodation[]) =>
+        setSchoolAccommodations(Array.isArray(rows) ? rows : []),
+      )
+      .catch(() => {});
+  }, []);
+  const accCategoryByName = useMemo(() => {
+    const m = new Map<string, SchoolAccommodation["category"]>();
+    for (const a of schoolAccommodations) m.set(a.name, a.category);
+    return m;
+  }, [schoolAccommodations]);
   interface MySection {
     id: number;
     period: number;
@@ -6490,6 +6513,14 @@ function App() {
                 <div className="no-print" style={{ marginBottom: "0.75rem" }}>
                   <button
                     type="button"
+                    onClick={() => setAccView("classView")}
+                    disabled={accView === "classView"}
+                    style={{ marginRight: "0.25rem" }}
+                  >
+                    Class View
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setAccView("student")}
                     disabled={accView === "student"}
                     style={{ marginRight: "0.25rem" }}
@@ -6520,7 +6551,346 @@ function App() {
                     Reports
                   </button>
                 </div>
-                {accView === "student" ? (
+                {accView === "classView" ? (
+                  (() => {
+                    const isEseCoord =
+                      authUser?.isEseCoordinator === true ||
+                      authUser?.isAdmin === true;
+                    const teachingPeriods = mySections
+                      .filter((s) => !s.isPlanning)
+                      .map((s) => s.period)
+                      .sort((a, b) => a - b);
+                    const planningPeriods = mySections
+                      .filter((s) => s.isPlanning)
+                      .map((s) => s.period);
+                    const effectivePeriod =
+                      classViewPeriod &&
+                      teachingPeriods.includes(classViewPeriod)
+                        ? classViewPeriod
+                        : (teachingPeriods[0] ?? null);
+                    const section = mySections.find(
+                      (s) => s.period === effectivePeriod && !s.isPlanning,
+                    );
+                    const roster = section
+                      ? students
+                          .filter((st) =>
+                            section.studentIds.includes(st.studentId),
+                          )
+                          .sort((a, b) =>
+                            (a.lastName + a.firstName).localeCompare(
+                              b.lastName + b.firstName,
+                            ),
+                          )
+                      : [];
+                    const catColor: Record<string, string> = {
+                      IEP: "#0e7490",
+                      "504": "#7c3aed",
+                      ELL: "#0891b2",
+                      Strategy: "#64748b",
+                    };
+                    const renderChip = (
+                      label: string,
+                      bg: string,
+                      title?: string,
+                    ) => (
+                      <span
+                        key={label}
+                        title={title}
+                        style={{
+                          display: "inline-block",
+                          padding: "1px 7px",
+                          marginRight: 4,
+                          borderRadius: 999,
+                          background: bg,
+                          color: "white",
+                          fontSize: 11,
+                          fontWeight: 600,
+                          lineHeight: "16px",
+                        }}
+                      >
+                        {label}
+                      </span>
+                    );
+                    return (
+                      <>
+                        <h3 style={{ marginTop: 0 }}>Class View</h3>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 6,
+                            alignItems: "center",
+                            marginBottom: "0.75rem",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: 12,
+                              color: "var(--text-subtle)",
+                              marginRight: 4,
+                            }}
+                          >
+                            Period:
+                          </span>
+                          {[1, 2, 3, 4, 5, 6, 7].map((p) => {
+                            const isPlanning = planningPeriods.includes(p);
+                            const isMine = teachingPeriods.includes(p);
+                            const isActive = effectivePeriod === p;
+                            return (
+                              <button
+                                key={p}
+                                type="button"
+                                onClick={() => {
+                                  if (!isMine) return;
+                                  setClassViewPeriod(p);
+                                  setClassViewHoverId(null);
+                                }}
+                                disabled={!isMine}
+                                title={
+                                  isPlanning
+                                    ? "Planning period"
+                                    : !isMine
+                                      ? "Not assigned this period"
+                                      : ""
+                                }
+                                style={{
+                                  padding: "0.25rem 0.6rem",
+                                  borderRadius: 6,
+                                  border: "1px solid var(--border)",
+                                  background: isActive
+                                    ? "var(--primary)"
+                                    : "transparent",
+                                  color: isActive
+                                    ? "white"
+                                    : isMine
+                                      ? undefined
+                                      : "var(--text-subtle)",
+                                  cursor: isMine ? "pointer" : "not-allowed",
+                                  opacity: isMine ? 1 : 0.5,
+                                }}
+                              >
+                                P{p}
+                                {isPlanning ? " (Plan)" : ""}
+                              </button>
+                            );
+                          })}
+                        </div>
+
+                        {!section ? (
+                          <div
+                            style={{
+                              color: "var(--text-subtle)",
+                              padding: "0.75rem 0",
+                            }}
+                          >
+                            No class assigned for this period.
+                          </div>
+                        ) : roster.length === 0 ? (
+                          <div
+                            style={{
+                              color: "var(--text-subtle)",
+                              padding: "0.75rem 0",
+                            }}
+                          >
+                            No students enrolled in this section.
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              style={{
+                                fontSize: 12,
+                                color: "var(--text-subtle)",
+                                marginBottom: 6,
+                              }}
+                            >
+                              {section.courseName} · {roster.length} students ·{" "}
+                              {
+                                roster.filter(
+                                  (s) => (s.accommodations ?? []).length > 0,
+                                ).length
+                              }{" "}
+                              with accommodations
+                            </div>
+                            <div
+                              style={{
+                                display: "grid",
+                                gap: 4,
+                              }}
+                            >
+                              {roster.map((s) => {
+                                const accs = s.accommodations ?? [];
+                                const byCat = new Map<
+                                  string,
+                                  string[]
+                                >();
+                                for (const name of accs) {
+                                  const cat =
+                                    accCategoryByName.get(name) ?? "Strategy";
+                                  const list = byCat.get(cat) ?? [];
+                                  list.push(name);
+                                  byCat.set(cat, list);
+                                }
+                                const isHover =
+                                  classViewHoverId === s.studentId;
+                                return (
+                                  <div
+                                    key={s.studentId}
+                                    onMouseEnter={() =>
+                                      setClassViewHoverId(s.studentId)
+                                    }
+                                    onMouseLeave={() =>
+                                      setClassViewHoverId((cur) =>
+                                        cur === s.studentId ? null : cur,
+                                      )
+                                    }
+                                    onClick={() =>
+                                      setClassViewHoverId((cur) =>
+                                        cur === s.studentId
+                                          ? null
+                                          : s.studentId,
+                                      )
+                                    }
+                                    style={{
+                                      position: "relative",
+                                      display: "grid",
+                                      gridTemplateColumns:
+                                        "minmax(200px, 1.4fr) minmax(160px, 1fr) auto",
+                                      gap: "0.75rem",
+                                      alignItems: "center",
+                                      padding: "0.45rem 0.6rem",
+                                      borderRadius: 6,
+                                      border: "1px solid var(--border)",
+                                      background:
+                                        accs.length > 0
+                                          ? "rgba(14,116,144,0.04)"
+                                          : "transparent",
+                                      cursor: accs.length > 0
+                                        ? "pointer"
+                                        : "default",
+                                    }}
+                                  >
+                                    <div>
+                                      <div style={{ fontWeight: 600 }}>
+                                        {s.lastName}, {s.firstName}
+                                      </div>
+                                      <div
+                                        style={{
+                                          fontSize: 11,
+                                          color: "var(--text-subtle)",
+                                        }}
+                                      >
+                                        {s.studentId} · Gr. {s.grade}
+                                      </div>
+                                    </div>
+                                    <div>
+                                      {accs.length === 0 ? (
+                                        <span
+                                          style={{
+                                            fontSize: 11,
+                                            color: "var(--text-subtle)",
+                                          }}
+                                        >
+                                          —
+                                        </span>
+                                      ) : (
+                                        Array.from(byCat.entries()).map(
+                                          ([cat, names]) =>
+                                            renderChip(
+                                              names.length > 1
+                                                ? `${cat} · ${names.length}`
+                                                : cat,
+                                              catColor[cat] ?? "#475569",
+                                              names.join(", "),
+                                            ),
+                                        )
+                                      )}
+                                    </div>
+                                    <div>
+                                      {isEseCoord && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setAccStudentId(s.studentId);
+                                            setAccView("student");
+                                          }}
+                                        >
+                                          Edit
+                                        </button>
+                                      )}
+                                    </div>
+                                    {isHover && accs.length > 0 && (
+                                      <div
+                                        style={{
+                                          position: "absolute",
+                                          top: "100%",
+                                          left: 8,
+                                          marginTop: 4,
+                                          zIndex: 5,
+                                          background: "white",
+                                          border: "1px solid var(--border)",
+                                          borderRadius: 6,
+                                          padding: "0.5rem 0.7rem",
+                                          boxShadow:
+                                            "0 4px 14px rgba(0,0,0,0.12)",
+                                          minWidth: 240,
+                                          maxWidth: 360,
+                                          color: "var(--text)",
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            fontSize: 11,
+                                            color: "var(--text-subtle)",
+                                            marginBottom: 4,
+                                          }}
+                                        >
+                                          Accommodations
+                                        </div>
+                                        {Array.from(byCat.entries()).map(
+                                          ([cat, names]) => (
+                                            <div
+                                              key={cat}
+                                              style={{ marginBottom: 4 }}
+                                            >
+                                              <div
+                                                style={{
+                                                  fontSize: 10,
+                                                  fontWeight: 700,
+                                                  color:
+                                                    catColor[cat] ?? "#475569",
+                                                  textTransform: "uppercase",
+                                                  letterSpacing: 0.5,
+                                                }}
+                                              >
+                                                {cat}
+                                              </div>
+                                              <ul
+                                                style={{
+                                                  margin: "2px 0 0 0",
+                                                  paddingLeft: 16,
+                                                  fontSize: 12,
+                                                }}
+                                              >
+                                                {names.map((n) => (
+                                                  <li key={n}>{n}</li>
+                                                ))}
+                                              </ul>
+                                            </div>
+                                          ),
+                                        )}
+                                      </div>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </>
+                        )}
+                      </>
+                    );
+                  })()
+                ) : accView === "student" ? (
                   <>
                     <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
                     <div style={{ marginBottom: "0.5rem" }}>
