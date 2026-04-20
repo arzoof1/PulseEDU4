@@ -26,7 +26,9 @@ function canManageEntry(
   staff: StaffRow,
   entry: typeof pbisEntriesTable.$inferSelect,
 ): boolean {
-  if (staff.isAdmin || staff.isPbisCoordinator) return true;
+  // Capability-based: PBIS managers can edit/void any entry; everyone else
+  // can only manage their own.
+  if (staff.capPbisManage) return true;
   return entry.staffId !== null && entry.staffId === staff.id;
 }
 
@@ -48,7 +50,12 @@ async function logEdit(
   });
 }
 
-router.get("/pbis", async (_req, res) => {
+router.get("/pbis", async (req, res) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
   const rows = await db.select().from(pbisEntriesTable);
   res.json(rows);
 });
@@ -139,21 +146,20 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
 });
 
 router.post("/pbis", async (req, res) => {
-  const { studentId, reason, points, staffName } = req.body ?? {};
-  const sessionStaffId = req.session.staffId;
-  let resolvedStaffId: number | null = null;
-  let resolvedStaffName =
-    typeof staffName === "string" ? staffName : "";
-  if (sessionStaffId) {
-    const [s] = await db
-      .select()
-      .from(staffTable)
-      .where(eq(staffTable.id, sessionStaffId));
-    if (s && s.active) {
-      resolvedStaffId = s.id;
-      resolvedStaffName = s.displayName;
-    }
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
   }
+  if (!staff.capPbisAward) {
+    res.status(403).json({ error: "Awarding PBIS points is not granted" });
+    return;
+  }
+  const { studentId, reason, points } = req.body ?? {};
+  // Awarding staff is always the signed-in user — never trust client-supplied
+  // staffName/staffId.
+  const resolvedStaffId: number | null = staff.id;
+  const resolvedStaffName: string = staff.displayName;
 
   if (typeof studentId !== "string" || !studentId) {
     res.status(400).json({ error: "studentId is required" });
@@ -192,6 +198,10 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
   const staff = await loadSessionStaff(req);
   if (!staff) {
     res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  if (!staff.capPbisAward) {
+    res.status(403).json({ error: "Awarding PBIS points is not granted" });
     return;
   }
   const { studentIds, reason, points } = req.body ?? {};

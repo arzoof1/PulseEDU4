@@ -19,7 +19,9 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
 }
 
 function isManager(s: StaffRow): boolean {
-  return s.isAdmin || s.isPbisCoordinator;
+  // Capability-based: PBIS managers (admin via role-preset seed) can edit
+  // milestones and view milestone-email history.
+  return s.capPbisManage;
 }
 
 router.get("/pbis-milestones", async (req: Request, res: Response) => {
