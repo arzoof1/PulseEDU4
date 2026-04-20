@@ -64,6 +64,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       res.status(400).json({
         error: "hallPassMaxMinutes must be an integer between 1 and 240",
       });
+      return;
     }
     updates.hallPassMaxMinutes = hallPassMaxMinutes;
   }
@@ -78,12 +79,14 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         error:
           "hallPassDefaultMinutes must be an integer between 1 and 240",
       });
+      return;
     }
     updates.hallPassDefaultMinutes = hallPassDefaultMinutes;
   }
 
   if (Object.keys(updates).length === 0) {
     res.json(current);
+    return;
   }
 
   const [updated] = await db
