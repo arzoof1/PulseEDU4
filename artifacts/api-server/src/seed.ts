@@ -223,10 +223,25 @@ export async function seedIfEmpty() {
     await db.insert(locationAllowedDestinationsTable).values(ladRows);
   }
 
-  await db.insert(staffDefaultsTable).values([
-    { staffName: "Mr. Davis (Admin)", defaultLocationName: "Front Office" },
-    { staffName: "Ms. Garcia (ESE Coordinator)", defaultLocationName: "Room 305" },
-  ]);
+  // staff_defaults is now keyed by staff.id (SIS-safe). Look up the seeded
+  // staff rows by display name and write the FK alongside the legacy name.
+  const staffByName = new Map(
+    insertedStaff.map((s) => [s.displayName, s.id] as const),
+  );
+  const defaultRows = [
+    { name: "Mr. Davis (Admin)", room: "Front Office" },
+    { name: "Ms. Garcia (ESE Coordinator)", room: "Room 305" },
+  ]
+    .map((r) => {
+      const id = staffByName.get(r.name);
+      return id == null
+        ? null
+        : { staffId: id, staffName: r.name, defaultLocationName: r.room };
+    })
+    .filter((r): r is NonNullable<typeof r> => r !== null);
+  if (defaultRows.length > 0) {
+    await db.insert(staffDefaultsTable).values(defaultRows);
+  }
 
   // Reset sequences so subsequent inserts don't collide if we ever re-seed
   // partially. Safe no-ops if not needed.

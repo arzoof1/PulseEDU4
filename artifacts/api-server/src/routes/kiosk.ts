@@ -99,7 +99,7 @@ router.post("/kiosk/activate", async (req, res) => {
   const [defaultRow] = await db
     .select()
     .from(staffDefaultsTable)
-    .where(eq(staffDefaultsTable.staffName, staff.displayName));
+    .where(eq(staffDefaultsTable.staffId, staff.id));
   const defaultRoom = defaultRow?.defaultLocationName ?? null;
 
   const originLocations = (

@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
+import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
+import IntegrationsAdmin from "./components/IntegrationsAdmin";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -10042,6 +10044,27 @@ function App() {
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}
         />
+        <StaffDefaultsAdmin
+          staffUsers={staffUsers
+            .filter((s) => typeof s.id === "number")
+            .map((s) => ({ id: s.id as number, displayName: s.displayName }))}
+          originLocations={Object.keys(effectiveDestinationsByRoom).sort((a, b) =>
+            a.localeCompare(b),
+          )}
+          onSaved={() => {
+            fetch("/api/staff-defaults")
+              .then((r) => r.json())
+              .then((rows: Array<{ staffName: string; defaultLocationName: string | null }>) => {
+                const map: Record<string, string> = {};
+                for (const r of rows) {
+                  if (r.defaultLocationName) map[r.staffName] = r.defaultLocationName;
+                }
+                setStaffDefaults(map);
+              })
+              .catch(() => {});
+          }}
+        />
+        <IntegrationsAdmin />
         <div className="card" style={{ marginTop: "1rem" }}>
           <h2>School Settings</h2>
           <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
