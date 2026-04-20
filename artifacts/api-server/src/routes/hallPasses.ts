@@ -22,6 +22,7 @@ router.post("/hall-passes", async (req, res) => {
     teacherName,
     destinationTeacher,
     contactedAcknowledged,
+    maxDurationMinutes,
   } = req.body ?? {};
 
   if (
@@ -70,7 +71,13 @@ router.post("/hall-passes", async (req, res) => {
       contactedAcknowledged: acknowledged,
       status: "active",
       createdAt: new Date().toISOString(),
-      maxDurationMinutes: config.defaultHallPassDurationMinutes,
+      maxDurationMinutes:
+        typeof maxDurationMinutes === "number" &&
+        Number.isFinite(maxDurationMinutes) &&
+        maxDurationMinutes > 0 &&
+        maxDurationMinutes <= 240
+          ? Math.round(maxDurationMinutes)
+          : config.defaultHallPassDurationMinutes,
       endedAt: null,
     })
     .returning();

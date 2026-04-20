@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
+import CreatePassModal from "./components/CreatePassModal";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -1976,6 +1977,7 @@ function PolarityStudentPicker({
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
+  const [createPassOpen, setCreatePassOpen] = useState(false);
   const [editingPassId, setEditingPassId] = useState<number | null>(null);
   const [editEndedAt, setEditEndedAt] = useState<string>("");
   const [editCreatedAt, setEditCreatedAt] = useState<string>("");
@@ -4615,6 +4617,47 @@ function App() {
         );
       })()}
 
+      <div className="card cp-cta-card">
+        <div className="cp-cta-text">Student Going Somewhere?</div>
+        <button
+          type="button"
+          className="cp-cta-button"
+          onClick={() => setCreatePassOpen(true)}
+        >
+          + Create Pass
+        </button>
+      </div>
+
+      <CreatePassModal
+        open={createPassOpen}
+        onClose={() => setCreatePassOpen(false)}
+        students={students}
+        destinationsByRoom={effectiveDestinationsByRoom}
+        defaultOriginRoom={originRoom || (staffDefaults[currentStaffUser] ?? "")}
+        currentStaffUser={currentStaffUser}
+        onCreate={async (payload) => {
+          const res = await fetch("/api/hall-passes", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId: payload.studentId,
+              destination: payload.destination,
+              originRoom: payload.originRoom,
+              teacherName: currentStaffUser,
+              destinationTeacher: null,
+              contactedAcknowledged: false,
+              maxDurationMinutes: payload.maxDurationMinutes,
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to create pass.");
+          }
+          loadHallPasses();
+        }}
+      />
+
+      {false && (
       <div className="card">
       <h2>Create Hall Pass</h2>
       <form onSubmit={handleSubmit} style={{ marginBottom: "1rem" }}>
@@ -4800,6 +4843,7 @@ function App() {
         </button>
       </form>
       </div>
+      )}
 
       <div className="card">
       <h2>Hall Passes</h2>
