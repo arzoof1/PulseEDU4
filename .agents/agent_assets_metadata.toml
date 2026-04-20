@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "gjoYm41VO4-iK_BrRq_HE"
+uri = "file://exports/PulseED-Overview.docx"
+type = "word_document"
+title = "PulseED — App Overview (Word document)"
