@@ -1033,3 +1033,9 @@ ul[style*="listStyle: none"] li button:hover {
   border-radius: 8px;
   font-size: 0.9rem;
 }
+
+.cp-teacher { display: flex; flex-direction: column; gap: 0.4rem; padding-top: 0.5rem; border-top: 1px solid #f1f5f9; }
+.cp-teacher-label { font-size: 0.85rem; color: var(--text-muted); font-weight: 600; }
+.cp-optional { color: var(--text-subtle); font-weight: 400; font-size: 0.8rem; }
+.cp-ack { display: flex; align-items: center; gap: 0.5rem; color: var(--text); font-size: 0.9rem; cursor: pointer; }
+.cp-ack input { accent-color: var(--primary); }

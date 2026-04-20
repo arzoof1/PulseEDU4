@@ -12,6 +12,8 @@ export interface CreatePassPayload {
   destination: string;
   originRoom: string;
   maxDurationMinutes: number;
+  destinationTeacher: string | null;
+  contactedAcknowledged: boolean;
 }
 
 interface Props {
@@ -21,6 +23,7 @@ interface Props {
   destinationsByRoom: Record<string, string[]>;
   defaultOriginRoom: string;
   currentStaffUser: string;
+  staffUsers: string[];
   onCreate: (payload: CreatePassPayload) => Promise<void> | void;
 }
 
@@ -54,6 +57,7 @@ export default function CreatePassModal({
   destinationsByRoom,
   defaultOriginRoom,
   currentStaffUser,
+  staffUsers,
   onCreate,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -64,6 +68,8 @@ export default function CreatePassModal({
   const [destQuery, setDestQuery] = useState("");
   const [destination, setDestination] = useState("");
   const [minutes, setMinutes] = useState<number>(DEFAULT_MIN);
+  const [destinationTeacher, setDestinationTeacher] = useState<string>("");
+  const [contactedAck, setContactedAck] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const studentInputRef = useRef<HTMLInputElement>(null);
@@ -77,6 +83,8 @@ export default function CreatePassModal({
     setDestQuery("");
     setDestination("");
     setMinutes(DEFAULT_MIN);
+    setDestinationTeacher("");
+    setContactedAck(false);
     setError(null);
     setSubmitting(false);
     setTimeout(() => studentInputRef.current?.focus(), 50);
@@ -117,10 +125,18 @@ export default function CreatePassModal({
     return availableDestinations.filter((d) => d.toLowerCase().includes(q));
   }, [availableDestinations, destQuery]);
 
+  const teacherChoices = useMemo(
+    () => staffUsers.filter((u) => u && u !== currentStaffUser),
+    [staffUsers, currentStaffUser],
+  );
+
   if (!open) return null;
+
+  const needsContactAck = Boolean(destinationTeacher) && !contactedAck;
 
   const handleSend = async () => {
     if (!selectedStudent || !destination || !originRoom) return;
+    if (needsContactAck) return;
     setSubmitting(true);
     setError(null);
     try {
@@ -129,6 +145,8 @@ export default function CreatePassModal({
         destination,
         originRoom,
         maxDurationMinutes: minutes,
+        destinationTeacher: destinationTeacher || null,
+        contactedAcknowledged: destinationTeacher ? contactedAck : false,
       });
       onClose();
     } catch (e: unknown) {
@@ -335,13 +353,50 @@ export default function CreatePassModal({
                 </div>
               </div>
 
+              <div className="cp-teacher">
+                <label className="cp-teacher-label" htmlFor="cp-dest-teacher">
+                  Notify a teacher? <span className="cp-optional">(optional)</span>
+                </label>
+                <select
+                  id="cp-dest-teacher"
+                  className="cp-input"
+                  value={destinationTeacher}
+                  onChange={(e) => {
+                    setDestinationTeacher(e.target.value);
+                    setContactedAck(false);
+                  }}
+                >
+                  <option value="">— none —</option>
+                  {teacherChoices.map((u) => (
+                    <option key={u} value={u}>
+                      {u}
+                    </option>
+                  ))}
+                </select>
+                {destinationTeacher && (
+                  <label className="cp-ack">
+                    <input
+                      type="checkbox"
+                      checked={contactedAck}
+                      onChange={(e) => setContactedAck(e.target.checked)}
+                    />
+                    <span>I've contacted {destinationTeacher}</span>
+                  </label>
+                )}
+              </div>
+
               {error && <div className="cp-error">{error}</div>}
 
               <button
                 type="button"
                 className="cp-send"
                 onClick={handleSend}
-                disabled={submitting}
+                disabled={submitting || needsContactAck}
+                title={
+                  needsContactAck
+                    ? `Confirm you've contacted ${destinationTeacher} to enable.`
+                    : undefined
+                }
               >
                 {submitting ? "Sending…" : "Send Pass ›"}
               </button>

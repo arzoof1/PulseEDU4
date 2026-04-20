@@ -4635,6 +4635,7 @@ function App() {
         destinationsByRoom={effectiveDestinationsByRoom}
         defaultOriginRoom={originRoom || (staffDefaults[currentStaffUser] ?? "")}
         currentStaffUser={currentStaffUser}
+        staffUsers={staffUsers}
         onCreate={async (payload) => {
           const res = await fetch("/api/hall-passes", {
             method: "POST",
@@ -4644,8 +4645,8 @@ function App() {
               destination: payload.destination,
               originRoom: payload.originRoom,
               teacherName: currentStaffUser,
-              destinationTeacher: null,
-              contactedAcknowledged: false,
+              destinationTeacher: payload.destinationTeacher,
+              contactedAcknowledged: payload.contactedAcknowledged,
               maxDurationMinutes: payload.maxDurationMinutes,
             }),
           });
