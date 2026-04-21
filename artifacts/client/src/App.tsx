@@ -2206,6 +2206,12 @@ function App() {
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
+  const [showChangePw, setShowChangePw] = useState(false);
+  const [changePwCurrent, setChangePwCurrent] = useState("");
+  const [changePwNew, setChangePwNew] = useState("");
+  const [changePwBusy, setChangePwBusy] = useState(false);
+  const [changePwError, setChangePwError] = useState("");
+  const [changePwOk, setChangePwOk] = useState(false);
   const [dateFilter, setDateFilter] = useState<"today" | "all">("all");
   const [staffFilter, setStaffFilter] = useState<"all" | "mine">("all");
   const [passFilter, setPassFilter] = useState<"all" | "mine">("all");
@@ -5238,6 +5244,28 @@ function App() {
             </span>
             <button
               type="button"
+              onClick={() => {
+                setChangePwCurrent("");
+                setChangePwNew("");
+                setChangePwError("");
+                setChangePwOk(false);
+                setShowChangePw(true);
+              }}
+              style={{
+                background: "transparent",
+                border: "1px solid var(--border)",
+                color: "inherit",
+                borderRadius: 6,
+                padding: "0.25rem 0.6rem",
+                cursor: "pointer",
+                fontSize: "0.85rem",
+                marginRight: 4,
+              }}
+            >
+              Change password
+            </button>
+            <button
+              type="button"
               onClick={async () => {
                 await fetch("/api/auth/logout", { method: "POST" });
                 setAuthUser(null);
@@ -5257,6 +5285,140 @@ function App() {
           </span>
         </div>
       </header>
+
+      {showChangePw && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 100,
+          }}
+          onClick={() => !changePwBusy && setShowChangePw(false)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              padding: 16,
+              borderRadius: 8,
+              minWidth: 320,
+              maxWidth: "90vw",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Change your password</h3>
+            <label style={{ display: "block", marginBottom: 8 }}>
+              <div style={{ fontSize: 12 }}>Current password</div>
+              <input
+                type="password"
+                autoFocus
+                value={changePwCurrent}
+                onChange={(e) => setChangePwCurrent(e.target.value)}
+                style={{ width: "100%", padding: "6px 8px", fontSize: 14 }}
+              />
+            </label>
+            <label style={{ display: "block", marginBottom: 8 }}>
+              <div style={{ fontSize: 12 }}>New password (min 8 chars)</div>
+              <input
+                type="password"
+                value={changePwNew}
+                onChange={(e) => setChangePwNew(e.target.value)}
+                style={{ width: "100%", padding: "6px 8px", fontSize: 14 }}
+              />
+            </label>
+            {changePwError && (
+              <div
+                role="alert"
+                style={{
+                  background: "#fee2e2",
+                  color: "#991b1b",
+                  padding: 8,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  marginBottom: 8,
+                }}
+              >
+                {changePwError}
+              </div>
+            )}
+            {changePwOk && (
+              <div
+                style={{
+                  background: "#dcfce7",
+                  color: "#166534",
+                  padding: 8,
+                  borderRadius: 6,
+                  fontSize: 13,
+                  marginBottom: 8,
+                }}
+              >
+                Password updated.
+              </div>
+            )}
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                disabled={changePwBusy}
+                onClick={() => setShowChangePw(false)}
+              >
+                {changePwOk ? "Close" : "Cancel"}
+              </button>
+              <button
+                type="button"
+                disabled={
+                  changePwBusy ||
+                  !changePwCurrent ||
+                  changePwNew.length < 8 ||
+                  changePwOk
+                }
+                onClick={async () => {
+                  setChangePwBusy(true);
+                  setChangePwError("");
+                  try {
+                    const { authFetch } = await import("./lib/authToken");
+                    const res = await authFetch("/api/auth/change-password", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({
+                        currentPassword: changePwCurrent,
+                        newPassword: changePwNew,
+                      }),
+                    });
+                    if (!res.ok) {
+                      const j = await res.json().catch(() => ({}));
+                      throw new Error(
+                        j.error || `Update failed (${res.status})`,
+                      );
+                    }
+                    setChangePwOk(true);
+                    setChangePwCurrent("");
+                    setChangePwNew("");
+                  } catch (e) {
+                    setChangePwError(
+                      e instanceof Error ? e.message : String(e),
+                    );
+                  } finally {
+                    setChangePwBusy(false);
+                  }
+                }}
+              >
+                {changePwBusy ? "Saving…" : "Update password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {(() => {
         const hasBelowEkg =

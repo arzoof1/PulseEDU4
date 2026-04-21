@@ -2,7 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { issueAuthToken } from "../lib/authToken.js";
+import { issueAuthToken, verifyAuthToken } from "../lib/authToken.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -95,6 +95,61 @@ router.post("/auth/logout", (req, res) => {
     res.clearCookie("pulseed.sid");
     res.status(204).end();
   });
+});
+
+// Change the caller's own password. Requires current password to prove it's
+// really them (so a stolen session/bearer token can't silently reset it).
+router.post("/auth/change-password", async (req: Request, res) => {
+  let staffId = req.session.staffId ?? null;
+  if (!staffId) {
+    const auth = req.headers.authorization;
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+      staffId = verifyAuthToken(auth.slice(7).trim());
+    }
+  }
+  if (!staffId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+
+  const { currentPassword, newPassword } = (req.body ?? {}) as {
+    currentPassword?: unknown;
+    newPassword?: unknown;
+  };
+  if (
+    typeof currentPassword !== "string" ||
+    typeof newPassword !== "string" ||
+    !currentPassword ||
+    newPassword.length < 8
+  ) {
+    res.status(400).json({
+      error: "currentPassword and newPassword (min 8 chars) are required",
+    });
+    return;
+  }
+
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, staffId));
+  if (!staff || !staff.active) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+
+  const ok = await bcrypt.compare(currentPassword, staff.passwordHash);
+  if (!ok) {
+    res.status(401).json({ error: "Current password is incorrect" });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await db
+    .update(staffTable)
+    .set({ passwordHash })
+    .where(eq(staffTable.id, staffId));
+
+  res.json({ ok: true });
 });
 
 router.get("/auth/me", async (req, res) => {

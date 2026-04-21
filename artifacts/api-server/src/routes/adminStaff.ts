@@ -303,4 +303,79 @@ router.post(
   },
 );
 
+// Admin / SuperUser resets another staff member's password.
+//   - Non-SuperUser cannot reset a SuperUser's password (would let them
+//     take over a SuperUser account).
+//   - Non-Admin/SuperUser (i.e. someone holding only cap_staff_roles) is
+//     blocked entirely — password reset is a privileged operation, not a
+//     matrix-edit operation.
+router.post(
+  "/admin/staff/:id/password",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    if (!actor.isAdmin && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only Admin or SuperUser can reset passwords." });
+      return;
+    }
+
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+
+    // Self-reset must go through /auth/change-password (which proves the
+    // caller knows the current password). Going through the admin path
+    // would let anyone with admin/super skip that proof for themselves.
+    if (targetId === actor.id) {
+      res.status(409).json({
+        error: "Use Change Password to update your own password.",
+      });
+      return;
+    }
+
+    const { newPassword } = (req.body ?? {}) as { newPassword?: unknown };
+    if (typeof newPassword !== "string" || newPassword.length < 8) {
+      res
+        .status(400)
+        .json({ error: "newPassword (min 8 chars) is required" });
+      return;
+    }
+
+    const [target] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, targetId));
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+
+    if (!target.active) {
+      res.status(409).json({
+        error: "Reactivate this account before resetting its password.",
+      });
+      return;
+    }
+
+    if (target.isSuperUser && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only a SuperUser can reset a SuperUser's password." });
+      return;
+    }
+
+    const passwordHash = await bcrypt.hash(newPassword, 10);
+    await db
+      .update(staffTable)
+      .set({ passwordHash })
+      .where(eq(staffTable.id, targetId));
+
+    res.json({ ok: true });
+  },
+);
+
 export default router;

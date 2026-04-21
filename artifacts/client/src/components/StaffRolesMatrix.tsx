@@ -183,9 +183,44 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const [error, setError] = useState("");
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
+  const [pwResetTarget, setPwResetTarget] = useState<StaffRow | null>(null);
+  const [pwResetValue, setPwResetValue] = useState("");
+  const [pwResetBusy, setPwResetBusy] = useState(false);
 
   const canManageRoles =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
+  const canResetPasswords =
+    Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+
+  async function submitPwReset() {
+    if (!pwResetTarget) return;
+    if (pwResetValue.length < 8) {
+      setError("Password must be at least 8 characters.");
+      return;
+    }
+    setPwResetBusy(true);
+    setError("");
+    try {
+      const res = await authFetch(
+        `/api/admin/staff/${pwResetTarget.id}/password`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ newPassword: pwResetValue }),
+        },
+      );
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Reset failed (${res.status})`);
+      }
+      setPwResetTarget(null);
+      setPwResetValue("");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setPwResetBusy(false);
+    }
+  }
 
   async function refresh() {
     try {
@@ -393,6 +428,30 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                     <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
                       {s.email}
                     </div>
+                    {canResetPasswords &&
+                      // Self-reset uses the user-pill "Change password" flow
+                      // (which proves the caller knows the current password).
+                      s.id !== currentUser.id &&
+                      // Inactive accounts must be reactivated first.
+                      s.active &&
+                      // Non-SuperUser can't reset a SuperUser's password.
+                      (!Boolean(s.isSuperUser) || currentUser.isSuperUser) && (
+                        <button
+                          type="button"
+                          className="ghost"
+                          onClick={() => {
+                            setPwResetTarget(s);
+                            setPwResetValue("");
+                          }}
+                          style={{
+                            marginTop: 4,
+                            fontSize: 11,
+                            padding: "2px 6px",
+                          }}
+                        >
+                          Reset password
+                        </button>
+                      )}
                   </td>
                   <td
                     style={{
@@ -494,6 +553,72 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           </tbody>
         </table>
       </div>
+
+      {pwResetTarget && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+          onClick={() => !pwResetBusy && setPwResetTarget(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              padding: 16,
+              borderRadius: 8,
+              minWidth: 320,
+              maxWidth: "90vw",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Reset password</h3>
+            <p style={{ margin: "4px 0 12px", fontSize: 13 }}>
+              Set a new password for{" "}
+              <strong>{pwResetTarget.displayName}</strong> ({pwResetTarget.email}
+              ). They'll use it on next sign-in.
+            </p>
+            <input
+              type="text"
+              autoFocus
+              value={pwResetValue}
+              onChange={(e) => setPwResetValue(e.target.value)}
+              placeholder="New password (min 8 chars)"
+              style={{ width: "100%", padding: "6px 8px", fontSize: 14 }}
+            />
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                disabled={pwResetBusy}
+                onClick={() => setPwResetTarget(null)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={pwResetBusy || pwResetValue.length < 8}
+                onClick={submitPwReset}
+              >
+                {pwResetBusy ? "Saving…" : "Set password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAddStaff && (
         <AddStaffModal
