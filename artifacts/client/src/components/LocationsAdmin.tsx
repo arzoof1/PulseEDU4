@@ -168,6 +168,32 @@ export default function LocationsAdmin({ onChanged }: Props) {
     }
   }
 
+  async function deleteLocation(id: number, name: string) {
+    const ok = window.confirm(
+      `Delete the location "${name}"?\n\n` +
+        `Past hall passes, tardies, and kiosk records will be unaffected ` +
+        `(they store the location name as text). Any allowed-destination ` +
+        `pairings for this location will also be removed.\n\n` +
+        `If you just want to hide it instead, uncheck "Active".`,
+    );
+    if (!ok) return;
+    setSavingId(id);
+    setError(null);
+    try {
+      const res = await authFetch(`/api/locations/${id}`, { method: "DELETE" });
+      if (!res.ok && res.status !== 204) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error ?? "Delete failed");
+      }
+      await reload();
+      onChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSavingId(null);
+    }
+  }
+
   async function removePair(pairId: number) {
     setError(null);
     try {
@@ -347,6 +373,7 @@ export default function LocationsAdmin({ onChanged }: Props) {
                   onPatch={(patch) => patchLocation(loc.id, patch)}
                   onAddPair={(destId) => addPair(loc.id, destId)}
                   onRemovePair={(pairId) => removePair(pairId)}
+                  onDelete={() => deleteLocation(loc.id, loc.name)}
                 />
               );
             })}
@@ -377,6 +404,7 @@ interface RowProps {
   onPatch: (patch: Partial<LocationRow>) => void;
   onAddPair: (destId: number) => void;
   onRemovePair: (pairId: number) => void;
+  onDelete: () => void;
 }
 
 function FragmentRow({
@@ -389,6 +417,7 @@ function FragmentRow({
   onPatch,
   onAddPair,
   onRemovePair,
+  onDelete,
 }: RowProps) {
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(loc.name);
@@ -496,11 +525,35 @@ function FragmentRow({
           />
         </td>
         <td style={{ padding: "0.4rem 0.5rem", textAlign: "right" }}>
-          {loc.isOrigin && (
-            <button type="button" onClick={onToggleExpand}>
-              {isExpanded ? "Hide" : `Allowed (${myPairs.length})`}
+          <span style={{ display: "inline-flex", gap: "0.35rem", justifyContent: "flex-end", flexWrap: "wrap" }}>
+            {!editingName && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDraftName(loc.name);
+                  setEditingName(true);
+                }}
+                disabled={saving}
+                title="Rename this location"
+              >
+                Edit
+              </button>
+            )}
+            {loc.isOrigin && (
+              <button type="button" onClick={onToggleExpand}>
+                {isExpanded ? "Hide" : `Allowed (${myPairs.length})`}
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onDelete}
+              disabled={saving}
+              style={{ color: "var(--danger, #c00)" }}
+              title="Delete this location"
+            >
+              Delete
             </button>
-          )}
+          </span>
         </td>
       </tr>
       {isExpanded && loc.isOrigin && (

@@ -127,6 +127,26 @@ router.post("/locations", requireAdminOrSuper(), async (req, res) => {
   }
 });
 
+router.delete("/locations/:id", requireAdminOrSuper(), async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  // Allowed-destination pairings cascade-delete via FK. Past hall passes,
+  // tardies, kiosk events, etc. store the location *name* as text, so
+  // historical records are unaffected by removing a row here.
+  const result = await db
+    .delete(locationsTable)
+    .where(eq(locationsTable.id, id))
+    .returning();
+  if (result.length === 0) {
+    res.status(404).json({ error: "Location not found" });
+    return;
+  }
+  res.status(204).end();
+});
+
 router.patch("/locations/:id", requireAdminOrSuper(), async (req, res) => {
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
