@@ -4076,7 +4076,10 @@ function App() {
       setEseStudentAccs([]);
       return;
     }
-    fetch(`/api/students/${studentId}/accommodations`)
+    const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
+    fetch(`/api/students/${studentId}/accommodations${sid}`, {
+      credentials: "include",
+    })
       .then((res) => res.json())
       .then((data) => setEseStudentAccs(data))
       .catch((err) =>
@@ -4192,14 +4195,16 @@ function App() {
   const eseAssignSelected = async () => {
     if (!eseStudentId || eseAddSelected.size === 0) return;
     try {
+      const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
       const res = await fetch(
-        `/api/students/${eseStudentId}/accommodations`,
+        `/api/students/${eseStudentId}/accommodations${sid}`,
         {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
           body: JSON.stringify({
             accommodationIds: Array.from(eseAddSelected),
+            staffId: authUser?.id,
           }),
         },
       );
@@ -4246,13 +4251,15 @@ function App() {
   const eseAddNewMaster = async () => {
     if (!eseNewName.trim()) return;
     try {
-      const res = await fetch("/api/school-accommodations", {
+      const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
+      const res = await fetch(`/api/school-accommodations${sid}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
         body: JSON.stringify({
           name: eseNewName.trim(),
           category: eseNewCategory,
+          staffId: authUser?.id,
         }),
       });
       if (!res.ok) throw new Error(await res.text());
@@ -4270,11 +4277,12 @@ function App() {
     nextActive: boolean,
   ) => {
     try {
-      const res = await fetch(`/api/school-accommodations/${id}`, {
+      const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
+      const res = await fetch(`/api/school-accommodations/${id}${sid}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify({ active: nextActive }),
+        body: JSON.stringify({ active: nextActive, staffId: authUser?.id }),
       });
       if (!res.ok) throw new Error(await res.text());
       loadSchoolAccommodations();
@@ -4299,15 +4307,20 @@ function App() {
   const eseSaveEditMaster = async () => {
     if (eseEditingId == null || !eseEditName.trim()) return;
     try {
-      const res = await fetch(`/api/school-accommodations/${eseEditingId}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          name: eseEditName.trim(),
-          category: eseEditCategory,
-        }),
-      });
+      const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
+      const res = await fetch(
+        `/api/school-accommodations/${eseEditingId}${sid}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            name: eseEditName.trim(),
+            category: eseEditCategory,
+            staffId: authUser?.id,
+          }),
+        },
+      );
       if (!res.ok) throw new Error(await res.text());
       eseCancelEditMaster();
       loadSchoolAccommodations();
@@ -4336,7 +4349,8 @@ function App() {
     }
     if (!window.confirm(`Delete "${a.name}"? This cannot be undone.`)) return;
     try {
-      const res = await fetch(`/api/school-accommodations/${a.id}`, {
+      const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
+      const res = await fetch(`/api/school-accommodations/${a.id}${sid}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -4363,10 +4377,11 @@ function App() {
     setEseMatrixLoading(true);
     setEseMatrixMsg("");
     try {
+      const sid = authUser?.id ? `&staffId=${authUser.id}` : "";
       const res = await fetch(
         `/api/accommodation-category-matrix?category=${encodeURIComponent(
           category,
-        )}`,
+        )}${sid}`,
         { credentials: "include" },
       );
       if (!res.ok) throw new Error(await res.text());
@@ -4392,8 +4407,9 @@ function App() {
     if (currentlyAssigned) {
       // Remove
       try {
+        const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
         const res = await fetch(
-          `/api/students/${studentId}/accommodations/${currentlyAssigned}`,
+          `/api/students/${studentId}/accommodations/${currentlyAssigned}${sid}`,
           { method: "DELETE", credentials: "include" },
         );
         if (!res.ok) throw new Error(await res.text());

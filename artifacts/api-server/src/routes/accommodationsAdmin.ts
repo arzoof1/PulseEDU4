@@ -18,7 +18,23 @@ async function requireEseOrAdmin(
   res: Response,
   next: NextFunction,
 ) {
-  const staffId = req.session.staffId;
+  // Prefer the session, but fall back to ?staffId= or body.staffId so the
+  // request still works inside the Replit preview iframe where SameSite cookies
+  // may be blocked.
+  const sessionId = req.session.staffId;
+  const queryRaw = req.query.staffId;
+  const queryId =
+    typeof queryRaw === "string" && Number.isFinite(Number(queryRaw))
+      ? Number(queryRaw)
+      : null;
+  const bodyRaw = (req.body as { staffId?: unknown } | undefined)?.staffId;
+  const bodyId =
+    typeof bodyRaw === "number" && Number.isFinite(bodyRaw)
+      ? bodyRaw
+      : typeof bodyRaw === "string" && Number.isFinite(Number(bodyRaw))
+        ? Number(bodyRaw)
+        : null;
+  const staffId = sessionId ?? queryId ?? bodyId;
   if (!staffId) {
     res.status(401).json({ error: "Sign-in required" });
     return;
