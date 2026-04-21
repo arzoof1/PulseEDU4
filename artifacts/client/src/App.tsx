@@ -6128,6 +6128,85 @@ function App() {
                     </div>
                   )}
                 </div>
+
+                {(() => {
+                  const overdueByStudent = new Map<string, number>();
+                  for (const p of todaysPasses) {
+                    if (!p.endedAt || !p.createdAt) continue;
+                    const dur =
+                      (new Date(p.endedAt).getTime() -
+                        new Date(p.createdAt).getTime()) /
+                      60000;
+                    if (dur > p.maxDurationMinutes) {
+                      overdueByStudent.set(
+                        p.studentId,
+                        (overdueByStudent.get(p.studentId) || 0) + 1,
+                      );
+                    }
+                  }
+                  const reported = Array.from(overdueByStudent.entries()).sort(
+                    (a, b) => b[1] - a[1],
+                  );
+                  return (
+                    <div
+                      className="card"
+                      style={{ width: "33%", minWidth: 280, marginBottom: 0 }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          marginBottom: "0.5rem",
+                          gap: "0.5rem",
+                        }}
+                      >
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: "0.5rem",
+                          }}
+                        >
+                          <span style={{ fontSize: "1.1rem" }}>🚩</span>
+                          <h3 style={{ margin: 0, fontSize: "1rem" }}>
+                            Reported Students
+                          </h3>
+                        </div>
+                        <span style={{ fontSize: "1rem", color: "#1e3a8a" }}>
+                          🏴
+                        </span>
+                      </div>
+                      {reported.length === 0 ? (
+                        <div style={{ color: "#94a3b8", fontSize: "0.95rem" }}>
+                          No Reported Students Today.
+                        </div>
+                      ) : (
+                        <ol
+                          style={{
+                            margin: 0,
+                            paddingLeft: "1.1rem",
+                            fontSize: "0.9rem",
+                            color: "#475569",
+                            display: "grid",
+                            gap: "0.25rem",
+                            maxHeight: 160,
+                            overflowY: "auto",
+                          }}
+                        >
+                          {reported.map(([sid, n]) => (
+                            <li key={sid}>
+                              {studentName(sid)}{" "}
+                              <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>
+                                ({n} overdue)
+                              </span>
+                            </li>
+                          ))}
+                        </ol>
+                      )}
+                    </div>
+                  );
+                })()}
                 </div>
               );
             })()}
