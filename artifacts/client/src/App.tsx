@@ -7048,31 +7048,74 @@ function App() {
                     Student
                     <input
                       type="text"
+                      list="research-students"
                       value={researchStudent}
                       onChange={(e) => setResearchStudent(e.target.value)}
                       placeholder="Name or ID"
-                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 180 }}
+                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 220 }}
                     />
+                    <datalist id="research-students">
+                      {students
+                        .slice()
+                        .sort((a, b) =>
+                          `${a.lastName} ${a.firstName}`.localeCompare(
+                            `${b.lastName} ${b.firstName}`,
+                          ),
+                        )
+                        .map((s) => (
+                          <option key={s.id} value={`${s.firstName} ${s.lastName}`}>
+                            {s.studentId}
+                          </option>
+                        ))}
+                    </datalist>
                   </label>
                   <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
                     Origin
                     <input
                       type="text"
+                      list="research-origins"
                       value={researchOrigin}
                       onChange={(e) => setResearchOrigin(e.target.value)}
-                      placeholder="e.g. Room 101"
-                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
+                      placeholder="Any room"
+                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 200 }}
                     />
+                    <datalist id="research-origins">
+                      {Array.from(
+                        new Set(
+                          hallPasses
+                            .map((p) => p.originRoom)
+                            .filter((v): v is string => !!v),
+                        ),
+                      )
+                        .sort((a, b) => a.localeCompare(b))
+                        .map((r) => (
+                          <option key={r} value={r} />
+                        ))}
+                    </datalist>
                   </label>
                   <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
                     Destination
                     <input
                       type="text"
+                      list="research-destinations"
                       value={researchDest}
                       onChange={(e) => setResearchDest(e.target.value)}
-                      placeholder="e.g. Nurse"
-                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
+                      placeholder="Any destination"
+                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 200 }}
                     />
+                    <datalist id="research-destinations">
+                      {Array.from(
+                        new Set(
+                          hallPasses
+                            .map((p) => p.destination)
+                            .filter((v): v is string => !!v),
+                        ),
+                      )
+                        .sort((a, b) => a.localeCompare(b))
+                        .map((d) => (
+                          <option key={d} value={d} />
+                        ))}
+                    </datalist>
                   </label>
                 </div>
               </div>
