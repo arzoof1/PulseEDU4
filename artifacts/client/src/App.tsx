@@ -2000,7 +2000,7 @@ function App() {
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd">("hub");
   const [ffFilter, setFfFilter] = useState<Record<string, string>>({});
   const [roomFilter, setRoomFilter] = useState<Record<string, string>>({});
-  const [staffFilter, setStaffFilter] = useState<Record<string, string>>({});
+  const [staffUsageFilter, setStaffUsageFilter] = useState<Record<string, string>>({});
   const [hpOverviewDate, setHpOverviewDate] = useState<string>(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -6945,7 +6945,7 @@ function App() {
                 background: "white",
               };
               const setS = (k: string, v: string) =>
-                setStaffFilter((p) => ({ ...p, [k]: v }));
+                setStaffUsageFilter((p) => ({ ...p, [k]: v }));
 
               return (
                 <div className="card" style={{ overflow: "visible" }}>
@@ -6988,7 +6988,7 @@ function App() {
                               <input
                                 type="text"
                                 placeholder="Filter…"
-                                value={staffFilter[k] || ""}
+                                value={staffUsageFilter[k] || ""}
                                 onChange={(e) => setS(k, e.target.value)}
                                 style={filterInputStyle}
                               />
