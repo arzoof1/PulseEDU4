@@ -168,6 +168,36 @@ export default function LocationsAdmin({ onChanged }: Props) {
     }
   }
 
+  const [wiring, setWiring] = useState(false);
+  async function wireClassroomMesh() {
+    const ok = window.confirm(
+      `Turn every classroom into both an Origin and a Destination, ` +
+        `and create allowed-destination pairings between every pair of ` +
+        `classrooms?\n\nThis is safe to run repeatedly — existing pairings ` +
+        `are preserved. Useful after adding new classrooms.`,
+    );
+    if (!ok) return;
+    setWiring(true);
+    setError(null);
+    try {
+      const res = await authFetch("/api/locations/wire-classrooms-mesh", {
+        method: "POST",
+      });
+      const j = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(j.error ?? "Wire failed");
+      window.alert(
+        `Done. Considered ${j.classroomsConsidered} classrooms, ` +
+          `updated ${j.flagsUpdated} flag rows, created ${j.pairsCreated} new pairings.`,
+      );
+      await reload();
+      onChanged?.();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setWiring(false);
+    }
+  }
+
   async function deleteLocation(id: number, name: string) {
     const ok = window.confirm(
       `Delete the location "${name}"?\n\n` +
@@ -336,6 +366,15 @@ export default function LocationsAdmin({ onChanged }: Props) {
           />
           <span>Show inactive</span>
         </label>
+        <button
+          type="button"
+          onClick={wireClassroomMesh}
+          disabled={wiring}
+          title="Make every classroom both an Origin and a Destination, and create allowed pairings between every pair of classrooms."
+          style={{ marginLeft: "auto" }}
+        >
+          {wiring ? "Wiring…" : "Wire all classrooms ↔ classrooms"}
+        </button>
       </div>
 
       {/* Table */}

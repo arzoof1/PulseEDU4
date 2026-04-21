@@ -5,8 +5,13 @@ import {
   type Response,
   type NextFunction,
 } from "express";
-import { db, locationsTable, staffTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import {
+  db,
+  locationsTable,
+  locationAllowedDestinationsTable,
+  staffTable,
+} from "@workspace/db";
+import { and, eq } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 
 const router: IRouter = Router();
@@ -126,6 +131,73 @@ router.post("/locations", requireAdminOrSuper(), async (req, res) => {
     res.status(500).json({ error: msg });
   }
 });
+
+// Bulk-wire helper: ensure every classroom is both an Origin and a Destination,
+// and create allowed-destination pairings between every (origin, destination)
+// pair of *active* classrooms (excluding self). Idempotent — existing rows are
+// left alone. Useful after adding/renaming classrooms in bulk.
+router.post(
+  "/locations/wire-classrooms-mesh",
+  requireAdminOrSuper(),
+  async (_req, res) => {
+    try {
+      const classrooms = await db
+        .select()
+        .from(locationsTable)
+        .where(eq(locationsTable.kind, "classroom"));
+      const active = classrooms.filter((c) => c.active);
+      let flagsUpdated = 0;
+      for (const c of active) {
+        if (!c.isOrigin || !c.isDestination) {
+          await db
+            .update(locationsTable)
+            .set({ isOrigin: true, isDestination: true })
+            .where(eq(locationsTable.id, c.id));
+          flagsUpdated++;
+        }
+      }
+      const existing = await db
+        .select({
+          o: locationAllowedDestinationsTable.originLocationId,
+          d: locationAllowedDestinationsTable.destinationLocationId,
+        })
+        .from(locationAllowedDestinationsTable);
+      const have = new Set(existing.map((r) => `${r.o}->${r.d}`));
+      const toInsert: Array<{
+        originLocationId: number;
+        destinationLocationId: number;
+      }> = [];
+      for (const o of active) {
+        for (const d of active) {
+          if (o.id === d.id) continue;
+          if (!have.has(`${o.id}->${d.id}`)) {
+            toInsert.push({
+              originLocationId: o.id,
+              destinationLocationId: d.id,
+            });
+          }
+        }
+      }
+      let pairsCreated = 0;
+      // Chunk inserts to avoid oversized parameter lists.
+      const CHUNK = 500;
+      for (let i = 0; i < toInsert.length; i += CHUNK) {
+        const slice = toInsert.slice(i, i + CHUNK);
+        if (slice.length === 0) continue;
+        await db.insert(locationAllowedDestinationsTable).values(slice);
+        pairsCreated += slice.length;
+      }
+      res.json({
+        classroomsConsidered: active.length,
+        flagsUpdated,
+        pairsCreated,
+      });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Bulk wire failed";
+      res.status(500).json({ error: msg });
+    }
+  },
+);
 
 router.delete("/locations/:id", requireAdminOrSuper(), async (req, res) => {
   const id = Number(req.params.id);
