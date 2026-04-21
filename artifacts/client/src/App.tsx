@@ -7012,65 +7012,69 @@ function App() {
                   marginBottom: "1rem",
                 }}
               >
-                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
-                  Student
-                  <input
-                    type="text"
-                    value={researchStudent}
-                    onChange={(e) => setResearchStudent(e.target.value)}
-                    placeholder="Name or ID"
-                    style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 180 }}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
-                  Origin
-                  <input
-                    type="text"
-                    value={researchOrigin}
-                    onChange={(e) => setResearchOrigin(e.target.value)}
-                    placeholder="e.g. Room 101"
-                    style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
-                  Destination
-                  <input
-                    type="text"
-                    value={researchDest}
-                    onChange={(e) => setResearchDest(e.target.value)}
-                    placeholder="e.g. Nurse"
-                    style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
-                  From
-                  <input
-                    type="date"
-                    value={researchStart}
-                    onChange={(e) => setResearchStart(e.target.value)}
-                    style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
-                  />
-                </label>
-                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
-                  To
-                  <input
-                    type="date"
-                    value={researchEnd}
-                    onChange={(e) => setResearchEnd(e.target.value)}
-                    style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
-                  />
-                </label>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setResearchStudent("");
-                    setResearchOrigin("");
-                    setResearchDest("");
-                  }}
-                  style={{ padding: "0.45rem 0.9rem", fontSize: "0.85rem" }}
-                >
-                  Clear filters
-                </button>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end", width: "100%" }}>
+                  <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                    From
+                    <input
+                      type="date"
+                      value={researchStart}
+                      onChange={(e) => setResearchStart(e.target.value)}
+                      style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
+                    />
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                    To
+                    <input
+                      type="date"
+                      value={researchEnd}
+                      onChange={(e) => setResearchEnd(e.target.value)}
+                      style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setResearchStudent("");
+                      setResearchOrigin("");
+                      setResearchDest("");
+                    }}
+                    style={{ padding: "0.45rem 0.9rem", fontSize: "0.85rem" }}
+                  >
+                    Clear filters
+                  </button>
+                </div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.75rem", alignItems: "flex-end", width: "100%" }}>
+                  <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                    Student
+                    <input
+                      type="text"
+                      value={researchStudent}
+                      onChange={(e) => setResearchStudent(e.target.value)}
+                      placeholder="Name or ID"
+                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 180 }}
+                    />
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                    Origin
+                    <input
+                      type="text"
+                      value={researchOrigin}
+                      onChange={(e) => setResearchOrigin(e.target.value)}
+                      placeholder="e.g. Room 101"
+                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
+                    />
+                  </label>
+                  <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                    Destination
+                    <input
+                      type="text"
+                      value={researchDest}
+                      onChange={(e) => setResearchDest(e.target.value)}
+                      placeholder="e.g. Nurse"
+                      style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
+                    />
+                  </label>
+                </div>
               </div>
 
               {filtered.length === 0 ? (
