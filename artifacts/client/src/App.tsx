@@ -45,14 +45,6 @@ interface HallPass {
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
 
-const staffUsers = [
-  "Ms. Rivera",
-  "Mr. Johnson",
-  "Coach Lee",
-  "Ms. Patel (Counselor)",
-  "Mr. Davis (Admin)",
-  "Ms. Garcia (Interventionist)",
-];
 
 // (staffPeriods removed; replaced by mySections derived from /api/schedule)
 
@@ -1646,247 +1638,6 @@ function PulloutReportSection({ students }: { students: Student[] }) {
   );
 }
 
-type StaffAdminRow = {
-  id: number;
-  email: string;
-  displayName: string;
-  active: boolean;
-  isAdmin: boolean;
-  isEseCoordinator: boolean;
-  isPbisCoordinator: boolean;
-  isBehaviorSpecialist: boolean;
-  isIssTeacher: boolean;
-  isDean: boolean;
-  isMtssCoordinator: boolean;
-};
-
-const STAFF_ROLE_FIELDS: {
-  key: keyof Omit<
-    StaffAdminRow,
-    "id" | "email" | "displayName" | "active"
-  >;
-  label: string;
-}[] = [
-  { key: "isAdmin", label: "Admin" },
-  { key: "isDean", label: "Dean" },
-  { key: "isMtssCoordinator", label: "MTSS Coord." },
-  { key: "isBehaviorSpecialist", label: "Behavior Spec." },
-  { key: "isIssTeacher", label: "ISS Teacher" },
-  { key: "isPbisCoordinator", label: "PBIS Coord." },
-  { key: "isEseCoordinator", label: "ESE Coord." },
-];
-
-function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) {
-  const [rows, setRows] = useState<StaffAdminRow[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [busyId, setBusyId] = useState<number | null>(null);
-  const [filter, setFilter] = useState("");
-  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
-
-  const refresh = async () => {
-    setLoading(true);
-    setMsg(null);
-    try {
-      const r = await fetch("/api/admin/staff");
-      if (!r.ok) {
-        setMsg({ ok: false, text: "Could not load staff." });
-        setRows([]);
-      } else {
-        setRows(await r.json());
-      }
-    } catch {
-      setMsg({ ok: false, text: "Network error." });
-      setRows([]);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    refresh();
-  }, []);
-
-  const filtered = useMemo(() => {
-    const q = filter.trim().toLowerCase();
-    if (!q) return rows;
-    return rows.filter(
-      (r) =>
-        r.displayName.toLowerCase().includes(q) ||
-        r.email.toLowerCase().includes(q),
-    );
-  }, [rows, filter]);
-
-  const toggle = async (
-    row: StaffAdminRow,
-    field: keyof StaffAdminRow,
-    next: boolean,
-  ) => {
-    setBusyId(row.id);
-    setMsg(null);
-    try {
-      const r = await fetch(`/api/admin/staff/${row.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ [field]: next }),
-      });
-      const data = await r.json().catch(() => ({}));
-      if (!r.ok) {
-        setMsg({ ok: false, text: data?.error ?? "Could not update." });
-      } else {
-        setRows((prev) => prev.map((x) => (x.id === row.id ? data : x)));
-      }
-    } catch {
-      setMsg({ ok: false, text: "Network error." });
-    } finally {
-      setBusyId(null);
-    }
-  };
-
-  return (
-    <div className="card" style={{ marginTop: "1rem" }}>
-      <h2>Staff & Roles</h2>
-      <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-        Toggle which staff can verify pullouts (Admin / Dean / MTSS), run the
-        ISS Dashboard (ISS Teacher / Behavior Specialist), and review closed
-        pullouts (Behavior Specialist). Admins can also deactivate accounts.
-      </p>
-      {msg && (
-        <div
-          style={{
-            padding: "0.5rem 0.75rem",
-            borderRadius: 6,
-            marginBottom: "0.75rem",
-            background: msg.ok ? "#ecfdf5" : "#fef2f2",
-            border: `1px solid ${msg.ok ? "#a7f3d0" : "#fecaca"}`,
-            color: msg.ok ? "#065f46" : "#991b1b",
-          }}
-        >
-          {msg.text}
-        </div>
-      )}
-      <div style={{ marginBottom: "0.5rem" }}>
-        <input
-          type="text"
-          placeholder="Filter by name or email…"
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          style={{ width: "100%", maxWidth: 360 }}
-        />
-      </div>
-      {loading ? (
-        <p>Loading…</p>
-      ) : filtered.length === 0 ? (
-        <p style={{ color: "var(--text-subtle)" }}>No staff match.</p>
-      ) : (
-        <div style={{ overflowX: "auto" }}>
-          <table
-            style={{
-              width: "100%",
-              borderCollapse: "collapse",
-              fontSize: "0.9rem",
-            }}
-          >
-            <thead>
-              <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                <th style={{ padding: "0.4rem 0.5rem" }}>Staff</th>
-                {STAFF_ROLE_FIELDS.map((f) => (
-                  <th
-                    key={f.key}
-                    style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}
-                  >
-                    {f.label}
-                  </th>
-                ))}
-                <th style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}>
-                  Active
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {filtered.map((row) => {
-                const isSelf = currentStaffId === row.id;
-                const dim = !row.active;
-                return (
-                  <tr
-                    key={row.id}
-                    style={{
-                      borderBottom: "1px solid #f1f5f9",
-                      opacity: dim ? 0.5 : 1,
-                    }}
-                  >
-                    <td style={{ padding: "0.4rem 0.5rem" }}>
-                      <div style={{ fontWeight: 600 }}>
-                        {row.displayName}
-                        {isSelf && (
-                          <span
-                            style={{
-                              marginLeft: 6,
-                              fontSize: "0.75rem",
-                              color: "var(--text-subtle)",
-                            }}
-                          >
-                            (you)
-                          </span>
-                        )}
-                      </div>
-                      <div
-                        style={{
-                          fontSize: "0.8rem",
-                          color: "var(--text-subtle)",
-                        }}
-                      >
-                        {row.email}
-                      </div>
-                    </td>
-                    {STAFF_ROLE_FIELDS.map((f) => (
-                      <td
-                        key={f.key}
-                        style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}
-                      >
-                        <input
-                          type="checkbox"
-                          checked={Boolean(row[f.key])}
-                          disabled={
-                            busyId === row.id ||
-                            (isSelf && f.key === "isAdmin" && row.isAdmin)
-                          }
-                          title={
-                            isSelf && f.key === "isAdmin"
-                              ? "You cannot remove your own admin role."
-                              : undefined
-                          }
-                          onChange={(e) =>
-                            toggle(row, f.key, e.target.checked)
-                          }
-                        />
-                      </td>
-                    ))}
-                    <td style={{ padding: "0.4rem 0.5rem", textAlign: "center" }}>
-                      <input
-                        type="checkbox"
-                        checked={row.active}
-                        disabled={busyId === row.id || isSelf}
-                        title={
-                          isSelf
-                            ? "You cannot deactivate your own account."
-                            : undefined
-                        }
-                        onChange={(e) =>
-                          toggle(row, "active", e.target.checked)
-                        }
-                      />
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
-    </div>
-  );
-}
-
 
 function PolarityStudentPicker({
   label,
@@ -2207,6 +1958,7 @@ function App() {
     defaultRoom?: string | null;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [staffUsers, setStaffUsers] = useState<string[]>([]);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
   const [changePwCurrent, setChangePwCurrent] = useState("");
@@ -3377,6 +3129,23 @@ function App() {
     loadActiveKiosks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.isAdmin]);
+
+  useEffect(() => {
+    if (!authUser) {
+      setStaffUsers([]);
+      return;
+    }
+    fetch("/api/admin/staff", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: Array<{ displayName: string; active: boolean }>) => {
+        const names = rows
+          .filter((r) => r.active)
+          .map((r) => r.displayName)
+          .sort((a, b) => a.localeCompare(b));
+        setStaffUsers(names);
+      })
+      .catch(() => setStaffUsers([]));
+  }, [authUser?.id]);
 
   const loadHallPasses = () => {
     fetch("/api/hall-passes")
@@ -12331,7 +12100,6 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && (
         <>
-        <StaffRolesAdmin currentStaffId={authUser?.id ?? null} />
         <TeacherAllowlistAdmin
           staffUsers={staffUsers}
           allDestinations={(() => {
