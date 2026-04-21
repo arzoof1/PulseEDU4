@@ -6646,13 +6646,13 @@ function App() {
                           }}
                         >
                           <tr>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Grade</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Student ID</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Passes</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Passes Auto Ended</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Lost Instructional Min</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>First Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Last Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Grade</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Student ID</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Passes</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Passes Auto Ended</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Lost Instructional Min</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -6751,11 +6751,11 @@ function App() {
                           }}
                         >
                           <tr>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Room Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Room Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
                               Passes From This Room
                             </th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
                               Passes To This Room
                             </th>
                           </tr>
@@ -6867,12 +6867,12 @@ function App() {
                           }}
                         >
                           <tr>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>First Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Last Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
                               Total Passes From this Room
                             </th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
                               Pass to this Room
                             </th>
                           </tr>
