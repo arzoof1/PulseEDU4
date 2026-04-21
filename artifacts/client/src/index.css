@@ -1091,14 +1091,6 @@ ul[style*="listStyle: none"] li button:hover {
   stroke-width: 2;
   stroke-linecap: round;
   stroke-linejoin: round;
-  stroke-dasharray: 30 200;
-  stroke-dashoffset: 230;
-  animation: classlog-ekg-sweep 2.4s linear infinite;
-  filter: drop-shadow(0 0 3px rgba(14, 116, 144, 0.7));
-}
-@keyframes classlog-ekg-sweep {
-  from { stroke-dashoffset: 230; }
-  to { stroke-dashoffset: 0; }
 }
 
 /* Apply button EKG sweep on click */

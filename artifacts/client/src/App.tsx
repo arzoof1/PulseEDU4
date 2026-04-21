@@ -7372,38 +7372,64 @@ function App() {
                             : "#64748b";
                     return (
                       <>
-                        <h3
+                        <div
                           style={{
-                            marginTop: 0,
                             display: "flex",
                             alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "0.75rem",
+                            marginTop: 0,
+                            marginBottom: "0.6rem",
                           }}
                         >
-                          Class Log
-                          <svg
-                            className="classlog-ekg no-print"
-                            viewBox="0 0 220 36"
-                            preserveAspectRatio="none"
-                            aria-hidden="true"
+                          <h3
+                            style={{
+                              margin: 0,
+                              display: "flex",
+                              alignItems: "center",
+                            }}
                           >
-                            <path
-                              className="track"
-                              d="M0 18 H40 L48 18 L54 6 L62 30 L70 12 L78 22 L86 18 H110 L118 18 L124 8 L132 28 L140 14 L148 22 L156 18 H220"
-                            />
-                            <path
-                              className="pulse"
-                              d="M0 18 H40 L48 18 L54 6 L62 30 L70 12 L78 22 L86 18 H110 L118 18 L124 8 L132 28 L140 14 L148 22 L156 18 H220"
-                            />
-                          </svg>
+                            Class Log
+                            <svg
+                              className="classlog-ekg no-print"
+                              viewBox="0 0 220 36"
+                              preserveAspectRatio="none"
+                              aria-hidden="true"
+                            >
+                              <path
+                                className="track"
+                                d="M0 18 H40 L48 18 L54 6 L62 30 L70 12 L78 22 L86 18 H110 L118 18 L124 8 L132 28 L140 14 L148 22 L156 18 H220"
+                              />
+                              <path
+                                className="pulse"
+                                d="M0 18 H40 L48 18 L54 6 L62 30 L70 12 L78 22 L86 18 H110 L118 18 L124 8 L132 28 L140 14 L148 22 L156 18 H220"
+                              />
+                            </svg>
+                          </h3>
                           <button
                             type="button"
                             className="no-print"
                             onClick={() => window.print()}
-                            style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                            style={{
+                              background: "#7c3aed",
+                              color: "#fff",
+                              border: "1px solid #6d28d9",
+                              padding: "0.35rem 0.95rem",
+                              fontSize: "0.85rem",
+                              fontWeight: 600,
+                              borderRadius: 999,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                              boxShadow: "0 1px 2px rgba(124,58,237,0.25)",
+                            }}
+                            title="Print this view"
                           >
+                            <span aria-hidden="true">🖨</span>
                             Print
                           </button>
-                        </h3>
+                        </div>
                         <div style={{ marginBottom: "0.75rem" }}>
                           <label>
                             Period:{" "}
