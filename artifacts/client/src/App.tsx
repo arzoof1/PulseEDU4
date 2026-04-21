@@ -2244,6 +2244,7 @@ function App() {
     | "issDashboard"
     | "behaviorReview"
     | "behaviorSpecialist"
+    | "hallPassMgmt"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -4873,6 +4874,8 @@ function App() {
     if (activeSection === "interventions" && canManageBehaviorLists) {
       loadInterventionTypes();
       loadPulloutReasons();
+    }
+    if (activeSection === "hallPassMgmt" && canManageBehaviorLists) {
       loadPolarityPairs();
     }
     if (activeSection === "requestPullout") {
@@ -9645,6 +9648,7 @@ function App() {
           | "issDashboard"
           | "behaviorReview"
           | "interventions"
+          | "hallPassMgmt"
           | "requestPullout"
           | "logIntervention"
           | "verifyPullouts";
@@ -9675,8 +9679,15 @@ function App() {
           {
             key: "interventions",
             label: "Interventions",
-            desc: "Manage intervention types, pullout reasons, polarity pairs.",
+            desc: "Manage intervention types and pullout reasons.",
             color: "#7c3aed",
+            show: canManageBehaviorLists,
+          },
+          {
+            key: "hallPassMgmt",
+            label: "Hall Pass Management",
+            desc: "Keep-Apart pairs and other hall-pass safeguards.",
+            color: "#0d9488",
             show: canManageBehaviorLists,
           },
           {
@@ -11231,7 +11242,7 @@ function App() {
         </section>
       )}
 
-      {activeSection === "interventions" && canManageBehaviorLists && (
+      {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
         <section className="card">
           <h2>Keep-Apart Pairs</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
