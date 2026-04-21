@@ -7,6 +7,7 @@ import {
   schoolAccommodationsTable,
   studentAccommodationsTable,
   staffTable,
+  studentsTable,
 } from "@workspace/db";
 import { and, eq, isNull, sql, desc, inArray } from "drizzle-orm";
 
@@ -112,6 +113,126 @@ router.patch("/school-accommodations/:id", requireEseOrAdmin, async (req, res) =
   }
   res.json(row);
 });
+
+// Hard-delete a master accommodation. Only permitted when it has never been
+// assigned (active or historical). If any assignment rows exist, return 409
+// and the caller should deactivate via PATCH instead.
+router.delete("/school-accommodations/:id", requireEseOrAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const [{ n }] = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(studentAccommodationsTable)
+    .where(eq(studentAccommodationsTable.accommodationId, id));
+  if (n > 0) {
+    res.status(409).json({
+      error:
+        "This accommodation has assignment history and cannot be deleted. Deactivate it instead.",
+      assignmentCount: n,
+    });
+    return;
+  }
+  const [row] = await db
+    .delete(schoolAccommodationsTable)
+    .where(eq(schoolAccommodationsTable.id, id))
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.json({ deleted: true });
+});
+
+// Matrix view of one category (IEP / 504 / ELL / Strategy). Returns the active
+// master accommodations in that category and every student who currently has
+// at least one active assignment in that category, with the assignmentId for
+// each (studentId, accommodationId) cell so the UI can toggle.
+router.get(
+  "/accommodation-category-matrix",
+  requireEseOrAdmin,
+  async (req, res) => {
+    const category =
+      typeof req.query.category === "string" ? req.query.category : "";
+    const ALLOWED = new Set(["IEP", "504", "ELL", "Strategy"]);
+    if (!ALLOWED.has(category)) {
+      res
+        .status(400)
+        .json({ error: "category must be one of IEP, 504, ELL, Strategy" });
+      return;
+    }
+    const accs = await db
+      .select()
+      .from(schoolAccommodationsTable)
+      .where(
+        and(
+          eq(schoolAccommodationsTable.category, category),
+          eq(schoolAccommodationsTable.active, true),
+        ),
+      )
+      .orderBy(schoolAccommodationsTable.name);
+    if (accs.length === 0) {
+      res.json({ category, accommodations: [], students: [] });
+      return;
+    }
+    const accIds = accs.map((a) => a.id);
+    const rows = await db
+      .select({
+        assignmentId: studentAccommodationsTable.id,
+        studentId: studentAccommodationsTable.studentId,
+        accommodationId: studentAccommodationsTable.accommodationId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentAccommodationsTable)
+      .innerJoin(
+        studentsTable,
+        eq(studentsTable.studentId, studentAccommodationsTable.studentId),
+      )
+      .where(
+        and(
+          isNull(studentAccommodationsTable.removedAt),
+          inArray(studentAccommodationsTable.accommodationId, accIds),
+        ),
+      );
+    const byStudent = new Map<
+      string,
+      {
+        studentId: string;
+        firstName: string;
+        lastName: string;
+        grade: number;
+        assignments: Record<number, number>;
+      }
+    >();
+    for (const r of rows) {
+      let s = byStudent.get(r.studentId);
+      if (!s) {
+        s = {
+          studentId: r.studentId,
+          firstName: r.firstName,
+          lastName: r.lastName,
+          grade: r.grade,
+          assignments: {},
+        };
+        byStudent.set(r.studentId, s);
+      }
+      s.assignments[r.accommodationId] = r.assignmentId;
+    }
+    const students = Array.from(byStudent.values()).sort((a, b) => {
+      const ln = a.lastName.localeCompare(b.lastName);
+      return ln !== 0 ? ln : a.firstName.localeCompare(b.firstName);
+    });
+    res.json({
+      category,
+      accommodations: accs.map((a) => ({ id: a.id, name: a.name })),
+      students,
+    });
+  },
+);
 
 // ---- Per-student assignments ----
 

@@ -2510,6 +2510,33 @@ function App() {
     useState("Behavior");
   const [eseNewName, setEseNewName] = useState("");
   const [eseNewCategory, setEseNewCategory] = useState("Strategy");
+  // Inline editing of a master accommodation row
+  const [eseEditingId, setEseEditingId] = useState<number | null>(null);
+  const [eseEditName, setEseEditName] = useState("");
+  const [eseEditCategory, setEseEditCategory] = useState("Strategy");
+  // Student Assignments sub-category tab + matrix state
+  const [eseAssignCategory, setEseAssignCategory] = useState<
+    "IEP" | "504" | "ELL"
+  >("IEP");
+  type CategoryMatrix = {
+    category: string;
+    accommodations: { id: number; name: string }[];
+    students: {
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      grade: number;
+      assignments: Record<number, number>;
+    }[];
+  };
+  const [eseMatrix, setEseMatrix] = useState<CategoryMatrix | null>(null);
+  const [eseMatrixLoading, setEseMatrixLoading] = useState(false);
+  const [eseMatrixMsg, setEseMatrixMsg] = useState("");
+  // Frontend-only "newly added" students whose row is shown but who don't yet
+  // have any assignment in the active category.
+  const [eseExtraStudentIds, setEseExtraStudentIds] = useState<
+    Record<string, string[]>
+  >({ IEP: [], "504": [], ELL: [] });
   const [accommodationLogs, setAccommodationLogs] = useState<
     {
       id: number;
@@ -4255,6 +4282,158 @@ function App() {
       window.alert(
         "Failed: " + (err instanceof Error ? err.message : String(err)),
       );
+    }
+  };
+
+  const eseStartEditMaster = (a: { id: number; name: string; category: string }) => {
+    setEseEditingId(a.id);
+    setEseEditName(a.name);
+    setEseEditCategory(a.category);
+  };
+
+  const eseCancelEditMaster = () => {
+    setEseEditingId(null);
+    setEseEditName("");
+  };
+
+  const eseSaveEditMaster = async () => {
+    if (eseEditingId == null || !eseEditName.trim()) return;
+    try {
+      const res = await fetch(`/api/school-accommodations/${eseEditingId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          name: eseEditName.trim(),
+          category: eseEditCategory,
+        }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      eseCancelEditMaster();
+      loadSchoolAccommodations();
+    } catch (err) {
+      window.alert(
+        "Failed: " + (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+
+  const eseDeleteMaster = async (a: {
+    id: number;
+    name: string;
+    inUseCount: number;
+    active: boolean;
+  }) => {
+    if (a.inUseCount > 0) {
+      const ok = window.confirm(
+        `"${a.name}" has ${a.inUseCount} active assignment${
+          a.inUseCount === 1 ? "" : "s"
+        } and cannot be deleted. Deactivate it instead?`,
+      );
+      if (!ok) return;
+      eseToggleMasterActive(a.id, false);
+      return;
+    }
+    if (!window.confirm(`Delete "${a.name}"? This cannot be undone.`)) return;
+    try {
+      const res = await fetch(`/api/school-accommodations/${a.id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (res.status === 409) {
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        window.alert(
+          body.error ||
+            "Cannot delete — this accommodation has assignment history. Deactivate instead.",
+        );
+        return;
+      }
+      if (!res.ok) throw new Error(await res.text());
+      loadSchoolAccommodations();
+    } catch (err) {
+      window.alert(
+        "Failed: " + (err instanceof Error ? err.message : String(err)),
+      );
+    }
+  };
+
+  const loadEseMatrix = async (category: "IEP" | "504" | "ELL") => {
+    setEseMatrixLoading(true);
+    setEseMatrixMsg("");
+    try {
+      const res = await fetch(
+        `/api/accommodation-category-matrix?category=${encodeURIComponent(
+          category,
+        )}`,
+        { credentials: "include" },
+      );
+      if (!res.ok) throw new Error(await res.text());
+      const data = (await res.json()) as CategoryMatrix;
+      setEseMatrix(data);
+    } catch (err) {
+      setEseMatrixMsg(
+        "Failed to load: " +
+          (err instanceof Error ? err.message : String(err)),
+      );
+      setEseMatrix(null);
+    } finally {
+      setEseMatrixLoading(false);
+    }
+  };
+
+  const eseMatrixToggle = async (
+    studentId: string,
+    accommodationId: number,
+    currentlyAssigned: number | undefined,
+  ) => {
+    if (!eseMatrix) return;
+    if (currentlyAssigned) {
+      // Remove
+      try {
+        const res = await fetch(
+          `/api/students/${studentId}/accommodations/${currentlyAssigned}`,
+          { method: "DELETE", credentials: "include" },
+        );
+        if (!res.ok) throw new Error(await res.text());
+        setEseMatrix((m) => {
+          if (!m) return m;
+          return {
+            ...m,
+            students: m.students.map((s) =>
+              s.studentId !== studentId
+                ? s
+                : (() => {
+                    const next = { ...s.assignments };
+                    delete next[accommodationId];
+                    return { ...s, assignments: next };
+                  })(),
+            ),
+          };
+        });
+      } catch (err) {
+        window.alert(
+          "Failed: " + (err instanceof Error ? err.message : String(err)),
+        );
+      }
+    } else {
+      // Add
+      try {
+        const res = await fetch(`/api/students/${studentId}/accommodations`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({ accommodationIds: [accommodationId] }),
+        });
+        if (!res.ok) throw new Error(await res.text());
+        // Reload matrix to capture the new assignmentId.
+        loadEseMatrix(eseAssignCategory);
+      } catch (err) {
+        window.alert(
+          "Failed: " + (err instanceof Error ? err.message : String(err)),
+        );
+      }
     }
   };
 
@@ -9722,15 +9901,335 @@ function App() {
           {/* Note: nav buttons above are hidden in print via .no-print on parent */}
           {eseTab === "students" ? (
             <div>
-              <div style={{ marginBottom: "0.5rem" }}>
-                <input
-                  type="text"
-                  placeholder="Search student by name or ID"
-                  value={eseStudentSearch}
-                  onChange={(e) => setEseStudentSearch(e.target.value)}
-                  style={{ width: "20rem" }}
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.4rem",
+                  marginBottom: "0.6rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span style={{ fontWeight: 600, marginRight: "0.25rem" }}>
+                  Category:
+                </span>
+                {(["IEP", "504", "ELL"] as const).map((c) => {
+                  const active = eseAssignCategory === c;
+                  const colorBg =
+                    c === "IEP" ? "#0e7490" : c === "504" ? "#7c3aed" : "#0891b2";
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => {
+                        setEseAssignCategory(c);
+                        loadEseMatrix(c);
+                      }}
+                      style={{
+                        background: active ? colorBg : "#fff",
+                        color: active ? "#fff" : colorBg,
+                        border: `1.5px solid ${colorBg}`,
+                        padding: "0.35rem 0.95rem",
+                        fontWeight: 600,
+                        fontSize: "0.9rem",
+                        borderRadius: 999,
+                        cursor: "pointer",
+                      }}
+                    >
+                      {c === "IEP" ? "ESE / IEP" : c}
+                    </button>
+                  );
+                })}
+                <span
+                  style={{
+                    marginLeft: "auto",
+                    fontStyle: "italic",
+                    color: "#64748b",
+                    fontSize: "0.82rem",
+                  }}
+                >
+                  Will sync from SIS once available.
+                </span>
+              </div>
+
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  marginBottom: "0.6rem",
+                  padding: "0.5rem 0.6rem",
+                  background: "#f8fafc",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                }}
+              >
+                <label style={{ fontWeight: 600 }}>
+                  Add new {eseAssignCategory === "IEP" ? "ESE" : eseAssignCategory}{" "}
+                  student:
+                </label>
+                <StudentCombobox
+                  students={students.filter(
+                    (s) =>
+                      !eseMatrix?.students.some(
+                        (m) => m.studentId === s.studentId,
+                      ) &&
+                      !(
+                        eseExtraStudentIds[eseAssignCategory] || []
+                      ).includes(s.studentId),
+                  )}
+                  value=""
+                  onChange={(sid) => {
+                    if (!sid) return;
+                    setEseExtraStudentIds((prev) => ({
+                      ...prev,
+                      [eseAssignCategory]: [
+                        sid,
+                        ...(prev[eseAssignCategory] || []),
+                      ],
+                    }));
+                  }}
+                  placeholder="Type name or ID then check accommodations…"
+                  minWidth={320}
                 />
               </div>
+
+              {eseMatrixMsg && (
+                <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+                  {eseMatrixMsg}
+                </div>
+              )}
+              {eseMatrixLoading && !eseMatrix ? (
+                <div>Loading…</div>
+              ) : !eseMatrix ? (
+                <div style={{ color: "#64748b" }}>
+                  Pick a category to view assignments.
+                </div>
+              ) : eseMatrix.accommodations.length === 0 ? (
+                <div style={{ color: "#64748b" }}>
+                  No active master accommodations in this category. Add one in
+                  the Master Accommodations List tab.
+                </div>
+              ) : (
+                (() => {
+                  const extras = (
+                    eseExtraStudentIds[eseAssignCategory] || []
+                  )
+                    .map((sid) => {
+                      const s = students.find((x) => x.studentId === sid);
+                      if (!s) return null;
+                      return {
+                        studentId: s.studentId,
+                        firstName: s.firstName,
+                        lastName: s.lastName,
+                        grade: s.grade,
+                        assignments: {} as Record<number, number>,
+                      };
+                    })
+                    .filter(
+                      (
+                        x,
+                      ): x is {
+                        studentId: string;
+                        firstName: string;
+                        lastName: string;
+                        grade: number;
+                        assignments: Record<number, number>;
+                      } => x !== null,
+                    );
+                  const allRows = [...extras, ...eseMatrix.students].sort(
+                    (a, b) => {
+                      const ln = a.lastName.localeCompare(b.lastName);
+                      return ln !== 0
+                        ? ln
+                        : a.firstName.localeCompare(b.firstName);
+                    },
+                  );
+                  return (
+                    <div style={{ overflowX: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.88rem",
+                        }}
+                      >
+                        <thead>
+                          <tr style={{ background: "#f0f0f0" }}>
+                            <th
+                              style={{
+                                textAlign: "left",
+                                padding: "0.4rem",
+                                position: "sticky",
+                                left: 0,
+                                background: "#f0f0f0",
+                                minWidth: 200,
+                              }}
+                            >
+                              Student
+                            </th>
+                            {eseMatrix.accommodations.map((a) => (
+                              <th
+                                key={a.id}
+                                style={{
+                                  textAlign: "center",
+                                  padding: "0.4rem 0.3rem",
+                                  fontWeight: 600,
+                                  borderLeft: "1px solid #e2e8f0",
+                                  minWidth: 90,
+                                  verticalAlign: "bottom",
+                                }}
+                              >
+                                <div
+                                  style={{
+                                    writingMode: "vertical-rl",
+                                    transform: "rotate(180deg)",
+                                    whiteSpace: "nowrap",
+                                    margin: "0 auto",
+                                  }}
+                                >
+                                  {a.name}
+                                </div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {allRows.length === 0 ? (
+                            <tr>
+                              <td
+                                colSpan={eseMatrix.accommodations.length + 1}
+                                style={{
+                                  padding: "0.6rem",
+                                  color: "#64748b",
+                                  fontStyle: "italic",
+                                }}
+                              >
+                                No students yet. Use “Add new …” above to
+                                start.
+                              </td>
+                            </tr>
+                          ) : (
+                            allRows.map((s, idx) => {
+                              const isExtra = (
+                                eseExtraStudentIds[eseAssignCategory] || []
+                              ).includes(s.studentId);
+                              const hasNoAssignments =
+                                Object.keys(s.assignments).length === 0;
+                              return (
+                              <tr
+                                key={s.studentId}
+                                style={{
+                                  borderBottom: "1px solid #eee",
+                                  background:
+                                    idx % 2 === 0 ? "#fff" : "#fafafa",
+                                }}
+                              >
+                                <td
+                                  style={{
+                                    padding: "0.4rem",
+                                    position: "sticky",
+                                    left: 0,
+                                    background:
+                                      idx % 2 === 0 ? "#fff" : "#fafafa",
+                                  }}
+                                >
+                                  <strong>
+                                    {s.lastName}, {s.firstName}
+                                  </strong>{" "}
+                                  <span style={{ color: "#64748b" }}>
+                                    · {s.studentId} · Gr {s.grade}
+                                  </span>
+                                  {isExtra && hasNoAssignments && (
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        setEseExtraStudentIds((prev) => ({
+                                          ...prev,
+                                          [eseAssignCategory]: (
+                                            prev[eseAssignCategory] || []
+                                          ).filter(
+                                            (id) => id !== s.studentId,
+                                          ),
+                                        }))
+                                      }
+                                      title="Remove from view (no assignments to delete)"
+                                      style={{
+                                        marginLeft: "0.4rem",
+                                        background: "transparent",
+                                        border: "none",
+                                        color: "#94a3b8",
+                                        cursor: "pointer",
+                                        fontSize: "1rem",
+                                        padding: 0,
+                                      }}
+                                    >
+                                      ×
+                                    </button>
+                                  )}
+                                </td>
+                                {eseMatrix.accommodations.map((a) => {
+                                  const assigned = s.assignments[a.id];
+                                  return (
+                                    <td
+                                      key={a.id}
+                                      style={{
+                                        textAlign: "center",
+                                        padding: "0.3rem",
+                                        borderLeft: "1px solid #e2e8f0",
+                                      }}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={!!assigned}
+                                        onChange={() =>
+                                          eseMatrixToggle(
+                                            s.studentId,
+                                            a.id,
+                                            assigned,
+                                          )
+                                        }
+                                        style={{
+                                          width: 18,
+                                          height: 18,
+                                          cursor: "pointer",
+                                          accentColor:
+                                            eseAssignCategory === "IEP"
+                                              ? "#0e7490"
+                                              : eseAssignCategory === "504"
+                                                ? "#7c3aed"
+                                                : "#0891b2",
+                                        }}
+                                      />
+                                    </td>
+                                  );
+                                })}
+                              </tr>
+                              );
+                            })
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  );
+                })()
+              )}
+
+              <details style={{ marginTop: "1rem" }}>
+                <summary
+                  style={{ cursor: "pointer", color: "#0e7490" }}
+                >
+                  Search a single student (legacy view)
+                </summary>
+                <div style={{ marginTop: "0.5rem", marginBottom: "0.5rem" }}>
+                  <input
+                    type="text"
+                    placeholder="Search student by name or ID"
+                    value={eseStudentSearch}
+                    onChange={(e) => setEseStudentSearch(e.target.value)}
+                    style={{ width: "20rem" }}
+                  />
+                </div>
               {eseStudentSearch && !eseStudentId && (
                 <ul
                   style={{
@@ -9955,6 +10454,7 @@ function App() {
                   </div>
                 </div>
               )}
+              </details>
             </div>
           ) : (
             <div>
@@ -10018,7 +10518,7 @@ function App() {
                       In Use
                     </th>
                     <th style={{ textAlign: "left", padding: "0.4rem" }}>
-                      Action
+                      Actions
                     </th>
                   </tr>
                 </thead>
@@ -10030,29 +10530,129 @@ function App() {
                         ? a.name.localeCompare(b.name)
                         : a.category.localeCompare(b.category),
                     )
-                    .map((a) => (
-                      <tr
-                        key={a.id}
-                        style={{ borderBottom: "1px solid #eee" }}
-                      >
-                        <td style={{ padding: "0.4rem" }}>{a.category}</td>
-                        <td style={{ padding: "0.4rem" }}>{a.name}</td>
-                        <td style={{ padding: "0.4rem" }}>
-                          {a.active ? "Yes" : "No"}
-                        </td>
-                        <td style={{ padding: "0.4rem" }}>{a.inUseCount}</td>
-                        <td style={{ padding: "0.4rem" }}>
-                          <button
-                            type="button"
-                            onClick={() =>
-                              eseToggleMasterActive(a.id, !a.active)
-                            }
+                    .map((a) => {
+                      const editing = eseEditingId === a.id;
+                      return (
+                        <tr
+                          key={a.id}
+                          style={{ borderBottom: "1px solid #eee" }}
+                        >
+                          <td style={{ padding: "0.4rem" }}>
+                            {editing ? (
+                              <select
+                                value={eseEditCategory}
+                                onChange={(e) =>
+                                  setEseEditCategory(e.target.value)
+                                }
+                              >
+                                <option value="IEP">IEP</option>
+                                <option value="504">504</option>
+                                <option value="ELL">ELL</option>
+                                <option value="Strategy">Strategy</option>
+                              </select>
+                            ) : (
+                              a.category
+                            )}
+                          </td>
+                          <td style={{ padding: "0.4rem" }}>
+                            {editing ? (
+                              <input
+                                type="text"
+                                value={eseEditName}
+                                onChange={(e) =>
+                                  setEseEditName(e.target.value)
+                                }
+                                style={{ width: "100%" }}
+                              />
+                            ) : (
+                              a.name
+                            )}
+                          </td>
+                          <td style={{ padding: "0.4rem" }}>
+                            {a.active ? "Yes" : "No"}
+                          </td>
+                          <td style={{ padding: "0.4rem" }}>{a.inUseCount}</td>
+                          <td
+                            style={{
+                              padding: "0.4rem",
+                              display: "flex",
+                              gap: "0.35rem",
+                              flexWrap: "wrap",
+                            }}
                           >
-                            {a.active ? "Deactivate" : "Activate"}
-                          </button>
-                        </td>
-                      </tr>
-                    ))}
+                            {editing ? (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={eseSaveEditMaster}
+                                  disabled={!eseEditName.trim()}
+                                  style={{
+                                    background: "#0d9488",
+                                    color: "#fff",
+                                    border: "1px solid #0f766e",
+                                    padding: "0.25rem 0.7rem",
+                                    borderRadius: 4,
+                                    cursor: eseEditName.trim()
+                                      ? "pointer"
+                                      : "not-allowed",
+                                  }}
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={eseCancelEditMaster}
+                                >
+                                  Cancel
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => eseStartEditMaster(a)}
+                                  title="Edit name and category"
+                                >
+                                  Edit
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    eseToggleMasterActive(a.id, !a.active)
+                                  }
+                                  title={
+                                    a.active
+                                      ? "Hide from teachers (keeps history)"
+                                      : "Make available again"
+                                  }
+                                >
+                                  {a.active ? "Deactivate" : "Activate"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => eseDeleteMaster(a)}
+                                  style={{
+                                    background: "#dc2626",
+                                    color: "#fff",
+                                    border: "1px solid #b91c1c",
+                                    padding: "0.25rem 0.7rem",
+                                    borderRadius: 4,
+                                    cursor: "pointer",
+                                  }}
+                                  title={
+                                    a.inUseCount > 0
+                                      ? "In use — will offer to deactivate"
+                                      : "Permanently delete"
+                                  }
+                                >
+                                  Delete
+                                </button>
+                              </>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
