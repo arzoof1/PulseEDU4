@@ -6681,6 +6681,123 @@ function App() {
                 </div>
               );
             })()}
+
+            {(() => {
+              const fromCounts = new Map<string, number>();
+              const toCounts = new Map<string, number>();
+              for (const p of hallPasses) {
+                const dt = new Date(p.createdAt);
+                if (dt.getFullYear() !== today.getFullYear()) continue;
+                if (p.originRoom) {
+                  fromCounts.set(
+                    p.originRoom,
+                    (fromCounts.get(p.originRoom) || 0) + 1,
+                  );
+                }
+                if (p.destination) {
+                  toCounts.set(
+                    p.destination,
+                    (toCounts.get(p.destination) || 0) + 1,
+                  );
+                }
+              }
+              const allNames = new Set<string>([
+                ...fromCounts.keys(),
+                ...toCounts.keys(),
+              ]);
+              const folderFor = (name: string) => {
+                if (/^Room\s+(\d)/i.test(name)) {
+                  const m = name.match(/^Room\s+(\d)/i);
+                  return m ? `${m[1]}00 Hall` : "—";
+                }
+                if (/library|media|gym|nurse|office|counsel/i.test(name))
+                  return "Staff";
+                return "—";
+              };
+              const rows = Array.from(allNames)
+                .map((name) => ({
+                  name,
+                  from: fromCounts.get(name) || 0,
+                  to: toCounts.get(name) || 0,
+                  folder: folderFor(name),
+                }))
+                .sort((a, b) => b.from + b.to - (a.from + a.to));
+
+              return (
+                <div className="card">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <h3 style={{ margin: 0 }}>Room Usage</h3>
+                    <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                      {rows.length} rooms
+                    </div>
+                  </div>
+                  {rows.length === 0 ? (
+                    <div style={{ color: "#64748b", padding: "1rem 0" }}>
+                      No room activity this year yet.
+                    </div>
+                  ) : (
+                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        <thead
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            textAlign: "left",
+                          }}
+                        >
+                          <tr>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Room Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Passes From This Room
+                            </th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Passes To This Room
+                            </th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Room Folder</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr
+                              key={r.name}
+                              style={{ borderTop: "1px solid #e2e8f0" }}
+                            >
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.name}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.from.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.to.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.folder}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         );
       })()}
