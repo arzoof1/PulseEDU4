@@ -23,7 +23,7 @@ import { and, eq, or, ne } from "drizzle-orm";
 const router: IRouter = Router();
 
 async function loadStaff(req: Request, res: Response) {
-  const staffId = req.session.staffId;
+  const staffId = req.staffId;
   if (!staffId) {
     res.status(401).json({ error: "Sign-in required" });
     return null;

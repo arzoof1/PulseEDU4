@@ -12,7 +12,7 @@ const router: IRouter = Router();
 async function resolveStaff(
   req: Request,
 ): Promise<typeof staffTable.$inferSelect | null> {
-  const sessionId = req.session.staffId;
+  const sessionId = req.staffId;
   const queryId = (() => {
     const raw = req.query.staffId;
     if (typeof raw !== "string") return null;

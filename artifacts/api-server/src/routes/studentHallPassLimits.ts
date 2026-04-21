@@ -23,7 +23,7 @@ import { and, eq, gte, lte } from "drizzle-orm";
 const router: IRouter = Router();
 
 async function loadStaff(req: Request, res: Response) {
-  const sessionId = req.session.staffId;
+  const sessionId = req.staffId;
   const queryRaw = req.query.staffId;
   const queryId =
     typeof queryRaw === "string" && Number.isFinite(Number(queryRaw))

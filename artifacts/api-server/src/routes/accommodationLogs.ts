@@ -20,7 +20,7 @@ async function requireStaff(
   // Prefer the session, but fall back to ?staffId= or body.staffId so the
   // request still works inside the Replit preview iframe where SameSite=None
   // cookies can be blocked.
-  const sessionId = req.session.staffId;
+  const sessionId = req.staffId;
   const queryRaw = req.query.staffId;
   const queryId =
     typeof queryRaw === "string" && Number.isFinite(Number(queryRaw))

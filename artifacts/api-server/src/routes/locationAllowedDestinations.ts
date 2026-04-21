@@ -20,7 +20,7 @@ const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
-  let id = req.session.staffId ?? null;
+  let id = req.staffId ?? null;
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {

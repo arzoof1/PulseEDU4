@@ -27,7 +27,7 @@ async function requireStaff(
   res: Response,
   next: NextFunction,
 ) {
-  const staffId = req.session.staffId;
+  const staffId = req.staffId;
   if (!staffId) {
     res.status(401).json({ error: "Sign-in required" });
     return;

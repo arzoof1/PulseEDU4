@@ -16,7 +16,7 @@ const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadSessionStaff(req: Request): Promise<StaffRow | null> {
-  const id = req.session.staffId;
+  const id = req.staffId;
   if (!id) return null;
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return s && s.active ? s : null;
@@ -140,7 +140,7 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
 
 router.post("/pbis", async (req, res) => {
   const { studentId, reason, points, staffName } = req.body ?? {};
-  const sessionStaffId = req.session.staffId;
+  const sessionStaffId = req.staffId;
   let resolvedStaffId: number | null = null;
   let resolvedStaffName =
     typeof staffName === "string" ? staffName : "";

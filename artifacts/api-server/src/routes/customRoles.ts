@@ -56,7 +56,7 @@ type StaffRow = typeof staffTable.$inferSelect;
 async function loadStaff(req: Request): Promise<StaffRow | null> {
   // Session OR server-signed bearer token (issued at login, verified via
   // HMAC). Never trusts a raw caller-supplied actor id.
-  let id = req.session.staffId ?? null;
+  let id = req.staffId ?? null;
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {

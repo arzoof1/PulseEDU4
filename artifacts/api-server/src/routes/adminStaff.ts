@@ -20,7 +20,7 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   // be forged or modified — that lets the privileged endpoints work inside
   // the Replit preview iframe (where the cookie is sometimes blocked)
   // without ever trusting a raw caller-supplied staffId.
-  let id = req.session.staffId ?? null;
+  let id = req.staffId ?? null;
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {

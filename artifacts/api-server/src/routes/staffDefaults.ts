@@ -18,7 +18,7 @@ const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
-  const id = req.session.staffId;
+  const id = req.staffId;
   if (!id) return null;
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return s && s.active ? s : null;

@@ -5,6 +5,15 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
 import { logger } from "./lib/logger";
+import { verifyAuthToken } from "./lib/authToken";
+
+declare global {
+  namespace Express {
+    interface Request {
+      staffId?: number | null;
+    }
+  }
+}
 
 const app: Express = express();
 
@@ -69,6 +78,26 @@ app.use(
     name: "pulseed.sid",
   }),
 );
+
+// Resolve the authenticated staff id per request from EITHER the session
+// cookie OR a server-issued Bearer token (HMAC-signed with SESSION_SECRET).
+// The bearer fallback is needed inside the Replit preview iframe where the
+// session cookie is often blocked. We DO NOT write to req.session here, so:
+//   - logout (which destroys the session) stays authoritative for cookie auth
+//   - the session store sees no extra writes/churn
+//   - bearer-derived identity never gets persisted with a different sid
+// Routes should read req.staffId instead of req.session.staffId.
+app.use((req, _res, next) => {
+  let sid: number | null = req.session.staffId ?? null;
+  if (!sid) {
+    const auth = req.headers.authorization;
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+      sid = verifyAuthToken(auth.slice(7).trim());
+    }
+  }
+  req.staffId = sid;
+  next();
+});
 
 app.use("/api", router);
 

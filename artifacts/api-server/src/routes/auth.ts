@@ -101,13 +101,7 @@ router.post("/auth/logout", (req, res) => {
 // Change the caller's own password. Requires current password to prove it's
 // really them (so a stolen session/bearer token can't silently reset it).
 router.post("/auth/change-password", async (req: Request, res) => {
-  let staffId = req.session.staffId ?? null;
-  if (!staffId) {
-    const auth = req.headers.authorization;
-    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      staffId = verifyAuthToken(auth.slice(7).trim());
-    }
-  }
+  const staffId = req.staffId ?? null;
   if (!staffId) {
     res.status(401).json({ error: "Sign-in required" });
     return;
@@ -154,7 +148,7 @@ router.post("/auth/change-password", async (req: Request, res) => {
 });
 
 router.get("/auth/me", async (req, res) => {
-  const staffId = req.session.staffId;
+  const staffId = req.staffId;
   if (!staffId) {
     res.status(401).json({ error: "Not authenticated" });
     return;
