@@ -14,6 +14,11 @@ const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
+  // Privileged admin surface: ONLY trust the server-side session. We do not
+  // accept ?staffId= or actorStaffId from the client here, because those
+  // values are caller-controlled and would let any unauthenticated user
+  // impersonate any staff member (including SuperUser) and escalate
+  // privileges via these endpoints.
   const id = req.session.staffId;
   if (!id) return null;
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
@@ -264,10 +269,17 @@ router.post(
     }
 
     const updates = pickBoolUpdates(req.body);
-    // Same privilege gating as the patch endpoint.
+    // Same privilege gating as the patch endpoint. A cap_staff_roles holder
+    // who is not Admin/SuperUser must not be able to create users with
+    // SuperUser/Admin or with the role-management caps themselves — that
+    // would be a privilege-escalation bootstrap.
     if (updates.isSuperUser && !actor.isSuperUser) delete updates.isSuperUser;
     if (updates.isAdmin && !actor.isSuperUser && !actor.isAdmin) {
       delete updates.isAdmin;
+    }
+    if (!actor.isSuperUser && !actor.isAdmin) {
+      delete updates.capStaffRoles;
+      delete updates.capManageRoles;
     }
 
     const passwordHash = await bcrypt.hash(password, 10);

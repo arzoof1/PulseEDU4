@@ -186,14 +186,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const canManageRoles =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
 
+  const sid = `staffId=${currentUser.id}`;
+
   async function refresh() {
     try {
       const [s, r] = await Promise.all([
-        fetch("/api/admin/staff", { credentials: "include" }).then((res) =>
-          res.ok ? res.json() : Promise.reject(res.statusText),
+        fetch(`/api/admin/staff?${sid}`, { credentials: "include" }).then(
+          (res) =>
+            res.ok ? res.json() : Promise.reject(res.statusText),
         ),
-        fetch("/api/custom-roles", { credentials: "include" }).then((res) =>
-          res.ok ? res.json() : [],
+        fetch(`/api/custom-roles?${sid}`, { credentials: "include" }).then(
+          (res) => (res.ok ? res.json() : []),
         ),
       ]);
       setStaff(s);
@@ -225,11 +228,11 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       prev.map((s) => (s.id === id ? { ...s, ...body } : s)),
     );
     try {
-      const res = await fetch(`/api/admin/staff/${id}`, {
+      const res = await fetch(`/api/admin/staff/${id}?${sid}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
-        body: JSON.stringify(body),
+        body: JSON.stringify({ ...body, actorStaffId: currentUser.id }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -497,6 +500,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
       {showAddStaff && (
         <AddStaffModal
+          actorId={currentUser.id}
           onClose={() => setShowAddStaff(false)}
           onCreated={() => {
             setShowAddStaff(false);
@@ -510,6 +514,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       )}
       {showAddRole && canManageRoles && (
         <AddRoleModal
+          actorId={currentUser.id}
           onClose={() => setShowAddRole(false)}
           onCreated={() => {
             setShowAddRole(false);
@@ -549,11 +554,13 @@ function pillStyle(active: boolean): React.CSSProperties {
 }
 
 function AddStaffModal({
+  actorId,
   onClose,
   onCreated,
   canCreateAdmin,
   canCreateSuper,
 }: {
+  actorId: number;
   onClose: () => void;
   onCreated: () => void;
   canCreateAdmin: boolean;
@@ -571,7 +578,7 @@ function AddStaffModal({
     setBusy(true);
     setErr("");
     try {
-      const res = await fetch("/api/admin/staff", {
+      const res = await fetch(`/api/admin/staff?staffId=${actorId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -581,6 +588,7 @@ function AddStaffModal({
           password,
           isAdmin: makeAdmin,
           isSuperUser: makeSuper,
+          actorStaffId: actorId,
         }),
       });
       if (!res.ok) {
@@ -658,9 +666,11 @@ function AddStaffModal({
 }
 
 function AddRoleModal({
+  actorId,
   onClose,
   onCreated,
 }: {
+  actorId: number;
   onClose: () => void;
   onCreated: () => void;
 }) {
@@ -682,7 +692,7 @@ function AddRoleModal({
     setBusy(true);
     setErr("");
     try {
-      const res = await fetch("/api/custom-roles", {
+      const res = await fetch(`/api/custom-roles?staffId=${actorId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -690,6 +700,7 @@ function AddRoleModal({
           key: label,
           label,
           capabilities: [...caps],
+          actorStaffId: actorId,
         }),
       });
       if (!res.ok) {

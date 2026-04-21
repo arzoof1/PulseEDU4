@@ -53,6 +53,8 @@ function sanitizeCaps(actor: { isSuperUser: boolean }, caps: string[]): string[]
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
+  // Privileged surface (custom-role CRUD). Session-only — never trust a
+  // client-supplied actor id, or anyone could create roles as SuperUser.
   const id = req.session.staffId;
   if (!id) return null;
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
