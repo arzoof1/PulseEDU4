@@ -319,8 +319,10 @@ strong {
    option in a toggle/tab group. Apply the same red accent bar used in the
    sidebar so the active selection is visually consistent throughout the app. */
 button:disabled {
+  background: var(--primary-soft);
+  color: var(--primary);
   box-shadow: inset 3px 0 0 var(--accent);
-  border-color: rgba(239, 68, 68, 0.3);
+  border-color: rgba(14, 116, 144, 0.2);
   opacity: 1;
   cursor: default;
 }
