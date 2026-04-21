@@ -740,7 +740,7 @@ function VerifyPulloutsSection({
     setBusyId(p.id);
     setMsg(null);
     try {
-      const r = await fetch(`/api/pullouts/${p.id}/verify`, {
+      const r = await authFetch(`/api/pullouts/${p.id}/verify`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -779,7 +779,7 @@ function VerifyPulloutsSection({
     setBusyId(p.id);
     setMsg(null);
     try {
-      const r = await fetch(`/api/pullouts/${p.id}/reject`, {
+      const r = await authFetch(`/api/pullouts/${p.id}/reject`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ rejectedReason: draft.rejectedReason.trim() }),
@@ -1024,7 +1024,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     setBusyId(p.id);
     setMsg(null);
     try {
-      const r = await fetch(`/api/pullouts/${p.id}/${action}`, {
+      const r = await authFetch(`/api/pullouts/${p.id}/${action}`, {
         method: "PATCH",
       });
       const data = await r.json().catch(() => ({}));
@@ -1302,7 +1302,7 @@ function BehaviorReviewSection({
       const body = notes[p.id]?.trim()
         ? { reviewNotes: notes[p.id].trim() }
         : {};
-      const r = await fetch(`/api/pullouts/${p.id}/review`, {
+      const r = await authFetch(`/api/pullouts/${p.id}/review`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1526,7 +1526,7 @@ function PulloutReportSection({ students }: { students: Student[] }) {
     setErr(null);
     (async () => {
       try {
-        const r = await fetch(`/api/pullouts/report?days=${days}`);
+        const r = await authFetch(`/api/pullouts/report?days=${days}`);
         if (!r.ok) {
           if (!cancelled) setErr("Could not load report.");
         } else {
@@ -2493,7 +2493,7 @@ function App() {
   const toggleMilestone = async (m: PbisMilestone) => {
     setMilestoneListMsg("");
     try {
-      const res = await fetch(`/api/pbis-milestones/${m.id}`, {
+      const res = await authFetch(`/api/pbis-milestones/${m.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active: !m.active }),
@@ -2599,7 +2599,7 @@ function App() {
       return;
     }
     try {
-      const res = await fetch(`/api/schedule?staffId=${authUser.id}`, {
+      const res = await authFetch(`/api/schedule?staffId=${authUser.id}`, {
         credentials: "include",
       });
       if (!res.ok) {
@@ -2813,7 +2813,7 @@ function App() {
   const archivePbisGoal = async (id: number) => {
     if (!window.confirm("Archive this goal?")) return;
     try {
-      const res = await fetch(`/api/pbis-goals/${id}/archive`, {
+      const res = await authFetch(`/api/pbis-goals/${id}/archive`, {
         method: "POST",
       });
       if (!res.ok) {
@@ -2849,7 +2849,7 @@ function App() {
   const saveEditPbis = async (id: number) => {
     setPbisRowMsg(null);
     try {
-      const res = await fetch(`/api/pbis/${id}`, {
+      const res = await authFetch(`/api/pbis/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2889,7 +2889,7 @@ function App() {
     }
     setPbisRowMsg(null);
     try {
-      const res = await fetch(`/api/pbis/${id}/void`, {
+      const res = await authFetch(`/api/pbis/${id}/void`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ reason: reason.trim() }),
@@ -3002,7 +3002,7 @@ function App() {
         params.set("reason", pbisReportReason.trim());
       if (pbisReportStudent.trim())
         params.set("studentId", pbisReportStudent.trim());
-      const res = await fetch(`/api/reports/pbis?${params.toString()}`);
+      const res = await authFetch(`/api/reports/pbis?${params.toString()}`);
       if (!res.ok) {
         const j = (await res.json().catch(() => ({}))) as { error?: string };
         setPbisReport(null);
@@ -3075,7 +3075,7 @@ function App() {
       const elapsed = now - new Date(p.createdAt).getTime();
       if (elapsed >= SYSTEM_END_MS) {
         systemEndingRef.current.add(p.id);
-        fetch(`/api/hall-passes/${p.id}/end`, {
+        authFetch(`/api/hall-passes/${p.id}/end`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ system: true }),
@@ -3257,7 +3257,7 @@ function App() {
 
     loadAccommodationLogs();
 
-    fetch(`/api/schedule?staffId=${authUser.id}`, { credentials: "include" })
+    authFetch(`/api/schedule?staffId=${authUser.id}`, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : { sections: [] }))
       .then((data: { sections: MySection[] }) =>
         setMySections(data.sections ?? []),
@@ -3403,7 +3403,7 @@ function App() {
         to: range.to,
       });
       if (reportPeriod) params.set("period", reportPeriod);
-      const res = await fetch(`/api/reports/accommodations?${params}`);
+      const res = await authFetch(`/api/reports/accommodations?${params}`);
       if (myReqId !== reportReqIdRef.current) return;
       if (!res.ok) {
         if (res.status === 401) {
@@ -3690,7 +3690,7 @@ function App() {
     if (!confirm("Remove this keep-apart pair?")) return;
     setPolarityMsg("");
     try {
-      const res = await fetch(`/api/polarity-pairs/${id}`, {
+      const res = await authFetch(`/api/polarity-pairs/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -3708,7 +3708,7 @@ function App() {
     if (!authUser) return;
     try {
       const sid = `?staffId=${authUser.id}`;
-      const res = await fetch(`/api/student-hall-pass-limits${sid}`, {
+      const res = await authFetch(`/api/student-hall-pass-limits${sid}`, {
         credentials: "include",
       });
       if (!res.ok) {
@@ -3745,7 +3745,7 @@ function App() {
     }
     try {
       const sid = `?staffId=${authUser?.id ?? ""}`;
-      const res = await fetch(`/api/student-hall-pass-limits${sid}`, {
+      const res = await authFetch(`/api/student-hall-pass-limits${sid}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -3777,7 +3777,7 @@ function App() {
     if (!confirm("Remove this student's daily hall-pass limit?")) return;
     try {
       const sid = `?staffId=${authUser?.id ?? ""}`;
-      const res = await fetch(`/api/student-hall-pass-limits/${id}${sid}`, {
+      const res = await authFetch(`/api/student-hall-pass-limits/${id}${sid}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -3866,7 +3866,7 @@ function App() {
   const togglePbisReasonActive = async (id: number, active: boolean) => {
     setPbisListMsg("");
     try {
-      const res = await fetch(`/api/pbis-reasons/${id}`, {
+      const res = await authFetch(`/api/pbis-reasons/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active }),
@@ -3918,7 +3918,7 @@ function App() {
   const toggleInterventionActive = async (id: number, active: boolean) => {
     setIntervListMsg("");
     try {
-      const res = await fetch(`/api/intervention-types/${id}`, {
+      const res = await authFetch(`/api/intervention-types/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active }),
@@ -3943,7 +3943,7 @@ function App() {
     }
     setIntervListMsg("");
     try {
-      const res = await fetch(`/api/intervention-types/${id}`, {
+      const res = await authFetch(`/api/intervention-types/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -4018,7 +4018,7 @@ function App() {
   const togglePulloutReasonActive = async (id: number, active: boolean) => {
     setPulloutReasonMsg("");
     try {
-      const res = await fetch(`/api/pullout-reasons/${id}`, {
+      const res = await authFetch(`/api/pullout-reasons/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ active }),
@@ -4043,7 +4043,7 @@ function App() {
     }
     setPulloutReasonMsg("");
     try {
-      const res = await fetch(`/api/pullout-reasons/${id}`, {
+      const res = await authFetch(`/api/pullout-reasons/${id}`, {
         method: "DELETE",
       });
       if (!res.ok) {
@@ -4062,7 +4062,7 @@ function App() {
       return;
     }
     const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-    fetch(`/api/students/${studentId}/accommodations${sid}`, {
+    authFetch(`/api/students/${studentId}/accommodations${sid}`, {
       credentials: "include",
     })
       .then((res) => res.json())
@@ -4237,7 +4237,7 @@ function App() {
     if (!eseNewName.trim()) return;
     try {
       const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-      const res = await fetch(`/api/school-accommodations${sid}`, {
+      const res = await authFetch(`/api/school-accommodations${sid}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -4263,7 +4263,7 @@ function App() {
   ) => {
     try {
       const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-      const res = await fetch(`/api/school-accommodations/${id}${sid}`, {
+      const res = await authFetch(`/api/school-accommodations/${id}${sid}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -4335,7 +4335,7 @@ function App() {
     if (!window.confirm(`Delete "${a.name}"? This cannot be undone.`)) return;
     try {
       const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-      const res = await fetch(`/api/school-accommodations/${a.id}${sid}`, {
+      const res = await authFetch(`/api/school-accommodations/${a.id}${sid}`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -4421,7 +4421,7 @@ function App() {
     } else {
       // Add
       try {
-        const res = await fetch(`/api/students/${studentId}/accommodations`, {
+        const res = await authFetch(`/api/students/${studentId}/accommodations`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -4623,7 +4623,7 @@ function App() {
 
   const handleEndPass = async (id: number) => {
     try {
-      const res = await fetch(`/api/hall-passes/${id}/end`, {
+      const res = await authFetch(`/api/hall-passes/${id}/end`, {
         method: "PATCH",
       });
       if (!res.ok) {
@@ -4655,7 +4655,7 @@ function App() {
         alert("Started time must be before Ended time.");
         return;
       }
-      const res = await fetch(`/api/hall-passes/${id}`, {
+      const res = await authFetch(`/api/hall-passes/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
