@@ -253,7 +253,10 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     );
   }, [filter, staff]);
 
-  async function patchStaff(id: number, body: Record<string, boolean>) {
+  async function patchStaff(
+    id: number,
+    body: Record<string, boolean | string | null>,
+  ) {
     setSavingId(id);
     setError("");
     // optimistic
@@ -384,6 +387,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 }}
               >
                 Role presets
+              </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 140,
+                  textAlign: "left",
+                }}
+                title="Pre-fills the origin room when this user creates a hall pass."
+              >
+                Default room
               </th>
               {PAGES.map((p) => (
                 <th
@@ -518,6 +532,23 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                         </button>
                       ))}
                     </div>
+                  </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 140,
+                    }}
+                  >
+                    <DefaultRoomCell
+                      value={(s["defaultRoom"] as string | null) ?? ""}
+                      saving={isSaving}
+                      onSave={(next) =>
+                        patchStaff(s.id, {
+                          defaultRoom: next.trim() === "" ? null : next.trim(),
+                        })
+                      }
+                    />
                   </td>
                   {PAGES.map((p) => {
                     const checked = Boolean(s[p.key]);
@@ -932,6 +963,41 @@ function ModalShell({
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+function DefaultRoomCell({
+  value,
+  saving,
+  onSave,
+}: {
+  value: string;
+  saving: boolean;
+  onSave: (next: string) => void;
+}) {
+  const [draft, setDraft] = useState(value);
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+  const dirty = draft !== value;
+  return (
+    <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+      <input
+        type="text"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder="—"
+        disabled={saving}
+        style={{ width: 110, fontSize: 12, padding: "2px 4px" }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && dirty) onSave(draft);
+          if (e.key === "Escape") setDraft(value);
+        }}
+        onBlur={() => {
+          if (dirty) onSave(draft);
+        }}
+      />
     </div>
   );
 }

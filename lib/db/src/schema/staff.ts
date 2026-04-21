@@ -67,6 +67,13 @@ export const staffTable = pgTable("staff", {
   capStaffRoles: boolean("cap_staff_roles").notNull().default(false),
   capManageRoles: boolean("cap_manage_roles").notNull().default(false),
 
+  // Optional home/default classroom for this staff member. Stored as
+  // free text (the location name) so historical records remain intact if
+  // a room is later renamed or deleted. The Send Pass modal uses this
+  // value to pre-fill the origin room so teachers don't have to pick it
+  // every time.
+  defaultRoom: text("default_room"),
+
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),
   active: boolean("active").notNull().default(true),

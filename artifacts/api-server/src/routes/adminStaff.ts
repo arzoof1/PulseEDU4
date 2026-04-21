@@ -139,6 +139,7 @@ const STAFF_SELECT = {
   capManageLocations: staffTable.capManageLocations,
   capStaffRoles: staffTable.capStaffRoles,
   capManageRoles: staffTable.capManageRoles,
+  defaultRoom: staffTable.defaultRoom,
 } as const;
 
 // List all staff with full role + capability flags.
@@ -164,7 +165,20 @@ router.patch(
       res.status(400).json({ error: "Invalid staff id" });
       return;
     }
-    const updates = pickBoolUpdates(req.body);
+    const updates: Record<string, unknown> = pickBoolUpdates(req.body);
+    // Optional string field: defaultRoom. Empty string clears it (NULL).
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if ("defaultRoom" in body) {
+      const v = body.defaultRoom;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        updates.defaultRoom = null;
+      } else if (typeof v === "string") {
+        updates.defaultRoom = v.trim();
+      } else {
+        res.status(400).json({ error: "defaultRoom must be a string or null" });
+        return;
+      }
+    }
     if (Object.keys(updates).length === 0) {
       res.status(400).json({ error: "No valid fields in request body" });
       return;

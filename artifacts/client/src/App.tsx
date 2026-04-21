@@ -2204,6 +2204,7 @@ function App() {
     isSocialWorker?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
+    defaultRoom?: string | null;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -3276,10 +3277,15 @@ function App() {
   const [copiedRoom, setCopiedRoom] = useState<string | null>(null);
 
   useEffect(() => {
-    const def = staffDefaults[currentStaffUser];
+    // Prefer the per-staff defaultRoom stored on the user record (the new
+    // editable field in Staff & Roles); fall back to the older staffDefaults
+    // map keyed by display name for backward compatibility.
+    const def = authUser?.defaultRoom?.trim()
+      ? authUser.defaultRoom.trim()
+      : staffDefaults[currentStaffUser];
     if (def) setOriginRoom(def);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentStaffUser, staffDefaults]);
+  }, [currentStaffUser, staffDefaults, authUser?.defaultRoom]);
 
   const [tardyEntryType, setTardyEntryType] = useState<
     "tardy" | "checkin" | "checkout"
