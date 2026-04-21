@@ -16,9 +16,15 @@ import {
   Area,
   LineChart,
   Line,
+  BarChart,
+  Bar,
+  ScatterChart,
+  Scatter,
+  Cell,
   Legend,
   XAxis,
   YAxis,
+  ZAxis,
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
@@ -6366,6 +6372,182 @@ function App() {
                 </div>
               )}
             </div>
+
+            {(() => {
+              const studentInfo = new Map<
+                string,
+                { name: string; grade: number }
+              >();
+              for (const s of students) {
+                studentInfo.set(s.studentId, {
+                  name: `${s.firstName} ${s.lastName}`,
+                  grade: s.grade,
+                });
+              }
+
+              const byGrade = new Map<number, number>();
+              const byStudent = new Map<string, number>();
+              for (const p of hallPasses) {
+                const dt = new Date(p.createdAt);
+                if (dt.getFullYear() !== today.getFullYear()) continue;
+                const info = studentInfo.get(p.studentId);
+                if (!info) continue;
+                byGrade.set(info.grade, (byGrade.get(info.grade) || 0) + 1);
+                byStudent.set(p.studentId, (byStudent.get(p.studentId) || 0) + 1);
+              }
+
+              const gradeBars = grades.map((g) => ({
+                name: `Grade ${String(g).padStart(2, "0")}`,
+                grade: g,
+                total: byGrade.get(g) || 0,
+              }));
+
+              type ScatterPoint = {
+                x: number;
+                y: number;
+                grade: number;
+                name: string;
+              };
+              const scatterByGrade = new Map<number, ScatterPoint[]>();
+              for (const g of grades) scatterByGrade.set(g, []);
+              for (const [sid, count] of byStudent.entries()) {
+                const info = studentInfo.get(sid);
+                if (!info) continue;
+                const arr = scatterByGrade.get(info.grade);
+                if (!arr) continue;
+                arr.push({
+                  x: info.grade + (Math.random() - 0.5) * 0.8,
+                  y: count,
+                  grade: info.grade,
+                  name: info.name,
+                });
+              }
+
+              const ScatterTooltip = ({ active, payload }: any) => {
+                if (!active || !payload || !payload.length) return null;
+                const items = payload
+                  .map((p: any) => p && p.payload)
+                  .filter(Boolean) as ScatterPoint[];
+                const seen = new Set<string>();
+                const unique = items.filter((p) => {
+                  if (seen.has(p.name)) return false;
+                  seen.add(p.name);
+                  return true;
+                });
+                return (
+                  <div
+                    style={{
+                      background: "white",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 6,
+                      padding: "0.5rem 0.75rem",
+                      boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                      fontSize: "0.85rem",
+                      color: "#1e293b",
+                    }}
+                  >
+                    {unique.map((p) => (
+                      <div key={p.name}>
+                        <strong>{p.name}</strong>: {p.y} passes
+                      </div>
+                    ))}
+                  </div>
+                );
+              };
+
+              return (
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr 1fr",
+                    gap: "1rem",
+                  }}
+                >
+                  <div className="card" style={{ marginBottom: 0 }}>
+                    <h3 style={{ margin: "0 0 0.75rem 0" }}>
+                      Total Passes by Grade
+                    </h3>
+                    <div style={{ width: "100%", height: 320 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <BarChart
+                          data={gradeBars}
+                          margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis
+                            dataKey="name"
+                            tick={{ fontSize: 12, fill: "#64748b" }}
+                          />
+                          <YAxis
+                            tick={{ fontSize: 11, fill: "#64748b" }}
+                            allowDecimals={false}
+                          />
+                          <Tooltip />
+                          <Bar dataKey="total" radius={[4, 4, 0, 0]}>
+                            {gradeBars.map((entry, i) => (
+                              <Cell
+                                key={entry.grade}
+                                fill={gradeColors[grades.indexOf(entry.grade) % gradeColors.length] || gradeColors[i % gradeColors.length]}
+                              />
+                            ))}
+                          </Bar>
+                        </BarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+
+                  <div className="card" style={{ marginBottom: 0 }}>
+                    <h3 style={{ margin: "0 0 0.75rem 0" }}>
+                      Total Passes by Student
+                    </h3>
+                    <div style={{ width: "100%", height: 320 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <ScatterChart
+                          margin={{ top: 10, right: 20, left: 10, bottom: 20 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis
+                            type="number"
+                            dataKey="x"
+                            domain={[
+                              Math.min(...grades) - 0.5,
+                              Math.max(...grades) + 0.5,
+                            ]}
+                            ticks={grades}
+                            tickFormatter={(v) => String(v).padStart(2, "0")}
+                            tick={{ fontSize: 12, fill: "#64748b" }}
+                          />
+                          <YAxis
+                            type="number"
+                            dataKey="y"
+                            tick={{ fontSize: 11, fill: "#64748b" }}
+                            label={{
+                              value: "Total Passes",
+                              angle: -90,
+                              position: "insideLeft",
+                              style: { fontSize: 11, fill: "#64748b" },
+                            }}
+                          />
+                          <ZAxis range={[60, 60]} />
+                          <Tooltip
+                            cursor={{ strokeDasharray: "3 3" }}
+                            content={<ScatterTooltip />}
+                          />
+                          {grades.map((g, i) => (
+                            <Scatter
+                              key={g}
+                              name={`Grade ${String(g).padStart(2, "0")}`}
+                              data={scatterByGrade.get(g) || []}
+                              fill={gradeColors[i % gradeColors.length]}
+                            />
+                          ))}
+                        </ScatterChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </>
         );
       })()}
