@@ -6253,7 +6253,7 @@ function App() {
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "ytd" && (() => {
         const today = new Date();
         const studentGrade = new Map<string, number>();
-        for (const s of students) studentGrade.set(s.id, s.grade);
+        for (const s of students) studentGrade.set(s.studentId, s.grade);
         const grades = Array.from(new Set(students.map((s) => s.grade))).sort(
           (a, b) => a - b,
         );
