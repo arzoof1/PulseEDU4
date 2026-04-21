@@ -10,7 +10,10 @@ import { eq, isNull, and } from "drizzle-orm";
 const router: IRouter = Router();
 
 router.get("/students", async (_req, res) => {
-  const rows = await db.select().from(studentsTable).orderBy(studentsTable.id);
+  const rows = await db
+    .select()
+    .from(studentsTable)
+    .orderBy(studentsTable.lastName, studentsTable.firstName);
   const assignments = await db
     .select({
       studentId: studentAccommodationsTable.studentId,

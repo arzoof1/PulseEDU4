@@ -175,10 +175,12 @@ function RequestPulloutSection({
   students,
   interventionTypes,
   reasonOptions,
+  isAdmin,
 }: {
   students: Student[];
   interventionTypes: InterventionTypeLite[];
   reasonOptions: PulloutReasonLite[];
+  isAdmin?: boolean;
 }) {
   const [studentSearch, setStudentSearch] = useState("");
   const [studentId, setStudentId] = useState<string>("");
@@ -282,13 +284,15 @@ function RequestPulloutSection({
     const list = q
       ? students.filter(
           (s) =>
-            s.firstName.toLowerCase().startsWith(q) ||
-            s.lastName.toLowerCase().startsWith(q) ||
-            s.studentId.toLowerCase().startsWith(q),
+            s.firstName.toLowerCase().includes(q) ||
+            s.lastName.toLowerCase().includes(q) ||
+            s.studentId.toLowerCase().includes(q),
         )
       : students;
-    return list;
-  }, [students, studentSearch]);
+    // Admins/SuperUsers see all matches; non-admins keep the original 50-cap
+    // safety limit so the dropdown can't render a huge list.
+    return isAdmin ? list : list.slice(0, 50);
+  }, [students, studentSearch, isAdmin]);
 
   const selectedStudent = useMemo(
     () => students.find((s) => s.studentId === studentId) ?? null,
@@ -1889,23 +1893,25 @@ function PolarityStudentPicker({
   search,
   setSearch,
   setSelected,
+  isAdmin,
 }: {
   label: string;
   students: Student[];
   search: string;
   setSearch: (v: string) => void;
   setSelected: (v: string) => void;
+  isAdmin?: boolean;
 }) {
   const q = search.trim().toLowerCase();
-  const matches = q
-    ? students
-        .filter(
-          (s) =>
-            s.firstName.toLowerCase().startsWith(q) ||
-            s.lastName.toLowerCase().startsWith(q) ||
-            s.studentId.toLowerCase().startsWith(q),
-        )
+  const filtered = q
+    ? students.filter(
+        (s) =>
+          s.firstName.toLowerCase().includes(q) ||
+          s.lastName.toLowerCase().includes(q) ||
+          s.studentId.toLowerCase().includes(q),
+      )
     : [];
+  const matches = isAdmin ? filtered : filtered.slice(0, 8);
   // Detect when `search` already equals a fully-formatted picked label so we
   // don't keep showing the dropdown after a click.
   const looksPicked = /\(\s*S\d+\s*\)$/.test(search) || /^S\d+\s+-/.test(search);
@@ -1979,12 +1985,14 @@ function StudentCombobox({
   onChange,
   placeholder = "Type name or ID…",
   minWidth = 280,
+  isAdmin,
 }: {
   students: Student[];
   value: string;
   onChange: (studentId: string) => void;
   placeholder?: string;
   minWidth?: number;
+  isAdmin?: boolean;
 }) {
   const selected = students.find((s) => s.studentId === value);
   const labelOf = (s: Student) =>
@@ -2013,14 +2021,14 @@ function StudentCombobox({
     const base = q
       ? students.filter((s) => {
           return (
-            s.firstName.toLowerCase().startsWith(q) ||
-            s.lastName.toLowerCase().startsWith(q) ||
-            s.studentId.toLowerCase().startsWith(q) ||
-            labelOf(s).toLowerCase().startsWith(q)
+            s.firstName.toLowerCase().includes(q) ||
+            s.lastName.toLowerCase().includes(q) ||
+            s.studentId.toLowerCase().includes(q) ||
+            labelOf(s).toLowerCase().includes(q)
           );
         })
       : students;
-    return base;
+    return isAdmin ? base : base.slice(0, 50);
   })();
 
   const commit = (s: Student) => {
@@ -6043,9 +6051,9 @@ function App() {
                   .filter((s) => {
                     const q = tardyStudentSearch.toLowerCase();
                     return (
-                      s.firstName.toLowerCase().startsWith(q) ||
-                      s.lastName.toLowerCase().startsWith(q) ||
-                      s.studentId.toLowerCase().startsWith(q)
+                      s.firstName.toLowerCase().includes(q) ||
+                      s.lastName.toLowerCase().includes(q) ||
+                      s.studentId.toLowerCase().includes(q)
                     );
                   })
                   .map((s) => (
@@ -6074,9 +6082,9 @@ function App() {
                 {students.filter((s) => {
                   const q = tardyStudentSearch.toLowerCase();
                   return (
-                    s.firstName.toLowerCase().startsWith(q) ||
-                    s.lastName.toLowerCase().startsWith(q) ||
-                    s.studentId.toLowerCase().startsWith(q)
+                    s.firstName.toLowerCase().includes(q) ||
+                    s.lastName.toLowerCase().includes(q) ||
+                    s.studentId.toLowerCase().includes(q)
                   );
                 }).length === 0 && (
                   <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
@@ -6279,9 +6287,9 @@ function App() {
                     .filter((s) => {
                       const q = activityStudentSearch.toLowerCase();
                       return (
-                        s.firstName.toLowerCase().startsWith(q) ||
-                        s.lastName.toLowerCase().startsWith(q) ||
-                        s.studentId.toLowerCase().startsWith(q)
+                        s.firstName.toLowerCase().includes(q) ||
+                        s.lastName.toLowerCase().includes(q) ||
+                        s.studentId.toLowerCase().includes(q)
                       );
                     })
                     .map((s) => (
@@ -6310,9 +6318,9 @@ function App() {
                   {students.filter((s) => {
                     const q = activityStudentSearch.toLowerCase();
                     return (
-                      s.firstName.toLowerCase().startsWith(q) ||
-                      s.lastName.toLowerCase().startsWith(q) ||
-                      s.studentId.toLowerCase().startsWith(q)
+                      s.firstName.toLowerCase().includes(q) ||
+                      s.lastName.toLowerCase().includes(q) ||
+                      s.studentId.toLowerCase().includes(q)
                     );
                   }).length === 0 && (
                     <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
@@ -7666,6 +7674,9 @@ function App() {
                         students={students}
                         value={accStudentId}
                         onChange={setAccStudentId}
+                        isAdmin={Boolean(
+                          authUser?.isAdmin || authUser?.isSuperUser,
+                        )}
                       />
                     </div>
                     {!accStudentId ? (
@@ -8842,9 +8853,9 @@ function App() {
                       .filter((s) => {
                         const q = pbisStudentSearch.toLowerCase();
                         return (
-                          s.firstName.toLowerCase().startsWith(q) ||
-                          s.lastName.toLowerCase().startsWith(q) ||
-                          s.studentId.toLowerCase().startsWith(q)
+                          s.firstName.toLowerCase().includes(q) ||
+                          s.lastName.toLowerCase().includes(q) ||
+                          s.studentId.toLowerCase().includes(q)
                         );
                       })
                       .map((s) => (
@@ -9808,6 +9819,7 @@ function App() {
       {activeSection === "requestPullout" && (
         <RequestPulloutSection
           students={students}
+          isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           interventionTypes={interventionList}
           reasonOptions={pulloutReasonList}
         />
@@ -10119,15 +10131,19 @@ function App() {
                       maxWidth: "20rem",
                     }}
                   >
-                    {students
-                      .filter((s) => {
+                    {(() => {
+                      const filtered = students.filter((s) => {
                         const q = logIntervStudentSearch.toLowerCase();
                         return (
-                          s.firstName.toLowerCase().startsWith(q) ||
-                          s.lastName.toLowerCase().startsWith(q) ||
-                          s.studentId.toLowerCase().startsWith(q)
+                          s.firstName.toLowerCase().includes(q) ||
+                          s.lastName.toLowerCase().includes(q) ||
+                          s.studentId.toLowerCase().includes(q)
                         );
-                      })
+                      });
+                      const canSeeAll =
+                        authUser?.isAdmin || authUser?.isSuperUser;
+                      return (canSeeAll ? filtered : filtered.slice(0, 25));
+                    })()
                       .map((s) => (
                         <li key={s.id}>
                           <button
@@ -10389,6 +10405,9 @@ function App() {
                       !(
                         eseExtraStudentIds[eseAssignCategory] || []
                       ).includes(s.studentId),
+                  )}
+                  isAdmin={Boolean(
+                    authUser?.isAdmin || authUser?.isSuperUser,
                   )}
                   value=""
                   onChange={(sid) => {
@@ -10654,15 +10673,19 @@ function App() {
                     overflowY: "auto",
                   }}
                 >
-                  {students
-                    .filter((s) => {
+                  {(() => {
+                    const filtered = students.filter((s) => {
                       const q = eseStudentSearch.toLowerCase();
                       return (
-                        s.firstName.toLowerCase().startsWith(q) ||
-                        s.lastName.toLowerCase().startsWith(q) ||
-                        s.studentId.toLowerCase().startsWith(q)
+                        s.firstName.toLowerCase().includes(q) ||
+                        s.lastName.toLowerCase().includes(q) ||
+                        s.studentId.toLowerCase().includes(q)
                       );
-                    })
+                    });
+                    const canSeeAll =
+                      authUser?.isAdmin || authUser?.isSuperUser;
+                    return (canSeeAll ? filtered : filtered.slice(0, 50));
+                  })()
                     .map((s) => (
                       <li key={s.id}>
                         <button
@@ -11512,6 +11535,9 @@ function App() {
                 onChange={(id) => setHpLimitSelected(id)}
                 placeholder="Type or pick a student"
                 minWidth={240}
+                isAdmin={Boolean(
+                  authUser?.isAdmin || authUser?.isSuperUser,
+                )}
               />
             </label>
             <label>
@@ -11683,6 +11709,7 @@ function App() {
               search={polaritySearchA}
               setSearch={setPolaritySearchA}
               setSelected={setPolaritySelectedA}
+              isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
             />
             <PolarityStudentPicker
               label="Student B"
@@ -11690,6 +11717,7 @@ function App() {
               search={polaritySearchB}
               setSearch={setPolaritySearchB}
               setSelected={setPolaritySelectedB}
+              isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
             />
             <label>
               <div style={{ fontSize: "0.85rem" }}>Note (optional)</div>
