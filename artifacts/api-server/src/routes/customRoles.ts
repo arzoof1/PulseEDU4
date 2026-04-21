@@ -7,6 +7,7 @@ import {
 } from "express";
 import { db, staffTable, customRolesTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
+import { verifyAuthToken } from "../lib/authToken.js";
 
 const router: IRouter = Router();
 
@@ -53,9 +54,15 @@ function sanitizeCaps(actor: { isSuperUser: boolean }, caps: string[]): string[]
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
-  // Privileged surface (custom-role CRUD). Session-only — never trust a
-  // client-supplied actor id, or anyone could create roles as SuperUser.
-  const id = req.session.staffId;
+  // Session OR server-signed bearer token (issued at login, verified via
+  // HMAC). Never trusts a raw caller-supplied actor id.
+  let id = req.session.staffId ?? null;
+  if (!id) {
+    const auth = req.headers.authorization;
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+      id = verifyAuthToken(auth.slice(7).trim());
+    }
+  }
   if (!id) return null;
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return s && s.active ? s : null;

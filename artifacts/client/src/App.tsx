@@ -3365,11 +3365,18 @@ function App() {
   };
 
   useEffect(() => {
-    fetch("/api/auth/me")
-      .then((res) => (res.ok ? res.json() : null))
-      .then((user) => setAuthUser(user))
-      .catch(() => setAuthUser(null))
-      .finally(() => setAuthLoading(false));
+    import("./lib/authToken").then(({ authFetch, setAuthToken }) => {
+      authFetch("/api/auth/me")
+        .then((res) => (res.ok ? res.json() : null))
+        .then(
+          (user: (typeof authUser & { authToken?: string }) | null) => {
+            if (user?.authToken) setAuthToken(user.authToken);
+            setAuthUser(user);
+          },
+        )
+        .catch(() => setAuthUser(null))
+        .finally(() => setAuthLoading(false));
+    });
   }, []);
 
   useEffect(() => {

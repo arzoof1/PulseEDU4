@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { setAuthToken } from "./lib/authToken";
 
 export interface AuthUser {
   id: number;
@@ -36,7 +37,8 @@ export default function Login({
         setError(body.error ?? `Sign-in failed (${res.status})`);
         return;
       }
-      const user: AuthUser = await res.json();
+      const user: AuthUser & { authToken?: string } = await res.json();
+      if (user.authToken) setAuthToken(user.authToken);
       onLogin(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");

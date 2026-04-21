@@ -8,18 +8,25 @@ import {
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
 import { eq, asc } from "drizzle-orm";
+import { verifyAuthToken } from "../lib/authToken.js";
 
 const router: IRouter = Router();
 
 type StaffRow = typeof staffTable.$inferSelect;
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
-  // Privileged admin surface: ONLY trust the server-side session. We do not
-  // accept ?staffId= or actorStaffId from the client here, because those
-  // values are caller-controlled and would let any unauthenticated user
-  // impersonate any staff member (including SuperUser) and escalate
-  // privileges via these endpoints.
-  const id = req.session.staffId;
+  // Trust the server-side session OR a server-signed bearer token issued at
+  // login. The bearer token is HMAC-signed with SESSION_SECRET so it can't
+  // be forged or modified — that lets the privileged endpoints work inside
+  // the Replit preview iframe (where the cookie is sometimes blocked)
+  // without ever trusting a raw caller-supplied staffId.
+  let id = req.session.staffId ?? null;
+  if (!id) {
+    const auth = req.headers.authorization;
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+      id = verifyAuthToken(auth.slice(7).trim());
+    }
+  }
   if (!id) return null;
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return s && s.active ? s : null;

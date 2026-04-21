@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 type BoolKey = string;
 
@@ -186,17 +187,14 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const canManageRoles =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
 
-  const sid = `staffId=${currentUser.id}`;
-
   async function refresh() {
     try {
       const [s, r] = await Promise.all([
-        fetch(`/api/admin/staff?${sid}`, { credentials: "include" }).then(
-          (res) =>
-            res.ok ? res.json() : Promise.reject(res.statusText),
+        authFetch("/api/admin/staff").then((res) =>
+          res.ok ? res.json() : Promise.reject(res.statusText),
         ),
-        fetch(`/api/custom-roles?${sid}`, { credentials: "include" }).then(
-          (res) => (res.ok ? res.json() : []),
+        authFetch("/api/custom-roles").then((res) =>
+          res.ok ? res.json() : [],
         ),
       ]);
       setStaff(s);
@@ -228,11 +226,10 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       prev.map((s) => (s.id === id ? { ...s, ...body } : s)),
     );
     try {
-      const res = await fetch(`/api/admin/staff/${id}?${sid}`, {
+      const res = await authFetch(`/api/admin/staff/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({ ...body, actorStaffId: currentUser.id }),
+        body: JSON.stringify(body),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
@@ -578,17 +575,15 @@ function AddStaffModal({
     setBusy(true);
     setErr("");
     try {
-      const res = await fetch(`/api/admin/staff?staffId=${actorId}`, {
+      const res = await authFetch(`/api/admin/staff`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           email,
           displayName,
           password,
           isAdmin: makeAdmin,
           isSuperUser: makeSuper,
-          actorStaffId: actorId,
         }),
       });
       if (!res.ok) {
@@ -692,15 +687,13 @@ function AddRoleModal({
     setBusy(true);
     setErr("");
     try {
-      const res = await fetch(`/api/custom-roles?staffId=${actorId}`, {
+      const res = await authFetch(`/api/custom-roles`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           key: label,
           label,
           capabilities: [...caps],
-          actorStaffId: actorId,
         }),
       });
       if (!res.ok) {

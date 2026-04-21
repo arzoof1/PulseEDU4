@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { issueAuthToken } from "../lib/authToken.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -75,7 +76,12 @@ router.post("/auth/login", async (req: Request, res) => {
         res.status(500).json({ error: "Could not save session" });
         return;
       }
-      res.json(publicStaff(staff));
+      res.json({
+        ...publicStaff(staff),
+        // Signed bearer token used as a fallback when the browser blocks
+        // the session cookie (e.g. inside the Replit preview iframe).
+        authToken: issueAuthToken(staff.id),
+      });
     });
   });
 });
@@ -107,7 +113,7 @@ router.get("/auth/me", async (req, res) => {
     });
     return;
   }
-  res.json(publicStaff(staff));
+  res.json({ ...publicStaff(staff), authToken: issueAuthToken(staff.id) });
 });
 
 export default router;
