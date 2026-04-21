@@ -2175,6 +2175,7 @@ function App() {
     new Set(),
   );
   const [dailySubmitMsg, setDailySubmitMsg] = useState("");
+  const [dailyApplyPulse, setDailyApplyPulse] = useState(false);
   // Reports sub-tab state
   type ReportRange = "today" | "7d" | "30d" | "custom";
   const [reportRange, setReportRange] = useState<ReportRange>("7d");
@@ -3927,6 +3928,8 @@ function App() {
       }
       setDailySubmitMsg(msg);
       setDailySelectedAccs(new Set());
+      setDailyApplyPulse(true);
+      window.setTimeout(() => setDailyApplyPulse(false), 1500);
       loadAccommodationLogs();
     } catch (err) {
       setDailySubmitMsg(
@@ -7178,8 +7181,29 @@ function App() {
                             : "#64748b";
                     return (
                       <>
-                        <h3 style={{ marginTop: 0 }}>
+                        <h3
+                          style={{
+                            marginTop: 0,
+                            display: "flex",
+                            alignItems: "center",
+                          }}
+                        >
                           Class Log
+                          <svg
+                            className="classlog-ekg no-print"
+                            viewBox="0 0 220 36"
+                            preserveAspectRatio="none"
+                            aria-hidden="true"
+                          >
+                            <path
+                              className="track"
+                              d="M0 18 H40 L48 18 L54 6 L62 30 L70 12 L78 22 L86 18 H110 L118 18 L124 8 L132 28 L140 14 L148 22 L156 18 H220"
+                            />
+                            <path
+                              className="pulse"
+                              d="M0 18 H40 L48 18 L54 6 L62 30 L70 12 L78 22 L86 18 H110 L118 18 L124 8 L132 28 L140 14 L148 22 L156 18 H220"
+                            />
+                          </svg>
                           <button
                             type="button"
                             className="no-print"
@@ -7401,8 +7425,8 @@ function App() {
                                       color: "#b91c1c",
                                     }}
                                   >
-                                    Mark any absent students on the left,
-                                    then confirm to enable Apply.
+                                    Mark Absent students on the left, then
+                                    confirm to enable APPLY.
                                   </div>
                                 )}
                               <div
@@ -7425,6 +7449,10 @@ function App() {
                                     !dailyAbsentConfirmed ||
                                     dailySelectedAccs.size === 0 ||
                                     presentEligibleCount === 0
+                                  }
+                                  className={
+                                    "apply-ekg-btn" +
+                                    (dailyApplyPulse ? " pulse-active" : "")
                                   }
                                   style={{
                                     background: "#0d9488",
@@ -7455,11 +7483,28 @@ function App() {
                                           : undefined
                                   }
                                 >
-                                  Apply {dailySelectedAccs.size}{" "}
-                                  accommodation
-                                  {dailySelectedAccs.size === 1 ? "" : "s"} to{" "}
-                                  {presentEligibleCount} student
-                                  {presentEligibleCount === 1 ? "" : "s"}
+                                  <span style={{ position: "relative", zIndex: 1 }}>
+                                    Apply {dailySelectedAccs.size}{" "}
+                                    accommodation
+                                    {dailySelectedAccs.size === 1 ? "" : "s"} to{" "}
+                                    {presentEligibleCount} student
+                                    {presentEligibleCount === 1 ? "" : "s"}
+                                  </span>
+                                  <svg
+                                    className="apply-ekg-overlay"
+                                    viewBox="0 0 600 40"
+                                    preserveAspectRatio="none"
+                                    aria-hidden="true"
+                                  >
+                                    <path
+                                      className="track"
+                                      d="M0 20 H100 L110 20 L118 6 L128 34 L138 12 L148 26 L158 20 H260 L270 20 L278 8 L288 32 L298 14 L308 26 L318 20 H420 L430 20 L438 6 L448 34 L458 12 L468 26 L478 20 H600"
+                                    />
+                                    <path
+                                      className="pulse"
+                                      d="M0 20 H100 L110 20 L118 6 L128 34 L138 12 L148 26 L158 20 H260 L270 20 L278 8 L288 32 L298 14 L308 26 L318 20 H420 L430 20 L438 6 L448 34 L458 12 L468 26 L478 20 H600"
+                                    />
+                                  </svg>
                                 </button>
                               </div>
                               {accUnionWithIds.length === 0 ? (
