@@ -7276,7 +7276,8 @@ function App() {
                                       <em
                                         style={{
                                           color: "#666",
-                                          marginLeft: 4,
+                                          display: "block",
+                                          marginTop: 2,
                                         }}
                                       >
                                         ({dailyAbsent.size} marked absent)
@@ -7390,6 +7391,20 @@ function App() {
                               </div>
                             </div>
                             <div>
+                              {!dailyAbsentConfirmed &&
+                                allInPeriodStudents.length > 0 && (
+                                  <div
+                                    style={{
+                                      marginBottom: "0.5rem",
+                                      fontSize: "0.95em",
+                                      fontWeight: 700,
+                                      color: "#b91c1c",
+                                    }}
+                                  >
+                                    Mark any absent students on the left,
+                                    then confirm to enable Apply.
+                                  </div>
+                                )}
                               <div
                                 style={{
                                   display: "flex",
@@ -7527,18 +7542,6 @@ function App() {
                                 </>
                               )}
                               <div style={{ marginTop: "0.75rem" }}>
-                                {!dailyAbsentConfirmed &&
-                                  allInPeriodStudents.length > 0 && (
-                                    <div
-                                      style={{
-                                        fontSize: "0.85em",
-                                        color: "#92400e",
-                                      }}
-                                    >
-                                      Mark any absent students on the left,
-                                      then confirm to enable Apply.
-                                    </div>
-                                  )}
                                 {dailySubmitMsg && (
                                   <div
                                     style={{
