@@ -7092,10 +7092,10 @@ function App() {
                       <tr>
                         <th style={{ padding: "0.6rem 0.75rem", width: 60 }}>Pass</th>
                         <th style={{ padding: "0.6rem 0.75rem" }}>Student Name</th>
-                        <th style={{ padding: "0.6rem 0.75rem" }}>Grade</th>
-                        <th style={{ padding: "0.6rem 0.75rem" }}>ID</th>
                         <th style={{ padding: "0.6rem 0.75rem" }}>Origin</th>
                         <th style={{ padding: "0.6rem 0.75rem" }}>Destination</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Grade</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>ID</th>
                         <th style={{ padding: "0.6rem 0.75rem" }}>Pass start time</th>
                         <th style={{ padding: "0.6rem 0.75rem" }}>Duration</th>
                       </tr>
@@ -7118,12 +7118,12 @@ function App() {
                               />
                             </td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{info?.name || "—"}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.originRoom}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.destination}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {info ? String(info.grade).padStart(2, "0") : "—"}
                             </td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{p.studentId}</td>
-                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.originRoom}</td>
-                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.destination}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{fmtDateTime(p.createdAt)}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {d == null ? "active" : `${d.toFixed(2)} min`}
