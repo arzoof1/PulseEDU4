@@ -5330,7 +5330,14 @@ function App() {
         let active = 0;
         let overdue = 0;
         let ended = 0;
+        const today = new Date();
         for (const p of hallPasses) {
+          const created = new Date(p.createdAt);
+          const isToday =
+            created.getFullYear() === today.getFullYear() &&
+            created.getMonth() === today.getMonth() &&
+            created.getDate() === today.getDate();
+          if (!isToday) continue;
           if (p.status !== "active") {
             ended++;
           } else if (p.status === "active") {
