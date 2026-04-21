@@ -3874,9 +3874,25 @@ function App() {
     }
     const periodNum = Number(dailyPeriod);
     const allInPeriod = periodRoster[dailyPeriod] ?? [];
-    const present = allInPeriod.filter((id) => !dailyAbsent.has(id));
+    // Only send students who (a) are in the period, (b) are not absent, and
+    // (c) actually have at least one IEP/504/ELL accommodation. Sending the
+    // whole roster makes the server's "skipped not on student's plan" count
+    // huge and confusing.
+    const eligibleCats = new Set(["IEP", "504", "ELL"]);
+    const studentHasTrackedAcc = (id: string) => {
+      const st = students.find((s) => s.studentId === id);
+      if (!st) return false;
+      for (const name of st.accommodations ?? []) {
+        const cat = accCategoryByName.get(name);
+        if (cat && eligibleCats.has(cat)) return true;
+      }
+      return false;
+    };
+    const present = allInPeriod.filter(
+      (id) => !dailyAbsent.has(id) && studentHasTrackedAcc(id),
+    );
     if (present.length === 0) {
-      setDailySubmitMsg("No present students to log.");
+      setDailySubmitMsg("No present students with accommodations to log.");
       return;
     }
     setDailySubmitMsg("Submitting...");
@@ -3900,15 +3916,16 @@ function App() {
         throw new Error(text || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      setDailySubmitMsg(
-        `Recorded ${data.inserted} log${data.inserted === 1 ? "" : "s"}` +
-          (data.skippedDuplicate
-            ? ` (skipped ${data.skippedDuplicate} already logged today)`
-            : "") +
-          (data.skippedNotEntitled
-            ? ` (skipped ${data.skippedNotEntitled} not on student's plan)`
-            : ""),
-      );
+      const studentCount = present.length;
+      const recordsWord =
+        data.inserted === 1 ? "record" : "records";
+      const studentsWord =
+        studentCount === 1 ? "student" : "students";
+      let msg = `${data.inserted} ${recordsWord} logged for ${studentCount} present ${studentsWord}.`;
+      if (data.skippedDuplicate) {
+        msg += ` (${data.skippedDuplicate} already logged earlier today.)`;
+      }
+      setDailySubmitMsg(msg);
       setDailySelectedAccs(new Set());
       loadAccommodationLogs();
     } catch (err) {
