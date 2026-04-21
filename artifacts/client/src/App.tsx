@@ -11,6 +11,15 @@ import SettingsHub, {
   type SettingsTileId,
 } from "./components/SettingsHub";
 import { authFetch } from "./lib/authToken";
+import {
+  AreaChart,
+  Area,
+  XAxis,
+  YAxis,
+  CartesianGrid,
+  Tooltip,
+  ResponsiveContainer,
+} from "recharts";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -5858,21 +5867,147 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "overview" && (
-        <div className="card">
-          <h2>
-            <button
-              type="button"
-              className="no-print"
-              onClick={() => setHpReportSection("hub")}
-              style={{ marginRight: "0.75rem", fontSize: "0.85rem" }}
-            >
-              ← Back
-            </button>
-            Overview
-          </h2>
-        </div>
-      )}
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "overview" && (() => {
+        // Build a time series of concurrently-active passes for today,
+        // every 15 minutes from 7:00 AM to 4:00 PM local time.
+        const today = new Date();
+        const dayStr = today.toISOString().slice(0, 10);
+        const isSameLocalDay = (iso: string) => {
+          const d = new Date(iso);
+          return (
+            d.getFullYear() === today.getFullYear() &&
+            d.getMonth() === today.getMonth() &&
+            d.getDate() === today.getDate()
+          );
+        };
+        const todaysPasses = hallPasses.filter((p) => isSameLocalDay(p.createdAt));
+        const buckets: { label: string; t: number; count: number }[] = [];
+        const base = new Date(today);
+        base.setHours(7, 0, 0, 0);
+        const end = new Date(today);
+        end.setHours(16, 0, 0, 0);
+        for (let t = base.getTime(); t <= end.getTime(); t += 15 * 60 * 1000) {
+          const d = new Date(t);
+          const hr = d.getHours();
+          const mn = d.getMinutes();
+          const h12 = ((hr + 11) % 12) + 1;
+          const ampm = hr < 12 ? "AM" : "PM";
+          const label = mn === 0 ? `${h12}:00 ${ampm}` : "";
+          let count = 0;
+          for (const p of todaysPasses) {
+            const start = new Date(p.createdAt).getTime();
+            const stop = p.endedAt ? new Date(p.endedAt).getTime() : Date.now();
+            if (start <= t && t < stop) count++;
+          }
+          buckets.push({ label, t, count });
+        }
+        const peak = buckets.reduce((m, b) => Math.max(m, b.count), 0);
+        return (
+          <>
+            <div className="card">
+              <h2>
+                <button
+                  type="button"
+                  className="no-print"
+                  onClick={() => setHpReportSection("hub")}
+                  style={{ marginRight: "0.75rem", fontSize: "0.85rem" }}
+                >
+                  ← Back
+                </button>
+                Overview
+                <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
+                  {dayStr}
+                </span>
+              </h2>
+            </div>
+
+            <div className="card">
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <h3 style={{ margin: 0 }}>Pass Usage</h3>
+                <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                  Peak concurrent: <strong>{peak}</strong>
+                </div>
+              </div>
+              {todaysPasses.length === 0 ? (
+                <div style={{ color: "#64748b", padding: "1rem 0" }}>
+                  No passes recorded today.
+                </div>
+              ) : (
+                <div style={{ width: "100%", height: 320 }}>
+                  <ResponsiveContainer width="100%" height="100%">
+                    <AreaChart
+                      data={buckets}
+                      margin={{ top: 10, right: 20, left: 10, bottom: 30 }}
+                    >
+                      <defs>
+                        <linearGradient id="passUsageFill" x1="0" y1="0" x2="0" y2="1">
+                          <stop offset="0%" stopColor="#22c55e" stopOpacity={0.55} />
+                          <stop offset="100%" stopColor="#22c55e" stopOpacity={0.05} />
+                        </linearGradient>
+                      </defs>
+                      <CartesianGrid stroke="#e2e8f0" strokeDasharray="3 3" />
+                      <XAxis
+                        dataKey="label"
+                        interval={0}
+                        tick={{ fontSize: 11, fill: "#64748b" }}
+                        angle={-35}
+                        textAnchor="end"
+                        height={50}
+                      />
+                      <YAxis
+                        allowDecimals={false}
+                        tick={{ fontSize: 11, fill: "#64748b" }}
+                        label={{
+                          value: "Number of active passes",
+                          angle: -90,
+                          position: "insideLeft",
+                          style: { fill: "#1d4ed8", fontSize: 12 },
+                        }}
+                      />
+                      <Tooltip
+                        labelFormatter={(_, payload) => {
+                          const p = payload && payload[0]?.payload;
+                          if (!p) return "";
+                          const d = new Date(p.t);
+                          return d.toLocaleTimeString([], {
+                            hour: "numeric",
+                            minute: "2-digit",
+                          });
+                        }}
+                        formatter={(v: number) => [v, "Active passes"]}
+                      />
+                      <Area
+                        type="monotone"
+                        dataKey="count"
+                        stroke="#16a34a"
+                        strokeWidth={3}
+                        fill="url(#passUsageFill)"
+                      />
+                    </AreaChart>
+                  </ResponsiveContainer>
+                  <div
+                    style={{
+                      textAlign: "center",
+                      color: "#1d4ed8",
+                      fontSize: "0.9rem",
+                      marginTop: "-0.25rem",
+                    }}
+                  >
+                    Time
+                  </div>
+                </div>
+              )}
+            </div>
+          </>
+        );
+      })()}
 
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (
         <div className="card">
