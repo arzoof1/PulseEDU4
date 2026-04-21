@@ -2243,6 +2243,7 @@ function App() {
     | "verifyPullouts"
     | "issDashboard"
     | "behaviorReview"
+    | "behaviorSpecialist"
     | "settings"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
@@ -4908,6 +4909,9 @@ function App() {
   const interventionsNavSections: NavSection[] = [
     { key: "interventions", label: "Interventions", icon: IconClipboard },
   ];
+  const behaviorSpecNavSections: NavSection[] = [
+    { key: "behaviorSpecialist", label: "Behavior Specialist", icon: IconClipboard },
+  ];
   const adminNavSections: NavSection[] = [
     { key: "settings", label: "Settings", icon: IconSettings },
   ];
@@ -5060,6 +5064,7 @@ function App() {
         const hasBelowEkg =
           isEseCoord ||
           isPbisCoord ||
+          isBehaviorSpec ||
           canManageBehaviorLists ||
           canVerifyPullouts ||
           canViewIssDashboard ||
@@ -5086,6 +5091,7 @@ function App() {
                 <div className="section-label nav-admin-label">Tools</div>
                 {isEseCoord && eseNavSections.map(renderNavItem)}
                 {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
+                {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
                 {canManageBehaviorLists &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
@@ -9633,6 +9639,203 @@ function App() {
           onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
         />
       )}
+
+      {activeSection === "behaviorSpecialist" && isBehaviorSpec && (() => {
+        type HubKey =
+          | "issDashboard"
+          | "behaviorReview"
+          | "interventions"
+          | "requestPullout"
+          | "logIntervention"
+          | "verifyPullouts";
+        type HubTool = {
+          key: HubKey;
+          label: string;
+          desc: string;
+          color: string;
+          show: boolean;
+          badge?: number;
+        };
+        const tools: HubTool[] = [
+          {
+            key: "issDashboard",
+            label: "ISS Dashboard",
+            desc: "In-school suspension roster and pullout history.",
+            color: "#0f766e",
+            show: canViewIssDashboard,
+          },
+          {
+            key: "behaviorReview",
+            label: "Behavior Review",
+            desc: "Review and close out unreviewed pullouts.",
+            color: "#dc2626",
+            show: canReviewPullouts,
+            badge: unreviewedPulloutCount,
+          },
+          {
+            key: "interventions",
+            label: "Interventions",
+            desc: "Manage intervention types, pullout reasons, polarity pairs.",
+            color: "#7c3aed",
+            show: canManageBehaviorLists,
+          },
+          {
+            key: "requestPullout",
+            label: "Request Pullout",
+            desc: "Submit a new pullout request for a student.",
+            color: "#0891b2",
+            show: true,
+          },
+          {
+            key: "logIntervention",
+            label: "Log Intervention",
+            desc: "Record an intervention you delivered.",
+            color: "#0e7490",
+            show: true,
+          },
+          {
+            key: "verifyPullouts",
+            label: "Verify Pullouts",
+            desc: "Approve or reject pending pullout requests.",
+            color: "#b45309",
+            show: canVerifyPullouts,
+            badge: pendingPulloutCount,
+          },
+        ];
+        return (
+          <>
+            <div
+              className="card no-print"
+              style={{
+                background:
+                  "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                color: "white",
+                padding: "1.25rem 1.5rem",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "1rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: 0, color: "white" }}>
+                    Behavior Specialist
+                  </h2>
+                  <div style={{ opacity: 0.9, fontSize: "0.9rem", marginTop: 4 }}>
+                    Your hub for intervention oversight, pullout review, and
+                    classroom support tools.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  {tools
+                    .filter((t) => t.show)
+                    .map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => setActiveSection(t.key)}
+                        style={{
+                          background: "rgba(255,255,255,0.15)",
+                          border: "1px solid rgba(255,255,255,0.4)",
+                          color: "white",
+                          padding: "0.4rem 0.8rem",
+                          borderRadius: 999,
+                          fontSize: "0.85rem",
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        {t.label}
+                        {t.badge && t.badge > 0 ? (
+                          <span
+                            style={{
+                              background: "#dc2626",
+                              color: "white",
+                              borderRadius: 999,
+                              padding: "0 6px",
+                              fontSize: "0.75rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {t.badge}
+                          </span>
+                        ) : null}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="card no-print"
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fill, minmax(240px, 1fr))",
+                gap: "0.75rem",
+              }}
+            >
+              {tools
+                .filter((t) => t.show)
+                .map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setActiveSection(t.key)}
+                    style={{
+                      textAlign: "left",
+                      background: "white",
+                      border: `1px solid ${t.color}33`,
+                      borderLeft: `4px solid ${t.color}`,
+                      borderRadius: 8,
+                      padding: "0.85rem 1rem",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                      }}
+                    >
+                      <span style={{ fontWeight: 600, color: t.color }}>
+                        {t.label}
+                      </span>
+                      {t.badge && t.badge > 0 ? (
+                        <span
+                          style={{
+                            background: "#dc2626",
+                            color: "white",
+                            borderRadius: 999,
+                            padding: "0 7px",
+                            fontSize: "0.75rem",
+                            fontWeight: 700,
+                          }}
+                        >
+                          {t.badge}
+                        </span>
+                      ) : null}
+                    </div>
+                    <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+                      {t.desc}
+                    </span>
+                  </button>
+                ))}
+            </div>
+          </>
+        );
+      })()}
 
       {activeSection === "logIntervention" && (
         <section className="card">
