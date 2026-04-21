@@ -4051,6 +4051,12 @@ function App() {
       setHpLimitMsg("Daily limit must be a whole number between 1 and 100.");
       return;
     }
+    if (!hpLimitParentOk) {
+      setHpLimitMsg(
+        "Parent approval is required before saving a per-student pass limit.",
+      );
+      return;
+    }
     try {
       const sid = `?staffId=${authUser?.id ?? ""}`;
       const res = await fetch(`/api/student-hall-pass-limits${sid}`, {
@@ -11657,7 +11663,16 @@ function App() {
               />
               <span style={{ fontSize: "0.85rem" }}>Parent approved</span>
             </label>
-            <button type="button" onClick={addHpLimit}>
+            <button
+              type="button"
+              onClick={addHpLimit}
+              disabled={!hpLimitParentOk}
+              title={
+                hpLimitParentOk
+                  ? undefined
+                  : "Confirm parent approval before saving."
+              }
+            >
               Save Limit
             </button>
           </div>
