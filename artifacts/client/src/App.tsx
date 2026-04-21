@@ -310,7 +310,7 @@ function RequestPulloutSection({
       return;
     }
     let cancelled = false;
-    fetch(
+    authFetch(
       `/api/pullouts/preflight?studentId=${encodeURIComponent(studentId)}`,
     )
       .then((r) => (r.ok ? r.json() : null))
@@ -1423,7 +1423,7 @@ function StudentPulloutsTab({ studentId }: { studentId: string }) {
     setErr(null);
     (async () => {
       try {
-        const r = await fetch(
+        const r = await authFetch(
           `/api/pullouts/by-student/${encodeURIComponent(studentId)}`,
         );
         if (!r.ok) {
@@ -2562,7 +2562,7 @@ function App() {
     setLeaderboardBusy(true);
     setLeaderboardMsg("");
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `/api/pbis/leaderboard?period=${encodeURIComponent(p)}&limit=10`,
       );
       const j = (await res.json().catch(() => ({}))) as LeaderboardData & {
@@ -3326,7 +3326,7 @@ function App() {
     setHpReportLoading(true);
     setHpReportError("");
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `/api/reports/hall-passes?date=${encodeURIComponent(hpReportDate)}`,
       );
       if (myReqId !== hpReportReqIdRef.current) return;
@@ -4181,7 +4181,7 @@ function App() {
     if (!eseStudentId || eseAddSelected.size === 0) return;
     try {
       const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-      const res = await fetch(
+      const res = await authFetch(
         `/api/students/${eseStudentId}/accommodations${sid}`,
         {
           method: "POST",
@@ -4216,7 +4216,7 @@ function App() {
     )
       return;
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `/api/students/${eseStudentId}/accommodations/${assignmentId}`,
         { method: "DELETE", credentials: "include" },
       );
@@ -4293,7 +4293,7 @@ function App() {
     if (eseEditingId == null || !eseEditName.trim()) return;
     try {
       const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-      const res = await fetch(
+      const res = await authFetch(
         `/api/school-accommodations/${eseEditingId}${sid}`,
         {
           method: "PATCH",
@@ -4363,7 +4363,7 @@ function App() {
     setEseMatrixMsg("");
     try {
       const sid = authUser?.id ? `&staffId=${authUser.id}` : "";
-      const res = await fetch(
+      const res = await authFetch(
         `/api/accommodation-category-matrix?category=${encodeURIComponent(
           category,
         )}${sid}`,
@@ -4393,7 +4393,7 @@ function App() {
       // Remove
       try {
         const sid = authUser?.id ? `?staffId=${authUser.id}` : "";
-        const res = await fetch(
+        const res = await authFetch(
           `/api/students/${studentId}/accommodations/${currentlyAssigned}${sid}`,
           { method: "DELETE", credentials: "include" },
         );
@@ -6792,7 +6792,7 @@ function App() {
                     setEmailStatus(
                       `Sent to ${data.to || recipientToUse}. Logged to support notes.`,
                     );
-                    fetch(
+                    authFetch(
                       `/api/support-notes?studentId=${encodeURIComponent(activityStudentId)}`,
                     )
                       .then((r) => (r.ok ? r.json() : []))
