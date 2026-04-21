@@ -444,10 +444,12 @@ button:active:not(:disabled) {
 }
 
 button:disabled {
-  background: var(--surface-2);
-  color: var(--text-muted);
-  cursor: not-allowed;
-  border-color: var(--border);
+  background: var(--primary-soft);
+  color: var(--primary);
+  cursor: default;
+  border-color: rgba(14, 116, 144, 0.2);
+  box-shadow: inset 3px 0 0 var(--accent);
+  opacity: 1;
 }
 
 button[type="submit"] {
