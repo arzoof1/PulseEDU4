@@ -220,16 +220,15 @@ export default function CreatePassModal({
 
   const filteredStudents = useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
-    if (!q) return students.slice(0, 8);
-    return students
-      .filter(
-        (s) =>
-          s.firstName.toLowerCase().includes(q) ||
-          s.lastName.toLowerCase().includes(q) ||
-          s.studentId.toLowerCase().includes(q),
-      )
-      .slice(0, 8);
-  }, [students, studentQuery]);
+    if (!q) return students.slice(0, canChangeTeacher ? 25 : 8);
+    const matches = students.filter(
+      (s) =>
+        s.firstName.toLowerCase().includes(q) ||
+        s.lastName.toLowerCase().includes(q) ||
+        s.studentId.toLowerCase().includes(q),
+    );
+    return canChangeTeacher ? matches : matches.slice(0, 50);
+  }, [students, studentQuery, canChangeTeacher]);
 
   const nearSet = useMemo(() => {
     const set = new Set<string>();
