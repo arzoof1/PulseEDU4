@@ -282,11 +282,12 @@ function RequestPulloutSection({
     const list = q
       ? students.filter(
           (s) =>
-            `${s.firstName} ${s.lastName}`.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q),
+            s.firstName.toLowerCase().startsWith(q) ||
+            s.lastName.toLowerCase().startsWith(q) ||
+            s.studentId.toLowerCase().startsWith(q),
         )
       : students;
-    return list.slice(0, 50);
+    return list;
   }, [students, studentSearch]);
 
   const selectedStudent = useMemo(
@@ -1900,11 +1901,10 @@ function PolarityStudentPicker({
     ? students
         .filter(
           (s) =>
-            s.firstName.toLowerCase().includes(q) ||
-            s.lastName.toLowerCase().includes(q) ||
-            s.studentId.toLowerCase().includes(q),
+            s.firstName.toLowerCase().startsWith(q) ||
+            s.lastName.toLowerCase().startsWith(q) ||
+            s.studentId.toLowerCase().startsWith(q),
         )
-        .slice(0, 8)
     : [];
   // Detect when `search` already equals a fully-formatted picked label so we
   // don't keep showing the dropdown after a click.
@@ -2012,15 +2012,15 @@ function StudentCombobox({
     const q = query.trim().toLowerCase();
     const base = q
       ? students.filter((s) => {
-          const full = `${s.firstName} ${s.lastName}`.toLowerCase();
           return (
-            full.includes(q) ||
-            s.studentId.toLowerCase().includes(q) ||
-            labelOf(s).toLowerCase().includes(q)
+            s.firstName.toLowerCase().startsWith(q) ||
+            s.lastName.toLowerCase().startsWith(q) ||
+            s.studentId.toLowerCase().startsWith(q) ||
+            labelOf(s).toLowerCase().startsWith(q)
           );
         })
       : students;
-    return base.slice(0, 50);
+    return base;
   })();
 
   const commit = (s: Student) => {
@@ -6043,9 +6043,9 @@ function App() {
                   .filter((s) => {
                     const q = tardyStudentSearch.toLowerCase();
                     return (
-                      s.firstName.toLowerCase().includes(q) ||
-                      s.lastName.toLowerCase().includes(q) ||
-                      s.studentId.toLowerCase().includes(q)
+                      s.firstName.toLowerCase().startsWith(q) ||
+                      s.lastName.toLowerCase().startsWith(q) ||
+                      s.studentId.toLowerCase().startsWith(q)
                     );
                   })
                   .map((s) => (
@@ -6074,9 +6074,9 @@ function App() {
                 {students.filter((s) => {
                   const q = tardyStudentSearch.toLowerCase();
                   return (
-                    s.firstName.toLowerCase().includes(q) ||
-                    s.lastName.toLowerCase().includes(q) ||
-                    s.studentId.toLowerCase().includes(q)
+                    s.firstName.toLowerCase().startsWith(q) ||
+                    s.lastName.toLowerCase().startsWith(q) ||
+                    s.studentId.toLowerCase().startsWith(q)
                   );
                 }).length === 0 && (
                   <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
@@ -6279,9 +6279,9 @@ function App() {
                     .filter((s) => {
                       const q = activityStudentSearch.toLowerCase();
                       return (
-                        s.firstName.toLowerCase().includes(q) ||
-                        s.lastName.toLowerCase().includes(q) ||
-                        s.studentId.toLowerCase().includes(q)
+                        s.firstName.toLowerCase().startsWith(q) ||
+                        s.lastName.toLowerCase().startsWith(q) ||
+                        s.studentId.toLowerCase().startsWith(q)
                       );
                     })
                     .map((s) => (
@@ -6310,9 +6310,9 @@ function App() {
                   {students.filter((s) => {
                     const q = activityStudentSearch.toLowerCase();
                     return (
-                      s.firstName.toLowerCase().includes(q) ||
-                      s.lastName.toLowerCase().includes(q) ||
-                      s.studentId.toLowerCase().includes(q)
+                      s.firstName.toLowerCase().startsWith(q) ||
+                      s.lastName.toLowerCase().startsWith(q) ||
+                      s.studentId.toLowerCase().startsWith(q)
                     );
                   }).length === 0 && (
                     <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
@@ -8842,9 +8842,9 @@ function App() {
                       .filter((s) => {
                         const q = pbisStudentSearch.toLowerCase();
                         return (
-                          s.firstName.toLowerCase().includes(q) ||
-                          s.lastName.toLowerCase().includes(q) ||
-                          s.studentId.toLowerCase().includes(q)
+                          s.firstName.toLowerCase().startsWith(q) ||
+                          s.lastName.toLowerCase().startsWith(q) ||
+                          s.studentId.toLowerCase().startsWith(q)
                         );
                       })
                       .map((s) => (
@@ -10123,12 +10123,11 @@ function App() {
                       .filter((s) => {
                         const q = logIntervStudentSearch.toLowerCase();
                         return (
-                          s.firstName.toLowerCase().includes(q) ||
-                          s.lastName.toLowerCase().includes(q) ||
-                          s.studentId.toLowerCase().includes(q)
+                          s.firstName.toLowerCase().startsWith(q) ||
+                          s.lastName.toLowerCase().startsWith(q) ||
+                          s.studentId.toLowerCase().startsWith(q)
                         );
                       })
-                      .slice(0, 25)
                       .map((s) => (
                         <li key={s.id}>
                           <button
@@ -10659,12 +10658,11 @@ function App() {
                     .filter((s) => {
                       const q = eseStudentSearch.toLowerCase();
                       return (
-                        s.firstName.toLowerCase().includes(q) ||
-                        s.lastName.toLowerCase().includes(q) ||
-                        s.studentId.toLowerCase().includes(q)
+                        s.firstName.toLowerCase().startsWith(q) ||
+                        s.lastName.toLowerCase().startsWith(q) ||
+                        s.studentId.toLowerCase().startsWith(q)
                       );
                     })
-                    .slice(0, 50)
                     .map((s) => (
                       <li key={s.id}>
                         <button
