@@ -1885,6 +1885,140 @@ function StaffRolesAdmin({ currentStaffId }: { currentStaffId: number | null }) 
 // selected studentId via setSelected. We render this as a sibling component
 // (rather than inline) only because we need two independent instances on the
 // same row.
+function StudentCombobox({
+  label,
+  students,
+  search,
+  setSearch,
+  setSelected,
+  placeholder = "Type or pick a student",
+}: {
+  label: string;
+  students: Student[];
+  search: string;
+  setSearch: (v: string) => void;
+  setSelected: (v: string) => void;
+  placeholder?: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const closeTimer = useRef<number | null>(null);
+  const q = search.trim().toLowerCase();
+  const looksPicked =
+    /\(\s*S\d+\s*\)$/.test(search) || /^S\d+\s+-/.test(search);
+  const sorted = [...students].sort((a, b) => {
+    const an = `${a.lastName} ${a.firstName}`.toLowerCase();
+    const bn = `${b.lastName} ${b.firstName}`.toLowerCase();
+    return an.localeCompare(bn);
+  });
+  const matches = (
+    q && !looksPicked
+      ? sorted.filter(
+          (s) =>
+            s.firstName.toLowerCase().includes(q) ||
+            s.lastName.toLowerCase().includes(q) ||
+            s.studentId.toLowerCase().includes(q),
+        )
+      : sorted
+  ).slice(0, 50);
+
+  const scheduleClose = () => {
+    if (closeTimer.current != null) window.clearTimeout(closeTimer.current);
+    closeTimer.current = window.setTimeout(() => setOpen(false), 150);
+  };
+  const cancelClose = () => {
+    if (closeTimer.current != null) {
+      window.clearTimeout(closeTimer.current);
+      closeTimer.current = null;
+    }
+  };
+
+  return (
+    <label style={{ position: "relative" }}>
+      <div style={{ fontSize: "0.85rem" }}>{label}</div>
+      <div style={{ display: "flex", gap: "0.25rem" }}>
+        <input
+          type="text"
+          value={search}
+          placeholder={placeholder}
+          onFocus={() => {
+            cancelClose();
+            setOpen(true);
+          }}
+          onBlur={scheduleClose}
+          onChange={(e) => {
+            setSearch(e.target.value);
+            setSelected("");
+            setOpen(true);
+          }}
+          style={{ flex: 1, minWidth: 0 }}
+        />
+        <button
+          type="button"
+          onMouseDown={(e) => {
+            e.preventDefault();
+            cancelClose();
+            setOpen((v) => !v);
+          }}
+          aria-label="Toggle student list"
+          style={{ padding: "0 0.5rem" }}
+        >
+          ▾
+        </button>
+      </div>
+      {open && (
+        <ul
+          onMouseDown={cancelClose}
+          onMouseLeave={scheduleClose}
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            right: 0,
+            zIndex: 10,
+            background: "var(--bg, #fff)",
+            border: "1px solid #ccc",
+            borderRadius: "0.25rem",
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            maxHeight: "16rem",
+            overflowY: "auto",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.08)",
+          }}
+        >
+          {matches.length === 0 && (
+            <li style={{ padding: "0.25rem 0.5rem", color: "#666" }}>
+              No matches
+            </li>
+          )}
+          {matches.map((s) => (
+            <li key={s.studentId}>
+              <button
+                type="button"
+                style={{
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "0.25rem 0.5rem",
+                  background: "none",
+                  border: "none",
+                  cursor: "pointer",
+                }}
+                onClick={() => {
+                  setSelected(s.studentId);
+                  setSearch(`${s.firstName} ${s.lastName} (${s.studentId})`);
+                  setOpen(false);
+                }}
+              >
+                {s.lastName}, {s.firstName} ({s.studentId})
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </label>
+  );
+}
+
 function PolarityStudentPicker({
   label,
   students,
@@ -11478,7 +11612,7 @@ function App() {
               maxWidth: "70rem",
             }}
           >
-            <PolarityStudentPicker
+            <StudentCombobox
               label="Student"
               students={students}
               search={hpLimitSearch}
