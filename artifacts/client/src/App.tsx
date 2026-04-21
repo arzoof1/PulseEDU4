@@ -7363,14 +7363,69 @@ function App() {
                                   color: "#555",
                                 }}
                               >
-                                Present today: <strong>{presentIds.length}</strong>{" "}
-                                / Absent: <strong>{dailyAbsent.size}</strong>
+                                Present with accommodations:{" "}
+                                <strong>{presentEligibleCount}</strong> /
+                                Absent: <strong>{dailyAbsent.size}</strong>
                               </div>
                             </div>
                             <div>
-                              <h4 style={{ margin: "0 0 0.5rem" }}>
-                                Accommodations to log for present students
-                              </h4>
+                              <div
+                                style={{
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "space-between",
+                                  gap: "0.75rem",
+                                  marginBottom: "0.5rem",
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <h4 style={{ margin: 0 }}>
+                                  Accommodations
+                                </h4>
+                                <button
+                                  type="button"
+                                  onClick={submitDailyLog}
+                                  disabled={
+                                    !dailyAbsentConfirmed ||
+                                    dailySelectedAccs.size === 0 ||
+                                    presentEligibleCount === 0
+                                  }
+                                  style={{
+                                    background: "#0d9488",
+                                    color: "#fff",
+                                    border: "1px solid #0f766e",
+                                    padding: "0.6rem 1.1rem",
+                                    fontSize: "1rem",
+                                    fontWeight: 600,
+                                    borderRadius: 6,
+                                    cursor: !dailyAbsentConfirmed ||
+                                      dailySelectedAccs.size === 0 ||
+                                      presentEligibleCount === 0
+                                      ? "not-allowed"
+                                      : "pointer",
+                                    opacity: !dailyAbsentConfirmed ||
+                                      dailySelectedAccs.size === 0 ||
+                                      presentEligibleCount === 0
+                                      ? 0.55
+                                      : 1,
+                                  }}
+                                  title={
+                                    !dailyAbsentConfirmed
+                                      ? "Mark absences and confirm first"
+                                      : dailySelectedAccs.size === 0
+                                        ? "Select at least one accommodation"
+                                        : presentEligibleCount === 0
+                                          ? "No present students with accommodations"
+                                          : undefined
+                                  }
+                                >
+                                  Apply {dailySelectedAccs.size}{" "}
+                                  accommodation
+                                  {dailySelectedAccs.size === 1 ? "" : "s"} to{" "}
+                                  {presentEligibleCount} student
+                                  {presentEligibleCount === 1 ? "" : "s"}
+                                </button>
+                              </div>
                               {accUnionWithIds.length === 0 ? (
                                 <div>
                                   No accommodations apply to the present
@@ -7451,41 +7506,18 @@ function App() {
                                 </>
                               )}
                               <div style={{ marginTop: "0.75rem" }}>
-                                <button
-                                  type="button"
-                                  onClick={submitDailyLog}
-                                  disabled={
-                                    !dailyAbsentConfirmed ||
-                                    dailySelectedAccs.size === 0 ||
-                                    presentEligibleCount === 0
-                                  }
-                                  style={{
-                                    background: "#dff0d8",
-                                    padding: "0.5rem 0.75rem",
-                                  }}
-                                  title={
-                                    !dailyAbsentConfirmed
-                                      ? "Confirm absences first"
-                                      : undefined
-                                  }
-                                >
-                                  Apply {dailySelectedAccs.size} accommodation
-                                  {dailySelectedAccs.size === 1 ? "" : "s"} to{" "}
-                                  {presentEligibleCount} present student
-                                  {presentEligibleCount === 1 ? "" : "s"}
-                                </button>
-                                {!dailyAbsentConfirmed && (
-                                  <div
-                                    style={{
-                                      marginTop: "0.4rem",
-                                      fontSize: "0.85em",
-                                      color: "#92400e",
-                                    }}
-                                  >
-                                    Confirm the absence checkbox above to
-                                    enable Apply.
-                                  </div>
-                                )}
+                                {!dailyAbsentConfirmed &&
+                                  allInPeriodStudents.length > 0 && (
+                                    <div
+                                      style={{
+                                        fontSize: "0.85em",
+                                        color: "#92400e",
+                                      }}
+                                    >
+                                      Mark any absent students on the left,
+                                      then confirm to enable Apply.
+                                    </div>
+                                  )}
                                 {dailySubmitMsg && (
                                   <div
                                     style={{
