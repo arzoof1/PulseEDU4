@@ -6705,21 +6705,11 @@ function App() {
                 ...fromCounts.keys(),
                 ...toCounts.keys(),
               ]);
-              const folderFor = (name: string) => {
-                if (/^Room\s+(\d)/i.test(name)) {
-                  const m = name.match(/^Room\s+(\d)/i);
-                  return m ? `${m[1]}00 Hall` : "—";
-                }
-                if (/library|media|gym|nurse|office|counsel/i.test(name))
-                  return "Staff";
-                return "—";
-              };
               const rows = Array.from(allNames)
                 .map((name) => ({
                   name,
                   from: fromCounts.get(name) || 0,
                   to: toCounts.get(name) || 0,
-                  folder: folderFor(name),
                 }))
                 .sort((a, b) => b.from + b.to - (a.from + a.to));
 
@@ -6768,7 +6758,6 @@ function App() {
                             <th style={{ padding: "0.6rem 0.75rem" }}>
                               Passes To This Room
                             </th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Room Folder</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -6785,9 +6774,6 @@ function App() {
                               </td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>
                                 {r.to.toLocaleString()}
-                              </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.folder}
                               </td>
                             </tr>
                           ))}
