@@ -6798,6 +6798,104 @@ function App() {
                 </div>
               );
             })()}
+
+            {(() => {
+              const teacherCounts = new Map<string, number>();
+              for (const p of hallPasses) {
+                const dt = new Date(p.createdAt);
+                if (dt.getFullYear() !== today.getFullYear()) continue;
+                if (!p.teacherName) continue;
+                teacherCounts.set(
+                  p.teacherName,
+                  (teacherCounts.get(p.teacherName) || 0) + 1,
+                );
+              }
+              const splitName = (full: string) => {
+                const parts = full.trim().split(/\s+/);
+                if (parts.length === 1) return { first: parts[0], last: "" };
+                return {
+                  first: parts[0],
+                  last: parts.slice(1).join(" "),
+                };
+              };
+              const rows = Array.from(teacherCounts.entries())
+                .map(([name, total]) => {
+                  const { first, last } = splitName(name);
+                  return { name, first, last, total, now: total, scheduled: 0 };
+                })
+                .sort((a, b) => b.total - a.total);
+
+              return (
+                <div className="card">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <h3 style={{ margin: 0 }}>Staff Usage</h3>
+                    <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                      {rows.length} staff
+                    </div>
+                  </div>
+                  {rows.length === 0 ? (
+                    <div style={{ color: "#64748b", padding: "1rem 0" }}>
+                      No staff activity this year yet.
+                    </div>
+                  ) : (
+                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        <thead
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            textAlign: "left",
+                          }}
+                        >
+                          <tr>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Total Passes</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Now Passes</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Scheduled Passes</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr
+                              key={r.name}
+                              style={{ borderTop: "1px solid #e2e8f0" }}
+                            >
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.total.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.now.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.scheduled}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         );
       })()}
