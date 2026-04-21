@@ -5827,7 +5827,7 @@ function App() {
         return (
           <>
             <div
-              className="card no-print"
+              className="card no-print reports-header-burst"
               style={{
                 background:
                   "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #1d4ed8 100%)",
@@ -5874,43 +5874,6 @@ function App() {
                   ))}
                 </div>
               </div>
-            </div>
-
-            <div
-              className="card no-print"
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fill, minmax(240px, 1fr))",
-                gap: "0.75rem",
-              }}
-            >
-              {reports.map((r) => (
-                <button
-                  key={r.key}
-                  type="button"
-                  onClick={() => setHpReportSection(r.key)}
-                  style={{
-                    textAlign: "left",
-                    background: "white",
-                    border: `1px solid ${r.color}33`,
-                    borderLeft: `4px solid ${r.color}`,
-                    borderRadius: 8,
-                    padding: "0.85rem 1rem",
-                    cursor: "pointer",
-                    display: "flex",
-                    flexDirection: "column",
-                    gap: 4,
-                  }}
-                >
-                  <span style={{ fontWeight: 600, color: r.color }}>
-                    {r.label}
-                  </span>
-                  <span style={{ color: "#475569", fontSize: "0.85rem" }}>
-                    {r.desc}
-                  </span>
-                </button>
-              ))}
             </div>
           </>
         );
