@@ -315,6 +315,16 @@ strong {
   box-shadow: inset 3px 0 0 var(--accent);
 }
 
+/* Convention: a `disabled` <button> in this app marks the currently-selected
+   option in a toggle/tab group. Apply the same red accent bar used in the
+   sidebar so the active selection is visually consistent throughout the app. */
+button:disabled {
+  box-shadow: inset 3px 0 0 var(--accent);
+  border-color: rgba(239, 68, 68, 0.3);
+  opacity: 1;
+  cursor: default;
+}
+
 .nav-item .nav-icon {
   width: 18px;
   height: 18px;
