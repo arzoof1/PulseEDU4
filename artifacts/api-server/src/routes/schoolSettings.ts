@@ -28,6 +28,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     periodCount,
     hallPassMaxMinutes,
     hallPassDefaultMinutes,
+    globalDailyHallPassLimit,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -82,6 +83,24 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.hallPassDefaultMinutes = hallPassDefaultMinutes;
+  }
+  if (globalDailyHallPassLimit !== undefined) {
+    if (globalDailyHallPassLimit === null) {
+      updates.globalDailyHallPassLimit = null;
+    } else if (
+      typeof globalDailyHallPassLimit !== "number" ||
+      !Number.isInteger(globalDailyHallPassLimit) ||
+      globalDailyHallPassLimit < 1 ||
+      globalDailyHallPassLimit > 100
+    ) {
+      res.status(400).json({
+        error:
+          "globalDailyHallPassLimit must be null or an integer between 1 and 100",
+      });
+      return;
+    } else {
+      updates.globalDailyHallPassLimit = globalDailyHallPassLimit;
+    }
   }
 
   if (Object.keys(updates).length === 0) {

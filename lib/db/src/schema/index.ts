@@ -25,4 +25,5 @@ export * from "./pullouts";
 export * from "./pulloutReasons";
 export * from "./polarityPairs";
 export * from "./teacherDestinationAllowlist";
+export * from "./studentHallPassLimits";
 export * from "./districtIntegrations";

@@ -2254,6 +2254,7 @@ function App() {
     periodCount: number;
     hallPassMaxMinutes: number;
     hallPassDefaultMinutes: number;
+    globalDailyHallPassLimit: number | null;
   }>({
     schoolName: "",
     fromName: "",
@@ -2261,6 +2262,7 @@ function App() {
     periodCount: 7,
     hallPassMaxMinutes: 30,
     hallPassDefaultMinutes: 5,
+    globalDailyHallPassLimit: null,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -2491,6 +2493,29 @@ function App() {
   const [polaritySelectedB, setPolaritySelectedB] = useState("");
   const [polarityNote, setPolarityNote] = useState("");
   const [polarityMsg, setPolarityMsg] = useState("");
+
+  // ---- Hall Pass Daily Limits ----
+  type StudentHallPassLimit = {
+    id: number;
+    studentId: string;
+    dailyLimit: number;
+    note: string | null;
+    parentApproved: boolean;
+    active: boolean;
+    createdByName: string | null;
+    createdAt: string;
+    firstName: string | null;
+    lastName: string | null;
+  };
+  const [hpLimits, setHpLimits] = useState<StudentHallPassLimit[]>([]);
+  const [hpLimitMsg, setHpLimitMsg] = useState("");
+  const [hpLimitSearch, setHpLimitSearch] = useState("");
+  const [hpLimitSelected, setHpLimitSelected] = useState("");
+  const [hpLimitValue, setHpLimitValue] = useState<number>(3);
+  const [hpLimitNote, setHpLimitNote] = useState("");
+  const [hpLimitParentOk, setHpLimitParentOk] = useState(false);
+  const [hpGlobalLimitDraft, setHpGlobalLimitDraft] = useState<string>("");
+  const [hpGlobalLimitMsg, setHpGlobalLimitMsg] = useState("");
   const [intervListMsg, setIntervListMsg] = useState("");
   const [newIntervName, setNewIntervName] = useState("");
   const [newIntervCategory, setNewIntervCategory] = useState("Classroom");
@@ -3638,6 +3663,10 @@ function App() {
             typeof data.hallPassDefaultMinutes === "number"
               ? data.hallPassDefaultMinutes
               : 5,
+          globalDailyHallPassLimit:
+            typeof data.globalDailyHallPassLimit === "number"
+              ? data.globalDailyHallPassLimit
+              : null,
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -3671,6 +3700,10 @@ function App() {
           typeof data.hallPassDefaultMinutes === "number"
             ? data.hallPassDefaultMinutes
             : 5,
+        globalDailyHallPassLimit:
+          typeof data.globalDailyHallPassLimit === "number"
+            ? data.globalDailyHallPassLimit
+            : null,
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -3848,6 +3881,130 @@ function App() {
       await loadPolarityPairs();
     } catch (e) {
       setPolarityMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const loadHpLimits = async () => {
+    if (!authUser) return;
+    try {
+      const sid = `?staffId=${authUser.id}`;
+      const res = await fetch(`/api/student-hall-pass-limits${sid}`, {
+        credentials: "include",
+      });
+      if (!res.ok) {
+        setHpLimits([]);
+        return;
+      }
+      const data = (await res.json()) as StudentHallPassLimit[];
+      setHpLimits(Array.isArray(data) ? data : []);
+    } catch {
+      setHpLimits([]);
+    }
+  };
+
+  const addHpLimit = async () => {
+    setHpLimitMsg("");
+    const studentId = hpLimitSelected.trim();
+    if (!studentId) {
+      setHpLimitMsg("Pick a student.");
+      return;
+    }
+    if (
+      !Number.isInteger(hpLimitValue) ||
+      hpLimitValue < 1 ||
+      hpLimitValue > 100
+    ) {
+      setHpLimitMsg("Daily limit must be a whole number between 1 and 100.");
+      return;
+    }
+    try {
+      const sid = `?staffId=${authUser?.id ?? ""}`;
+      const res = await fetch(`/api/student-hall-pass-limits${sid}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({
+          studentId,
+          dailyLimit: hpLimitValue,
+          note: hpLimitNote.trim() || undefined,
+          parentApproved: hpLimitParentOk,
+          staffId: authUser?.id,
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setHpLimitMsg(j.error || `Save failed (HTTP ${res.status}).`);
+        return;
+      }
+      setHpLimitSearch("");
+      setHpLimitSelected("");
+      setHpLimitNote("");
+      setHpLimitParentOk(false);
+      setHpLimitValue(3);
+      await loadHpLimits();
+    } catch (e) {
+      setHpLimitMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const removeHpLimit = async (id: number) => {
+    if (!confirm("Remove this student's daily hall-pass limit?")) return;
+    try {
+      const sid = `?staffId=${authUser?.id ?? ""}`;
+      const res = await fetch(`/api/student-hall-pass-limits/${id}${sid}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setHpLimitMsg(j.error || `Remove failed (HTTP ${res.status}).`);
+        return;
+      }
+      await loadHpLimits();
+    } catch (e) {
+      setHpLimitMsg(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const saveGlobalHpLimit = async () => {
+    setHpGlobalLimitMsg("");
+    const trimmed = hpGlobalLimitDraft.trim();
+    let value: number | null = null;
+    if (trimmed !== "") {
+      const n = Number(trimmed);
+      if (!Number.isInteger(n) || n < 1 || n > 100) {
+        setHpGlobalLimitMsg(
+          "Global limit must be empty (no cap) or a whole number 1–100.",
+        );
+        return;
+      }
+      value = n;
+    }
+    try {
+      const res = await fetch("/api/school-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        credentials: "include",
+        body: JSON.stringify({ globalDailyHallPassLimit: value }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        setHpGlobalLimitMsg(
+          j.error || `Save failed (HTTP ${res.status}).`,
+        );
+        return;
+      }
+      const updated = (await res.json()) as {
+        globalDailyHallPassLimit: number | null;
+      };
+      setSchoolSettings((s) => ({
+        ...s,
+        ...(updated as Partial<typeof s>),
+      }));
+      setHpGlobalLimitMsg("Saved.");
+      setTimeout(() => setHpGlobalLimitMsg(""), 1800);
+    } catch (e) {
+      setHpGlobalLimitMsg(e instanceof Error ? e.message : String(e));
     }
   };
 
@@ -4877,6 +5034,12 @@ function App() {
     }
     if (activeSection === "hallPassMgmt" && canManageBehaviorLists) {
       loadPolarityPairs();
+      loadHpLimits();
+      setHpGlobalLimitDraft(
+        schoolSettings.globalDailyHallPassLimit != null
+          ? String(schoolSettings.globalDailyHallPassLimit)
+          : "",
+      );
     }
     if (activeSection === "requestPullout") {
       loadPulloutReasons();
@@ -11232,6 +11395,227 @@ function App() {
             </table>
           )}
         </section>
+      )}
+
+      {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
+        <section className="card">
+          <h2>Global Daily Pass Limit</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            School-wide cap on how many hall passes any one student can take
+            in a single day. Leave blank to allow unlimited (per-student
+            limits below still apply). Range: 1–100.
+          </p>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              alignItems: "end",
+              flexWrap: "wrap",
+            }}
+          >
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Passes per day</div>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={hpGlobalLimitDraft}
+                onChange={(e) => setHpGlobalLimitDraft(e.target.value)}
+                placeholder="No cap"
+                style={{ width: "8rem" }}
+              />
+            </label>
+            <button type="button" onClick={saveGlobalHpLimit}>
+              Save
+            </button>
+            {schoolSettings.globalDailyHallPassLimit != null && (
+              <span style={{ color: "#0f766e", fontSize: "0.85rem" }}>
+                Current cap: {schoolSettings.globalDailyHallPassLimit} per
+                day
+              </span>
+            )}
+            {hpGlobalLimitMsg && (
+              <span
+                style={{
+                  color: hpGlobalLimitMsg === "Saved." ? "#0f766e" : "crimson",
+                  fontSize: "0.85rem",
+                }}
+              >
+                {hpGlobalLimitMsg}
+              </span>
+            )}
+          </div>
+        </section>
+      )}
+
+      {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
+        <hr
+          style={{
+            border: 0,
+            borderTop: "2px dashed #cbd5e1",
+            margin: "0.25rem 0 0.5rem",
+          }}
+        />
+      )}
+
+      {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
+        <section className="card">
+          <h2>Per-Student Daily Pass Limits</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
+            Cap a specific student's daily hall passes — typically at parental
+            request. Once a student hits the cap, additional passes from
+            teachers and kiosks will be blocked. Per-student limits override
+            the global cap.
+          </p>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 8rem 1fr auto auto",
+              gap: "0.5rem",
+              alignItems: "end",
+              marginBottom: "0.75rem",
+              maxWidth: "70rem",
+            }}
+          >
+            <PolarityStudentPicker
+              label="Student"
+              students={students}
+              search={hpLimitSearch}
+              setSearch={setHpLimitSearch}
+              setSelected={setHpLimitSelected}
+            />
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>Passes per day</div>
+              <input
+                type="number"
+                min={1}
+                max={100}
+                value={hpLimitValue}
+                onChange={(e) => setHpLimitValue(Number(e.target.value))}
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label>
+              <div style={{ fontSize: "0.85rem" }}>
+                Note (who requested / why)
+              </div>
+              <input
+                type="text"
+                value={hpLimitNote}
+                onChange={(e) => setHpLimitNote(e.target.value)}
+                placeholder="e.g. Parent request 4/21 — Mrs. Lee"
+                style={{ width: "100%" }}
+              />
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.35rem",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={hpLimitParentOk}
+                onChange={(e) => setHpLimitParentOk(e.target.checked)}
+              />
+              <span style={{ fontSize: "0.85rem" }}>Parent approved</span>
+            </label>
+            <button type="button" onClick={addHpLimit}>
+              Save Limit
+            </button>
+          </div>
+          {hpLimitMsg && (
+            <div style={{ color: "crimson", marginBottom: "0.5rem" }}>
+              {hpLimitMsg}
+            </div>
+          )}
+
+          {hpLimits.length === 0 ? (
+            <div style={{ color: "var(--muted, #666)" }}>
+              No per-student limits set.
+            </div>
+          ) : (
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                maxWidth: "70rem",
+              }}
+            >
+              <thead>
+                <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
+                  <th style={{ padding: "0.4rem" }}>Student</th>
+                  <th style={{ padding: "0.4rem" }}>Limit/day</th>
+                  <th style={{ padding: "0.4rem" }}>Parent</th>
+                  <th style={{ padding: "0.4rem" }}>Note</th>
+                  <th style={{ padding: "0.4rem" }}>Set by</th>
+                  <th style={{ padding: "0.4rem" }}></th>
+                </tr>
+              </thead>
+              <tbody>
+                {hpLimits.map((l) => {
+                  const name =
+                    l.firstName && l.lastName
+                      ? `${l.firstName} ${l.lastName} (${l.studentId})`
+                      : l.studentId;
+                  return (
+                    <tr key={l.id} style={{ borderBottom: "1px solid #eee" }}>
+                      <td style={{ padding: "0.4rem" }}>{name}</td>
+                      <td style={{ padding: "0.4rem" }}>{l.dailyLimit}</td>
+                      <td style={{ padding: "0.4rem" }}>
+                        {l.parentApproved ? (
+                          <span style={{ color: "#0f766e", fontWeight: 600 }}>
+                            ✓ Approved
+                          </span>
+                        ) : (
+                          <span style={{ color: "#92400e" }}>Pending</span>
+                        )}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>{l.note ?? ""}</td>
+                      <td
+                        style={{
+                          padding: "0.4rem",
+                          color: "var(--muted, #666)",
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        {l.createdByName ?? ""}
+                        {l.createdAt
+                          ? ` · ${new Date(l.createdAt).toLocaleDateString()}`
+                          : ""}
+                      </td>
+                      <td style={{ padding: "0.4rem" }}>
+                        <button
+                          type="button"
+                          onClick={() => removeHpLimit(l.id)}
+                          style={{
+                            color: "crimson",
+                            borderColor: "crimson",
+                          }}
+                        >
+                          Remove
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </section>
+      )}
+
+      {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
+        <hr
+          style={{
+            border: 0,
+            borderTop: "2px dashed #cbd5e1",
+            margin: "0.25rem 0 0.5rem",
+          }}
+        />
       )}
 
       {activeSection === "hallPassMgmt" && canManageBehaviorLists && (

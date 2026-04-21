@@ -6,6 +6,10 @@ import {
   findPolarityConflict,
   polarityConflictMessage,
 } from "./polarityPairs";
+import {
+  findDailyLimitConflict,
+  dailyLimitConflictMessage,
+} from "./studentHallPassLimits";
 
 const router: IRouter = Router();
 
@@ -57,6 +61,13 @@ router.post("/hall-passes", async (req, res) => {
   const conflict = await findPolarityConflict(studentId);
   if (conflict) {
     res.status(409).json({ error: polarityConflictMessage(conflict) });
+    return;
+  }
+
+  // Daily-limit enforcement (per-student override falls back to global).
+  const limitConflict = await findDailyLimitConflict(studentId);
+  if (limitConflict) {
+    res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;
   }
 

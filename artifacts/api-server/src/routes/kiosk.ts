@@ -19,6 +19,10 @@ import {
   findPolarityConflict,
   polarityConflictMessage,
 } from "./polarityPairs";
+import {
+  findDailyLimitConflict,
+  dailyLimitConflictMessage,
+} from "./studentHallPassLimits";
 
 const ACTIVATION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -460,6 +464,11 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   }
 
   // Polarity / keep-apart enforcement.
+  const limitConflict = await findDailyLimitConflict(normalizedStudentId);
+  if (limitConflict) {
+    res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
+    return;
+  }
   const conflict = await findPolarityConflict(normalizedStudentId);
   if (conflict) {
     res.status(409).json({ error: polarityConflictMessage(conflict) });

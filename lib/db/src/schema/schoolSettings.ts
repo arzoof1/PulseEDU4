@@ -10,6 +10,9 @@ export const schoolSettingsTable = pgTable("school_settings", {
   hallPassDefaultMinutes: integer("hall_pass_default_minutes")
     .notNull()
     .default(5),
+  // Optional school-wide cap on the number of hall passes a student can take
+  // in one school day. Null means no global cap.
+  globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),
 });
 
 export type SchoolSettingsRow = typeof schoolSettingsTable.$inferSelect;
