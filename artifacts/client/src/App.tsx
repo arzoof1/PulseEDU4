@@ -1989,6 +1989,13 @@ function App() {
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay">("hub");
+  const [hpOverviewDate, setHpOverviewDate] = useState<string>(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  });
   const [passListView, setPassListView] = useState<"active" | "log">("active");
   // Hall pass reports state.
   const [hpReportDate, setHpReportDate] = useState<string>(() =>
@@ -5868,10 +5875,11 @@ function App() {
       })()}
 
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "overview" && (() => {
-        // Build a time series of concurrently-active passes for today,
+        // Build a time series of concurrently-active passes for the selected day,
         // every 15 minutes from 7:00 AM to 4:00 PM local time.
-        const today = new Date();
-        const dayStr = today.toISOString().slice(0, 10);
+        const [yy, mm, dd] = hpOverviewDate.split("-").map((n) => parseInt(n, 10));
+        const today = new Date(yy, (mm || 1) - 1, dd || 1);
+        const dayStr = hpOverviewDate;
         const isSameLocalDay = (iso: string) => {
           const d = new Date(iso);
           return (
@@ -5915,9 +5923,20 @@ function App() {
                   ← Back
                 </button>
                 Overview
-                <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
-                  {dayStr}
-                </span>
+                <input
+                  type="date"
+                  value={hpOverviewDate}
+                  onChange={(e) => setHpOverviewDate(e.target.value)}
+                  style={{
+                    marginLeft: "0.75rem",
+                    fontSize: "0.85rem",
+                    fontWeight: 400,
+                    padding: "0.25rem 0.5rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    color: "#334155",
+                  }}
+                />
               </h2>
             </div>
 
