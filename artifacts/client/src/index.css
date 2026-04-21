@@ -108,10 +108,11 @@ strong {
   display: flex;
   align-items: center;
   gap: 1.5rem;
-  padding: 0 1.5rem;
+  padding: 0.5rem 1.5rem;
   position: sticky;
   top: 0;
   z-index: 10;
+  flex-wrap: wrap;
 }
 
 .app-header .brand {
@@ -784,7 +785,7 @@ ul[style*="listStyle: none"] li button:hover {
 @media (max-width: 800px) {
   .app-shell {
     grid-template-columns: 1fr;
-    grid-template-rows: 64px auto 1fr;
+    grid-template-rows: auto auto 1fr;
   }
   .sidebar {
     flex-direction: row;
@@ -798,6 +799,43 @@ ul[style*="listStyle: none"] li button:hover {
   }
   .nav-item {
     white-space: nowrap;
+  }
+
+  /* Compact header so the user badge never overlaps the nav. */
+  .app-header {
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+  .app-header .brand {
+    width: 140px;
+    height: 32px;
+  }
+  .app-header .brand .wordmark {
+    font-size: 1.15rem;
+  }
+  .app-header .header-controls {
+    gap: 0.5rem;
+    width: 100%;
+    justify-content: flex-end;
+    margin-left: 0;
+  }
+  /* Hide the secondary "Show / Staff" filter labels' text on mobile —
+     the selects themselves stay tappable. */
+  .app-header .header-controls > label {
+    font-size: 0;
+    gap: 0;
+  }
+  .app-header .header-controls > label > select {
+    font-size: 13px;
+  }
+  /* Collapse the user pill to just the avatar + Sign out so the long
+     display name can't overflow over the nav strip below. */
+  .app-header .user-pill > span:not(.avatar) {
+    display: none;
+  }
+  .app-header .user-pill {
+    padding: 0.25rem 0.4rem;
+    gap: 0.4rem;
   }
 }
 
