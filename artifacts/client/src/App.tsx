@@ -6571,7 +6571,7 @@ function App() {
               }
               const stats = new Map<
                 string,
-                { passes: number; autoEnded: number }
+                { passes: number; autoEnded: number; lostMin: number }
               >();
               for (const p of hallPasses) {
                 const dt = new Date(p.createdAt);
@@ -6580,6 +6580,7 @@ function App() {
                 const cur = stats.get(p.studentId) || {
                   passes: 0,
                   autoEnded: 0,
+                  lostMin: 0,
                 };
                 cur.passes++;
                 if (p.endedAt) {
@@ -6588,6 +6589,7 @@ function App() {
                       new Date(p.createdAt).getTime()) /
                     60000;
                   if (durMin >= p.maxDurationMinutes) cur.autoEnded++;
+                  if (durMin > 0) cur.lostMin += durMin;
                 }
                 stats.set(p.studentId, cur);
               }
@@ -6601,6 +6603,7 @@ function App() {
                     grade: info.grade,
                     passes: v.passes,
                     autoEnded: v.autoEnded,
+                    lostMin: Math.round(v.lostMin),
                   };
                 })
                 .sort((a, b) => b.passes - a.passes);
@@ -6649,6 +6652,7 @@ function App() {
                             <th style={{ padding: "0.6rem 0.75rem" }}>Student ID</th>
                             <th style={{ padding: "0.6rem 0.75rem" }}>Passes</th>
                             <th style={{ padding: "0.6rem 0.75rem" }}>Passes Auto Ended</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Lost Instructional Min</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -6665,6 +6669,9 @@ function App() {
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.lostMin.toLocaleString()}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
