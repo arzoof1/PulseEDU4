@@ -1362,7 +1362,7 @@ function BehaviorReviewSection({
         <table
           border={1}
           cellPadding={6}
-          style={{ borderCollapse: "collapse", width: "100%" }}
+          style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}
         >
           <thead>
             <tr>
@@ -1576,7 +1576,7 @@ function PulloutReportSection({ students }: { students: Student[] }) {
         <table
           border={1}
           cellPadding={4}
-          style={{ borderCollapse: "collapse", fontSize: "0.9em" }}
+          style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: "0.9em" }}
         >
           <thead>
             <tr>
@@ -5591,7 +5591,7 @@ function App() {
           <table
             border={1}
             cellPadding={6}
-            style={{ borderCollapse: "collapse", width: "100%" }}
+            style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}
           >
             <thead>
               <tr>
@@ -6632,7 +6632,7 @@ function App() {
                       <table
                         style={{
                           width: "100%",
-                          borderCollapse: "collapse",
+                          borderCollapse: "separate", borderSpacing: 0,
                           fontSize: "0.9rem",
                         }}
                       >
@@ -6737,7 +6737,7 @@ function App() {
                       <table
                         style={{
                           width: "100%",
-                          borderCollapse: "collapse",
+                          borderCollapse: "separate", borderSpacing: 0,
                           fontSize: "0.9rem",
                         }}
                       >
@@ -6853,7 +6853,7 @@ function App() {
                       <table
                         style={{
                           width: "100%",
-                          borderCollapse: "collapse",
+                          borderCollapse: "separate", borderSpacing: 0,
                           fontSize: "0.9rem",
                         }}
                       >
@@ -9624,7 +9624,7 @@ function App() {
                             ) : (
                               <table
                                 style={{
-                                  borderCollapse: "collapse",
+                                  borderCollapse: "separate", borderSpacing: 0,
                                   width: "100%",
                                   marginBottom: "0.75rem",
                                 }}
@@ -9732,7 +9732,7 @@ function App() {
                                 <div style={{ overflowX: "auto" }}>
                                   <table
                                     style={{
-                                      borderCollapse: "collapse",
+                                      borderCollapse: "separate", borderSpacing: 0,
                                       fontSize: "0.85rem",
                                     }}
                                   >
@@ -10853,7 +10853,7 @@ function App() {
                       —
                     </div>
                   ) : (
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: "0.85rem" }}>
                       <thead>
                         <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                           <th style={{ padding: "0.25rem" }}>Reason</th>
@@ -10882,7 +10882,7 @@ function App() {
                       —
                     </div>
                   ) : (
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: "0.85rem" }}>
                       <thead>
                         <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                           <th style={{ padding: "0.25rem" }}>Teacher</th>
@@ -10912,7 +10912,7 @@ function App() {
                   No entries match these filters.
                 </div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: "0.85rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                       <th style={{ padding: "0.25rem" }}>When</th>
@@ -11393,7 +11393,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "collapse",
+                borderCollapse: "separate", borderSpacing: 0,
                 fontSize: "0.9rem",
               }}
             >
@@ -11612,7 +11612,7 @@ function App() {
                       <table
                         style={{
                           width: "100%",
-                          borderCollapse: "collapse",
+                          borderCollapse: "separate", borderSpacing: 0,
                           fontSize: "0.88rem",
                         }}
                       >
@@ -12289,7 +12289,7 @@ function App() {
             <div style={{ color: "var(--muted, #666)" }}>No reasons yet.</div>
           ) : (
             <table
-              style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
+              style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, maxWidth: "48rem" }}
             >
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
@@ -12378,7 +12378,7 @@ function App() {
               No milestones configured yet. (Suggestion: 25, 50, 100.)
             </div>
           ) : (
-            <table style={{ borderCollapse: "collapse", maxWidth: "32rem" }}>
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, maxWidth: "32rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                   <th style={{ padding: "0.4rem" }}>Points</th>
@@ -12415,7 +12415,7 @@ function App() {
           {milestoneEmailLog.length === 0 ? (
             <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
           ) : (
-            <table style={{ borderCollapse: "collapse", width: "100%", maxWidth: "56rem" }}>
+            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", maxWidth: "56rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                   <th style={{ padding: "0.4rem" }}>When</th>
@@ -12520,7 +12520,7 @@ function App() {
             </div>
           ) : (
             <table
-              style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
+              style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, maxWidth: "48rem" }}
             >
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
@@ -12736,7 +12736,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "collapse",
+                borderCollapse: "separate", borderSpacing: 0,
                 maxWidth: "70rem",
               }}
             >
@@ -12878,7 +12878,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "collapse",
+                borderCollapse: "separate", borderSpacing: 0,
                 maxWidth: "60rem",
               }}
             >
@@ -12983,7 +12983,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "collapse",
+                borderCollapse: "separate", borderSpacing: 0,
                 maxWidth: "48rem",
               }}
             >
