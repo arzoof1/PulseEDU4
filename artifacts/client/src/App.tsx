@@ -6008,17 +6008,30 @@ function App() {
 
             {(() => {
               const counts = new Map<string, number>();
+              let totalMs = 0;
+              let endedCount = 0;
               for (const p of hallPasses) {
-                if (!p.destination) continue;
-                counts.set(p.destination, (counts.get(p.destination) || 0) + 1);
+                if (p.destination) {
+                  counts.set(p.destination, (counts.get(p.destination) || 0) + 1);
+                }
+                if (p.endedAt && p.createdAt) {
+                  const dur =
+                    new Date(p.endedAt).getTime() - new Date(p.createdAt).getTime();
+                  if (dur > 0) {
+                    totalMs += dur;
+                    endedCount++;
+                  }
+                }
               }
               const top = Array.from(counts.entries())
                 .sort((a, b) => b[1] - a[1])
                 .slice(0, 5);
+              const avgMin = endedCount > 0 ? totalMs / endedCount / 60000 : 0;
               return (
+                <div style={{ display: "flex", gap: "1rem", flexWrap: "wrap" }}>
                 <div
                   className="card"
-                  style={{ width: "33%", minWidth: 280 }}
+                  style={{ width: "33%", minWidth: 280, marginBottom: 0 }}
                 >
                   <div
                     style={{
@@ -6070,6 +6083,51 @@ function App() {
                       ))}
                     </ol>
                   )}
+                </div>
+
+                <div
+                  className="card"
+                  style={{ width: "33%", minWidth: 280, marginBottom: 0 }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      justifyContent: "space-between",
+                      marginBottom: "0.5rem",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <h3 style={{ margin: 0, fontSize: "1rem" }}>
+                      Average Pass Time
+                    </h3>
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#64748b",
+                        letterSpacing: "0.08em",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      ALL TIME
+                    </span>
+                  </div>
+                  {endedCount === 0 ? (
+                    <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
+                      No completed passes yet.
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: "1.75rem",
+                        color: "#94a3b8",
+                        fontWeight: 500,
+                      }}
+                    >
+                      {avgMin.toFixed(1)} minutes
+                    </div>
+                  )}
+                </div>
                 </div>
               );
             })()}
