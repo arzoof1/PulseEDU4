@@ -1997,7 +1997,21 @@ function App() {
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
-  const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd">("hub");
+  const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
+  const [researchStart, setResearchStart] = useState<string>(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-01-01`;
+  });
+  const [researchEnd, setResearchEnd] = useState<string>(() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  });
+  const [researchStudent, setResearchStudent] = useState<string>("");
+  const [researchOrigin, setResearchOrigin] = useState<string>("");
+  const [researchDest, setResearchDest] = useState<string>("");
   const [hpOverviewDate, setHpOverviewDate] = useState<string>(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -5803,6 +5817,12 @@ function App() {
             desc: "Daily pass volume since January 1, broken down by grade.",
             color: "#a855f7",
           },
+          {
+            key: "research",
+            label: "Research",
+            desc: "Filterable list of every pass with student, origin, destination, time and duration.",
+            color: "#0ea5e9",
+          },
         ];
         return (
           <>
@@ -6900,6 +6920,227 @@ function App() {
                 </div>
               );
             })()}
+          </>
+        );
+      })()}
+
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
+        const studentInfo = new Map<
+          string,
+          { name: string; grade: number }
+        >();
+        for (const s of students) {
+          studentInfo.set(s.studentId, {
+            name: `${s.firstName} ${s.lastName}`,
+            grade: s.grade,
+          });
+        }
+        const startMs = new Date(`${researchStart}T00:00:00`).getTime();
+        const endMs = new Date(`${researchEnd}T23:59:59`).getTime();
+        const studentQ = researchStudent.trim().toLowerCase();
+        const originQ = researchOrigin.trim().toLowerCase();
+        const destQ = researchDest.trim().toLowerCase();
+
+        const filtered = hallPasses
+          .filter((p) => {
+            const t = new Date(p.createdAt).getTime();
+            if (t < startMs || t > endMs) return false;
+            if (originQ && !p.originRoom?.toLowerCase().includes(originQ)) return false;
+            if (destQ && !p.destination?.toLowerCase().includes(destQ)) return false;
+            if (studentQ) {
+              const info = studentInfo.get(p.studentId);
+              const hay = `${info?.name || ""} ${p.studentId}`.toLowerCase();
+              if (!hay.includes(studentQ)) return false;
+            }
+            return true;
+          })
+          .sort(
+            (a, b) =>
+              new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+          );
+
+        const fmtDateTime = (iso: string) => {
+          const d = new Date(iso);
+          const m = d.getMonth() + 1;
+          const day = d.getDate();
+          let h = d.getHours();
+          const mn = String(d.getMinutes()).padStart(2, "0");
+          const ampm = h < 12 ? "AM" : "PM";
+          h = ((h + 11) % 12) + 1;
+          return `${m}/${day} ${h}:${mn} ${ampm}`;
+        };
+        const durMin = (p: typeof hallPasses[number]) => {
+          if (!p.endedAt) return null;
+          const m =
+            (new Date(p.endedAt).getTime() - new Date(p.createdAt).getTime()) /
+            60000;
+          return Math.max(0, Math.round(m * 100) / 100);
+        };
+        const statusColor = (p: typeof hallPasses[number]) => {
+          if (p.status === "active") return "#3b82f6";
+          const d = durMin(p);
+          if (d != null && d > p.maxDurationMinutes) return "#f59e0b";
+          return "#22c55e";
+        };
+
+        return (
+          <>
+            <div className="card">
+              <h2>
+                <button
+                  type="button"
+                  className="no-print"
+                  onClick={() => setHpReportSection("hub")}
+                  style={{ marginRight: "0.75rem", fontSize: "0.85rem" }}
+                >
+                  ← Back
+                </button>
+                Research
+                <span style={{ marginLeft: "0.75rem", fontSize: "0.85rem", color: "#64748b", fontWeight: 400 }}>
+                  {filtered.length.toLocaleString()} passes
+                </span>
+              </h2>
+            </div>
+
+            <div className="card">
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: "0.75rem",
+                  alignItems: "flex-end",
+                  marginBottom: "1rem",
+                }}
+              >
+                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                  Student
+                  <input
+                    type="text"
+                    value={researchStudent}
+                    onChange={(e) => setResearchStudent(e.target.value)}
+                    placeholder="Name or ID"
+                    style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 180 }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                  Origin
+                  <input
+                    type="text"
+                    value={researchOrigin}
+                    onChange={(e) => setResearchOrigin(e.target.value)}
+                    placeholder="e.g. Room 101"
+                    style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                  Destination
+                  <input
+                    type="text"
+                    value={researchDest}
+                    onChange={(e) => setResearchDest(e.target.value)}
+                    placeholder="e.g. Nurse"
+                    style={{ padding: "0.4rem 0.6rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem", minWidth: 160 }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                  From
+                  <input
+                    type="date"
+                    value={researchStart}
+                    onChange={(e) => setResearchStart(e.target.value)}
+                    style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
+                  />
+                </label>
+                <label style={{ display: "flex", flexDirection: "column", fontSize: "0.8rem", color: "#64748b" }}>
+                  To
+                  <input
+                    type="date"
+                    value={researchEnd}
+                    onChange={(e) => setResearchEnd(e.target.value)}
+                    style={{ padding: "0.35rem 0.5rem", border: "1px solid #cbd5e1", borderRadius: 6, fontSize: "0.9rem" }}
+                  />
+                </label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setResearchStudent("");
+                    setResearchOrigin("");
+                    setResearchDest("");
+                  }}
+                  style={{ padding: "0.45rem 0.9rem", fontSize: "0.85rem" }}
+                >
+                  Clear filters
+                </button>
+              </div>
+
+              {filtered.length === 0 ? (
+                <div style={{ color: "#64748b", padding: "1rem 0" }}>
+                  No passes match the current filters.
+                </div>
+              ) : (
+                <div style={{ maxHeight: 600, overflow: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+                    <thead
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        background: "#f1f5f9",
+                        color: "#64748b",
+                        textAlign: "left",
+                      }}
+                    >
+                      <tr>
+                        <th style={{ padding: "0.6rem 0.75rem", width: 60 }}>Pass</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Student Name</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Grade</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>ID</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Origin</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Destination</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Pass start time</th>
+                        <th style={{ padding: "0.6rem 0.75rem" }}>Duration</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filtered.slice(0, 500).map((p) => {
+                        const info = studentInfo.get(p.studentId);
+                        const d = durMin(p);
+                        return (
+                          <tr key={p.id} style={{ borderTop: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>
+                              <span
+                                style={{
+                                  display: "inline-block",
+                                  width: 36,
+                                  height: 18,
+                                  borderRadius: 4,
+                                  background: statusColor(p),
+                                }}
+                              />
+                            </td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{info?.name || "—"}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>
+                              {info ? String(info.grade).padStart(2, "0") : "—"}
+                            </td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.studentId}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.originRoom}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.destination}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>{fmtDateTime(p.createdAt)}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>
+                              {d == null ? "active" : `${d.toFixed(2)} min`}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  {filtered.length > 500 && (
+                    <div style={{ padding: "0.75rem", fontSize: "0.8rem", color: "#64748b" }}>
+                      Showing first 500 of {filtered.length.toLocaleString()} matching passes. Narrow your filters to see more.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </>
         );
       })()}
