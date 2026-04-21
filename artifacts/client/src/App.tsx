@@ -5106,7 +5106,7 @@ function App() {
                     label: "ISS Dashboard",
                     icon: IconClipboard,
                   })}
-                {canReviewPullouts &&
+                {canReviewPullouts && !isBehaviorSpec &&
                   renderNavItem({
                     key: "behaviorReview",
                     label: "Behavior Review",
