@@ -1976,6 +1976,199 @@ function PolarityStudentPicker({
   );
 }
 
+function StudentCombobox({
+  students,
+  value,
+  onChange,
+  placeholder = "Type name or ID…",
+  minWidth = 280,
+}: {
+  students: Student[];
+  value: string;
+  onChange: (studentId: string) => void;
+  placeholder?: string;
+  minWidth?: number;
+}) {
+  const selected = students.find((s) => s.studentId === value);
+  const labelOf = (s: Student) =>
+    `${s.firstName} ${s.lastName} (${s.studentId})`;
+  const [query, setQuery] = useState(selected ? labelOf(selected) : "");
+  const [open, setOpen] = useState(false);
+  const [highlight, setHighlight] = useState(0);
+  const wrapRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setQuery(selected ? labelOf(selected) : "");
+  }, [value, students]);
+
+  useEffect(() => {
+    const onDocClick = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, []);
+
+  const matches = (() => {
+    const q = query.trim().toLowerCase();
+    const base = q
+      ? students.filter((s) => {
+          const full = `${s.firstName} ${s.lastName}`.toLowerCase();
+          return (
+            full.includes(q) ||
+            s.studentId.toLowerCase().includes(q) ||
+            labelOf(s).toLowerCase().includes(q)
+          );
+        })
+      : students;
+    return base.slice(0, 50);
+  })();
+
+  const commit = (s: Student) => {
+    onChange(s.studentId);
+    setQuery(labelOf(s));
+    setOpen(false);
+  };
+
+  return (
+    <div
+      ref={wrapRef}
+      style={{ position: "relative", display: "inline-block", minWidth }}
+    >
+      <input
+        type="text"
+        value={query}
+        placeholder={placeholder}
+        onFocus={() => {
+          setOpen(true);
+          setHighlight(0);
+        }}
+        onChange={(e) => {
+          setQuery(e.target.value);
+          setOpen(true);
+          setHighlight(0);
+          if (e.target.value.trim() === "") onChange("");
+        }}
+        onKeyDown={(e) => {
+          if (!open && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+            setOpen(true);
+            return;
+          }
+          if (e.key === "ArrowDown") {
+            e.preventDefault();
+            setHighlight((h) => Math.min(h + 1, matches.length - 1));
+          } else if (e.key === "ArrowUp") {
+            e.preventDefault();
+            setHighlight((h) => Math.max(h - 1, 0));
+          } else if (e.key === "Enter") {
+            if (open && matches[highlight]) {
+              e.preventDefault();
+              commit(matches[highlight]);
+            }
+          } else if (e.key === "Escape") {
+            setOpen(false);
+          }
+        }}
+        style={{ width: "100%", padding: "0.4rem 0.55rem" }}
+      />
+      {value && (
+        <button
+          type="button"
+          onClick={() => {
+            onChange("");
+            setQuery("");
+            setOpen(false);
+          }}
+          aria-label="Clear"
+          style={{
+            position: "absolute",
+            right: 6,
+            top: "50%",
+            transform: "translateY(-50%)",
+            background: "transparent",
+            border: "none",
+            color: "#64748b",
+            cursor: "pointer",
+            fontSize: "1.1rem",
+            lineHeight: 1,
+            padding: "0 0.25rem",
+          }}
+        >
+          ×
+        </button>
+      )}
+      {open && matches.length > 0 && (
+        <ul
+          role="listbox"
+          style={{
+            position: "absolute",
+            zIndex: 50,
+            top: "calc(100% + 2px)",
+            left: 0,
+            right: 0,
+            margin: 0,
+            padding: "0.25rem 0",
+            listStyle: "none",
+            background: "#fff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            boxShadow: "0 6px 18px rgba(15,23,42,0.12)",
+            maxHeight: 280,
+            overflowY: "auto",
+          }}
+        >
+          {matches.map((s, i) => (
+            <li
+              key={s.studentId}
+              role="option"
+              aria-selected={i === highlight}
+              onMouseDown={(e) => {
+                e.preventDefault();
+                commit(s);
+              }}
+              onMouseEnter={() => setHighlight(i)}
+              style={{
+                padding: "0.4rem 0.6rem",
+                cursor: "pointer",
+                background: i === highlight ? "#e0f2fe" : "transparent",
+                fontSize: "0.92rem",
+              }}
+            >
+              <strong>
+                {s.firstName} {s.lastName}
+              </strong>{" "}
+              <span style={{ color: "#64748b" }}>
+                · {s.studentId} · Gr {s.grade}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && matches.length === 0 && query.trim() !== "" && (
+        <div
+          style={{
+            position: "absolute",
+            zIndex: 50,
+            top: "calc(100% + 2px)",
+            left: 0,
+            right: 0,
+            background: "#fff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            padding: "0.5rem 0.6rem",
+            color: "#64748b",
+            fontSize: "0.9rem",
+          }}
+        >
+          No matches.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
@@ -7060,58 +7253,25 @@ function App() {
                 ) : accView === "student" ? (
                   <>
                     <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
-                    <div style={{ marginBottom: "0.5rem" }}>
-                      <label>
-                        Student:{" "}
-                        <input
-                          type="text"
-                          list="acc-student-options"
-                          placeholder="Type name or ID…"
-                          defaultValue={(() => {
-                            const s = students.find(
-                              (st) => st.studentId === accStudentId,
-                            );
-                            return s
-                              ? `${s.firstName} ${s.lastName} (${s.studentId})`
-                              : "";
-                          })()}
-                          onChange={(e) => {
-                            const v = e.target.value.trim();
-                            if (v === "") {
-                              setAccStudentId("");
-                              return;
-                            }
-                            const m = v.match(/\(([^)]+)\)\s*$/);
-                            if (m && students.some((st) => st.studentId === m[1])) {
-                              setAccStudentId(m[1]);
-                              return;
-                            }
-                            const lower = v.toLowerCase();
-                            const direct = students.find(
-                              (st) => st.studentId.toLowerCase() === lower,
-                            );
-                            if (direct) {
-                              setAccStudentId(direct.studentId);
-                              return;
-                            }
-                            const byName = students.find(
-                              (st) =>
-                                `${st.firstName} ${st.lastName}`.toLowerCase() ===
-                                lower,
-                            );
-                            if (byName) setAccStudentId(byName.studentId);
-                          }}
-                          style={{ minWidth: 260 }}
-                        />
-                        <datalist id="acc-student-options">
-                          {students.map((st) => (
-                            <option
-                              key={st.studentId}
-                              value={`${st.firstName} ${st.lastName} (${st.studentId})`}
-                            />
-                          ))}
-                        </datalist>
+                    <div
+                      style={{
+                        marginBottom: "0.5rem",
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <label
+                        style={{ fontWeight: 600 }}
+                        htmlFor="acc-student-combobox"
+                      >
+                        Student:
                       </label>
+                      <StudentCombobox
+                        students={students}
+                        value={accStudentId}
+                        onChange={setAccStudentId}
+                      />
                     </div>
                     {!accStudentId ? (
                       <div>Please select a student.</div>
