@@ -9649,7 +9649,6 @@ function App() {
           | "behaviorReview"
           | "interventions"
           | "hallPassMgmt"
-          | "requestPullout"
           | "logIntervention"
           | "verifyPullouts";
         type HubTool = {
@@ -9689,13 +9688,6 @@ function App() {
             desc: "Keep-Apart pairs and other hall-pass safeguards.",
             color: "#0d9488",
             show: canManageBehaviorLists,
-          },
-          {
-            key: "requestPullout",
-            label: "Request Pullout",
-            desc: "Submit a new pullout request for a student.",
-            color: "#0891b2",
-            show: true,
           },
           {
             key: "logIntervention",
