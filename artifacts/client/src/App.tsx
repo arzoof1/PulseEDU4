@@ -6628,7 +6628,7 @@ function App() {
                       No passes recorded this year yet.
                     </div>
                   ) : (
-                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                    <div>
                       <table
                         style={{
                           width: "100%",
@@ -6733,7 +6733,7 @@ function App() {
                       No room activity this year yet.
                     </div>
                   ) : (
-                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                    <div>
                       <table
                         style={{
                           width: "100%",
@@ -6849,7 +6849,7 @@ function App() {
                       No staff activity this year yet.
                     </div>
                   ) : (
-                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                    <div>
                       <table
                         style={{
                           width: "100%",
