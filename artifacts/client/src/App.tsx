@@ -1998,6 +1998,7 @@ function App() {
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
+  const [hpHubExiting, setHpHubExiting] = useState<null | "overview" | "byDay" | "ytd" | "research">(null);
   const [researchStart, setResearchStart] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-01-01`;
@@ -5827,12 +5828,19 @@ function App() {
         return (
           <>
             <div
-              className="card no-print reports-header-burst"
+              className={`card no-print ${hpHubExiting ? "reports-header-shrink" : "reports-header-burst"}`}
               style={{
                 background:
                   "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #1d4ed8 100%)",
                 color: "white",
                 padding: "1.25rem 1.5rem",
+              }}
+              onAnimationEnd={() => {
+                if (hpHubExiting) {
+                  const target = hpHubExiting;
+                  setHpHubExiting(null);
+                  setHpReportSection(target);
+                }
               }}
             >
               <div
@@ -5858,7 +5866,10 @@ function App() {
                     <button
                       key={r.key}
                       type="button"
-                      onClick={() => setHpReportSection(r.key)}
+                      onClick={() => {
+                        if (hpHubExiting) return;
+                        setHpHubExiting(r.key);
+                      }}
                       style={{
                         background: "rgba(255,255,255,0.15)",
                         border: "1px solid rgba(255,255,255,0.4)",
