@@ -5747,16 +5747,16 @@ function App() {
       </>)}
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
         type ReportTool = {
-          key: "byDay";
+          key: "overview";
           label: string;
           desc: string;
           color: string;
         };
         const reports: ReportTool[] = [
           {
-            key: "byDay",
-            label: "Daily Hall Pass Report",
-            desc: "Lost instructional minutes, totals, and per-student breakdown for a single day.",
+            key: "overview",
+            label: "Overview",
+            desc: "School-wide hall pass metrics at a glance.",
             color: "#0d9488",
           },
         ];
@@ -5852,7 +5852,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "overview" && (
         <div className="card">
           <h2>
             <button
@@ -5863,202 +5863,11 @@ function App() {
             >
               ← Back
             </button>
-            Daily Hall Pass Report
-            <button
-              type="button"
-              className="no-print"
-              onClick={() => window.print()}
-              style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
-            >
-              Print
-            </button>
+            Overview
           </h2>
-          <div
-            className="no-print"
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "0.5rem",
-              marginBottom: "0.75rem",
-              flexWrap: "wrap",
-            }}
-          >
-            <label>
-              Date:{" "}
-              <input
-                type="date"
-                value={hpReportDate}
-                onChange={(e) => setHpReportDate(e.target.value)}
-              />
-            </label>
-            <button
-              type="button"
-              onClick={() =>
-                setHpReportDate(new Date().toISOString().slice(0, 10))
-              }
-            >
-              Today
-            </button>
-            <button type="button" onClick={() => loadHpReport()}>
-              Refresh
-            </button>
-            {hpReportLoading && <span style={{ color: "#666" }}>Loading…</span>}
-            {hpReportError && (
-              <span style={{ color: "#a00" }}>{hpReportError}</span>
-            )}
-          </div>
-          {!hpReportData ? (
-            hpReportLoading ? null : <div>No data.</div>
-          ) : (
-            <>
-              <div style={{ marginBottom: "0.5rem", fontSize: "0.85rem", color: "#555" }}>
-                Reporting on {hpReportData.date} (as of{" "}
-                {new Date(hpReportData.asOf).toLocaleString()})
-              </div>
-              <div className="stat-grid" style={{ marginBottom: "1rem" }}>
-                <div className="stat-card">
-                  <span className="stat-label">Total Lost Instructional Minutes</span>
-                  <span className="stat-value">
-                    {hpReportData.totalLostMinutes}
-                  </span>
-                </div>
-                <div className="stat-card">
-                  <span className="stat-label">Total Passes</span>
-                  <span className="stat-value">{hpReportData.totalPasses}</span>
-                </div>
-                <div className="stat-card stat-active">
-                  <span className="stat-label">Currently Active</span>
-                  <span className="stat-value">
-                    {hpReportData.activePassCount}
-                  </span>
-                </div>
-              </div>
-
-              <div
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
-                  gap: "1rem",
-                }}
-              >
-                {/* Top student pass takers */}
-                <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Student Pass Takers</h3>
-                  {hpReportData.topStudentTakers.length === 0 ? (
-                    <div className="muted">No passes today.</div>
-                  ) : (
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Student</th>
-                          <th style={{ textAlign: "right" }}>Passes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {hpReportData.topStudentTakers.map((r, i) => (
-                          <tr key={r.studentId}>
-                            <td>{i + 1}</td>
-                            <td>
-                              {r.studentName}{" "}
-                              <span className="muted">({r.studentId})</span>
-                            </td>
-                            <td style={{ textAlign: "right" }}>{r.count}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-
-                {/* Top student lost instruction */}
-                <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Students by Lost Instruction</h3>
-                  {hpReportData.topStudentLostMinutes.length === 0 ? (
-                    <div className="muted">No passes today.</div>
-                  ) : (
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Student</th>
-                          <th style={{ textAlign: "right" }}>Minutes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {hpReportData.topStudentLostMinutes.map((r, i) => (
-                          <tr key={r.studentId}>
-                            <td>{i + 1}</td>
-                            <td>
-                              {r.studentName}{" "}
-                              <span className="muted">({r.studentId})</span>
-                            </td>
-                            <td style={{ textAlign: "right" }}>{r.minutes}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-
-                {/* Top teacher granters */}
-                <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Teacher Pass Granters</h3>
-                  {hpReportData.topTeacherGranters.length === 0 ? (
-                    <div className="muted">No passes today.</div>
-                  ) : (
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Teacher</th>
-                          <th style={{ textAlign: "right" }}>Passes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {hpReportData.topTeacherGranters.map((r, i) => (
-                          <tr key={r.teacherName}>
-                            <td>{i + 1}</td>
-                            <td>{r.teacherName}</td>
-                            <td style={{ textAlign: "right" }}>{r.count}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-
-                {/* Top destinations */}
-                <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Pass-To Locations</h3>
-                  {hpReportData.topDestinations.length === 0 ? (
-                    <div className="muted">No passes today.</div>
-                  ) : (
-                    <table>
-                      <thead>
-                        <tr>
-                          <th>#</th>
-                          <th>Destination</th>
-                          <th style={{ textAlign: "right" }}>Passes</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {hpReportData.topDestinations.map((r, i) => (
-                          <tr key={r.destination}>
-                            <td>{i + 1}</td>
-                            <td>{r.destination}</td>
-                            <td style={{ textAlign: "right" }}>{r.count}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  )}
-                </div>
-              </div>
-            </>
-          )}
         </div>
       )}
+
       </>)}
 
       {activeSection === "tardies" && (<>
