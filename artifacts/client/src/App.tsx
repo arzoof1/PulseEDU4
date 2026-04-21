@@ -3,6 +3,7 @@ import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
+import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
 
 const destinationsByRoom: Record<string, string[]> = {
@@ -4966,6 +4967,7 @@ function App() {
   };
 
   const isAdmin = authUser?.isAdmin === true;
+  const canManageSettings = isAdmin || authUser?.isSuperUser === true;
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
@@ -5026,7 +5028,7 @@ function App() {
   }, [canReviewPullouts, unreviewedPulloutsTick]);
 
   useEffect(() => {
-    if (!isAdmin && activeSection === "settings") {
+    if (!canManageSettings && activeSection === "settings") {
       setActiveSection("hallPasses");
     }
     if (!canManageStaffRoles && activeSection === "staffRoles") {
@@ -12080,7 +12082,7 @@ function App() {
         <StaffRolesMatrix currentUser={authUser} />
       )}
 
-      {activeSection === "settings" && isAdmin && (
+      {activeSection === "settings" && canManageSettings && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2>
             Admin Notifications
@@ -12163,7 +12165,7 @@ function App() {
         </div>
       )}
 
-      {activeSection === "settings" && isAdmin && (
+      {activeSection === "settings" && canManageSettings && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <div
             style={{
@@ -12268,7 +12270,7 @@ function App() {
         </div>
       )}
 
-      {activeSection === "settings" && isAdmin && (() => {
+      {activeSection === "settings" && canManageSettings && (() => {
         const kioskUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk`;
         return (
           <div className="card" style={{ marginBottom: "1rem" }}>
@@ -12321,7 +12323,7 @@ function App() {
         );
       })()}
 
-      {activeSection === "settings" && isAdmin && (
+      {activeSection === "settings" && canManageSettings && (
         <>
         <StaffRolesAdmin currentStaffId={authUser?.id ?? null} />
         <TeacherAllowlistAdmin
@@ -12335,6 +12337,28 @@ function App() {
           })()}
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}
+        />
+        <LocationsAdmin
+          onChanged={() => {
+            fetch("/api/location-allowed-destinations")
+              .then((r) => r.json())
+              .then(
+                (
+                  data: { originName: string; destinationName: string }[],
+                ) => {
+                  const map: Record<string, string[]> = {};
+                  for (const row of data) {
+                    if (!map[row.originName]) map[row.originName] = [];
+                    map[row.originName].push(row.destinationName);
+                  }
+                  for (const k of Object.keys(map)) {
+                    map[k].sort((a, b) => a.localeCompare(b));
+                  }
+                  setApiDestinationMap(map);
+                },
+              )
+              .catch(() => {});
+          }}
         />
         <StaffDefaultsAdmin
           originLocations={Object.keys(effectiveDestinationsByRoom).sort((a, b) =>
