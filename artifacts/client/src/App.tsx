@@ -5828,6 +5828,7 @@ function App() {
         return (
           <>
             <div
+              key={hpHubExiting ? `shrink-${hpHubExiting}` : "burst"}
               className={`card no-print ${hpHubExiting ? "reports-header-shrink" : "reports-header-burst"}`}
               style={{
                 background:
@@ -5835,7 +5836,8 @@ function App() {
                 color: "white",
                 padding: "1.25rem 1.5rem",
               }}
-              onAnimationEnd={() => {
+              onAnimationEnd={(e) => {
+                if (e.target !== e.currentTarget) return;
                 if (hpHubExiting) {
                   const target = hpHubExiting;
                   setHpHubExiting(null);
