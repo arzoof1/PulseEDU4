@@ -5,6 +5,11 @@ import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
+import SettingsHub, {
+  SettingsBackBar,
+  type SettingsTile,
+  type SettingsTileId,
+} from "./components/SettingsHub";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -1959,6 +1964,7 @@ function App() {
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
+  const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
   const [changePwCurrent, setChangePwCurrent] = useState("");
@@ -3129,6 +3135,16 @@ function App() {
     loadActiveKiosks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authUser?.isAdmin]);
+
+  useEffect(() => {
+    if (activeSection !== "settings") {
+      if (settingsTile !== null) setSettingsTile(null);
+    } else if (settingsTile === null && authUser?.isAdmin) {
+      loadAdminNotifications();
+      loadActiveKiosks();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, settingsTile]);
 
   useEffect(() => {
     if (!authUser) {
@@ -11857,7 +11873,70 @@ function App() {
         <StaffRolesMatrix currentUser={authUser} />
       )}
 
-      {activeSection === "settings" && canManageSettings && (
+      {activeSection === "settings" && canManageSettings && settingsTile === null && (
+        <SettingsHub
+          tiles={(() => {
+            const allowlistCount = Object.keys(teacherAllowlistMap).length;
+            const locationsCount = Object.keys(effectiveDestinationsByRoom).length;
+            const staffDefaultsCount = Object.keys(staffDefaults).length;
+            const tiles: SettingsTile[] = [
+              {
+                id: "notifications",
+                icon: "🔔",
+                title: "Admin Notifications",
+                subtitle: "Pending alerts that need a response.",
+                badge: adminNotifications.length,
+              },
+              {
+                id: "kiosks-active",
+                icon: "🖥️",
+                title: "Active Kiosks",
+                subtitle: "Currently checked-in kiosk stations.",
+                badge: activeKiosks.length,
+              },
+              {
+                id: "kiosk-setup",
+                icon: "🔗",
+                title: "Kiosk Setup",
+                subtitle: "URL, PIN, and QR code for kiosk activation.",
+              },
+              {
+                id: "allowlist",
+                icon: "🚪",
+                title: "Allowed Locations per Teacher",
+                subtitle: `Per-teacher pass destination overrides${allowlistCount ? ` · ${allowlistCount} teachers configured` : ""}.`,
+              },
+              {
+                id: "locations",
+                icon: "📍",
+                title: "Locations",
+                subtitle: `Rooms, destinations, and pairings${locationsCount ? ` · ${locationsCount} origin rooms` : ""}.`,
+              },
+              {
+                id: "school",
+                icon: "🏫",
+                title: "School Settings",
+                subtitle: "Branding, sender name, periods, and bell schedule.",
+              },
+              {
+                id: "staff-defaults",
+                icon: "📋",
+                title: "Staff Defaults",
+                subtitle: `Default rooms by name${staffDefaultsCount ? ` · ${staffDefaultsCount} configured` : ""}. Replaced by per-staff Default Room.`,
+                legacy: true,
+              },
+            ];
+            return tiles;
+          })()}
+          onSelect={setSettingsTile}
+        />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile !== null && (
+        <SettingsBackBar onBack={() => setSettingsTile(null)} />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "notifications" && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2>
             Admin Notifications
@@ -11940,7 +12019,7 @@ function App() {
         </div>
       )}
 
-      {activeSection === "settings" && canManageSettings && (
+      {activeSection === "settings" && canManageSettings && settingsTile === "kiosks-active" && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <div
             style={{
@@ -12045,7 +12124,7 @@ function App() {
         </div>
       )}
 
-      {activeSection === "settings" && canManageSettings && (() => {
+      {activeSection === "settings" && canManageSettings && settingsTile === "kiosk-setup" && (() => {
         const kioskUrl = `${window.location.origin}${import.meta.env.BASE_URL}kiosk`;
         return (
           <div className="card" style={{ marginBottom: "1rem" }}>
@@ -12098,8 +12177,9 @@ function App() {
         );
       })()}
 
-      {activeSection === "settings" && canManageSettings && (
+      {activeSection === "settings" && canManageSettings && (settingsTile === "allowlist" || settingsTile === "locations" || settingsTile === "staff-defaults" || settingsTile === "school") && (
         <>
+        {settingsTile === "allowlist" && (
         <TeacherAllowlistAdmin
           staffUsers={staffUsers}
           allDestinations={(() => {
@@ -12112,6 +12192,8 @@ function App() {
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}
         />
+        )}
+        {settingsTile === "locations" && (
         <LocationsAdmin
           onChanged={() => {
             fetch("/api/location-allowed-destinations")
@@ -12134,6 +12216,8 @@ function App() {
               .catch(() => {});
           }}
         />
+        )}
+        {settingsTile === "staff-defaults" && (
         <StaffDefaultsAdmin
           originLocations={Object.keys(effectiveDestinationsByRoom).sort((a, b) =>
             a.localeCompare(b),
@@ -12151,6 +12235,8 @@ function App() {
               .catch(() => {});
           }}
         />
+        )}
+        {settingsTile === "school" && (
         <div className="card" style={{ marginTop: "1rem" }}>
           <h2>School Settings</h2>
           <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
@@ -12391,6 +12477,7 @@ function App() {
             </div>
           </div>
         </div>
+        )}
         </>
       )}
       </main>
