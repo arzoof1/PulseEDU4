@@ -1998,6 +1998,9 @@ function App() {
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd">("hub");
+  const [ffFilter, setFfFilter] = useState<Record<string, string>>({});
+  const [roomFilter, setRoomFilter] = useState<Record<string, string>>({});
+  const [staffFilter, setStaffFilter] = useState<Record<string, string>>({});
   const [hpOverviewDate, setHpOverviewDate] = useState<string>(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -6608,8 +6611,50 @@ function App() {
                 })
                 .sort((a, b) => b.passes - a.passes);
 
+              const ffMatch = (row: typeof rows[number]) => {
+                const f = ffFilter;
+                if (f.first && !row.first.toLowerCase().includes(f.first.toLowerCase())) return false;
+                if (f.last && !row.last.toLowerCase().includes(f.last.toLowerCase())) return false;
+                if (f.grade && !String(row.grade).padStart(2, "0").includes(f.grade)) return false;
+                if (f.sid && !row.sid.toLowerCase().includes(f.sid.toLowerCase())) return false;
+                if (f.passes && !String(row.passes).includes(f.passes)) return false;
+                if (f.autoEnded && !String(row.autoEnded).includes(f.autoEnded)) return false;
+                if (f.lostMin && !String(row.lostMin).includes(f.lostMin)) return false;
+                return true;
+              };
+              const ffRows = rows.filter(ffMatch).slice(0, 15);
+              const ffTotal = rows.filter(ffMatch).length;
+              const stickyTh: React.CSSProperties = {
+                padding: "0.6rem 0.75rem",
+                position: "sticky",
+                top: 0,
+                background: "#f1f5f9",
+                color: "#64748b",
+                textAlign: "left",
+                zIndex: 2,
+                borderBottom: "1px solid #e2e8f0",
+              };
+              const filterTh: React.CSSProperties = {
+                padding: "0.4rem 0.5rem",
+                position: "sticky",
+                top: 36,
+                background: "#f1f5f9",
+                zIndex: 2,
+                borderBottom: "1px solid #e2e8f0",
+              };
+              const filterInputStyle: React.CSSProperties = {
+                width: "100%",
+                padding: "0.25rem 0.4rem",
+                fontSize: "0.8rem",
+                border: "1px solid #cbd5e1",
+                borderRadius: 4,
+                background: "white",
+              };
+              const setFf = (k: string, v: string) =>
+                setFfFilter((p) => ({ ...p, [k]: v }));
+
               return (
-                <div className="card">
+                <div className="card" style={{ overflow: "visible" }}>
                   <div
                     style={{
                       display: "flex",
@@ -6620,7 +6665,7 @@ function App() {
                   >
                     <h3 style={{ margin: 0 }}>All Frequent Flyers</h3>
                     <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                      {rows.length.toLocaleString()} students with passes YTD
+                      Showing {ffRows.length} of {ffTotal.toLocaleString()} (top 15)
                     </div>
                   </div>
                   {rows.length === 0 ? (
@@ -6628,55 +6673,56 @@ function App() {
                       No passes recorded this year yet.
                     </div>
                   ) : (
-                    <div>
-                      <table
-                        style={{
-                          width: "100%",
-                          borderCollapse: "separate", borderSpacing: 0,
-                          fontSize: "0.9rem",
-                        }}
-                      >
-                        <thead
-                          style={{
-                            position: "sticky",
-                            top: 0,
-                            background: "#f1f5f9",
-                            color: "#64748b",
-                            textAlign: "left",
-                          }}
-                        >
-                          <tr>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>First Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Last Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Grade</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Student ID</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Passes</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Passes Auto Ended</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Lost Instructional Min</th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((r) => (
-                            <tr
-                              key={r.sid}
-                              style={{ borderTop: "1px solid #e2e8f0" }}
-                            >
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {String(r.grade).padStart(2, "0")}
-                              </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.lostMin.toLocaleString()}
-                              </td>
-                            </tr>
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "separate",
+                        borderSpacing: 0,
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          <th style={stickyTh}>First Name</th>
+                          <th style={stickyTh}>Last Name</th>
+                          <th style={stickyTh}>Grade</th>
+                          <th style={stickyTh}>Student ID</th>
+                          <th style={stickyTh}>Passes</th>
+                          <th style={stickyTh}>Passes Auto Ended</th>
+                          <th style={stickyTh}>Lost Instructional Min</th>
+                        </tr>
+                        <tr>
+                          {(["first","last","grade","sid","passes","autoEnded","lostMin"] as const).map((k) => (
+                            <th key={k} style={filterTh}>
+                              <input
+                                type="text"
+                                placeholder="Filter…"
+                                value={ffFilter[k] || ""}
+                                onChange={(e) => setFf(k, e.target.value)}
+                                style={filterInputStyle}
+                              />
+                            </th>
                           ))}
-                        </tbody>
-                      </table>
-                    </div>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ffRows.map((r) => (
+                          <tr key={r.sid} style={{ borderTop: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>
+                              {String(r.grade).padStart(2, "0")}
+                            </td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>
+                              {r.lostMin.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               );
@@ -6713,8 +6759,46 @@ function App() {
                 }))
                 .sort((a, b) => b.from + b.to - (a.from + a.to));
 
+              const rMatch = (row: typeof rows[number]) => {
+                const f = roomFilter;
+                if (f.name && !row.name.toLowerCase().includes(f.name.toLowerCase())) return false;
+                if (f.from && !String(row.from).includes(f.from)) return false;
+                if (f.to && !String(row.to).includes(f.to)) return false;
+                return true;
+              };
+              const rRows = rows.filter(rMatch).slice(0, 15);
+              const rTotal = rows.filter(rMatch).length;
+              const stickyTh: React.CSSProperties = {
+                padding: "0.6rem 0.75rem",
+                position: "sticky",
+                top: 0,
+                background: "#f1f5f9",
+                color: "#64748b",
+                textAlign: "left",
+                zIndex: 2,
+                borderBottom: "1px solid #e2e8f0",
+              };
+              const filterTh: React.CSSProperties = {
+                padding: "0.4rem 0.5rem",
+                position: "sticky",
+                top: 36,
+                background: "#f1f5f9",
+                zIndex: 2,
+                borderBottom: "1px solid #e2e8f0",
+              };
+              const filterInputStyle: React.CSSProperties = {
+                width: "100%",
+                padding: "0.25rem 0.4rem",
+                fontSize: "0.8rem",
+                border: "1px solid #cbd5e1",
+                borderRadius: 4,
+                background: "white",
+              };
+              const setR = (k: string, v: string) =>
+                setRoomFilter((p) => ({ ...p, [k]: v }));
+
               return (
-                <div className="card">
+                <div className="card" style={{ overflow: "visible" }}>
                   <div
                     style={{
                       display: "flex",
@@ -6725,7 +6809,7 @@ function App() {
                   >
                     <h3 style={{ margin: 0 }}>Room Usage</h3>
                     <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                      {rows.length} rooms
+                      Showing {rRows.length} of {rTotal} (top 15)
                     </div>
                   </div>
                   {rows.length === 0 ? (
@@ -6733,53 +6817,48 @@ function App() {
                       No room activity this year yet.
                     </div>
                   ) : (
-                    <div>
-                      <table
-                        style={{
-                          width: "100%",
-                          borderCollapse: "separate", borderSpacing: 0,
-                          fontSize: "0.9rem",
-                        }}
-                      >
-                        <thead
-                          style={{
-                            position: "sticky",
-                            top: 0,
-                            background: "#f1f5f9",
-                            color: "#64748b",
-                            textAlign: "left",
-                          }}
-                        >
-                          <tr>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Room Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
-                              Passes From This Room
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "separate",
+                        borderSpacing: 0,
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          <th style={stickyTh}>Room Name</th>
+                          <th style={stickyTh}>Passes From This Room</th>
+                          <th style={stickyTh}>Passes To This Room</th>
+                        </tr>
+                        <tr>
+                          {(["name","from","to"] as const).map((k) => (
+                            <th key={k} style={filterTh}>
+                              <input
+                                type="text"
+                                placeholder="Filter…"
+                                value={roomFilter[k] || ""}
+                                onChange={(e) => setR(k, e.target.value)}
+                                style={filterInputStyle}
+                              />
                             </th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
-                              Passes To This Room
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((r) => (
-                            <tr
-                              key={r.name}
-                              style={{ borderTop: "1px solid #e2e8f0" }}
-                            >
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.name}
-                              </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.from.toLocaleString()}
-                              </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.to.toLocaleString()}
-                              </td>
-                            </tr>
                           ))}
-                        </tbody>
-                      </table>
-                    </div>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {rRows.map((r) => (
+                          <tr key={r.name} style={{ borderTop: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.name}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>
+                              {r.from.toLocaleString()}
+                            </td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>
+                              {r.to.toLocaleString()}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
                   )}
                 </div>
               );
@@ -6829,8 +6908,47 @@ function App() {
                 })
                 .sort((a, b) => b.fromRoom + b.toRoom - (a.fromRoom + a.toRoom));
 
+              const sMatch = (row: typeof rows[number]) => {
+                const f = staffFilter;
+                if (f.first && !row.first.toLowerCase().includes(f.first.toLowerCase())) return false;
+                if (f.last && !row.last.toLowerCase().includes(f.last.toLowerCase())) return false;
+                if (f.fromRoom && !String(row.fromRoom).includes(f.fromRoom)) return false;
+                if (f.toRoom && !String(row.toRoom).includes(f.toRoom)) return false;
+                return true;
+              };
+              const sRows = rows.filter(sMatch).slice(0, 15);
+              const sTotal = rows.filter(sMatch).length;
+              const stickyTh: React.CSSProperties = {
+                padding: "0.6rem 0.75rem",
+                position: "sticky",
+                top: 0,
+                background: "#f1f5f9",
+                color: "#64748b",
+                textAlign: "left",
+                zIndex: 2,
+                borderBottom: "1px solid #e2e8f0",
+              };
+              const filterTh: React.CSSProperties = {
+                padding: "0.4rem 0.5rem",
+                position: "sticky",
+                top: 36,
+                background: "#f1f5f9",
+                zIndex: 2,
+                borderBottom: "1px solid #e2e8f0",
+              };
+              const filterInputStyle: React.CSSProperties = {
+                width: "100%",
+                padding: "0.25rem 0.4rem",
+                fontSize: "0.8rem",
+                border: "1px solid #cbd5e1",
+                borderRadius: 4,
+                background: "white",
+              };
+              const setS = (k: string, v: string) =>
+                setStaffFilter((p) => ({ ...p, [k]: v }));
+
               return (
-                <div className="card">
+                <div className="card" style={{ overflow: "visible" }}>
                   <div
                     style={{
                       display: "flex",
@@ -6841,7 +6959,7 @@ function App() {
                   >
                     <h3 style={{ margin: 0 }}>Staff Usage</h3>
                     <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                      {rows.length} staff
+                      Showing {sRows.length} of {sTotal} (top 15)
                     </div>
                   </div>
                   {rows.length === 0 ? (
@@ -6849,48 +6967,46 @@ function App() {
                       No staff activity this year yet.
                     </div>
                   ) : (
-                    <div>
-                      <table
-                        style={{
-                          width: "100%",
-                          borderCollapse: "separate", borderSpacing: 0,
-                          fontSize: "0.9rem",
-                        }}
-                      >
-                        <thead
-                          style={{
-                            position: "sticky",
-                            top: 0,
-                            background: "#f1f5f9",
-                            color: "#64748b",
-                            textAlign: "left",
-                          }}
-                        >
-                          <tr>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>First Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>Last Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
-                              Total Passes From this Room
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "separate",
+                        borderSpacing: 0,
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      <thead>
+                        <tr>
+                          <th style={stickyTh}>First Name</th>
+                          <th style={stickyTh}>Last Name</th>
+                          <th style={stickyTh}>Total Passes From this Room</th>
+                          <th style={stickyTh}>Pass to this Room</th>
+                        </tr>
+                        <tr>
+                          {(["first","last","fromRoom","toRoom"] as const).map((k) => (
+                            <th key={k} style={filterTh}>
+                              <input
+                                type="text"
+                                placeholder="Filter…"
+                                value={staffFilter[k] || ""}
+                                onChange={(e) => setS(k, e.target.value)}
+                                style={filterInputStyle}
+                              />
                             </th>
-                            <th style={{ padding: "0.6rem 0.75rem", position: "sticky", top: 0, background: "#f1f5f9", zIndex: 1 }}>
-                              Pass to this Room
-                            </th>
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {rows.map((r) => (
-                            <tr
-                              key={r.name}
-                              style={{ borderTop: "1px solid #e2e8f0" }}
-                            >
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.fromRoom.toLocaleString()}
-                              </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.toRoom.toLocaleString()}
-                              </td>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sRows.map((r) => (
+                          <tr key={r.name} style={{ borderTop: "1px solid #e2e8f0" }}>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>
+                              {r.fromRoom.toLocaleString()}
+                            </td>
+                            <td style={{ padding: "0.55rem 0.75rem" }}>
+                              {r.toRoom.toLocaleString()}
+                            </td>
                             </tr>
                           ))}
                         </tbody>
