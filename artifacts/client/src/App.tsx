@@ -3881,7 +3881,10 @@ function App() {
     }
     setDailySubmitMsg("Submitting...");
     try {
-      const res = await fetch("/api/accommodation-logs/bulk", {
+      const url = authUser?.id
+        ? `/api/accommodation-logs/bulk?staffId=${authUser.id}`
+        : "/api/accommodation-logs/bulk";
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -3889,6 +3892,7 @@ function App() {
           period: periodNum,
           presentStudentIds: present,
           accommodationIds: Array.from(dailySelectedAccs),
+          staffId: authUser?.id,
         }),
       });
       if (!res.ok) {
