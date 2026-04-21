@@ -3864,6 +3864,36 @@ function App() {
       );
   };
 
+  const playEkgBeep = () => {
+    try {
+      const AudioCtx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext?: typeof AudioContext })
+          .webkitAudioContext;
+      if (!AudioCtx) return;
+      const ctx = new AudioCtx();
+      const now = ctx.currentTime;
+      // Two short sine pulses — a classic ECG monitor "blip-blip"
+      const blip = (start: number, freq: number, dur: number, peak: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = "sine";
+        osc.frequency.setValueAtTime(freq, start);
+        gain.gain.setValueAtTime(0, start);
+        gain.gain.linearRampToValueAtTime(peak, start + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+        osc.connect(gain).connect(ctx.destination);
+        osc.start(start);
+        osc.stop(start + dur + 0.02);
+      };
+      blip(now, 880, 0.12, 0.18);
+      blip(now + 0.16, 660, 0.18, 0.14);
+      window.setTimeout(() => ctx.close().catch(() => {}), 600);
+    } catch {
+      // Audio is a nice-to-have; ignore if blocked.
+    }
+  };
+
   const submitDailyLog = async () => {
     if (!dailyPeriod) {
       setDailySubmitMsg("Pick a period first.");
@@ -3930,6 +3960,7 @@ function App() {
       setDailySelectedAccs(new Set());
       setDailyApplyPulse(true);
       window.setTimeout(() => setDailyApplyPulse(false), 1500);
+      playEkgBeep();
       loadAccommodationLogs();
     } catch (err) {
       setDailySubmitMsg(
