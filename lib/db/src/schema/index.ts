@@ -27,3 +27,4 @@ export * from "./polarityPairs";
 export * from "./teacherDestinationAllowlist";
 export * from "./studentHallPassLimits";
 export * from "./districtIntegrations";
+export * from "./customRoles";

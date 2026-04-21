@@ -28,6 +28,7 @@ import pulloutReasonsRouter from "./pulloutReasons";
 import polarityPairsRouter from "./polarityPairs";
 import teacherAllowlistRouter from "./teacherAllowlist";
 import studentHallPassLimitsRouter from "./studentHallPassLimits";
+import customRolesRouter from "./customRoles";
 
 const router: IRouter = Router();
 
@@ -60,5 +61,6 @@ router.use(pulloutReasonsRouter);
 router.use(polarityPairsRouter);
 router.use(teacherAllowlistRouter);
 router.use(studentHallPassLimitsRouter);
+router.use(customRolesRouter);
 
 export default router;

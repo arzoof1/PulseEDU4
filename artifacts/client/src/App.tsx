@@ -3,6 +3,7 @@ import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
+import StaffRolesMatrix from "./components/StaffRolesMatrix";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -2182,6 +2183,7 @@ function App() {
     id: number;
     email: string;
     displayName: string;
+    isSuperUser?: boolean;
     isAdmin: boolean;
     isEseCoordinator: boolean;
     isPbisCoordinator: boolean;
@@ -2189,6 +2191,10 @@ function App() {
     isIssTeacher: boolean;
     isDean: boolean;
     isMtssCoordinator: boolean;
+    isCounselor?: boolean;
+    isSocialWorker?: boolean;
+    capStaffRoles?: boolean;
+    capManageRoles?: boolean;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const currentStaffUser = authUser?.displayName ?? "";
@@ -2242,6 +2248,7 @@ function App() {
     | "behaviorSpecialist"
     | "hallPassMgmt"
     | "settings"
+    | "staffRoles"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -5001,6 +5008,9 @@ function App() {
     if (!isAdmin && activeSection === "settings") {
       setActiveSection("hallPasses");
     }
+    if (!canManageStaffRoles && activeSection === "staffRoles") {
+      setActiveSection("hallPasses");
+    }
     if (!isEseCoord && activeSection === "ese") {
       setActiveSection("hallPasses");
     }
@@ -5081,8 +5091,13 @@ function App() {
     { key: "behaviorSpecialist", label: "Behavior Specialist", icon: IconClipboard },
   ];
   const adminNavSections: NavSection[] = [
+    { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
   ];
+  const canManageStaffRoles =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isAdmin) ||
+    Boolean(authUser?.capStaffRoles);
   const navBadge = (key: typeof activeSection) => {
     const badgeStyle: React.CSSProperties = {
       marginLeft: 6,
@@ -5237,7 +5252,8 @@ function App() {
           canVerifyPullouts ||
           canViewIssDashboard ||
           canReviewPullouts ||
-          isAdmin;
+          isAdmin ||
+          canManageStaffRoles;
         return (
           <aside className="sidebar">
             <div className="section-label">Workspace</div>
@@ -5280,7 +5296,10 @@ function App() {
                     label: "Behavior Review",
                     icon: IconClipboard,
                   })}
-                {isAdmin && adminNavSections.map(renderNavItem)}
+                {isAdmin
+                  ? adminNavSections.map(renderNavItem)
+                  : canManageStaffRoles &&
+                    renderNavItem(adminNavSections[0])}
               </>
             )}
           </aside>
@@ -11860,6 +11879,10 @@ function App() {
             </table>
           )}
         </section>
+      )}
+
+      {activeSection === "staffRoles" && canManageStaffRoles && authUser && (
+        <StaffRolesMatrix currentUser={authUser} />
       )}
 
       {activeSection === "settings" && isAdmin && (

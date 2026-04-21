@@ -23,6 +23,7 @@ export const staffTable = pgTable("staff", {
   displayName: text("display_name").notNull(),
 
   // ---- Role flags (legacy gates + labels/presets) ----
+  isSuperUser: boolean("is_super_user").notNull().default(false),
   isAdmin: boolean("is_admin").notNull().default(false),
   isEseCoordinator: boolean("is_ese_coordinator").notNull().default(false),
   isPbisCoordinator: boolean("is_pbis_coordinator").notNull().default(false),
@@ -30,6 +31,8 @@ export const staffTable = pgTable("staff", {
   isIssTeacher: boolean("is_iss_teacher").notNull().default(false),
   isDean: boolean("is_dean").notNull().default(false),
   isMtssCoordinator: boolean("is_mtss_coordinator").notNull().default(false),
+  isCounselor: boolean("is_counselor").notNull().default(false),
+  isSocialWorker: boolean("is_social_worker").notNull().default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with
@@ -61,6 +64,8 @@ export const staffTable = pgTable("staff", {
     .default(false),
   capIssDashboard: boolean("cap_iss_dashboard").notNull().default(false),
   capManageLocations: boolean("cap_manage_locations").notNull().default(false),
+  capStaffRoles: boolean("cap_staff_roles").notNull().default(false),
+  capManageRoles: boolean("cap_manage_roles").notNull().default(false),
 
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),

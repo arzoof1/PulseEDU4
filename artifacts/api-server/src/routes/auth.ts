@@ -18,6 +18,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     id: row.id,
     email: row.email,
     displayName: row.displayName,
+    isSuperUser: row.isSuperUser,
     isAdmin: row.isAdmin,
     isEseCoordinator: row.isEseCoordinator,
     isPbisCoordinator: row.isPbisCoordinator,
@@ -25,6 +26,10 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isIssTeacher: row.isIssTeacher,
     isDean: row.isDean,
     isMtssCoordinator: row.isMtssCoordinator,
+    isCounselor: row.isCounselor,
+    isSocialWorker: row.isSocialWorker,
+    capStaffRoles: row.capStaffRoles,
+    capManageRoles: row.capManageRoles,
   };
 }
 
