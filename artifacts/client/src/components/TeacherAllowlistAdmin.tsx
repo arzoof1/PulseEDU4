@@ -1,4 +1,5 @@
 import { useMemo, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 interface Props {
   staffUsers: string[];
@@ -32,7 +33,7 @@ export default function TeacherAllowlistAdmin({
     setSavingFor(staffName);
     setErrorFor(null);
     try {
-      const res = await fetch(
+      const res = await authFetch(
         `/api/teacher-allowlist/${encodeURIComponent(staffName)}`,
         {
           method: "PUT",

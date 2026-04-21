@@ -10,6 +10,7 @@ import SettingsHub, {
   type SettingsTile,
   type SettingsTileId,
 } from "./components/SettingsHub";
+import { authFetch } from "./lib/authToken";
 
 const destinationsByRoom: Record<string, string[]> = {
   "Room 101": ["Boys Restroom", "Girls Restroom", "Nurse", "Front Office"],
@@ -3095,7 +3096,7 @@ function App() {
 
   const loadAdminNotifications = () => {
     if (!authUser?.isAdmin) return;
-    fetch("/api/admin/notifications")
+    authFetch("/api/admin/notifications")
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setAdminNotifications(data))
       .catch(() => setAdminNotifications([]));
@@ -3103,14 +3104,14 @@ function App() {
 
   const loadActiveKiosks = () => {
     if (!authUser?.isAdmin) return;
-    fetch("/api/kiosk/activations?status=active")
+    authFetch("/api/kiosk/activations?status=active")
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setActiveKiosks(data))
       .catch(() => setActiveKiosks([]));
   };
 
   const resolveAdminNotification = async (id: number) => {
-    const res = await fetch(`/api/admin/notifications/${id}/resolve`, {
+    const res = await authFetch(`/api/admin/notifications/${id}/resolve`, {
       method: "POST",
     });
     if (res.ok) loadAdminNotifications();
@@ -3124,7 +3125,7 @@ function App() {
     ) {
       return;
     }
-    const res = await fetch(`/api/kiosk/activations/${id}/deactivate`, {
+    const res = await authFetch(`/api/kiosk/activations/${id}/deactivate`, {
       method: "POST",
     });
     if (res.ok) loadActiveKiosks();
@@ -3151,13 +3152,16 @@ function App() {
       setStaffUsers([]);
       return;
     }
-    fetch("/api/admin/staff", { credentials: "include" })
+    authFetch("/api/admin/staff")
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: Array<{ displayName: string; active: boolean }>) => {
-        const names = rows
-          .filter((r) => r.active)
-          .map((r) => r.displayName)
-          .sort((a, b) => a.localeCompare(b));
+        const names = Array.from(
+          new Set(
+            rows
+              .filter((r) => r.active && r.displayName)
+              .map((r) => r.displayName),
+          ),
+        ).sort((a, b) => a.localeCompare(b));
         setStaffUsers(names);
       })
       .catch(() => setStaffUsers([]));
@@ -3215,7 +3219,7 @@ function App() {
         console.error("Failed to load location destinations:", err),
       );
 
-    fetch("/api/teacher-allowlist")
+    authFetch("/api/teacher-allowlist")
       .then((res) => (res.ok ? res.json() : []))
       .then(
         (
@@ -3236,8 +3240,8 @@ function App() {
         console.error("Failed to load teacher allowlist:", err),
       );
 
-    fetch("/api/staff-defaults")
-      .then((res) => res.json())
+    authFetch("/api/staff-defaults")
+      .then((res) => (res.ok ? res.json() : []))
       .then(
         (data: { staffName: string; defaultLocationName: string | null }[]) => {
           const map: Record<string, string> = {};
@@ -12223,8 +12227,8 @@ function App() {
             a.localeCompare(b),
           )}
           onSaved={() => {
-            fetch("/api/staff-defaults")
-              .then((r) => r.json())
+            authFetch("/api/staff-defaults")
+              .then((r) => (r.ok ? r.json() : []))
               .then((rows: Array<{ staffName: string; defaultLocationName: string | null }>) => {
                 const map: Record<string, string> = {};
                 for (const r of rows) {

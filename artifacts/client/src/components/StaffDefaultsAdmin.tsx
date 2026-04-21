@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 type StaffUser = { id: number; displayName: string };
 
@@ -24,11 +25,11 @@ export default function StaffDefaultsAdmin({
   const [filter, setFilter] = useState("");
 
   useEffect(() => {
-    fetch("/api/staff-defaults")
-      .then((r) => r.json())
+    authFetch("/api/staff-defaults")
+      .then((r) => (r.ok ? r.json() : []))
       .then((data: StaffDefaultRow[]) => setRows(data))
       .catch(() => {});
-    fetch("/api/admin/staff", { credentials: "include" })
+    authFetch("/api/admin/staff")
       .then((r) => (r.ok ? r.json() : []))
       .then((data: Array<{ id: number; displayName: string; active?: boolean }>) =>
         setStaffUsers(
@@ -60,18 +61,17 @@ export default function StaffDefaultsAdmin({
   async function save(staffId: number, room: string) {
     setSavingFor(staffId);
     try {
-      const res = await fetch("/api/staff-defaults", {
+      const res = await authFetch("/api/staff-defaults", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({ staffId, defaultLocationName: room }),
       });
       if (!res.ok) {
         const j = await res.json().catch(() => ({}));
         throw new Error(j.error ?? "Save failed");
       }
-      const refreshed = await fetch("/api/staff-defaults").then((r) =>
-        r.json(),
+      const refreshed = await authFetch("/api/staff-defaults").then((r) =>
+        r.ok ? r.json() : [],
       );
       setRows(refreshed);
       onSaved?.();
