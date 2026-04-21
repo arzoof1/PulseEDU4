@@ -221,12 +221,24 @@ export default function CreatePassModal({
   const filteredStudents = useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
     if (!q) return students.slice(0, canChangeTeacher ? 25 : 8);
-    const matches = students.filter(
-      (s) =>
-        s.firstName.toLowerCase().includes(q) ||
-        s.lastName.toLowerCase().includes(q) ||
-        s.studentId.toLowerCase().includes(q),
-    );
+    const scored: Array<{ s: CreatePassStudent; rank: number }> = [];
+    for (const s of students) {
+      const first = s.firstName.toLowerCase();
+      const last = s.lastName.toLowerCase();
+      const sid = s.studentId.toLowerCase();
+      let rank = -1;
+      if (first.startsWith(q) || last.startsWith(q)) rank = 0;
+      else if (sid.startsWith(q)) rank = 1;
+      else if (first.includes(q) || last.includes(q) || sid.includes(q))
+        rank = 2;
+      if (rank >= 0) scored.push({ s, rank });
+    }
+    scored.sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      const al = a.s.lastName.localeCompare(b.s.lastName);
+      return al !== 0 ? al : a.s.firstName.localeCompare(b.s.firstName);
+    });
+    const matches = scored.map((x) => x.s);
     return canChangeTeacher ? matches : matches.slice(0, 50);
   }, [students, studentQuery, canChangeTeacher]);
 
@@ -358,6 +370,11 @@ export default function CreatePassModal({
                 placeholder="Student name or ID"
                 value={studentQuery}
                 onChange={(e) => setStudentQuery(e.target.value)}
+                autoComplete="off"
+                autoCorrect="off"
+                autoCapitalize="off"
+                spellCheck={false}
+                name="cp-student-search"
               />
               <ul className="cp-list">
                 {filteredStudents.map((s) => (
