@@ -1362,7 +1362,7 @@ function BehaviorReviewSection({
         <table
           border={1}
           cellPadding={6}
-          style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}
+          style={{ borderCollapse: "collapse", width: "100%" }}
         >
           <thead>
             <tr>
@@ -1576,7 +1576,7 @@ function PulloutReportSection({ students }: { students: Student[] }) {
         <table
           border={1}
           cellPadding={4}
-          style={{ borderCollapse: "separate", borderSpacing: 0, fontSize: "0.9em" }}
+          style={{ borderCollapse: "collapse", fontSize: "0.9em" }}
         >
           <thead>
             <tr>
@@ -1998,9 +1998,6 @@ function App() {
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd">("hub");
-  const [ffFilter, setFfFilter] = useState<Record<string, string>>({});
-  const [roomFilter, setRoomFilter] = useState<Record<string, string>>({});
-  const [staffUsageFilter, setStaffUsageFilter] = useState<Record<string, string>>({});
   const [hpOverviewDate, setHpOverviewDate] = useState<string>(() => {
     const d = new Date();
     const y = d.getFullYear();
@@ -5594,7 +5591,7 @@ function App() {
           <table
             border={1}
             cellPadding={6}
-            style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%" }}
+            style={{ borderCollapse: "collapse", width: "100%" }}
           >
             <thead>
               <tr>
@@ -6611,50 +6608,8 @@ function App() {
                 })
                 .sort((a, b) => b.passes - a.passes);
 
-              const ffMatch = (row: typeof rows[number]) => {
-                const f = ffFilter;
-                if (f.first && !row.first.toLowerCase().includes(f.first.toLowerCase())) return false;
-                if (f.last && !row.last.toLowerCase().includes(f.last.toLowerCase())) return false;
-                if (f.grade && !String(row.grade).padStart(2, "0").includes(f.grade)) return false;
-                if (f.sid && !row.sid.toLowerCase().includes(f.sid.toLowerCase())) return false;
-                if (f.passes && !String(row.passes).includes(f.passes)) return false;
-                if (f.autoEnded && !String(row.autoEnded).includes(f.autoEnded)) return false;
-                if (f.lostMin && !String(row.lostMin).includes(f.lostMin)) return false;
-                return true;
-              };
-              const ffRows = rows.filter(ffMatch).slice(0, 15);
-              const ffTotal = rows.filter(ffMatch).length;
-              const stickyTh: React.CSSProperties = {
-                padding: "0.6rem 0.75rem",
-                position: "sticky",
-                top: 0,
-                background: "#f1f5f9",
-                color: "#64748b",
-                textAlign: "left",
-                zIndex: 2,
-                borderBottom: "1px solid #e2e8f0",
-              };
-              const filterTh: React.CSSProperties = {
-                padding: "0.4rem 0.5rem",
-                position: "sticky",
-                top: 36,
-                background: "#f1f5f9",
-                zIndex: 2,
-                borderBottom: "1px solid #e2e8f0",
-              };
-              const filterInputStyle: React.CSSProperties = {
-                width: "100%",
-                padding: "0.25rem 0.4rem",
-                fontSize: "0.8rem",
-                border: "1px solid #cbd5e1",
-                borderRadius: 4,
-                background: "white",
-              };
-              const setFf = (k: string, v: string) =>
-                setFfFilter((p) => ({ ...p, [k]: v }));
-
               return (
-                <div className="card" style={{ overflow: "visible" }}>
+                <div className="card">
                   <div
                     style={{
                       display: "flex",
@@ -6665,7 +6620,7 @@ function App() {
                   >
                     <h3 style={{ margin: 0 }}>All Frequent Flyers</h3>
                     <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                      Showing {ffRows.length} of {ffTotal.toLocaleString()} (top 15)
+                      {rows.length.toLocaleString()} students with passes YTD
                     </div>
                   </div>
                   {rows.length === 0 ? (
@@ -6673,56 +6628,55 @@ function App() {
                       No passes recorded this year yet.
                     </div>
                   ) : (
-                    <table
-                      style={{
-                        width: "100%",
-                        borderCollapse: "separate",
-                        borderSpacing: 0,
-                        fontSize: "0.9rem",
-                      }}
-                    >
-                      <thead>
-                        <tr>
-                          <th style={stickyTh}>First Name</th>
-                          <th style={stickyTh}>Last Name</th>
-                          <th style={stickyTh}>Grade</th>
-                          <th style={stickyTh}>Student ID</th>
-                          <th style={stickyTh}>Passes</th>
-                          <th style={stickyTh}>Passes Auto Ended</th>
-                          <th style={stickyTh}>Lost Instructional Min</th>
-                        </tr>
-                        <tr>
-                          {(["first","last","grade","sid","passes","autoEnded","lostMin"] as const).map((k) => (
-                            <th key={k} style={filterTh}>
-                              <input
-                                type="text"
-                                placeholder="Filter…"
-                                value={ffFilter[k] || ""}
-                                onChange={(e) => setFf(k, e.target.value)}
-                                style={filterInputStyle}
-                              />
-                            </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {ffRows.map((r) => (
-                          <tr key={r.sid} style={{ borderTop: "1px solid #e2e8f0" }}>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>
-                              {String(r.grade).padStart(2, "0")}
-                            </td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>
-                              {r.lostMin.toLocaleString()}
-                            </td>
+                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        <thead
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            textAlign: "left",
+                          }}
+                        >
+                          <tr>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Grade</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Student ID</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Passes</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Passes Auto Ended</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Lost Instructional Min</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr
+                              key={r.sid}
+                              style={{ borderTop: "1px solid #e2e8f0" }}
+                            >
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {String(r.grade).padStart(2, "0")}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.lostMin.toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               );
@@ -6751,54 +6705,26 @@ function App() {
                 ...fromCounts.keys(),
                 ...toCounts.keys(),
               ]);
+              const folderFor = (name: string) => {
+                if (/^Room\s+(\d)/i.test(name)) {
+                  const m = name.match(/^Room\s+(\d)/i);
+                  return m ? `${m[1]}00 Hall` : "—";
+                }
+                if (/library|media|gym|nurse|office|counsel/i.test(name))
+                  return "Staff";
+                return "—";
+              };
               const rows = Array.from(allNames)
                 .map((name) => ({
                   name,
                   from: fromCounts.get(name) || 0,
                   to: toCounts.get(name) || 0,
+                  folder: folderFor(name),
                 }))
                 .sort((a, b) => b.from + b.to - (a.from + a.to));
 
-              const rMatch = (row: typeof rows[number]) => {
-                const f = roomFilter;
-                if (f.name && !row.name.toLowerCase().includes(f.name.toLowerCase())) return false;
-                if (f.from && !String(row.from).includes(f.from)) return false;
-                if (f.to && !String(row.to).includes(f.to)) return false;
-                return true;
-              };
-              const rRows = rows.filter(rMatch).slice(0, 15);
-              const rTotal = rows.filter(rMatch).length;
-              const stickyTh: React.CSSProperties = {
-                padding: "0.6rem 0.75rem",
-                position: "sticky",
-                top: 0,
-                background: "#f1f5f9",
-                color: "#64748b",
-                textAlign: "left",
-                zIndex: 2,
-                borderBottom: "1px solid #e2e8f0",
-              };
-              const filterTh: React.CSSProperties = {
-                padding: "0.4rem 0.5rem",
-                position: "sticky",
-                top: 36,
-                background: "#f1f5f9",
-                zIndex: 2,
-                borderBottom: "1px solid #e2e8f0",
-              };
-              const filterInputStyle: React.CSSProperties = {
-                width: "100%",
-                padding: "0.25rem 0.4rem",
-                fontSize: "0.8rem",
-                border: "1px solid #cbd5e1",
-                borderRadius: 4,
-                background: "white",
-              };
-              const setR = (k: string, v: string) =>
-                setRoomFilter((p) => ({ ...p, [k]: v }));
-
               return (
-                <div className="card" style={{ overflow: "visible" }}>
+                <div className="card">
                   <div
                     style={{
                       display: "flex",
@@ -6809,7 +6735,7 @@ function App() {
                   >
                     <h3 style={{ margin: 0 }}>Room Usage</h3>
                     <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                      Showing {rRows.length} of {rTotal} (top 15)
+                      {rows.length} rooms
                     </div>
                   </div>
                   {rows.length === 0 ? (
@@ -6817,48 +6743,57 @@ function App() {
                       No room activity this year yet.
                     </div>
                   ) : (
-                    <table
-                      style={{
-                        width: "100%",
-                        borderCollapse: "separate",
-                        borderSpacing: 0,
-                        fontSize: "0.9rem",
-                      }}
-                    >
-                      <thead>
-                        <tr>
-                          <th style={stickyTh}>Room Name</th>
-                          <th style={stickyTh}>Passes From This Room</th>
-                          <th style={stickyTh}>Passes To This Room</th>
-                        </tr>
-                        <tr>
-                          {(["name","from","to"] as const).map((k) => (
-                            <th key={k} style={filterTh}>
-                              <input
-                                type="text"
-                                placeholder="Filter…"
-                                value={roomFilter[k] || ""}
-                                onChange={(e) => setR(k, e.target.value)}
-                                style={filterInputStyle}
-                              />
+                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        <thead
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            textAlign: "left",
+                          }}
+                        >
+                          <tr>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Room Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Passes From This Room
                             </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {rRows.map((r) => (
-                          <tr key={r.name} style={{ borderTop: "1px solid #e2e8f0" }}>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.name}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>
-                              {r.from.toLocaleString()}
-                            </td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>
-                              {r.to.toLocaleString()}
-                            </td>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Passes To This Room
+                            </th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Room Folder</th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr
+                              key={r.name}
+                              style={{ borderTop: "1px solid #e2e8f0" }}
+                            >
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.name}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.from.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.to.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.folder}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
                 </div>
               );
@@ -6908,47 +6843,8 @@ function App() {
                 })
                 .sort((a, b) => b.fromRoom + b.toRoom - (a.fromRoom + a.toRoom));
 
-              const sMatch = (row: typeof rows[number]) => {
-                const f = staffFilter;
-                if (f.first && !row.first.toLowerCase().includes(f.first.toLowerCase())) return false;
-                if (f.last && !row.last.toLowerCase().includes(f.last.toLowerCase())) return false;
-                if (f.fromRoom && !String(row.fromRoom).includes(f.fromRoom)) return false;
-                if (f.toRoom && !String(row.toRoom).includes(f.toRoom)) return false;
-                return true;
-              };
-              const sRows = rows.filter(sMatch).slice(0, 15);
-              const sTotal = rows.filter(sMatch).length;
-              const stickyTh: React.CSSProperties = {
-                padding: "0.6rem 0.75rem",
-                position: "sticky",
-                top: 0,
-                background: "#f1f5f9",
-                color: "#64748b",
-                textAlign: "left",
-                zIndex: 2,
-                borderBottom: "1px solid #e2e8f0",
-              };
-              const filterTh: React.CSSProperties = {
-                padding: "0.4rem 0.5rem",
-                position: "sticky",
-                top: 36,
-                background: "#f1f5f9",
-                zIndex: 2,
-                borderBottom: "1px solid #e2e8f0",
-              };
-              const filterInputStyle: React.CSSProperties = {
-                width: "100%",
-                padding: "0.25rem 0.4rem",
-                fontSize: "0.8rem",
-                border: "1px solid #cbd5e1",
-                borderRadius: 4,
-                background: "white",
-              };
-              const setS = (k: string, v: string) =>
-                setStaffUsageFilter((p) => ({ ...p, [k]: v }));
-
               return (
-                <div className="card" style={{ overflow: "visible" }}>
+                <div className="card">
                   <div
                     style={{
                       display: "flex",
@@ -6959,7 +6855,7 @@ function App() {
                   >
                     <h3 style={{ margin: 0 }}>Staff Usage</h3>
                     <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
-                      Showing {sRows.length} of {sTotal} (top 15)
+                      {rows.length} staff
                     </div>
                   </div>
                   {rows.length === 0 ? (
@@ -6967,50 +6863,53 @@ function App() {
                       No staff activity this year yet.
                     </div>
                   ) : (
-                    <table
-                      style={{
-                        width: "100%",
-                        borderCollapse: "separate",
-                        borderSpacing: 0,
-                        fontSize: "0.9rem",
-                      }}
-                    >
-                      <thead>
-                        <tr>
-                          <th style={stickyTh}>First Name</th>
-                          <th style={stickyTh}>Last Name</th>
-                          <th style={stickyTh}>Total Passes From this Room</th>
-                          <th style={stickyTh}>Pass to this Room</th>
-                        </tr>
-                        <tr>
-                          {(["first","last","fromRoom","toRoom"] as const).map((k) => (
-                            <th key={k} style={filterTh}>
-                              <input
-                                type="text"
-                                placeholder="Filter…"
-                                value={staffUsageFilter[k] || ""}
-                                onChange={(e) => setS(k, e.target.value)}
-                                style={filterInputStyle}
-                              />
+                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        <thead
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            textAlign: "left",
+                          }}
+                        >
+                          <tr>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Total Passes From this Room
                             </th>
-                          ))}
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {sRows.map((r) => (
-                          <tr key={r.name} style={{ borderTop: "1px solid #e2e8f0" }}>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>
-                              {r.fromRoom.toLocaleString()}
-                            </td>
-                            <td style={{ padding: "0.55rem 0.75rem" }}>
-                              {r.toRoom.toLocaleString()}
-                            </td>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Pass to this Room
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr
+                              key={r.name}
+                              style={{ borderTop: "1px solid #e2e8f0" }}
+                            >
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.fromRoom.toLocaleString()}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {r.toRoom.toLocaleString()}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
                       </table>
+                    </div>
                   )}
                 </div>
               );
@@ -9739,7 +9638,7 @@ function App() {
                             ) : (
                               <table
                                 style={{
-                                  borderCollapse: "separate", borderSpacing: 0,
+                                  borderCollapse: "collapse",
                                   width: "100%",
                                   marginBottom: "0.75rem",
                                 }}
@@ -9847,7 +9746,7 @@ function App() {
                                 <div style={{ overflowX: "auto" }}>
                                   <table
                                     style={{
-                                      borderCollapse: "separate", borderSpacing: 0,
+                                      borderCollapse: "collapse",
                                       fontSize: "0.85rem",
                                     }}
                                   >
@@ -10968,7 +10867,7 @@ function App() {
                       —
                     </div>
                   ) : (
-                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: "0.85rem" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                       <thead>
                         <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                           <th style={{ padding: "0.25rem" }}>Reason</th>
@@ -10997,7 +10896,7 @@ function App() {
                       —
                     </div>
                   ) : (
-                    <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: "0.85rem" }}>
+                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                       <thead>
                         <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                           <th style={{ padding: "0.25rem" }}>Teacher</th>
@@ -11027,7 +10926,7 @@ function App() {
                   No entries match these filters.
                 </div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, fontSize: "0.85rem" }}>
+                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                       <th style={{ padding: "0.25rem" }}>When</th>
@@ -11508,7 +11407,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "separate", borderSpacing: 0,
+                borderCollapse: "collapse",
                 fontSize: "0.9rem",
               }}
             >
@@ -11727,7 +11626,7 @@ function App() {
                       <table
                         style={{
                           width: "100%",
-                          borderCollapse: "separate", borderSpacing: 0,
+                          borderCollapse: "collapse",
                           fontSize: "0.88rem",
                         }}
                       >
@@ -12404,7 +12303,7 @@ function App() {
             <div style={{ color: "var(--muted, #666)" }}>No reasons yet.</div>
           ) : (
             <table
-              style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, maxWidth: "48rem" }}
+              style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
             >
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
@@ -12493,7 +12392,7 @@ function App() {
               No milestones configured yet. (Suggestion: 25, 50, 100.)
             </div>
           ) : (
-            <table style={{ borderCollapse: "separate", borderSpacing: 0, maxWidth: "32rem" }}>
+            <table style={{ borderCollapse: "collapse", maxWidth: "32rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                   <th style={{ padding: "0.4rem" }}>Points</th>
@@ -12530,7 +12429,7 @@ function App() {
           {milestoneEmailLog.length === 0 ? (
             <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
           ) : (
-            <table style={{ borderCollapse: "separate", borderSpacing: 0, width: "100%", maxWidth: "56rem" }}>
+            <table style={{ borderCollapse: "collapse", width: "100%", maxWidth: "56rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                   <th style={{ padding: "0.4rem" }}>When</th>
@@ -12635,7 +12534,7 @@ function App() {
             </div>
           ) : (
             <table
-              style={{ width: "100%", borderCollapse: "separate", borderSpacing: 0, maxWidth: "48rem" }}
+              style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
             >
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
@@ -12851,7 +12750,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "separate", borderSpacing: 0,
+                borderCollapse: "collapse",
                 maxWidth: "70rem",
               }}
             >
@@ -12993,7 +12892,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "separate", borderSpacing: 0,
+                borderCollapse: "collapse",
                 maxWidth: "60rem",
               }}
             >
@@ -13098,7 +12997,7 @@ function App() {
             <table
               style={{
                 width: "100%",
-                borderCollapse: "separate", borderSpacing: 0,
+                borderCollapse: "collapse",
                 maxWidth: "48rem",
               }}
             >
