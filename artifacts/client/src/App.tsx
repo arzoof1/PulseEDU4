@@ -5092,7 +5092,7 @@ function App() {
                 {isEseCoord && eseNavSections.map(renderNavItem)}
                 {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
                 {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
-                {canManageBehaviorLists &&
+                {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
                   renderNavItem({
