@@ -6410,13 +6410,21 @@ function App() {
               };
               const scatterByGrade = new Map<number, ScatterPoint[]>();
               for (const g of grades) scatterByGrade.set(g, []);
+              const stableJitter = (key: string) => {
+                let h = 2166136261;
+                for (let i = 0; i < key.length; i++) {
+                  h ^= key.charCodeAt(i);
+                  h = Math.imul(h, 16777619);
+                }
+                return (((h >>> 0) % 1000) / 1000 - 0.5) * 0.8;
+              };
               for (const [sid, count] of byStudent.entries()) {
                 const info = studentInfo.get(sid);
                 if (!info) continue;
                 const arr = scatterByGrade.get(info.grade);
                 if (!arr) continue;
                 arr.push({
-                  x: info.grade + (Math.random() - 0.5) * 0.8,
+                  x: info.grade + stableJitter(sid),
                   y: count,
                   grade: info.grade,
                   name: info.name,
