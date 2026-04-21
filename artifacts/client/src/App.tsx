@@ -6005,6 +6005,74 @@ function App() {
                 </div>
               )}
             </div>
+
+            {(() => {
+              const counts = new Map<string, number>();
+              for (const p of hallPasses) {
+                if (!p.destination) continue;
+                counts.set(p.destination, (counts.get(p.destination) || 0) + 1);
+              }
+              const top = Array.from(counts.entries())
+                .sort((a, b) => b[1] - a[1])
+                .slice(0, 5);
+              return (
+                <div
+                  className="card"
+                  style={{ width: "33%", minWidth: 280 }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "flex-start",
+                      justifyContent: "space-between",
+                      marginBottom: "0.5rem",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <h3 style={{ margin: 0, fontSize: "1rem" }}>
+                      Most Frequent Room Destinations
+                    </h3>
+                    <span
+                      style={{
+                        fontSize: "0.75rem",
+                        color: "#64748b",
+                        letterSpacing: "0.08em",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      ALL TIME
+                    </span>
+                  </div>
+                  {top.length === 0 ? (
+                    <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
+                      No pass destinations yet.
+                    </div>
+                  ) : (
+                    <ol
+                      style={{
+                        margin: 0,
+                        padding: 0,
+                        listStyle: "none",
+                        display: "grid",
+                        gridTemplateColumns: "1fr 1fr",
+                        gap: "0.35rem 1rem",
+                        fontSize: "0.9rem",
+                        color: "#475569",
+                      }}
+                    >
+                      {top.map(([name, n], i) => (
+                        <li key={name}>
+                          {i + 1}. {name}{" "}
+                          <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>
+                            ({n})
+                          </span>
+                        </li>
+                      ))}
+                    </ol>
+                  )}
+                </div>
+              );
+            })()}
           </>
         );
       })()}
