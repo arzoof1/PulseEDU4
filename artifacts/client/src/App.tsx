@@ -6556,6 +6556,124 @@ function App() {
                 </div>
               );
             })()}
+
+            {(() => {
+              const studentInfo = new Map<
+                string,
+                { first: string; last: string; grade: number }
+              >();
+              for (const s of students) {
+                studentInfo.set(s.studentId, {
+                  first: s.firstName,
+                  last: s.lastName,
+                  grade: s.grade,
+                });
+              }
+              const stats = new Map<
+                string,
+                { passes: number; autoEnded: number }
+              >();
+              for (const p of hallPasses) {
+                const dt = new Date(p.createdAt);
+                if (dt.getFullYear() !== today.getFullYear()) continue;
+                if (!studentInfo.has(p.studentId)) continue;
+                const cur = stats.get(p.studentId) || {
+                  passes: 0,
+                  autoEnded: 0,
+                };
+                cur.passes++;
+                if (p.endedAt) {
+                  const durMin =
+                    (new Date(p.endedAt).getTime() -
+                      new Date(p.createdAt).getTime()) /
+                    60000;
+                  if (durMin >= p.maxDurationMinutes) cur.autoEnded++;
+                }
+                stats.set(p.studentId, cur);
+              }
+              const rows = Array.from(stats.entries())
+                .map(([sid, v]) => {
+                  const info = studentInfo.get(sid)!;
+                  return {
+                    sid,
+                    first: info.first,
+                    last: info.last,
+                    grade: info.grade,
+                    passes: v.passes,
+                    autoEnded: v.autoEnded,
+                  };
+                })
+                .sort((a, b) => b.passes - a.passes);
+
+              return (
+                <div className="card">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <h3 style={{ margin: 0 }}>All Frequent Flyers</h3>
+                    <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                      {rows.length.toLocaleString()} students with passes YTD
+                    </div>
+                  </div>
+                  {rows.length === 0 ? (
+                    <div style={{ color: "#64748b", padding: "1rem 0" }}>
+                      No passes recorded this year yet.
+                    </div>
+                  ) : (
+                    <div style={{ maxHeight: 480, overflow: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: "0.9rem",
+                        }}
+                      >
+                        <thead
+                          style={{
+                            position: "sticky",
+                            top: 0,
+                            background: "#f1f5f9",
+                            color: "#64748b",
+                            textAlign: "left",
+                          }}
+                        >
+                          <tr>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Grade</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Student ID</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Passes</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>Passes Auto Ended</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {rows.map((r) => (
+                            <tr
+                              key={r.sid}
+                              style={{ borderTop: "1px solid #e2e8f0" }}
+                            >
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>
+                                {String(r.grade).padStart(2, "0")}
+                              </td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.sid}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.passes}</td>
+                              <td style={{ padding: "0.55rem 0.75rem" }}>{r.autoEnded}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
           </>
         );
       })()}
