@@ -1979,6 +1979,7 @@ function App() {
 
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
+  const [hpReportSection, setHpReportSection] = useState<"hub" | "byDay">("hub");
   const [passListView, setPassListView] = useState<"active" | "log">("active");
   // Hall pass reports state.
   const [hpReportDate, setHpReportDate] = useState<string>(() =>
@@ -5295,7 +5296,10 @@ function App() {
           </button>
           <button
             type="button"
-            onClick={() => setHpView("reports")}
+            onClick={() => {
+              setHpView("reports");
+              setHpReportSection("hub");
+            }}
             disabled={hpView === "reports"}
           >
             Reports
@@ -5741,10 +5745,125 @@ function App() {
       </div>
 
       </>)}
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && (
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
+        type ReportTool = {
+          key: "byDay";
+          label: string;
+          desc: string;
+          color: string;
+        };
+        const reports: ReportTool[] = [
+          {
+            key: "byDay",
+            label: "Daily Hall Pass Report",
+            desc: "Lost instructional minutes, totals, and per-student breakdown for a single day.",
+            color: "#0d9488",
+          },
+        ];
+        return (
+          <>
+            <div
+              className="card no-print"
+              style={{
+                background:
+                  "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #1d4ed8 100%)",
+                color: "white",
+                padding: "1.25rem 1.5rem",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "1rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: 0, color: "white" }}>
+                    Hall Pass Reports
+                  </h2>
+                  <div style={{ opacity: 0.9, fontSize: "0.9rem", marginTop: 4 }}>
+                    Your hub for hall-pass analytics, lost-time tracking, and
+                    student movement insights.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  {reports.map((r) => (
+                    <button
+                      key={r.key}
+                      type="button"
+                      onClick={() => setHpReportSection(r.key)}
+                      style={{
+                        background: "rgba(255,255,255,0.15)",
+                        border: "1px solid rgba(255,255,255,0.4)",
+                        color: "white",
+                        padding: "0.4rem 0.8rem",
+                        borderRadius: 999,
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {r.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div
+              className="card no-print"
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fill, minmax(240px, 1fr))",
+                gap: "0.75rem",
+              }}
+            >
+              {reports.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => setHpReportSection(r.key)}
+                  style={{
+                    textAlign: "left",
+                    background: "white",
+                    border: `1px solid ${r.color}33`,
+                    borderLeft: `4px solid ${r.color}`,
+                    borderRadius: 8,
+                    padding: "0.85rem 1rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <span style={{ fontWeight: 600, color: r.color }}>
+                    {r.label}
+                  </span>
+                  <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+                    {r.desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        );
+      })()}
+
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (
         <div className="card">
           <h2>
-            Hall Pass Reports
+            <button
+              type="button"
+              className="no-print"
+              onClick={() => setHpReportSection("hub")}
+              style={{ marginRight: "0.75rem", fontSize: "0.85rem" }}
+            >
+              ← Back
+            </button>
+            Daily Hall Pass Report
             <button
               type="button"
               className="no-print"
