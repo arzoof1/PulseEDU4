@@ -6800,15 +6800,23 @@ function App() {
             })()}
 
             {(() => {
-              const teacherCounts = new Map<string, number>();
+              const fromCounts = new Map<string, number>();
+              const toCounts = new Map<string, number>();
               for (const p of hallPasses) {
                 const dt = new Date(p.createdAt);
                 if (dt.getFullYear() !== today.getFullYear()) continue;
-                if (!p.teacherName) continue;
-                teacherCounts.set(
-                  p.teacherName,
-                  (teacherCounts.get(p.teacherName) || 0) + 1,
-                );
+                if (p.teacherName) {
+                  fromCounts.set(
+                    p.teacherName,
+                    (fromCounts.get(p.teacherName) || 0) + 1,
+                  );
+                }
+                if (p.destinationTeacher) {
+                  toCounts.set(
+                    p.destinationTeacher,
+                    (toCounts.get(p.destinationTeacher) || 0) + 1,
+                  );
+                }
               }
               const splitName = (full: string) => {
                 const parts = full.trim().split(/\s+/);
@@ -6818,12 +6826,22 @@ function App() {
                   last: parts.slice(1).join(" "),
                 };
               };
-              const rows = Array.from(teacherCounts.entries())
-                .map(([name, total]) => {
+              const allNames = new Set<string>([
+                ...fromCounts.keys(),
+                ...toCounts.keys(),
+              ]);
+              const rows = Array.from(allNames)
+                .map((name) => {
                   const { first, last } = splitName(name);
-                  return { name, first, last, total, now: total, scheduled: 0 };
+                  return {
+                    name,
+                    first,
+                    last,
+                    fromRoom: fromCounts.get(name) || 0,
+                    toRoom: toCounts.get(name) || 0,
+                  };
                 })
-                .sort((a, b) => b.total - a.total);
+                .sort((a, b) => b.fromRoom + b.toRoom - (a.fromRoom + a.toRoom));
 
               return (
                 <div className="card">
@@ -6865,9 +6883,12 @@ function App() {
                           <tr>
                             <th style={{ padding: "0.6rem 0.75rem" }}>First Name</th>
                             <th style={{ padding: "0.6rem 0.75rem" }}>Last Name</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Total Passes</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Now Passes</th>
-                            <th style={{ padding: "0.6rem 0.75rem" }}>Scheduled Passes</th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Total Passes From this Room
+                            </th>
+                            <th style={{ padding: "0.6rem 0.75rem" }}>
+                              Pass to this Room
+                            </th>
                           </tr>
                         </thead>
                         <tbody>
@@ -6879,13 +6900,10 @@ function App() {
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.first}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>{r.last}</td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.total.toLocaleString()}
+                                {r.fromRoom.toLocaleString()}
                               </td>
                               <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.now.toLocaleString()}
-                              </td>
-                              <td style={{ padding: "0.55rem 0.75rem" }}>
-                                {r.scheduled}
+                                {r.toRoom.toLocaleString()}
                               </td>
                             </tr>
                           ))}
