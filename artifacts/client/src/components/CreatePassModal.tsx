@@ -279,7 +279,13 @@ export default function CreatePassModal({
   const needsContactAck = showContactAck && !contactedAck;
 
   const handleSend = async () => {
-    if (!selectedStudent || !destination || !originRoom) return;
+    if (!selectedStudent || !destination) return;
+    if (!originRoom) {
+      setError(
+        "Pick an origin room before sending. (Set a default room in Staff Defaults to skip this step.)",
+      );
+      return;
+    }
     if (needsContactAck) return;
     setSubmitting(true);
     setError(null);
@@ -449,7 +455,7 @@ export default function CreatePassModal({
                     <strong>{selectedTeacher}</strong>
                   )}
                 </div>
-                {!canChangeTeacher && allRooms.length > 0 && (
+                {allRooms.length > 0 && (
                   <div className="cp-context-row">
                     <span className="cp-context-label">Room</span>
                     <RoomCombobox
