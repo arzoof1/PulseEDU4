@@ -350,7 +350,7 @@ function RequestPulloutSection({
     }
     setSubmitting(true);
     try {
-      const r = await fetch("/api/pullouts", {
+      const r = await authFetch("/api/pullouts", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -689,7 +689,7 @@ function VerifyPulloutsSection({
     setLoading(true);
     setMsg(null);
     try {
-      const r = await fetch("/api/pullouts?scope=pending");
+      const r = await authFetch("/api/pullouts?scope=pending");
       if (!r.ok) {
         setMsg({ ok: false, text: "Could not load pending pullouts." });
         setRows([]);
@@ -999,7 +999,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     setLoading(true);
     setMsg(null);
     try {
-      const r = await fetch("/api/pullouts?scope=active");
+      const r = await authFetch("/api/pullouts?scope=active");
       if (!r.ok) {
         setMsg({ ok: false, text: "Could not load ISS dashboard." });
         setRows([]);
@@ -1272,7 +1272,7 @@ function BehaviorReviewSection({
     setLoading(true);
     setMsg(null);
     try {
-      const r = await fetch("/api/pullouts?scope=unreviewed");
+      const r = await authFetch("/api/pullouts?scope=unreviewed");
       if (!r.ok) {
         setMsg({ ok: false, text: "Could not load review queue." });
         setRows([]);
@@ -2099,7 +2099,7 @@ function App() {
       setAllSections([]);
       return;
     }
-    fetch("/api/schedule?all=1", { credentials: "include" })
+    authFetch("/api/schedule?all=1", { credentials: "include" })
       .then((r) => (r.ok ? r.json() : { sections: [] }))
       .then((data: { sections?: AllSection[] }) =>
         setAllSections(Array.isArray(data.sections) ? data.sections : []),
@@ -2115,7 +2115,7 @@ function App() {
     SchoolAccommodation[]
   >([]);
   useEffect(() => {
-    fetch("/api/school-accommodations", { credentials: "include" })
+    authFetch("/api/school-accommodations", { credentials: "include" })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: SchoolAccommodation[]) =>
         setSchoolAccommodations(Array.isArray(rows) ? rows : []),
@@ -2447,7 +2447,7 @@ function App() {
 
   const loadPbisMilestones = async () => {
     try {
-      const res = await fetch("/api/pbis-milestones");
+      const res = await authFetch("/api/pbis-milestones");
       if (!res.ok) return;
       const data = (await res.json()) as PbisMilestone[];
       setPbisMilestones(Array.isArray(data) ? data : []);
@@ -2457,7 +2457,7 @@ function App() {
   };
   const loadMilestoneEmails = async () => {
     try {
-      const res = await fetch("/api/pbis-milestone-emails");
+      const res = await authFetch("/api/pbis-milestone-emails");
       if (!res.ok) return;
       const data = (await res.json()) as PbisMilestoneEmailRow[];
       setMilestoneEmailLog(Array.isArray(data) ? data : []);
@@ -2468,7 +2468,7 @@ function App() {
   const addMilestone = async () => {
     setMilestoneListMsg("");
     try {
-      const res = await fetch("/api/pbis-milestones", {
+      const res = await authFetch("/api/pbis-milestones", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ points: newMilestonePoints }),
@@ -2656,7 +2656,7 @@ function App() {
     }
     setBulkBusy(true);
     try {
-      const res = await fetch("/api/pbis/bulk", {
+      const res = await authFetch("/api/pbis/bulk", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2725,7 +2725,7 @@ function App() {
 
   const loadPbisGoals = async () => {
     try {
-      const res = await fetch("/api/pbis-goals");
+      const res = await authFetch("/api/pbis-goals");
       if (!res.ok) {
         setPbisGoals([]);
         return;
@@ -2782,7 +2782,7 @@ function App() {
     }
     setGoalBusy(true);
     try {
-      const res = await fetch("/api/pbis-goals", {
+      const res = await authFetch("/api/pbis-goals", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -2937,7 +2937,7 @@ function App() {
 
   const loadInterventionEntries = async () => {
     try {
-      const res = await fetch("/api/interventions");
+      const res = await authFetch("/api/interventions");
       if (!res.ok) {
         setInterventionEntries([]);
         return;
@@ -2962,7 +2962,7 @@ function App() {
     }
     setLogIntervBusy(true);
     try {
-      const res = await fetch("/api/interventions", {
+      const res = await authFetch("/api/interventions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3168,7 +3168,7 @@ function App() {
   }, [authUser?.id]);
 
   const loadHallPasses = () => {
-    fetch("/api/hall-passes")
+    authFetch("/api/hall-passes")
       .then((res) => res.json())
       .then((data: HallPass[]) => setHallPasses(data))
       .catch((err) => console.error("Failed to load hall passes:", err));
@@ -3191,14 +3191,14 @@ function App() {
 
   useEffect(() => {
     if (!authUser) return;
-    fetch("/api/health")
+    authFetch("/api/health")
       .then((res) => res.json())
       .then((data) => console.log("Health check response:", data))
       .catch((err) => console.error("Health check failed:", err));
 
     loadStudents();
 
-    fetch("/api/location-allowed-destinations")
+    authFetch("/api/location-allowed-destinations")
       .then((res) => res.json())
       .then(
         (
@@ -3278,7 +3278,7 @@ function App() {
 
   // ---- Reports tab ----
   const loadReportTeachers = () => {
-    fetch("/api/reports/teachers")
+    authFetch("/api/reports/teachers")
       .then((res) => (res.ok ? res.json() : { teachers: [] }))
       .then((data) =>
         setReportTeachers(Array.isArray(data.teachers) ? data.teachers : []),
@@ -3466,7 +3466,7 @@ function App() {
   ]);
 
   const loadSchoolSettings = () => {
-    fetch("/api/school-settings")
+    authFetch("/api/school-settings")
       .then((res) => res.json())
       .then((data) =>
         setSchoolSettings({
@@ -3496,7 +3496,7 @@ function App() {
     setSettingsStatus("saving");
     setSettingsError("");
     try {
-      const res = await fetch("/api/school-settings", {
+      const res = await authFetch("/api/school-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(schoolSettings),
@@ -3534,21 +3534,21 @@ function App() {
   };
 
   const loadTardies = () => {
-    fetch("/api/tardies")
+    authFetch("/api/tardies")
       .then((res) => res.json())
       .then((data: Tardy[]) => setTardies(data))
       .catch((err) => console.error("Failed to load tardies:", err));
   };
 
   const loadPbis = () => {
-    fetch("/api/pbis")
+    authFetch("/api/pbis")
       .then((res) => res.json())
       .then((data: PbisEntry[]) => setPbisEntries(data))
       .catch((err) => console.error("Failed to load pbis:", err));
   };
 
   const loadAccommodationLogs = () => {
-    fetch("/api/accommodation-logs")
+    authFetch("/api/accommodation-logs")
       .then((res) => res.json())
       .then((data) => setAccommodationLogs(data))
       .catch((err) =>
@@ -3557,14 +3557,14 @@ function App() {
   };
 
   const loadStudents = () => {
-    fetch("/api/students")
+    authFetch("/api/students")
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
   };
 
   const loadSchoolAccommodations = () => {
-    fetch("/api/school-accommodations")
+    authFetch("/api/school-accommodations")
       .then((res) => res.json())
       .then((data) => setSchoolAccs(data))
       .catch((err) =>
@@ -3575,7 +3575,7 @@ function App() {
   const loadPbisReasons = async () => {
     setPbisListMsg("");
     try {
-      const res = await fetch("/api/pbis-reasons");
+      const res = await authFetch("/api/pbis-reasons");
       if (res.status === 401) {
         // Swallow transient 401s on initial load — the user may not be signed
         // in yet, or the session cookie hasn't been attached to this request.
@@ -3602,7 +3602,7 @@ function App() {
   const loadInterventionTypes = async () => {
     setIntervListMsg("");
     try {
-      const res = await fetch("/api/intervention-types");
+      const res = await authFetch("/api/intervention-types");
       if (res.status === 401) {
         // Swallow transient 401s on initial load (see loadPbisReasons note).
         setInterventionList([]);
@@ -3627,7 +3627,7 @@ function App() {
   const loadPolarityPairs = async () => {
     setPolarityMsg("");
     try {
-      const res = await fetch("/api/polarity-pairs");
+      const res = await authFetch("/api/polarity-pairs");
       if (res.status === 401) {
         setPolarityPairs([]);
         return;
@@ -3661,7 +3661,7 @@ function App() {
       return;
     }
     try {
-      const res = await fetch("/api/polarity-pairs", {
+      const res = await authFetch("/api/polarity-pairs", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3807,7 +3807,7 @@ function App() {
       value = n;
     }
     try {
-      const res = await fetch("/api/school-settings", {
+      const res = await authFetch("/api/school-settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         credentials: "include",
@@ -3842,7 +3842,7 @@ function App() {
     }
     setPbisListMsg("");
     try {
-      const res = await fetch("/api/pbis-reasons", {
+      const res = await authFetch("/api/pbis-reasons", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3889,7 +3889,7 @@ function App() {
     }
     setIntervListMsg("");
     try {
-      const res = await fetch("/api/intervention-types", {
+      const res = await authFetch("/api/intervention-types", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -3959,7 +3959,7 @@ function App() {
   const loadPulloutReasons = async () => {
     setPulloutReasonMsg("");
     try {
-      const res = await fetch("/api/pullout-reasons");
+      const res = await authFetch("/api/pullout-reasons");
       if (res.status === 401) {
         // Session not ready yet (startup race or just-signed-out). The card
         // itself is gated to signed-in users, so swallow this silently and
@@ -3991,7 +3991,7 @@ function App() {
     }
     setPulloutReasonMsg("");
     try {
-      const res = await fetch("/api/pullout-reasons", {
+      const res = await authFetch("/api/pullout-reasons", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4444,7 +4444,7 @@ function App() {
     period: number | null,
   ) => {
     try {
-      const res = await fetch("/api/accommodation-logs", {
+      const res = await authFetch("/api/accommodation-logs", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -4468,7 +4468,7 @@ function App() {
     period: number | null,
   ) => {
     try {
-      const res = await fetch("/api/accommodation-logs", {
+      const res = await authFetch("/api/accommodation-logs", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -4488,7 +4488,7 @@ function App() {
   };
 
   const loadSupportNotes = () => {
-    fetch("/api/support-notes")
+    authFetch("/api/support-notes")
       .then((res) => res.json())
       .then((data: SupportNote[]) => setSupportNotes(data))
       .catch((err) => console.error("Failed to load support notes:", err));
@@ -4498,7 +4498,7 @@ function App() {
     e.preventDefault();
     if (!activityStudentId || !supportNoteText.trim()) return;
     try {
-      const res = await fetch("/api/support-notes", {
+      const res = await authFetch("/api/support-notes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4525,7 +4525,7 @@ function App() {
     );
     if (!reason) return;
     try {
-      const res = await fetch("/api/pbis", {
+      const res = await authFetch("/api/pbis", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4561,7 +4561,7 @@ function App() {
     )
       return;
     try {
-      const res = await fetch("/api/tardies", {
+      const res = await authFetch("/api/tardies", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4590,7 +4590,7 @@ function App() {
 
       if (tardyEntryType === "tardy" && tardyCreateReturnPass) {
         try {
-          const passRes = await fetch("/api/hall-passes", {
+          const passRes = await authFetch("/api/hall-passes", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -4689,7 +4689,7 @@ function App() {
     if (!selectedStudentId || !destination || !originRoom) return;
 
     try {
-      const res = await fetch("/api/hall-passes", {
+      const res = await authFetch("/api/hall-passes", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -4787,7 +4787,7 @@ function App() {
       return;
     }
     let cancelled = false;
-    fetch("/api/pullouts?scope=pending")
+    authFetch("/api/pullouts?scope=pending")
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: unknown) => {
         if (cancelled) return;
@@ -4810,7 +4810,7 @@ function App() {
       return;
     }
     let cancelled = false;
-    fetch("/api/pullouts?scope=unreviewed")
+    authFetch("/api/pullouts?scope=unreviewed")
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: unknown) => {
         if (cancelled) return;
@@ -5064,7 +5064,7 @@ function App() {
             <button
               type="button"
               onClick={async () => {
-                await fetch("/api/auth/logout", { method: "POST" });
+                await authFetch("/api/auth/logout", { method: "POST" });
                 setAuthUser(null);
               }}
               style={{
@@ -5365,7 +5365,7 @@ function App() {
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
         onCreate={async (payload) => {
-          const res = await fetch("/api/hall-passes", {
+          const res = await authFetch("/api/hall-passes", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
@@ -6772,7 +6772,7 @@ function App() {
                   setEmailSending(true);
                   setEmailStatus("Sending...");
                   try {
-                    const res = await fetch("/api/parent-email/send", {
+                    const res = await authFetch("/api/parent-email/send", {
                       method: "POST",
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({
@@ -12200,7 +12200,7 @@ function App() {
         {settingsTile === "locations" && (
         <LocationsAdmin
           onChanged={() => {
-            fetch("/api/location-allowed-destinations")
+            authFetch("/api/location-allowed-destinations")
               .then((r) => r.json())
               .then(
                 (
