@@ -14,6 +14,9 @@ import { authFetch } from "./lib/authToken";
 import {
   AreaChart,
   Area,
+  LineChart,
+  Line,
+  Legend,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -6226,6 +6229,106 @@ function App() {
                     </div>
                   );
                 })()}
+                </div>
+              );
+            })()}
+
+            {(() => {
+              const studentGrade = new Map<string, number>();
+              for (const s of students) studentGrade.set(s.id, s.grade);
+              const grades = Array.from(new Set(students.map((s) => s.grade))).sort(
+                (a, b) => a - b,
+              );
+              const gradeColors = ["#22c55e", "#ef4444", "#f59e0b", "#3b82f6", "#a855f7", "#0ea5e9"];
+
+              const yearStart = new Date(today.getFullYear(), 0, 1);
+              const dayMs = 24 * 60 * 60 * 1000;
+              const days: { key: string; label: string; t: number }[] = [];
+              for (let t = yearStart.getTime(); t <= today.getTime(); t += dayMs) {
+                const d = new Date(t);
+                const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+                const label = d.toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                });
+                days.push({ key, label, t });
+              }
+
+              const series = days.map((d) => {
+                const row: Record<string, number | string> = { date: d.label };
+                for (const g of grades) row[`G${g}`] = 0;
+                return row;
+              });
+              const indexByKey = new Map(days.map((d, i) => [d.key, i]));
+
+              let totalYtd = 0;
+              for (const p of hallPasses) {
+                const dt = new Date(p.createdAt);
+                if (dt.getFullYear() !== today.getFullYear()) continue;
+                if (dt.getTime() > today.getTime() + dayMs) continue;
+                const key = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, "0")}-${String(dt.getDate()).padStart(2, "0")}`;
+                const idx = indexByKey.get(key);
+                if (idx == null) continue;
+                const g = studentGrade.get(p.studentId);
+                if (g == null) continue;
+                series[idx][`G${g}`] = (series[idx][`G${g}`] as number) + 1;
+                totalYtd++;
+              }
+
+              return (
+                <div className="card">
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    <h3 style={{ margin: 0 }}>Year to Date Summary</h3>
+                    <div style={{ fontSize: "0.85rem", color: "#64748b" }}>
+                      Total passes YTD: <strong>{totalYtd.toLocaleString()}</strong>
+                    </div>
+                  </div>
+                  {totalYtd === 0 ? (
+                    <div style={{ color: "#64748b", padding: "1rem 0" }}>
+                      No passes recorded this year yet.
+                    </div>
+                  ) : (
+                    <div style={{ width: "100%", height: 340 }}>
+                      <ResponsiveContainer width="100%" height="100%">
+                        <LineChart
+                          data={series}
+                          margin={{ top: 10, right: 20, left: 10, bottom: 40 }}
+                        >
+                          <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                          <XAxis
+                            dataKey="date"
+                            tick={{ fontSize: 11, fill: "#64748b" }}
+                            interval={Math.max(0, Math.floor(series.length / 20))}
+                            angle={-35}
+                            textAnchor="end"
+                            height={60}
+                          />
+                          <YAxis tick={{ fontSize: 11, fill: "#64748b" }} allowDecimals={false} />
+                          <Tooltip />
+                          <Legend />
+                          {grades.map((g, i) => (
+                            <Line
+                              key={g}
+                              type="monotone"
+                              dataKey={`G${g}`}
+                              name={`Grade ${String(g).padStart(2, "0")}`}
+                              stroke={gradeColors[i % gradeColors.length]}
+                              strokeWidth={2}
+                              dot={false}
+                              activeDot={{ r: 4 }}
+                            />
+                          ))}
+                        </LineChart>
+                      </ResponsiveContainer>
+                    </div>
+                  )}
                 </div>
               );
             })()}
