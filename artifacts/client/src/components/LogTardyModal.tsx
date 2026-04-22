@@ -78,6 +78,16 @@ export default function LogTardyModal({
   const [schedule, setSchedule] = useState<BellSchedule | null>(null);
   const [scheduleLoading, setScheduleLoading] = useState(false);
   const [now, setNow] = useState(() => new Date());
+  const [testTime, setTestTime] = useState<string>("");
+  const isDev = import.meta.env.DEV;
+  const effectiveNow = useMemo(() => {
+    if (!isDev || !testTime) return now;
+    const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(testTime);
+    if (!m) return now;
+    const d = new Date(now);
+    d.setHours(parseInt(m[1], 10), parseInt(m[2], 10), 0, 0);
+    return d;
+  }, [isDev, testTime, now]);
 
   const [teacherName, setTeacherName] = useState<string | null>(null);
   const [teacherLoading, setTeacherLoading] = useState(false);
@@ -138,8 +148,8 @@ export default function LogTardyModal({
   }, [open]);
 
   const currentPeriod = useMemo(
-    () => findCurrentPeriod(schedule, now),
-    [schedule, now],
+    () => findCurrentPeriod(schedule, effectiveNow),
+    [schedule, effectiveNow],
   );
   const periodValue = currentPeriod
     ? String(currentPeriod.periodNumber)
@@ -332,6 +342,24 @@ export default function LogTardyModal({
                         : "No active period"}
                   </strong>
                 </div>
+                {isDev && (
+                  <div className="cp-context-row">
+                    <span className="cp-context-label">Test time (dev)</span>
+                    <input
+                      type="time"
+                      value={testTime}
+                      onChange={(e) => setTestTime(e.target.value)}
+                      style={{
+                        padding: "0.25rem 0.5rem",
+                        border: "1px dashed #f59e0b",
+                        borderRadius: 4,
+                        fontSize: "0.85rem",
+                        background: "#fffbeb",
+                      }}
+                      title="Dev only — overrides current time so you can test outside school hours."
+                    />
+                  </div>
+                )}
                 <div className="cp-context-row">
                   <span className="cp-context-label">Teacher</span>
                   <strong>
