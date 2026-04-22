@@ -9072,7 +9072,19 @@ function App() {
 
       {activeSection === "accommodations" && (<>
         <section className="card">
-          <h2>Accommodations</h2>
+          <div className="section-header-bar-teal" />
+          <div className="section-header-band-hub">
+            <h2
+              style={{
+                margin: 0,
+                color: "white",
+                fontSize: "1.5rem",
+                fontWeight: 700,
+              }}
+            >
+              Accommodations
+            </h2>
+          </div>
           {(() => {
             const s = students.find(
               (st) => st.studentId === accStudentId,
