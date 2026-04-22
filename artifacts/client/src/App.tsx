@@ -5829,56 +5829,6 @@ function App() {
             <div
               className="card no-print"
               style={{
-                background:
-                  "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #1d4ed8 100%)",
-                color: "white",
-                padding: "1.25rem 1.5rem",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "space-between",
-                  gap: "1rem",
-                  flexWrap: "wrap",
-                }}
-              >
-                <div>
-                  <h2 style={{ margin: 0, color: "white" }}>
-                    Hall Pass Reports
-                  </h2>
-                  <div style={{ opacity: 0.9, fontSize: "0.9rem", marginTop: 4 }}>
-                    Your hub for hall-pass analytics, lost-time tracking, and
-                    student movement insights.
-                  </div>
-                </div>
-                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                  {reports.map((r) => (
-                    <button
-                      key={r.key}
-                      type="button"
-                      onClick={() => setHpReportSection(r.key)}
-                      style={{
-                        background: "rgba(255,255,255,0.15)",
-                        border: "1px solid rgba(255,255,255,0.4)",
-                        color: "white",
-                        padding: "0.4rem 0.8rem",
-                        borderRadius: 999,
-                        fontSize: "0.85rem",
-                        cursor: "pointer",
-                      }}
-                    >
-                      {r.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-
-            <div
-              className="card no-print"
-              style={{
                 display: "grid",
                 gridTemplateColumns:
                   "repeat(auto-fill, minmax(240px, 1fr))",
