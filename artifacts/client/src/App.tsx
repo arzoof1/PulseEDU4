@@ -11593,13 +11593,13 @@ function App() {
             sees only their own entries.
           </p>
           <div className="card cp-cta-card">
-            <div className="cp-cta-text">Log a Check-In or Check-Out?</div>
+            <div className="cp-cta-text">Need to Log an Intervention?</div>
             <button
               type="button"
               className="cp-cta-button"
               onClick={() => setCheckInOutOpen(true)}
             >
-              + Log Check-In / Check-Out
+              + Log Intervention
             </button>
           </div>
           {intervListMsg && (
