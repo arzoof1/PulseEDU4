@@ -24,14 +24,16 @@ interface TenancyStatus {
   districts: DistrictRow[];
   schools: SchoolRow[];
   counts: Record<string, number>;
+  perSchool: Record<string, Record<string, number>>;
+  orphans: Record<string, number>;
+  totalOrphans: number;
   perSchoolBreakdownAvailable: boolean;
-  note?: string;
 }
 
 const tableLabels: Record<string, string> = {
   students: "Students",
   staff: "Staff",
-  hall_passes: "Hall passes (lifetime)",
+  hall_passes: "Hall passes",
   tardies: "Tardies",
   pbis_entries: "PBIS entries",
   pullouts: "Pullouts",
@@ -77,7 +79,6 @@ export default function TenancyPanel() {
       </div>
     );
   }
-
   if (error) {
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
@@ -86,13 +87,21 @@ export default function TenancyPanel() {
       </div>
     );
   }
-
   if (!status) return null;
 
   const district = status.districts[0] ?? null;
   const schoolsForDistrict = district
     ? status.schools.filter((s) => s.districtId === district.id)
     : [];
+  const orphansClean = status.totalOrphans === 0;
+
+  const cellStyle = { padding: "0.4rem", textAlign: "right" as const };
+  const headStyle = {
+    padding: "0.4rem",
+    textAlign: "right" as const,
+    fontSize: 12,
+    color: "var(--text-subtle)",
+  };
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -216,55 +225,116 @@ export default function TenancyPanel() {
         </table>
       </section>
 
-      <section style={{ marginBottom: "1rem" }}>
-        <h3 style={{ marginBottom: "0.5rem" }}>
-          District-wide row counts (Day 1)
-        </h3>
-        <p style={{ color: "var(--text-subtle)", marginTop: 0, fontSize: 13 }}>
-          Counts are global today. Day 2 adds <code>school_id</code> on every
-          row and breaks these down per-school with an orphan check.
-        </p>
+      <section style={{ marginBottom: "1.25rem" }}>
         <div
           style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(auto-fill, minmax(200px, 1fr))",
-            gap: "0.5rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            marginBottom: "0.5rem",
           }}
         >
-          {Object.entries(status.counts).map(([key, n]) => (
-            <div
-              key={key}
-              style={{
-                padding: "0.6rem 0.75rem",
-                border: "1px solid var(--border, #2a3447)",
-                borderRadius: 8,
-                background: "var(--card-bg, rgba(255,255,255,0.03))",
-              }}
-            >
-              <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-                {tableLabels[key] ?? key}
-              </div>
-              <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
-                {n.toLocaleString()}
-              </div>
-            </div>
-          ))}
+          <h3 style={{ margin: 0 }}>Data integrity check</h3>
+          <span
+            style={{
+              background: orphansClean ? "#dcfce7" : "#fee2e2",
+              color: orphansClean ? "#166534" : "#991b1b",
+              borderRadius: 999,
+              padding: "0.15rem 0.7rem",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            {orphansClean
+              ? `✓ All records assigned to a school (0 orphans)`
+              : `✗ ${status.totalOrphans} orphan rows`}
+          </span>
         </div>
+        {!orphansClean && (
+          <p style={{ color: "#991b1b", marginTop: 0, fontSize: 13 }}>
+            Tables with orphans:&nbsp;
+            {Object.entries(status.orphans)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => `${tableLabels[k] ?? k} (${n})`)
+              .join(", ")}
+            .
+          </p>
+        )}
       </section>
 
-      {status.note && (
-        <div
-          style={{
-            padding: "0.7rem 0.85rem",
-            background: "#fef3c7",
-            color: "#92400e",
-            borderRadius: 8,
-            fontSize: 13,
-          }}
-        >
-          <strong>Next:</strong> {status.note}
+      <section style={{ marginBottom: "0.5rem" }}>
+        <h3 style={{ marginBottom: "0.5rem" }}>Per-school row counts</h3>
+        <p style={{ color: "var(--text-subtle)", marginTop: 0, fontSize: 13 }}>
+          Day 2 has assigned every existing record to{" "}
+          <strong>D. S. Parrott Middle School</strong>. New schools start with
+          zero rows.
+        </p>
+        <div style={{ overflowX: "auto" }}>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: "0.9rem",
+            }}
+          >
+            <thead>
+              <tr
+                style={{
+                  borderBottom: "1px solid var(--border, #2a3447)",
+                }}
+              >
+                <th style={{ textAlign: "left", padding: "0.4rem" }}>
+                  Table
+                </th>
+                {schoolsForDistrict.map((s) => (
+                  <th key={s.id} style={headStyle}>
+                    {s.shortName ?? s.name}
+                    {s.isPrimary ? " ★" : ""}
+                  </th>
+                ))}
+                <th style={headStyle}>Total</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(status.counts).map(([key, total]) => (
+                <tr
+                  key={key}
+                  style={{
+                    borderBottom: "1px solid var(--border, #2a3447)",
+                  }}
+                >
+                  <td style={{ padding: "0.4rem", fontWeight: 600 }}>
+                    {tableLabels[key] ?? key}
+                  </td>
+                  {schoolsForDistrict.map((s) => {
+                    const n = status.perSchool[key]?.[String(s.id)] ?? 0;
+                    return (
+                      <td
+                        key={s.id}
+                        style={{
+                          ...cellStyle,
+                          color:
+                            n === 0 ? "var(--text-subtle)" : "inherit",
+                        }}
+                      >
+                        {n.toLocaleString()}
+                      </td>
+                    );
+                  })}
+                  <td
+                    style={{
+                      ...cellStyle,
+                      fontWeight: 700,
+                    }}
+                  >
+                    {total.toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </section>
     </div>
   );
 }

@@ -62,27 +62,55 @@ Files: `lib/db/src/schema/{staff,customRoles}.ts`,
 - **Combobox pattern**: native `<input list=…>` + `<datalist>` for
   search-filter pickers; plain `<select>` for fixed dropdowns.
 
-## Multi-tenancy — Day 1 (April 2026)
+## Multi-tenancy — Day 1 + Day 2 (April 2026)
 
-PulseEDU is migrating from single-tenant to silo-per-district. Day 1 of the
-Week 1 plan added the foundation tables; data tables remain unscoped until
-Day 2.
+PulseEDU is migrating from single-tenant to silo-per-district.
 
+**Day 1 — foundation tables.**
 - New tables: `districts`, `schools` (`lib/db/src/schema/{districts,schools}.ts`).
 - Seeded: `Hernando County School District` (slug `hernando`, state code `27`)
   with 5 schools — D. S. Parrott Middle (PRIMARY, code 0241), F. W. Springstead
   High (0181), Nature Coast Technical High (0351), Weeki Wachee High (0391),
   Powell Middle (0221).
-- New SuperUser-only Settings tile: **Tenancy** (`TenancyPanel.tsx`) showing
-  the registered district + schools and current district-wide row counts.
+- New SuperUser-only Settings tile: **Tenancy** (`TenancyPanel.tsx`).
 - API: `GET /api/tenancy/status` (SuperUser-gated) — `routes/tenancy.ts`.
+- Idempotent boot-time seed: `seedTenancy()` in `seed.ts`.
 - Tables created via direct SQL because drizzle-kit push prompts on rename
   detection between unrelated existing tables (same workaround used for the
   PBIS thresholds columns).
 
-Day 2 will add `school_id` to all ~22 tenant-scoped tables, backfill every
-existing row to D. S. Parrott (`is_primary = true`), make `school_id` NOT
-NULL, carry `schoolId` on the auth session, and scope every route query.
+**Day 2 — `school_id` on every tenant-scoped table + backfill.**
+- 32 tables now have `school_id INTEGER NOT NULL DEFAULT 1` with a foreign key
+  to `schools(id) ON DELETE RESTRICT` and a `school_id` index. Tables scoped:
+  `students, staff, hall_passes, tardies, pbis_entries, pullouts,
+  accommodation_logs, support_notes, intervention_entries, iss_roster,
+  iss_attendance_day, record_edits, pbis_goals, pbis_milestones,
+  pbis_milestone_emails, pbis_reasons, locations,
+  location_allowed_destinations, bell_schedules, class_sections,
+  section_roster, kiosk_activations, admin_notifications, staff_defaults,
+  student_accommodations, school_accommodations, intervention_types,
+  pullout_reasons, teacher_destination_allowlist, student_hall_pass_limits,
+  trusted_adult_interventions, polarity_pairs`.
+- All existing rows backfilled to D. S. Parrott (`school_id = 1`). 0 orphans
+  across all 32 tables.
+- DEFAULT 1 stays in place as a safety net so legacy INSERT paths that don't
+  yet pass `school_id` still write to Parrott. Day 3 will remove the DEFAULT
+  once routes explicitly carry `req.schoolId`.
+- Drizzle schema files NOT yet updated to declare `school_id` — deliberately
+  deferred to Day 3 when the route-by-route scoping work happens, so we don't
+  pay the cost twice. The DB is the source of truth in the meantime.
+- Tenancy panel now shows: per-school row counts (5 columns × 10 tables),
+  total per row, and a green "✓ All records assigned to a school (0 orphans)"
+  / red "✗ N orphan rows" data-integrity check.
+- Tables NOT scoped (deliberately): `districts`, `schools`, `custom_roles`
+  (cross-school presets), `district_integrations` (district-level),
+  `school_settings` (singleton, becomes per-school in Day 4),
+  `bell_schedule_periods` (child of `bell_schedules`, scoped via parent),
+  `user_sessions`, `check_in_with_options` (legacy).
+
+**Day 3 (next)** — auth session carries `schoolId`; `req.schoolId` middleware
+enforces scoping; SuperUser school switcher in the top bar; create-school
+flow; remove the `school_id` DEFAULT once every INSERT path is explicit.
 
 Multi-day plan tracked in `.local/session_plan.md`.
 

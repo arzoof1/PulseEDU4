@@ -28,8 +28,7 @@ async function requireSuperUser(req: any, res: any) {
   return staff;
 }
 
-// Tables we report row counts for on Day 1. These are the data tables that
-// will receive a school_id column on Day 2.
+// Tables we report row counts for. All have a school_id column as of Day 2.
 const COUNT_TABLES = [
   "students",
   "staff",
@@ -57,16 +56,35 @@ router.get("/tenancy/status", async (req, res) => {
     .from(schoolsTable)
     .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
 
-  // Global counts (district-wide). Per-school counts arrive in Day 2 once
-  // each table has a school_id column.
+  // Per-school + global counts in one pass per table.
   const counts: Record<string, number> = {};
+  const perSchool: Record<string, Record<number, number>> = {};
+  const orphans: Record<string, number> = {};
   for (const t of COUNT_TABLES) {
+    perSchool[t] = {};
     const result = await db.execute(
-      sql.raw(`SELECT COUNT(*)::int AS n FROM ${t}`),
+      sql.raw(
+        `SELECT school_id, COUNT(*)::int AS n FROM ${t} GROUP BY school_id`,
+      ),
     );
-    const row = (result as any).rows?.[0] ?? (result as any)[0];
-    counts[t] = Number(row?.n ?? 0);
+    const rows = (result as any).rows ?? (result as any);
+    let total = 0;
+    let orphanCount = 0;
+    for (const row of rows) {
+      const n = Number(row.n ?? 0);
+      const sid = row.school_id;
+      total += n;
+      if (sid === null || sid === undefined) {
+        orphanCount += n;
+      } else {
+        perSchool[t][Number(sid)] = n;
+      }
+    }
+    counts[t] = total;
+    orphans[t] = orphanCount;
   }
+
+  const totalOrphans = Object.values(orphans).reduce((a, b) => a + b, 0);
 
   res.json({
     districts: districts.map((d) => ({
@@ -87,9 +105,10 @@ router.get("/tenancy/status", async (req, res) => {
       active: s.active,
     })),
     counts,
-    // Day 2 work: school_id columns + per-school breakdown + orphan check.
-    perSchoolBreakdownAvailable: false,
-    note: "Day 1 foundation. Day 2 will tag every existing record to D. S. Parrott Middle School and enable per-school row counts and an orphan check.",
+    perSchool,
+    orphans,
+    totalOrphans,
+    perSchoolBreakdownAvailable: true,
   });
 });
 
