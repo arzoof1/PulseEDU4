@@ -5409,7 +5409,7 @@ function App() {
                       lineHeight: 1.15,
                     }}
                   >
-                    Number of Active<br />Hall Passes
+                    Active Hall Passes
                   </div>
                   <div style={{ fontSize: "1.75rem" }} aria-hidden>
                     🚶
