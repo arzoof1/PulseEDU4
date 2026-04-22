@@ -1190,7 +1190,16 @@ function IssDashboardSection({ students }: { students: Student[] }) {
           alignItems: "baseline",
         }}
       >
-        <h2>ISS Dashboard</h2>
+        <h2
+          style={{
+            margin: 0,
+            fontSize: "1.5rem",
+            fontWeight: 700,
+            color: "#7c3aed",
+          }}
+        >
+          ISS Dashboard
+        </h2>
         <button
           type="button"
           onClick={refresh}
