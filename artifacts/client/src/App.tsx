@@ -12890,13 +12890,17 @@ function App() {
 
       {activeSection === "interventions" && canManageBehaviorLists && (
         <section className="card">
-          <button
-            type="button"
-            className="back-button-purple"
-            onClick={() => setActiveSection("behaviorSpecialist")}
-          >
-            ← Back
-          </button>
+          <div className="section-header-bar-teal" />
+          <div className="section-header-band-hub">
+            <button
+              type="button"
+              className="back-button-purple"
+              style={{ marginBottom: 0 }}
+              onClick={() => setActiveSection("behaviorSpecialist")}
+            >
+              ← Back
+            </button>
+          </div>
           <h2>Classroom Interventions</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
             Manage the intervention types teachers can pick when logging a
