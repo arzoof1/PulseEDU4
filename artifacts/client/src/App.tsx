@@ -8023,15 +8023,6 @@ function App() {
 
               <div style={{ marginBottom: "0.75rem" }}>
                 <strong>Quick Actions:</strong>{" "}
-                <button type="button" onClick={() => setStudentTab("pbis")}>
-                  Add PBIS
-                </button>{" "}
-                <button
-                  type="button"
-                  onClick={() => setStudentTab("supportNotes")}
-                >
-                  Add Support Note
-                </button>{" "}
                 <button type="button" onClick={() => setStudentTab("contact")}>
                   Send Email
                 </button>
