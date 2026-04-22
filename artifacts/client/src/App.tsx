@@ -1355,7 +1355,16 @@ function BehaviorReviewSection({
 
   return (
     <section className="card">
-      <h2>Behavior Review</h2>
+      <h2
+        style={{
+          margin: "0 0 0.5rem",
+          fontSize: "1.5rem",
+          fontWeight: 700,
+          color: "#7c3aed",
+        }}
+      >
+        Behavior Review
+      </h2>
       <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
         Closed pullouts awaiting behavior-specialist review. Add optional
         notes for your records, then mark reviewed to clear from the queue.
