@@ -5458,11 +5458,31 @@ function App() {
                 </div>
               </div>
               <div className="stat-card stat-overdue">
-                <span className="stat-label">Overdue Passes</span>
+                <span
+                  className="stat-label"
+                  style={{
+                    fontSize: "1.5rem",
+                    fontWeight: 800,
+                    color: "#1e1b4b",
+                    lineHeight: 1.15,
+                  }}
+                >
+                  Overdue Passes
+                </span>
                 <span className="stat-value">{overdue}</span>
               </div>
               <div className="stat-card stat-ended">
-                <span className="stat-label">Ended Passes</span>
+                <span
+                  className="stat-label"
+                  style={{
+                    fontSize: "1.5rem",
+                    fontWeight: 800,
+                    color: "#1e1b4b",
+                    lineHeight: 1.15,
+                  }}
+                >
+                  Ended Passes
+                </span>
                 <span className="stat-value">{ended}</span>
               </div>
             </div>
