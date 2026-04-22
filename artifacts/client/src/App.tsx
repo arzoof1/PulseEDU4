@@ -5045,7 +5045,7 @@ function App() {
   const baseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
     { key: "tardies", label: "Tardy Pass", icon: IconClock },
-    { key: "student", label: "Student Activity", icon: IconUser },
+    { key: "student", label: "Family Communication", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
@@ -7910,7 +7910,7 @@ function App() {
                 color: "#7c3aed",
               }}
             >
-              Student Activity
+              Family Communication
             </h2>
           <div style={{ marginBottom: "0.5rem" }}>
             <label style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 480 }}>
