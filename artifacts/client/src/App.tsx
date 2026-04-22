@@ -4963,15 +4963,20 @@ function App() {
       return;
     }
     let cancelled = false;
-    authFetch("/api/pullouts?scope=pending")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: unknown) => {
-        if (cancelled) return;
-        if (Array.isArray(rows)) setPendingPulloutCount(rows.length);
-      })
-      .catch(() => {});
+    const fetchCount = () => {
+      authFetch("/api/pullouts?scope=pending")
+        .then((r) => (r.ok ? r.json() : []))
+        .then((rows: unknown) => {
+          if (cancelled) return;
+          if (Array.isArray(rows)) setPendingPulloutCount(rows.length);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
     return () => {
       cancelled = true;
+      clearInterval(interval);
     };
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
