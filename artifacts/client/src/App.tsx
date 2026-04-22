@@ -11418,6 +11418,17 @@ function App() {
             </div>
           </div>
           <PulloutReportSection students={students} />
+          <svg
+            className="ekg-separator"
+            viewBox="0 0 600 28"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              className="track"
+              d="M0 14 H140 L150 14 L155 6 L162 22 L168 8 L175 14 H300 L310 14 L315 6 L322 22 L328 8 L335 14 H460 L470 14 L475 6 L482 22 L488 8 L495 14 H600"
+            />
+          </svg>
           <IssDashboardSection students={students} />
         </>
       )}
