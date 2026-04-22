@@ -7556,6 +7556,40 @@ function App() {
 
               <div
                 style={{
+                  borderTopLeftRadius: "var(--radius-lg, 8px)",
+                  borderTopRightRadius: "var(--radius-lg, 8px)",
+                  overflow: "hidden",
+                  marginBottom: "0.75rem",
+                }}
+              >
+                <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+                <div
+                  className="section-header-band-hub"
+                  style={{
+                    width: "100%",
+                    margin: 0,
+                    display: "grid",
+                    gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
+                    gap: "1rem",
+                    padding: "0.6rem 1rem",
+                  }}
+                >
+                  <h3 style={{ margin: 0, color: "white", fontSize: "1rem", fontWeight: 700 }}>
+                    Top 10 Student Pass Takers
+                  </h3>
+                  <h3 style={{ margin: 0, color: "white", fontSize: "1rem", fontWeight: 700 }}>
+                    Top 10 Students by Lost Instruction
+                  </h3>
+                  <h3 style={{ margin: 0, color: "white", fontSize: "1rem", fontWeight: 700 }}>
+                    Top 10 Teacher Pass Granters
+                  </h3>
+                  <h3 style={{ margin: 0, color: "white", fontSize: "1rem", fontWeight: 700 }}>
+                    Top 10 Pass-To Locations
+                  </h3>
+                </div>
+              </div>
+              <div
+                style={{
                   display: "grid",
                   gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))",
                   gap: "1rem",
@@ -7563,7 +7597,7 @@ function App() {
               >
                 {/* Top student pass takers */}
                 <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Student Pass Takers</h3>
+                  <h3 style={{ display: "none" }}>Top 10 Student Pass Takers</h3>
                   {hpReportData.topStudentTakers.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
