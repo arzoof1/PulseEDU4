@@ -10280,15 +10280,22 @@ function App() {
                     };
                     return (
                       <>
-                        <h3 style={{ marginTop: 0 }}>
-                          Accommodation Reports
+                        <div
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "space-between",
+                            gap: "0.75rem",
+                            marginBottom: "0.5rem",
+                          }}
+                        >
+                          <h3 style={{ margin: 0 }}>Accommodation Reports</h3>
                           <button
                             type="button"
                             className="back-button-purple no-print"
                             onClick={() => window.print()}
                             style={{
                               marginBottom: 0,
-                              marginLeft: "0.75rem",
                               display: "inline-flex",
                               alignItems: "center",
                               gap: "0.35rem",
@@ -10298,7 +10305,7 @@ function App() {
                             <span aria-hidden="true">🖨</span>
                             Print
                           </button>
-                        </h3>
+                        </div>
 
                         {/* ---- Filter bar ---- */}
                         <div
