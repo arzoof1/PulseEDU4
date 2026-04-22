@@ -7848,19 +7848,22 @@ function App() {
               Student Activity
             </h2>
           <div style={{ marginBottom: "0.5rem" }}>
-            <label>
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               Student:{" "}
-              <input
-                type="text"
-                placeholder="Search by name or ID"
-                value={activityStudentSearch}
-                onChange={(e) => {
-                  setActivityStudentSearch(e.target.value);
-                  setActivityStudentId("");
+              <StudentCombobox
+                students={students}
+                value={activityStudentId}
+                onChange={(id) => {
+                  setActivityStudentId(id);
+                  const s = students.find((x) => x.studentId === id);
+                  setActivityStudentSearch(
+                    s ? `${s.firstName} ${s.lastName} (${s.studentId})` : "",
+                  );
                 }}
+                isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
               />
             </label>
-            {activityStudentId ? (
+            {false && activityStudentId ? (
               <div style={{ marginTop: "0.25rem" }}>
                 Selected: <strong>{activityStudentId}</strong>{" "}
                 {(() => {
@@ -7880,7 +7883,7 @@ function App() {
                 </button>
               </div>
             ) : (
-              activityStudentSearch && (
+              activityStudentSearch && false && (
                 <ul
                   style={{
                     listStyle: "none",
