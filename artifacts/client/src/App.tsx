@@ -11397,13 +11397,26 @@ function App() {
 
       {activeSection === "issDashboard" && canViewIssDashboard && (
         <>
-          <button
-            type="button"
-            className="back-button-purple"
-            onClick={() => setActiveSection("behaviorSpecialist")}
+          <div
+            style={{
+              borderTopLeftRadius: "var(--radius-lg, 8px)",
+              borderTopRightRadius: "var(--radius-lg, 8px)",
+              overflow: "hidden",
+              marginBottom: "-1px",
+            }}
           >
-            ← Back
-          </button>
+            <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+            <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
+              <button
+                type="button"
+                className="back-button-purple"
+                style={{ marginBottom: 0 }}
+                onClick={() => setActiveSection("behaviorSpecialist")}
+              >
+                ← Back
+              </button>
+            </div>
+          </div>
           <PulloutReportSection students={students} />
           <IssDashboardSection students={students} />
         </>
