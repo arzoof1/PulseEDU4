@@ -125,15 +125,18 @@ export async function countPassesToday(studentId: string): Promise<number> {
  */
 export async function getEffectiveDailyLimit(
   studentId: string,
+  schoolId: number,
 ): Promise<{ limit: number; source: "student" | "global" } | null> {
   const studentRow = await getActiveStudentLimit(studentId);
   if (studentRow && studentRow.dailyLimit > 0) {
     return { limit: studentRow.dailyLimit, source: "student" };
   }
+  // Per-school global limit (D4): use the calling staff/kiosk's school,
+  // not "the first row in school_settings" (which silently used Parrott).
   const [settings] = await db
     .select()
     .from(schoolSettingsTable)
-    .limit(1);
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
   const g = settings?.globalDailyHallPassLimit;
   if (typeof g === "number" && g > 0) {
     return { limit: g, source: "global" };
@@ -141,12 +144,15 @@ export async function getEffectiveDailyLimit(
   return null;
 }
 
-export async function findDailyLimitConflict(studentId: string): Promise<{
+export async function findDailyLimitConflict(
+  studentId: string,
+  schoolId: number,
+): Promise<{
   used: number;
   limit: number;
   source: "student" | "global";
 } | null> {
-  const eff = await getEffectiveDailyLimit(studentId);
+  const eff = await getEffectiveDailyLimit(studentId, schoolId);
   if (!eff) return null;
   const used = await countPassesToday(studentId);
   if (used >= eff.limit) {

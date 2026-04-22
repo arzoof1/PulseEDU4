@@ -14,6 +14,7 @@ import {
 import { alias } from "drizzle-orm/pg-core";
 import { and, eq } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -47,7 +48,9 @@ function requireAdminOrSuper() {
   };
 }
 
-router.get("/location-allowed-destinations", async (_req, res) => {
+router.get("/location-allowed-destinations", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const origin = alias(locationsTable, "origin_loc");
   const dest = alias(locationsTable, "dest_loc");
 
@@ -72,7 +75,8 @@ router.get("/location-allowed-destinations", async (_req, res) => {
     .innerJoin(
       dest,
       eq(dest.id, locationAllowedDestinationsTable.destinationLocationId),
-    );
+    )
+    .where(eq(locationAllowedDestinationsTable.schoolId, schoolId));
 
   // Hide pairs where either side has been deactivated, or where the origin is
   // no longer flagged as an origin / the destination as a destination.
@@ -107,6 +111,8 @@ router.post(
   "/location-allowed-destinations",
   requireAdminOrSuper(),
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const b = (req.body ?? {}) as Record<string, unknown>;
     const originId = Number(b.originLocationId);
     const destId = Number(b.destinationLocationId);
@@ -124,10 +130,27 @@ router.post(
         .json({ error: "Origin and destination must differ." });
       return;
     }
+    // Both endpoints must belong to this school.
+    const ends = await db
+      .select({ id: locationsTable.id })
+      .from(locationsTable)
+      .where(
+        and(
+          eq(locationsTable.schoolId, schoolId),
+        ),
+      );
+    const okIds = new Set(ends.map((r) => r.id));
+    if (!okIds.has(originId) || !okIds.has(destId)) {
+      res
+        .status(400)
+        .json({ error: "Origin and destination must belong to this school." });
+      return;
+    }
     try {
       const [row] = await db
         .insert(locationAllowedDestinationsTable)
         .values({
+          schoolId,
           originLocationId: originId,
           destinationLocationId: destId,
         })
@@ -148,6 +171,8 @@ router.delete(
   "/location-allowed-destinations/:id",
   requireAdminOrSuper(),
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: "Invalid id" });
@@ -155,7 +180,12 @@ router.delete(
     }
     const result = await db
       .delete(locationAllowedDestinationsTable)
-      .where(eq(locationAllowedDestinationsTable.id, id))
+      .where(
+        and(
+          eq(locationAllowedDestinationsTable.id, id),
+          eq(locationAllowedDestinationsTable.schoolId, schoolId),
+        ),
+      )
       .returning();
     if (result.length === 0) {
       res.status(404).json({ error: "Pairing not found" });
@@ -171,6 +201,8 @@ router.delete(
   "/location-allowed-destinations/by-origin/:originId",
   requireAdminOrSuper(),
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const id = Number(req.params.originId);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: "Invalid id" });
@@ -178,7 +210,12 @@ router.delete(
     }
     await db
       .delete(locationAllowedDestinationsTable)
-      .where(eq(locationAllowedDestinationsTable.originLocationId, id));
+      .where(
+        and(
+          eq(locationAllowedDestinationsTable.originLocationId, id),
+          eq(locationAllowedDestinationsTable.schoolId, schoolId),
+        ),
+      );
     res.status(204).end();
   },
 );

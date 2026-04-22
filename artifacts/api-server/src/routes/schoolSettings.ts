@@ -1,26 +1,46 @@
 import { Router, type IRouter } from "express";
 import { db, schoolSettingsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
-async function getOrCreate() {
-  const [row] = await db.select().from(schoolSettingsTable).limit(1);
+// Read or lazily create the settings row for a given school. The
+// `school_settings_school_id_unique` index guarantees one row per school,
+// so the second concurrent request just hits the existing row.
+async function getOrCreate(schoolId: number) {
+  const [row] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
   if (row) return row;
-  const [created] = await db
-    .insert(schoolSettingsTable)
-    .values({})
-    .returning();
-  return created;
+  try {
+    const [created] = await db
+      .insert(schoolSettingsTable)
+      .values({ schoolId })
+      .returning();
+    return created;
+  } catch {
+    // Another concurrent request inserted first — just re-read.
+    const [row2] = await db
+      .select()
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    return row2;
+  }
 }
 
-router.get("/school-settings", async (_req, res) => {
-  const row = await getOrCreate();
+router.get("/school-settings", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const row = await getOrCreate(schoolId);
   res.json(row);
 });
 
 router.put("/school-settings", async (req, res): Promise<void> => {
-  const current = await getOrCreate();
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const current = await getOrCreate(schoolId);
   const {
     schoolName,
     fromName,
@@ -168,10 +188,17 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     return;
   }
 
+  // Always scope by both id AND schoolId — defensive, in case the
+  // settings row id ever leaks across schools.
   const [updated] = await db
     .update(schoolSettingsTable)
     .set(updates)
-    .where(eq(schoolSettingsTable.id, current.id))
+    .where(
+      and(
+        eq(schoolSettingsTable.id, current.id),
+        eq(schoolSettingsTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   res.json(updated);
 });

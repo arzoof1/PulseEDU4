@@ -12,6 +12,7 @@ import {
 } from "express";
 import { db, pbisGoalsTable, staffTable } from "@workspace/db";
 import { and, eq, isNull } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -40,9 +41,14 @@ async function requireStaff(
 }
 
 router.get("/pbis-goals", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const studentId =
     typeof req.query.studentId === "string" ? req.query.studentId.trim() : "";
-  const conds = [isNull(pbisGoalsTable.archivedAt)];
+  const conds = [
+    isNull(pbisGoalsTable.archivedAt),
+    eq(pbisGoalsTable.schoolId, schoolId),
+  ];
   if (studentId) conds.push(eq(pbisGoalsTable.studentId, studentId));
   const rows = await db
     .select()
@@ -52,6 +58,8 @@ router.get("/pbis-goals", requireStaff, async (req, res) => {
 });
 
 router.post("/pbis-goals", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
   const { studentId, reason, targetPoints, periodType } = req.body ?? {};
@@ -78,6 +86,7 @@ router.post("/pbis-goals", requireStaff, async (req, res) => {
   const [row] = await db
     .insert(pbisGoalsTable)
     .values({
+      schoolId,
       studentId: studentId.trim(),
       reason: reasonText,
       targetPoints: target,
@@ -91,6 +100,8 @@ router.post("/pbis-goals", requireStaff, async (req, res) => {
 });
 
 router.post("/pbis-goals/:id/archive", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
   const id = Number(req.params.id);
@@ -101,7 +112,9 @@ router.post("/pbis-goals/:id/archive", requireStaff, async (req, res) => {
   const [goal] = await db
     .select()
     .from(pbisGoalsTable)
-    .where(eq(pbisGoalsTable.id, id));
+    .where(
+      and(eq(pbisGoalsTable.id, id), eq(pbisGoalsTable.schoolId, schoolId)),
+    );
   if (!goal) {
     res.status(404).json({ error: "Goal not found" });
     return;

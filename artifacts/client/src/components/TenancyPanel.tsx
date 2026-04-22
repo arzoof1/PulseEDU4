@@ -81,6 +81,10 @@ const tableLabels: Record<string, string> = {
   support_notes: "Support notes",
   intervention_entries: "Intervention entries",
   iss_roster: "ISS roster entries",
+  school_settings: "Settings rows",
+  bell_schedules: "Bell schedules",
+  pbis_reasons: "PBIS reasons",
+  pbis_milestones: "PBIS milestones",
 };
 
 export default function TenancyPanel() {

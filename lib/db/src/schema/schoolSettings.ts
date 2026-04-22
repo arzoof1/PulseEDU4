@@ -1,8 +1,17 @@
-import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, uniqueIndex } from "drizzle-orm/pg-core";
 
-export const schoolSettingsTable = pgTable("school_settings", {
-  id: serial("id").primaryKey(),
-  schoolName: text("school_name").notNull().default("PulseED"),
+// Per-school operational settings. As of D4 there is exactly one row per
+// school (enforced by `school_settings_school_id_unique`). Routes
+// read-or-create the row for `req.schoolId` so a brand-new school gets
+// sensible defaults the first time anyone opens its Settings page.
+export const schoolSettingsTable = pgTable(
+  "school_settings",
+  {
+    id: serial("id").primaryKey(),
+    // Tenant column. NOT NULL DEFAULT 1 stays as a safety net until every
+    // INSERT path is explicit — same pattern as the rest of the D2 work.
+    schoolId: integer("school_id").notNull().default(1),
+    schoolName: text("school_name").notNull().default("PulseED"),
   fromName: text("from_name").notNull().default("PulseED"),
   emailSignature: text("email_signature").notNull().default("Thank you,\nPulseED"),
   periodCount: integer("period_count").notNull().default(7),
@@ -24,6 +33,12 @@ export const schoolSettingsTable = pgTable("school_settings", {
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
-});
+  },
+  (t) => ({
+    schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(
+      t.schoolId,
+    ),
+  }),
+);
 
 export type SchoolSettingsRow = typeof schoolSettingsTable.$inferSelect;

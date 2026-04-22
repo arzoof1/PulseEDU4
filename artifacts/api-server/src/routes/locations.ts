@@ -148,12 +148,25 @@ router.post("/locations", requireAdminOrSuper(), async (req, res) => {
 router.post(
   "/locations/wire-classrooms-mesh",
   requireAdminOrSuper(),
-  async (_req, res) => {
+  async (req, res) => {
     try {
+      const schoolId = req.schoolId;
+      if (!schoolId) {
+        res.status(401).json({ error: "Sign-in required" });
+        return;
+      }
+      // D4: scope mesh-wiring to THIS school. Otherwise an admin could
+      // create cross-school location pairs (and inserts would silently
+      // pick DEFAULT 1 for school_id).
       const classrooms = await db
         .select()
         .from(locationsTable)
-        .where(eq(locationsTable.kind, "classroom"));
+        .where(
+          and(
+            eq(locationsTable.kind, "classroom"),
+            eq(locationsTable.schoolId, schoolId),
+          ),
+        );
       const active = classrooms.filter((c) => c.active);
       let flagsUpdated = 0;
       for (const c of active) {
@@ -161,7 +174,12 @@ router.post(
           await db
             .update(locationsTable)
             .set({ isOrigin: true, isDestination: true })
-            .where(eq(locationsTable.id, c.id));
+            .where(
+              and(
+                eq(locationsTable.id, c.id),
+                eq(locationsTable.schoolId, schoolId),
+              ),
+            );
           flagsUpdated++;
         }
       }
@@ -170,9 +188,11 @@ router.post(
           o: locationAllowedDestinationsTable.originLocationId,
           d: locationAllowedDestinationsTable.destinationLocationId,
         })
-        .from(locationAllowedDestinationsTable);
+        .from(locationAllowedDestinationsTable)
+        .where(eq(locationAllowedDestinationsTable.schoolId, schoolId));
       const have = new Set(existing.map((r) => `${r.o}->${r.d}`));
       const toInsert: Array<{
+        schoolId: number;
         originLocationId: number;
         destinationLocationId: number;
       }> = [];
@@ -181,6 +201,7 @@ router.post(
           if (o.id === d.id) continue;
           if (!have.has(`${o.id}->${d.id}`)) {
             toInsert.push({
+              schoolId,
               originLocationId: o.id,
               destinationLocationId: d.id,
             });
@@ -209,6 +230,11 @@ router.post(
 );
 
 router.delete("/locations/:id", requireAdminOrSuper(), async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: "Invalid id" });
@@ -216,10 +242,13 @@ router.delete("/locations/:id", requireAdminOrSuper(), async (req, res) => {
   }
   // Allowed-destination pairings cascade-delete via FK. Past hall passes,
   // tardies, kiosk events, etc. store the location *name* as text, so
-  // historical records are unaffected by removing a row here.
+  // historical records are unaffected by removing a row here. Scoped by
+  // (id, school_id) so an admin can't delete another school's row by id.
   const result = await db
     .delete(locationsTable)
-    .where(eq(locationsTable.id, id))
+    .where(
+      and(eq(locationsTable.id, id), eq(locationsTable.schoolId, schoolId)),
+    )
     .returning();
   if (result.length === 0) {
     res.status(404).json({ error: "Location not found" });
@@ -229,6 +258,11 @@ router.delete("/locations/:id", requireAdminOrSuper(), async (req, res) => {
 });
 
 router.patch("/locations/:id", requireAdminOrSuper(), async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id <= 0) {
     res.status(400).json({ error: "Invalid id" });
@@ -258,7 +292,9 @@ router.patch("/locations/:id", requireAdminOrSuper(), async (req, res) => {
     const [row] = await db
       .update(locationsTable)
       .set(updates)
-      .where(eq(locationsTable.id, id))
+      .where(
+        and(eq(locationsTable.id, id), eq(locationsTable.schoolId, schoolId)),
+      )
       .returning();
     if (!row) {
       res.status(404).json({ error: "Location not found" });

@@ -73,8 +73,8 @@ router.post("/hall-passes", async (req, res) => {
     return;
   }
 
-  // Daily-limit enforcement (per-student override falls back to global).
-  const limitConflict = await findDailyLimitConflict(studentId);
+  // Daily-limit enforcement (per-student override falls back to per-school global).
+  const limitConflict = await findDailyLimitConflict(studentId, schoolId);
   if (limitConflict) {
     res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;

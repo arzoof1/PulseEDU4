@@ -164,6 +164,107 @@ Day 4.
 
 Multi-day plan tracked in `.local/session_plan.md`.
 
+## Multi-tenancy — Day 4 (April 2026)
+
+D4 makes per-school configuration *truly* per-school instead of singleton.
+
+**Schema (Wave A1).**
+- `school_settings.school_id INTEGER NOT NULL DEFAULT 1` + unique index
+  `school_settings_school_id_unique` — guarantees one row per school.
+- `schools.timezone TEXT NOT NULL DEFAULT 'America/New_York'`.
+- Drizzle schemas updated: `schoolSettings.ts`, `schools.ts`, plus
+  `schoolId` columns added to `pbisGoals`, `pbisMilestones` (table-wide
+  unique on `points` removed in favor of per-school dup-check),
+  `kioskActivations`, `teacherDestinationAllowlist`,
+  `locationAllowedDestinations` (DB columns existed since D2 — Drizzle
+  was missing them).
+
+**Routes (Wave A2).**
+- `requireSchool(req, res)` helper at `src/lib/scope.ts` returns
+  `req.schoolId` or writes 401.
+- Lazy "ensure settings row" pattern in `routes/schoolSettings.ts` —
+  GET reads-or-creates by `req.schoolId`, PUT updates by both `id` AND
+  `school_id` (defensive). Concurrent inserts are absorbed by the
+  unique index + retry-read.
+- Scoped CRUD routes: `bellSchedules.ts`, `teacherAllowlist.ts`,
+  `listsAdmin.ts` (pbis-reasons), `pbisGoals.ts`, `pbisMilestones.ts`,
+  `kiosk.ts` (activations list / activate / deactivate),
+  `locationAllowedDestinations.ts`.
+- **Acceptance criterion fix at `routes/pbis.ts:583`** — the PBIS
+  thresholds query now filters by `staff.schoolId`. Changing
+  `pbisQuietTeacherDays` in Parrott no longer affects Powell.
+- `routes/studentHallPassLimits.ts`: `getEffectiveDailyLimit` and
+  `findDailyLimitConflict` now take `schoolId`. Callers in
+  `hallPasses.ts` (uses `req.schoolId`) and `kiosk.ts` (uses
+  `act.schoolId` from the kiosk activation) pass it through.
+- `kiosk.ts /kiosk/activate` is unauthenticated, so it derives
+  school from the verified staff record (not `req.schoolId`) and
+  stamps `kiosk_activations.school_id` on insert. Origin-room lookup
+  is also filtered to the staff's school.
+
+**Post-review hardening (Wave A2.1).**
+After the first architect pass, several non-obvious cross-school readers
+were closed:
+- `routes/issAttendance.ts /iss-attendance/today-periods` now scopes the
+  bell-schedule lookup by `req.schoolId` (an ISS dean was previously
+  seeing the first active default schedule globally).
+- `routes/pbis.ts` cold-period logic scopes the `bellSchedules` query
+  by `staff.schoolId`.
+- `routes/kiosk.ts /kiosk/hall-passes` resolves origin/destination by
+  `(name, act.schoolId)` and checks the allowlist by
+  `(schoolId, origin, dest)` — names like "Library" can repeat across
+  schools, so name-only lookup was a leak.
+- `routes/locations.ts /wire-classrooms-mesh` now requires
+  `req.schoolId`, reads classrooms + existing pairs filtered by school,
+  and **stamps `school_id` on inserted mesh pairs** (previously inserts
+  silently fell through to `DEFAULT 1`).
+- `routes/locations.ts` PATCH/DELETE `/locations/:id` now match by
+  `(id, schoolId)` so an admin can't mutate another school's row by id.
+- DB constraint `pbis_milestones_school_points_unique UNIQUE
+  (school_id, points)` replaces the old table-wide
+  `pbis_milestones_points_key` — concurrency-safe per-school dup check.
+
+**Tenancy panel (Wave A3).**
+- `routes/tenancy.ts` `COUNT_TABLES` extended with `school_settings`,
+  `bell_schedules`, `pbis_reasons`, `pbis_milestones`. SuperUsers see
+  "1 settings row per school visited" once each school's UI loads.
+
+**Known D5 gaps (deferred).**
+The following downstream consumers still read
+`schoolSettings...limit(1)` (singleton, effectively Parrott) because
+they run from background jobs / email helpers without a `req` in
+scope. Threading `schoolId` through requires a bigger refactor:
+- `lib/dailyDigest.ts` — daily digest scheduler.
+- `lib/pulloutEmail.ts`, `routes/email.ts`, `routes/parentEmail.ts`,
+  `lib/pbisMilestones.ts` — email composition (fromName, signature,
+  schoolName).
+These read display-only fields (school name, sender name, signature),
+so they degrade gracefully but should be tenant-aware in D5.
+
+Additional D5 follow-ups surfaced by code review (cross-school *data*
+leak risk — distinct from the per-school *settings* this wave fixed):
+- `routes/issAttendance.ts` `GET /iss-attendance` (day-only filter) and
+  `PUT /iss-attendance/:id` (id-only update).
+- `routes/pbis.ts` `/pbis/needs-attention` top-heavy `monthEntries`
+  query, plus `PATCH /pbis/:id` and `POST /pbis/:id/void` (id-only).
+- `routes/pbisMilestones.ts` `/pbis-milestone-emails` listing.
+- `routes/studentHallPassLimits.ts` `countPassesToday`, GET active
+  limits, DELETE by id.
+These do NOT block the D4 acceptance criterion (settings isolation),
+but should be scoped before any second district goes live.
+
+**Verification.**
+SQL spot-check after migration:
+```
+INSERT INTO school_settings (school_id, school_name, pbis_quiet_teacher_days)
+VALUES (5, 'Powell Middle', 2);
+SELECT school_id, school_name, pbis_quiet_teacher_days FROM school_settings;
+-- → 1|PulseEDU|5    5|Powell Middle|2
+```
+Independent rows; PBIS query reads the one matching the caller's
+school. `school_settings_school_id_unique` index guarantees the
+lazy-create can't double-insert under contention.
+
 ## Bell Schedule (April 2026)
 
 School Bell Schedule management lives at top-level nav "Bell Schedule" and is

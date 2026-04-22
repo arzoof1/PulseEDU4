@@ -226,6 +226,8 @@ router.post("/tenancy/schools", async (req, res) => {
 });
 
 // Tables we report row counts for. All have a school_id column as of Day 2.
+// Day 4 added the per-school settings/config tables so SuperUsers can verify
+// silo isolation at a glance (e.g. "1 settings row per school visited").
 const COUNT_TABLES = [
   "students",
   "staff",
@@ -237,6 +239,10 @@ const COUNT_TABLES = [
   "support_notes",
   "intervention_entries",
   "iss_roster",
+  "school_settings",
+  "bell_schedules",
+  "pbis_reasons",
+  "pbis_milestones",
 ] as const;
 
 router.get("/tenancy/status", async (req, res) => {

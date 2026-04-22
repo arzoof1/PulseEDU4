@@ -22,7 +22,8 @@ import {
   trustedAdultInterventionsTable,
   staffTable,
 } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -71,14 +72,19 @@ const requireInterventionAdmin = requireRole(
 router.get("/pbis-reasons", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select()
     .from(pbisReasonsTable)
+    .where(eq(pbisReasonsTable.schoolId, schoolId))
     .orderBy(pbisReasonsTable.category, pbisReasonsTable.name);
   res.json(rows);
 });
 
 router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { name, category, defaultPoints } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -95,22 +101,36 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
     }
     pts = n;
   }
+  // Duplicate-name check is per-school only.
   const existing = await db
     .select()
     .from(pbisReasonsTable)
-    .where(sql`lower(${pbisReasonsTable.name}) = lower(${name.trim()})`);
+    .where(
+      and(
+        eq(pbisReasonsTable.schoolId, schoolId),
+        sql`lower(${pbisReasonsTable.name}) = lower(${name.trim()})`,
+      ),
+    );
   if (existing.length > 0) {
     res.status(409).json({ error: "Reason name already exists" });
     return;
   }
   const [row] = await db
     .insert(pbisReasonsTable)
-    .values({ name: name.trim(), category: cat, defaultPoints: pts, active: true })
+    .values({
+      schoolId,
+      name: name.trim(),
+      category: cat,
+      defaultPoints: pts,
+      active: true,
+    })
     .returning();
   res.status(201).json(row);
 });
 
 router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -137,7 +157,12 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
   const [row] = await db
     .update(pbisReasonsTable)
     .set(updates)
-    .where(eq(pbisReasonsTable.id, id))
+    .where(
+      and(
+        eq(pbisReasonsTable.id, id),
+        eq(pbisReasonsTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });

@@ -11,8 +11,9 @@ import {
   bellSchedulePeriodsTable,
   staffTable,
 } from "@workspace/db";
-import { and, asc, eq } from "drizzle-orm";
+import { and, asc, eq, inArray } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -92,14 +93,22 @@ function parsePeriods(raw: unknown): PeriodInput[] | string {
   return out;
 }
 
-async function listSchedules() {
+async function listSchedules(schoolId: number) {
   const schedules = await db
     .select()
     .from(bellSchedulesTable)
+    .where(eq(bellSchedulesTable.schoolId, schoolId))
     .orderBy(asc(bellSchedulesTable.sortOrder), asc(bellSchedulesTable.id));
+  if (schedules.length === 0) return [];
   const periods = await db
     .select()
     .from(bellSchedulePeriodsTable)
+    .where(
+      inArray(
+        bellSchedulePeriodsTable.scheduleId,
+        schedules.map((s) => s.id),
+      ),
+    )
     .orderBy(asc(bellSchedulePeriodsTable.periodNumber));
   return schedules.map((s) => ({
     ...s,
@@ -110,9 +119,11 @@ async function listSchedules() {
 router.get(
   "/bell-schedules",
   requireAccess(),
-  async (_req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
     try {
-      const data = await listSchedules();
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      const data = await listSchedules(schoolId);
       res.json({ schedules: data });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -125,6 +136,8 @@ router.post(
   requireAccess(),
   async (req: Request, res: Response) => {
     try {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
       const b = (req.body ?? {}) as Record<string, unknown>;
       const name = typeof b.name === "string" ? b.name.trim() : "";
       if (!name) {
@@ -146,21 +159,27 @@ router.post(
       }
       await db.transaction(async (tx) => {
         if (isDefault) {
+          // Only clear the default within THIS school.
           await tx
             .update(bellSchedulesTable)
             .set({ isDefault: false })
-            .where(eq(bellSchedulesTable.isDefault, true));
+            .where(
+              and(
+                eq(bellSchedulesTable.isDefault, true),
+                eq(bellSchedulesTable.schoolId, schoolId),
+              ),
+            );
         }
         const [created] = await tx
           .insert(bellSchedulesTable)
-          .values({ name, kind, isDefault, active: true })
+          .values({ schoolId, name, kind, isDefault, active: true })
           .returning();
         if (!created) throw new Error("Failed to create schedule");
         await tx
           .insert(bellSchedulePeriodsTable)
           .values(periodsParsed.map((p) => ({ ...p, scheduleId: created.id })));
       });
-      const data = await listSchedules();
+      const data = await listSchedules(schoolId);
       res.status(201).json({ schedules: data });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -173,6 +192,8 @@ router.put(
   requireAccess(),
   async (req: Request, res: Response) => {
     try {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
         res.status(400).json({ error: "Invalid id" });
@@ -181,7 +202,12 @@ router.put(
       const [existing] = await db
         .select()
         .from(bellSchedulesTable)
-        .where(eq(bellSchedulesTable.id, id));
+        .where(
+          and(
+            eq(bellSchedulesTable.id, id),
+            eq(bellSchedulesTable.schoolId, schoolId),
+          ),
+        );
       if (!existing) {
         res.status(404).json({ error: "Schedule not found" });
         return;
@@ -220,17 +246,28 @@ router.put(
 
       await db.transaction(async (tx) => {
         if (setDefault) {
+          // Only clear the default within THIS school.
           await tx
             .update(bellSchedulesTable)
             .set({ isDefault: false })
-            .where(eq(bellSchedulesTable.isDefault, true));
+            .where(
+              and(
+                eq(bellSchedulesTable.isDefault, true),
+                eq(bellSchedulesTable.schoolId, schoolId),
+              ),
+            );
           updates.isDefault = true;
         }
         if (Object.keys(updates).length > 0) {
           await tx
             .update(bellSchedulesTable)
             .set(updates)
-            .where(eq(bellSchedulesTable.id, id));
+            .where(
+              and(
+                eq(bellSchedulesTable.id, id),
+                eq(bellSchedulesTable.schoolId, schoolId),
+              ),
+            );
         }
         if (periodsParsed !== null) {
           await tx
@@ -241,7 +278,7 @@ router.put(
             .values(periodsParsed.map((p) => ({ ...p, scheduleId: id })));
         }
       });
-      const data = await listSchedules();
+      const data = await listSchedules(schoolId);
       res.json({ schedules: data });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });
@@ -254,6 +291,8 @@ router.delete(
   requireAccess(),
   async (req: Request, res: Response) => {
     try {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
       const id = Number(req.params.id);
       if (!Number.isInteger(id) || id <= 0) {
         res.status(400).json({ error: "Invalid id" });
@@ -262,13 +301,25 @@ router.delete(
       const [existing] = await db
         .select()
         .from(bellSchedulesTable)
-        .where(eq(bellSchedulesTable.id, id));
+        .where(
+          and(
+            eq(bellSchedulesTable.id, id),
+            eq(bellSchedulesTable.schoolId, schoolId),
+          ),
+        );
       if (!existing) {
         res.status(404).json({ error: "Schedule not found" });
         return;
       }
-      await db.delete(bellSchedulesTable).where(eq(bellSchedulesTable.id, id));
-      const data = await listSchedules();
+      await db
+        .delete(bellSchedulesTable)
+        .where(
+          and(
+            eq(bellSchedulesTable.id, id),
+            eq(bellSchedulesTable.schoolId, schoolId),
+          ),
+        );
+      const data = await listSchedules(schoolId);
       res.json({ schedules: data });
     } catch (err) {
       res.status(500).json({ error: (err as Error).message });

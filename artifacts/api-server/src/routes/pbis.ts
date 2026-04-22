@@ -577,11 +577,13 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     return;
   }
 
-  // Load tunable thresholds (with safe defaults).
+  // Load per-school tunable thresholds (with safe defaults). This is the
+  // D4 acceptance criterion: changing pbisQuietTeacherDays in one school
+  // must not affect another.
   const [settingsRow] = await db
     .select()
     .from(schoolSettingsTable)
-    .limit(1);
+    .where(eq(schoolSettingsTable.schoolId, staff.schoolId));
   const QUIET_DAYS = settingsRow?.pbisQuietTeacherDays ?? 5;
   const INVISIBLE_DAYS = settingsRow?.pbisInvisibleStudentDays ?? 10;
   const IMBALANCE_PCT = settingsRow?.pbisReasonImbalancePct ?? 60;
@@ -807,6 +809,8 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     schoolAverage: number;
   }> = [];
   {
+    // D4: bell schedule is per-school. Cold-period analysis must use
+    // THIS school's default schedule, not whichever happens to be first.
     const [defaultSched] = await db
       .select({ id: bellSchedulesTable.id })
       .from(bellSchedulesTable)
@@ -814,6 +818,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
         and(
           eq(bellSchedulesTable.isDefault, true),
           eq(bellSchedulesTable.active, true),
+          eq(bellSchedulesTable.schoolId, staff.schoolId),
         ),
       )
       .limit(1);

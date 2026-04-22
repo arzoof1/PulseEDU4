@@ -77,11 +77,24 @@ router.get(
 router.get(
   "/iss-attendance/today-periods",
   requireAttendanceMW(),
-  async (_req: Request, res: Response) => {
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    // Bell schedule is per-school (D4): only consider schedules for the
+    // caller's active school, otherwise an ISS dean in school A would see
+    // school B's "today" periods.
     const schedules = await db
       .select()
       .from(bellSchedulesTable)
-      .where(eq(bellSchedulesTable.active, true));
+      .where(
+        and(
+          eq(bellSchedulesTable.active, true),
+          eq(bellSchedulesTable.schoolId, schoolId),
+        ),
+      );
     const def =
       schedules.find((s) => s.isDefault) ?? schedules[0] ?? null;
     if (!def) {

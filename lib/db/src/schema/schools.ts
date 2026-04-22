@@ -29,6 +29,10 @@ export const schoolsTable = pgTable(
     // Whether this is the district's "primary" school — used as the default
     // for legacy data backfill and for new staff who don't pick one.
     isPrimary: boolean("is_primary").notNull().default(false),
+    // Per-school IANA timezone, used for "today" date math and the daily
+    // digest cron. Defaults to America/New_York for the first district
+    // (Hernando County, FL).
+    timezone: text("timezone").notNull().default("America/New_York"),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

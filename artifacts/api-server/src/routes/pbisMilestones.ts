@@ -5,7 +5,8 @@ import {
   pbisMilestoneEmailsTable,
   staffTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -28,7 +29,12 @@ router.get("/pbis-milestones", async (req: Request, res: Response) => {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
-  const rows = await db.select().from(pbisMilestonesTable);
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(pbisMilestonesTable)
+    .where(eq(pbisMilestonesTable.schoolId, schoolId));
   rows.sort((a, b) => a.points - b.points);
   res.json(rows);
 });
@@ -39,15 +45,33 @@ router.post("/pbis-milestones", async (req: Request, res: Response) => {
     res.status(403).json({ error: "Admin or PBIS coordinator only" });
     return;
   }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const points = Number(req.body?.points);
   if (!Number.isFinite(points) || points <= 0) {
     res.status(400).json({ error: "points must be a positive number" });
+    return;
+  }
+  // Per-school duplicate check (the old table-wide unique on `points` was
+  // dropped in D4 to allow two schools to use the same milestone value).
+  const existing = await db
+    .select({ id: pbisMilestonesTable.id })
+    .from(pbisMilestonesTable)
+    .where(
+      and(
+        eq(pbisMilestonesTable.schoolId, schoolId),
+        eq(pbisMilestonesTable.points, Math.trunc(points)),
+      ),
+    );
+  if (existing.length > 0) {
+    res.status(409).json({ error: "That milestone already exists" });
     return;
   }
   try {
     const [row] = await db
       .insert(pbisMilestonesTable)
       .values({
+        schoolId,
         points: Math.trunc(points),
         active: true,
         createdAt: new Date().toISOString(),
@@ -70,6 +94,8 @@ router.patch("/pbis-milestones/:id", async (req: Request, res: Response) => {
     res.status(403).json({ error: "Admin or PBIS coordinator only" });
     return;
   }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isFinite(id)) {
     res.status(400).json({ error: "Bad id" });
@@ -83,7 +109,12 @@ router.patch("/pbis-milestones/:id", async (req: Request, res: Response) => {
   const [row] = await db
     .update(pbisMilestonesTable)
     .set({ active })
-    .where(eq(pbisMilestonesTable.id, id))
+    .where(
+      and(
+        eq(pbisMilestonesTable.id, id),
+        eq(pbisMilestonesTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });

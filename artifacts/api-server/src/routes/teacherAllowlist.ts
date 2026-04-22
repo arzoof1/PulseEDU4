@@ -11,7 +11,8 @@ import {
   staffTable,
   teacherDestinationAllowlistTable,
 } from "@workspace/db";
-import { eq, inArray } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -55,7 +56,9 @@ function requireAdmin() {
 router.get(
   "/teacher-allowlist",
   requireSignedIn(),
-  async (_req, res) => {
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const rows = await db
       .select({
         id: teacherDestinationAllowlistTable.id,
@@ -71,7 +74,8 @@ router.get(
           locationsTable.id,
           teacherDestinationAllowlistTable.destinationLocationId,
         ),
-      );
+      )
+      .where(eq(teacherDestinationAllowlistTable.schoolId, schoolId));
     rows.sort((a, b) => {
       const s = a.staffName.localeCompare(b.staffName);
       if (s !== 0) return s;
@@ -87,6 +91,8 @@ router.put(
   "/teacher-allowlist/:staffName",
   requireAdmin(),
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const staffName = String(req.params.staffName ?? "").trim();
     if (!staffName) {
       res.status(400).json({ error: "staffName is required" });
@@ -109,10 +115,16 @@ router.put(
 
     let locationIds: number[] = [];
     if (names.length > 0) {
+      // Resolve names to locations within THIS school only.
       const locs = await db
         .select({ id: locationsTable.id, name: locationsTable.name })
         .from(locationsTable)
-        .where(inArray(locationsTable.name, names));
+        .where(
+          and(
+            inArray(locationsTable.name, names),
+            eq(locationsTable.schoolId, schoolId),
+          ),
+        );
       locationIds = locs.map((l) => l.id);
       if (locationIds.length !== names.length) {
         res.status(400).json({
@@ -125,11 +137,17 @@ router.put(
     await db.transaction(async (tx) => {
       await tx
         .delete(teacherDestinationAllowlistTable)
-        .where(eq(teacherDestinationAllowlistTable.staffName, staffName));
+        .where(
+          and(
+            eq(teacherDestinationAllowlistTable.staffName, staffName),
+            eq(teacherDestinationAllowlistTable.schoolId, schoolId),
+          ),
+        );
 
       if (locationIds.length > 0) {
         await tx.insert(teacherDestinationAllowlistTable).values(
           locationIds.map((destinationLocationId) => ({
+            schoolId,
             staffName,
             destinationLocationId,
           })),

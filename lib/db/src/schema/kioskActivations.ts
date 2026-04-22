@@ -8,6 +8,9 @@ import {
 
 export const kioskActivationsTable = pgTable("kiosk_activations", {
   id: serial("id").primaryKey(),
+  // Tenant column. Stamped from the activating staff member's school
+  // because /kiosk/activate is unauthenticated (no req.schoolId yet).
+  schoolId: integer("school_id").notNull().default(1),
   tokenHash: text("token_hash").notNull().unique(),
   room: text("room").notNull(),
   staffId: integer("staff_id").notNull(),

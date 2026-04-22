@@ -6,6 +6,8 @@ import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
 //   reason:      null = any reason; otherwise must match an entry's reason text
 export const pbisGoalsTable = pgTable("pbis_goals", {
   id: serial("id").primaryKey(),
+  // Tenant column (D2 backfill). Routes filter by req.schoolId.
+  schoolId: integer("school_id").notNull().default(1),
   studentId: text("student_id").notNull(),
   reason: text("reason"),
   targetPoints: integer("target_points").notNull(),

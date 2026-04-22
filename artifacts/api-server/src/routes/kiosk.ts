@@ -15,6 +15,7 @@ import {
 import { and, eq, isNull, gt, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
+import { requireSchool } from "../lib/scope.js";
 import {
   findPolarityConflict,
   polarityConflictMessage,
@@ -106,6 +107,9 @@ router.post("/kiosk/activate", async (req, res) => {
     .where(eq(staffDefaultsTable.staffId, staff.id));
   const defaultRoom = defaultRow?.defaultLocationName ?? null;
 
+  // Origin rooms are scoped to the activating staff's school. The kiosk
+  // activation route is unauthenticated, so we derive school from the
+  // verified staff record (not req.schoolId, which isn't set here).
   const originLocations = (
     await db
       .select()
@@ -114,6 +118,7 @@ router.post("/kiosk/activate", async (req, res) => {
         and(
           eq(locationsTable.isOrigin, true),
           eq(locationsTable.active, true),
+          eq(locationsTable.schoolId, staff.schoolId),
         ),
       )
   ).map((l) => l.name);
@@ -170,6 +175,7 @@ router.post("/kiosk/activate", async (req, res) => {
       : null;
 
   await db.insert(kioskActivationsTable).values({
+    schoolId: staff.schoolId,
     tokenHash,
     room: chosenRoom,
     staffId: staff.id,
@@ -251,13 +257,16 @@ router.post("/kiosk/deactivate", requireStaff, async (req, res) => {
 });
 
 router.get("/kiosk/activations", requireAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const onlyActive = (req.query.status ?? "active") === "active";
   const baseWhere = onlyActive
     ? and(
+        eq(kioskActivationsTable.schoolId, schoolId),
         isNull(kioskActivationsTable.deactivatedAt),
         gt(kioskActivationsTable.expiresAt, new Date()),
       )
-    : undefined;
+    : eq(kioskActivationsTable.schoolId, schoolId);
 
   const rows = await db
     .select({
@@ -283,6 +292,8 @@ router.post(
   "/kiosk/activations/:id/deactivate",
   requireAdmin,
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
     const id = Number(req.params.id);
@@ -299,6 +310,7 @@ router.post(
       .where(
         and(
           eq(kioskActivationsTable.id, id),
+          eq(kioskActivationsTable.schoolId, schoolId),
           isNull(kioskActivationsTable.deactivatedAt),
         ),
       )
@@ -398,10 +410,18 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     ? `${actStaff.displayName} (K)`
     : `Kiosk: ${act.room}`;
 
+  // Resolve origin and destination by name *within the kiosk's school*.
+  // Two schools may legitimately have a "Library" — without this filter
+  // a kiosk in school A could end up issuing a pass to school B's room.
   const [origin] = await db
     .select()
     .from(locationsTable)
-    .where(eq(locationsTable.name, originRoom));
+    .where(
+      and(
+        eq(locationsTable.name, originRoom),
+        eq(locationsTable.schoolId, act.schoolId),
+      ),
+    );
   if (!origin) {
     res.status(400).json({ error: `Unknown origin room: ${originRoom}` });
     return;
@@ -410,7 +430,12 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   const [dest] = await db
     .select()
     .from(locationsTable)
-    .where(eq(locationsTable.name, destination));
+    .where(
+      and(
+        eq(locationsTable.name, destination),
+        eq(locationsTable.schoolId, act.schoolId),
+      ),
+    );
   if (!dest) {
     res.status(400).json({ error: `Unknown destination: ${destination}` });
     return;
@@ -427,6 +452,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     .from(locationAllowedDestinationsTable)
     .where(
       and(
+        eq(locationAllowedDestinationsTable.schoolId, act.schoolId),
         eq(locationAllowedDestinationsTable.originLocationId, origin.id),
         eq(
           locationAllowedDestinationsTable.destinationLocationId,
@@ -463,8 +489,13 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
-  // Polarity / keep-apart enforcement.
-  const limitConflict = await findDailyLimitConflict(normalizedStudentId);
+  // Polarity / keep-apart enforcement. The kiosk activation carries the
+  // school it was bound to, so the daily limit is read from that school's
+  // settings (not the singleton row).
+  const limitConflict = await findDailyLimitConflict(
+    normalizedStudentId,
+    act.schoolId,
+  );
   if (limitConflict) {
     res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;
