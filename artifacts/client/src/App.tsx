@@ -11592,14 +11592,8 @@ function App() {
             behavior specialist will see school-wide history; everyone else
             sees only their own entries.
           </p>
-          <div
-            style={{
-              display: "flex",
-              gap: "0.5rem",
-              flexWrap: "wrap",
-              marginBottom: "1rem",
-            }}
-          >
+          <div className="card cp-cta-card">
+            <div className="cp-cta-text">Log a Check-In or Check-Out?</div>
             <button
               type="button"
               className="cp-cta-button"
