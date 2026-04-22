@@ -19,6 +19,7 @@ interface Props {
   onClose: () => void;
   students: CheckInStudent[];
   checkInWithOptions: string[];
+  currentUser: string;
   onSubmit: (payload: CheckInOutPayload) => Promise<void> | void;
 }
 
@@ -27,6 +28,7 @@ export default function CheckInOutModal({
   onClose,
   students,
   checkInWithOptions,
+  currentUser,
   onSubmit,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -47,7 +49,7 @@ export default function CheckInOutModal({
     setEntryType("checkin");
     setStudentQuery("");
     setSelectedStudent(null);
-    setCheckInWith("");
+    setCheckInWith(currentUser);
     setNotes("");
     setError(null);
     setSubmitting(false);
