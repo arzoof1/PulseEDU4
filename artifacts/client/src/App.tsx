@@ -456,21 +456,28 @@ function RequestPulloutSection({
           <span>Student</span>
           <input
             type="text"
-            placeholder="Search by name or ID…"
+            list="request-pullout-student-options"
+            placeholder="Type name or ID…"
             value={studentSearch}
-            onChange={(e) => setStudentSearch(e.target.value)}
+            onChange={(e) => {
+              const v = e.target.value;
+              setStudentSearch(v);
+              const match = sortedStudents.find(
+                (s) =>
+                  `${s.firstName} ${s.lastName} (${s.studentId})` === v ||
+                  s.studentId === v.trim(),
+              );
+              setStudentId(match ? match.studentId : "");
+            }}
           />
-          <select
-            value={studentId}
-            onChange={(e) => setStudentId(e.target.value)}
-          >
-            <option value="">— select a student —</option>
+          <datalist id="request-pullout-student-options">
             {sortedStudents.map((s) => (
-              <option key={s.id} value={s.studentId}>
-                {s.firstName} {s.lastName} ({s.studentId})
-              </option>
+              <option
+                key={s.id}
+                value={`${s.firstName} ${s.lastName} (${s.studentId})`}
+              />
             ))}
-          </select>
+          </datalist>
         </label>
         {selectedStudent && preflight && (
           <div
