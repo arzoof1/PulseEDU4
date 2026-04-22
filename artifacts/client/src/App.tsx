@@ -5371,10 +5371,91 @@ function App() {
         return (
           <div className="card">
             <h2>Hall Pass Summary</h2>
-            <div className="stat-grid">
-              <div className="stat-card stat-active">
-                <span className="stat-label">Active Passes</span>
-                <span className="stat-value">{active}</span>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "2fr 1fr 1fr",
+                gap: "1rem",
+                alignItems: "stretch",
+              }}
+            >
+              <div
+                style={{
+                  background: "white",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 16,
+                  padding: "1.25rem 1.5rem",
+                  boxShadow: "0 1px 3px rgba(15,23,42,0.06)",
+                  display: "flex",
+                  flexDirection: "column",
+                  justifyContent: "space-between",
+                  minHeight: 200,
+                  position: "relative",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-start",
+                    gap: "1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "1.5rem",
+                      fontWeight: 800,
+                      color: "#1e1b4b",
+                      lineHeight: 1.15,
+                    }}
+                  >
+                    Number of Active<br />Hall Passes
+                  </div>
+                  <div style={{ fontSize: "1.75rem" }} aria-hidden>
+                    🚶
+                  </div>
+                </div>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "1rem",
+                    marginTop: "1rem",
+                  }}
+                >
+                  <div
+                    style={{
+                      fontSize: "3.25rem",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      lineHeight: 1,
+                    }}
+                  >
+                    {active}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => window.print()}
+                    style={{
+                      flex: 1,
+                      background: "#86efac",
+                      border: "none",
+                      borderRadius: 12,
+                      color: "white",
+                      fontWeight: 600,
+                      fontSize: "1rem",
+                      padding: "0.85rem 1rem",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: "0.5rem",
+                    }}
+                  >
+                    <span aria-hidden>🖨️</span>
+                    Report of Students
+                  </button>
+                </div>
               </div>
               <div className="stat-card stat-overdue">
                 <span className="stat-label">Overdue Passes</span>
