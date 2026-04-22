@@ -16281,7 +16281,6 @@ function App() {
         open={logTardyOpen}
         onClose={() => setLogTardyOpen(false)}
         students={students}
-        periods={["1", "2", "3", "4", "5", "6", "7"]}
         onSubmit={async (payload) => {
           const res = await authFetch("/api/tardies", {
             method: "POST",

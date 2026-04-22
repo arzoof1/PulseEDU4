@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 export interface TardyStudent {
   id: number | string;
@@ -13,19 +14,55 @@ export interface LogTardyPayload {
   createReturnPass: boolean;
 }
 
+interface BellPeriod {
+  id: number;
+  periodNumber: number;
+  name: string;
+  startTime: string;
+  endTime: string;
+}
+
+interface BellSchedule {
+  id: number;
+  name: string;
+  kind: string;
+  isDefault: boolean;
+  active: boolean;
+  periods: BellPeriod[];
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
   students: TardyStudent[];
-  periods: string[];
   onSubmit: (payload: LogTardyPayload) => Promise<void> | void;
+}
+
+function toMinutes(t: string): number | null {
+  const m = /^([01]\d|2[0-3]):([0-5]\d)$/.exec(t);
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+function findCurrentPeriod(
+  schedule: BellSchedule | null,
+  now: Date,
+): BellPeriod | null {
+  if (!schedule) return null;
+  const mins = now.getHours() * 60 + now.getMinutes();
+  for (const p of schedule.periods) {
+    const s = toMinutes(p.startTime);
+    const e = toMinutes(p.endTime);
+    if (s == null || e == null) continue;
+    if (mins >= s && mins < e) return p;
+  }
+  return null;
 }
 
 export default function LogTardyModal({
   open,
   onClose,
   students,
-  periods,
   onSubmit,
 }: Props) {
   const [step, setStep] = useState<1 | 2>(1);
@@ -33,23 +70,117 @@ export default function LogTardyModal({
   const [selectedStudent, setSelectedStudent] = useState<TardyStudent | null>(
     null,
   );
-  const [period, setPeriod] = useState<string>("");
   const [createReturnPass, setCreateReturnPass] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const studentInputRef = useRef<HTMLInputElement>(null);
+
+  const [schedule, setSchedule] = useState<BellSchedule | null>(null);
+  const [scheduleLoading, setScheduleLoading] = useState(false);
+  const [now, setNow] = useState(() => new Date());
+
+  const [teacherName, setTeacherName] = useState<string | null>(null);
+  const [teacherLoading, setTeacherLoading] = useState(false);
+  const [teacherError, setTeacherError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!open) return;
     setStep(1);
     setStudentQuery("");
     setSelectedStudent(null);
-    setPeriod("");
     setCreateReturnPass(false);
     setError(null);
     setSubmitting(false);
+    setTeacherName(null);
+    setTeacherError(null);
+    setSchedule(null);
+    setNow(new Date());
     setTimeout(() => studentInputRef.current?.focus(), 50);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setScheduleLoading(true);
+    (async () => {
+      try {
+        const r = await authFetch("/api/bell-schedules");
+        if (!r.ok) throw new Error("Failed to load bell schedule.");
+        const body: unknown = await r.json();
+        const list: BellSchedule[] = Array.isArray(body)
+          ? (body as BellSchedule[])
+          : Array.isArray(
+                (body as { schedules?: BellSchedule[] })?.schedules,
+              )
+            ? ((body as { schedules: BellSchedule[] }).schedules)
+            : [];
+        const regular =
+          list.find((s) => s.kind === "regular" && s.isDefault && s.active) ||
+          list.find((s) => s.kind === "regular" && s.active) ||
+          list.find((s) => s.kind === "regular") ||
+          null;
+        if (!cancelled) setSchedule(regular);
+      } catch {
+        if (!cancelled) setSchedule(null);
+      } finally {
+        if (!cancelled) setScheduleLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const id = setInterval(() => setNow(new Date()), 30_000);
+    return () => clearInterval(id);
+  }, [open]);
+
+  const currentPeriod = useMemo(
+    () => findCurrentPeriod(schedule, now),
+    [schedule, now],
+  );
+  const periodValue = currentPeriod
+    ? String(currentPeriod.periodNumber)
+    : "";
+
+  useEffect(() => {
+    if (!open || step !== 2 || !selectedStudent || !periodValue) {
+      setTeacherName(null);
+      setTeacherError(null);
+      return;
+    }
+    let cancelled = false;
+    setTeacherLoading(true);
+    setTeacherError(null);
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/section-lookup?studentId=${encodeURIComponent(selectedStudent.studentId)}&period=${encodeURIComponent(periodValue)}`,
+        );
+        if (!r.ok) {
+          if (!cancelled) {
+            setTeacherName(null);
+            setTeacherError("No teacher found for this period.");
+          }
+          return;
+        }
+        const info = await r.json();
+        if (!cancelled) setTeacherName(info.teacherName ?? null);
+      } catch {
+        if (!cancelled) {
+          setTeacherName(null);
+          setTeacherError("Lookup failed.");
+        }
+      } finally {
+        if (!cancelled) setTeacherLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [open, step, selectedStudent, periodValue]);
 
   const filteredStudents = useMemo(() => {
     const q = studentQuery.trim().toLowerCase();
@@ -77,13 +208,13 @@ export default function LogTardyModal({
   if (!open) return null;
 
   const handleSubmit = async () => {
-    if (!selectedStudent || !period) return;
+    if (!selectedStudent || !periodValue) return;
     setSubmitting(true);
     setError(null);
     try {
       await onSubmit({
         studentId: selectedStudent.studentId,
-        period,
+        period: periodValue,
         createReturnPass,
       });
       onClose();
@@ -123,7 +254,7 @@ export default function LogTardyModal({
           )}
           <div className="cp-title">
             {step === 1 && "Select Student"}
-            {step === 2 && "Which Period?"}
+            {step === 2 && "Confirm Tardy"}
           </div>
           <button
             type="button"
@@ -191,45 +322,43 @@ export default function LogTardyModal({
                   <span className="cp-context-label">ID</span>
                   <strong>{selectedStudent.studentId}</strong>
                 </div>
-              </div>
-
-              <div className="cp-time">
-                <div className="cp-time-label">Period</div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "0.5rem",
-                    marginTop: "0.5rem",
-                  }}
-                >
-                  {periods.map((p) => {
-                    const active = period === p;
-                    return (
-                      <button
-                        key={p}
-                        type="button"
-                        onClick={() => setPeriod(p)}
-                        style={{
-                          padding: "0.6rem 1rem",
-                          borderRadius: 999,
-                          border: active
-                            ? "2px solid #0f766e"
-                            : "1px solid #cbd5e1",
-                          background: active ? "#ccfbf1" : "white",
-                          color: active ? "#0f766e" : "#1e293b",
-                          fontWeight: active ? 700 : 500,
-                          fontSize: "0.95rem",
-                          cursor: "pointer",
-                          minWidth: 56,
-                        }}
-                      >
-                        {p}
-                      </button>
-                    );
-                  })}
+                <div className="cp-context-row">
+                  <span className="cp-context-label">Period</span>
+                  <strong>
+                    {scheduleLoading
+                      ? "Loading…"
+                      : currentPeriod
+                        ? `${currentPeriod.periodNumber}${currentPeriod.name ? ` · ${currentPeriod.name}` : ""}`
+                        : "No active period"}
+                  </strong>
+                </div>
+                <div className="cp-context-row">
+                  <span className="cp-context-label">Teacher</span>
+                  <strong>
+                    {!periodValue
+                      ? "—"
+                      : teacherLoading
+                        ? "Looking up…"
+                        : teacherName
+                          ? teacherName
+                          : teacherError || "—"}
+                  </strong>
                 </div>
               </div>
+
+              {!periodValue && !scheduleLoading && (
+                <p
+                  style={{
+                    margin: "0.75rem 0 0",
+                    color: "#b91c1c",
+                    fontSize: "0.85rem",
+                  }}
+                >
+                  The current time isn't inside any period of the regular bell
+                  schedule. Wait for the next period to start, or update the
+                  bell schedule.
+                </p>
+              )}
 
               <label
                 style={{
@@ -255,8 +384,7 @@ export default function LogTardyModal({
                     fontSize: "0.8rem",
                   }}
                 >
-                  We'll look up the teacher for that period from the student's
-                  schedule.
+                  We'll send the student back to the teacher shown above.
                 </p>
               )}
 
@@ -286,9 +414,11 @@ export default function LogTardyModal({
                 <button
                   type="button"
                   className="cp-cta-button"
-                  disabled={!period || submitting}
+                  disabled={!periodValue || submitting}
                   onClick={handleSubmit}
-                  style={{ opacity: !period || submitting ? 0.6 : 1 }}
+                  style={{
+                    opacity: !periodValue || submitting ? 0.6 : 1,
+                  }}
                 >
                   {submitting ? "Saving…" : "Log Tardy"}
                 </button>
