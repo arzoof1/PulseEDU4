@@ -1446,6 +1446,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             };
             const tiles: IssTile[] = [
               {
+                key: "attendance",
+                label: "Today's ISS Attendance",
+                desc: "Mark which periods each student was present.",
+                count: attendance.length,
+                color: "#0d9488",
+                emoji: "🗓️",
+              },
+              {
                 key: "onTheWay",
                 label: "On the way",
                 desc: "Verified pullouts en route to ISS.",
@@ -1468,14 +1476,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                 count: sortedRoster.length,
                 color: "#7c3aed",
                 emoji: "📋",
-              },
-              {
-                key: "attendance",
-                label: "Today's ISS Attendance",
-                desc: "Mark which periods each student was present.",
-                count: attendance.length,
-                color: "#0d9488",
-                emoji: "🗓️",
               },
             ];
             return (
