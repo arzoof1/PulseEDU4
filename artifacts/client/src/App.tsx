@@ -9327,40 +9327,33 @@ function App() {
                               >
                                 Teacher:
                               </span>
-                              <input
-                                type="text"
-                                list="acc-teacher-options"
-                                placeholder="Type teacher name…"
-                                defaultValue={
-                                  teacherOptions.find(
-                                    (t) => t.id === classViewTeacherId,
-                                  )?.name ?? ""
+                              <select
+                                value={
+                                  classViewTeacherId == null
+                                    ? ""
+                                    : String(classViewTeacherId)
                                 }
                                 onChange={(e) => {
-                                  const v = e.target.value.trim();
+                                  const v = e.target.value;
                                   if (v === "") {
                                     setClassViewTeacherId(null);
                                     setClassViewPeriod(null);
                                     setClassViewHoverId(null);
                                     return;
                                   }
-                                  const match = teacherOptions.find(
-                                    (t) =>
-                                      t.name.toLowerCase() === v.toLowerCase(),
-                                  );
-                                  if (match) {
-                                    setClassViewTeacherId(match.id);
-                                    setClassViewPeriod(null);
-                                    setClassViewHoverId(null);
-                                  }
+                                  setClassViewTeacherId(Number(v));
+                                  setClassViewPeriod(null);
+                                  setClassViewHoverId(null);
                                 }}
-                                style={{ minWidth: 200 }}
-                              />
-                              <datalist id="acc-teacher-options">
+                                style={{ minWidth: 220 }}
+                              >
+                                <option value="">Select teacher…</option>
                                 {teacherOptions.map((t) => (
-                                  <option key={t.id} value={t.name} />
+                                  <option key={t.id} value={String(t.id)}>
+                                    {t.name}
+                                  </option>
                                 ))}
-                              </datalist>
+                              </select>
                             </div>
                           )}
                         </div>
