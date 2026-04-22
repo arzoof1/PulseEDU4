@@ -208,10 +208,9 @@ export default function CheckInOutModal({
                     <button
                       type="button"
                       className="cp-list-item"
-                      disabled={submitting}
                       onClick={() => {
                         setSelectedStudent(s);
-                        handleSubmit(s);
+                        setStep(3);
                       }}
                     >
                       <span className="cp-avatar" aria-hidden="true">
@@ -251,45 +250,6 @@ export default function CheckInOutModal({
                 </div>
               </div>
 
-              <div className="cp-time">
-                <div className="cp-time-label">
-                  {entryType === "checkin" ? "Checking in with" : "Checking out with"}
-                </div>
-                <div
-                  style={{
-                    display: "flex",
-                    flexWrap: "wrap",
-                    gap: "0.5rem",
-                    marginTop: "0.5rem",
-                  }}
-                >
-                  {checkInWithOptions.map((opt) => {
-                    const active = checkInWith === opt;
-                    return (
-                      <button
-                        key={opt}
-                        type="button"
-                        onClick={() => setCheckInWith(opt)}
-                        style={{
-                          padding: "0.6rem 1rem",
-                          borderRadius: 999,
-                          border: active
-                            ? "2px solid #0f766e"
-                            : "1px solid #cbd5e1",
-                          background: active ? "#ccfbf1" : "white",
-                          color: active ? "#0f766e" : "#1e293b",
-                          fontWeight: active ? 700 : 500,
-                          fontSize: "0.95rem",
-                          cursor: "pointer",
-                        }}
-                      >
-                        {opt}
-                      </button>
-                    );
-                  })}
-                </div>
-              </div>
-
               <label
                 style={{
                   display: "flex",
@@ -301,11 +261,12 @@ export default function CheckInOutModal({
                 }}
               >
                 Notes (optional)
-                <input
-                  type="text"
+                <textarea
                   value={notes}
                   onChange={(e) => setNotes(e.target.value)}
                   className="cp-input"
+                  rows={3}
+                  placeholder="Add any context or details…"
                 />
               </label>
 
@@ -335,9 +296,9 @@ export default function CheckInOutModal({
                 <button
                   type="button"
                   className="cp-cta-button"
-                  disabled={!checkInWith || submitting}
-                  onClick={handleSubmit}
-                  style={{ opacity: !checkInWith || submitting ? 0.6 : 1 }}
+                  disabled={submitting}
+                  onClick={() => selectedStudent && handleSubmit(selectedStudent)}
+                  style={{ opacity: submitting ? 0.6 : 1 }}
                 >
                   {submitting
                     ? "Saving…"
