@@ -75,7 +75,7 @@ export default function Login({
       >
         <div style={{ textAlign: "center", marginBottom: "0.5rem" }}>
           <div style={{ fontSize: "1.5rem", fontWeight: 700, letterSpacing: "0.02em" }}>
-            Pulse<span style={{ color: "#3b82f6" }}>ED</span>
+            Pulse<span style={{ color: "#3b82f6" }}>EDU</span>
           </div>
           <div style={{ fontSize: "0.9rem", opacity: 0.7, marginTop: 4 }}>
             Sign in to continue

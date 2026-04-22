@@ -5158,7 +5158,7 @@ function App() {
             />
           </svg>
           <span className="wordmark">
-            Pulse<span className="accent">ED</span>
+            Pulse<span className="accent">EDU</span>
           </span>
           <svg
             className="ekg-layer ekg-fg"
