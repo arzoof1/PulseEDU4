@@ -7848,20 +7848,23 @@ function App() {
               Student Activity
             </h2>
           <div style={{ marginBottom: "0.5rem" }}>
-            <label style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
-              Student:{" "}
-              <StudentCombobox
-                students={students}
-                value={activityStudentId}
-                onChange={(id) => {
-                  setActivityStudentId(id);
-                  const s = students.find((x) => x.studentId === id);
-                  setActivityStudentSearch(
-                    s ? `${s.firstName} ${s.lastName} (${s.studentId})` : "",
-                  );
-                }}
-                isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
-              />
+            <label style={{ display: "flex", alignItems: "center", gap: 8, maxWidth: 480 }}>
+              <span style={{ whiteSpace: "nowrap" }}>Student:</span>
+              <div style={{ flex: 1 }}>
+                <StudentCombobox
+                  students={students}
+                  value={activityStudentId}
+                  onChange={(id) => {
+                    setActivityStudentId(id);
+                    const s = students.find((x) => x.studentId === id);
+                    setActivityStudentSearch(
+                      s ? `${s.firstName} ${s.lastName} (${s.studentId})` : "",
+                    );
+                  }}
+                  minWidth={400}
+                  isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+                />
+              </div>
             </label>
             {false && activityStudentId ? (
               <div style={{ marginTop: "0.25rem" }}>
