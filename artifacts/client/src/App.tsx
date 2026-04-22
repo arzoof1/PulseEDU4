@@ -1082,6 +1082,8 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   const [attendance, setAttendance] = useState<IssAttendanceRow[]>([]);
   const [bellPeriods, setBellPeriods] = useState<BellPeriod[]>([]);
   const [attendanceBusyId, setAttendanceBusyId] = useState<number | null>(null);
+  type IssView = "hub" | "onTheWay" | "arrived" | "roster" | "attendance";
+  const [view, setView] = useState<IssView>("hub");
 
   const studentName = (id: string) => {
     const s = students.find((x) => x.studentId === id);
@@ -1433,6 +1435,140 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         </button>
       ) : (
         <>
+          {view === "hub" && (() => {
+            type IssTile = {
+              key: Exclude<IssView, "hub">;
+              label: string;
+              desc: string;
+              count: number;
+              color: string;
+              emoji: string;
+            };
+            const tiles: IssTile[] = [
+              {
+                key: "onTheWay",
+                label: "On the way",
+                desc: "Verified pullouts en route to ISS.",
+                count: onTheWay.length,
+                color: "#0e7490",
+                emoji: "🚶",
+              },
+              {
+                key: "arrived",
+                label: "Arrived",
+                desc: "Students currently in the room.",
+                count: arrived.length,
+                color: "#16a34a",
+                emoji: "✅",
+              },
+              {
+                key: "roster",
+                label: "ISS Daily Roster",
+                desc: "All students assigned to ISS today.",
+                count: sortedRoster.length,
+                color: "#7c3aed",
+                emoji: "📋",
+              },
+              {
+                key: "attendance",
+                label: "Today's ISS Attendance",
+                desc: "Mark which periods each student was present.",
+                count: attendance.length,
+                color: "#0d9488",
+                emoji: "🗓️",
+              },
+            ];
+            return (
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns:
+                    "repeat(auto-fit, minmax(240px, 1fr))",
+                  gap: "0.85rem",
+                  marginTop: "1rem",
+                }}
+              >
+                {tiles.map((t) => (
+                  <button
+                    key={t.key}
+                    type="button"
+                    onClick={() => setView(t.key)}
+                    style={{
+                      textAlign: "left",
+                      background: "white",
+                      border: `1px solid ${t.color}33`,
+                      borderLeft: `4px solid ${t.color}`,
+                      borderRadius: 10,
+                      padding: "1rem 1.1rem",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 6,
+                      boxShadow: "0 1px 2px rgba(15,23,42,0.06)",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "0.5rem",
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontWeight: 700,
+                          color: t.color,
+                          fontSize: "1rem",
+                        }}
+                      >
+                        {t.label}
+                      </span>
+                      <span style={{ fontSize: "1.4rem" }} aria-hidden>
+                        {t.emoji}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: "1.75rem",
+                        fontWeight: 800,
+                        color: "#1e293b",
+                        lineHeight: 1,
+                      }}
+                    >
+                      {t.count}
+                    </div>
+                    <span
+                      style={{ color: "#475569", fontSize: "0.85rem" }}
+                    >
+                      {t.desc}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            );
+          })()}
+          {view !== "hub" && (
+            <button
+              type="button"
+              onClick={() => setView("hub")}
+              style={{
+                marginTop: "1rem",
+                background: "transparent",
+                border: "1px solid var(--border, #cbd5e1)",
+                borderRadius: 6,
+                padding: "0.35rem 0.8rem",
+                cursor: "pointer",
+                fontSize: "0.85rem",
+                color: "#0f766e",
+                fontWeight: 600,
+              }}
+            >
+              ← Back to ISS Hub
+            </button>
+          )}
+          {view === "onTheWay" && (
+          <>
           <h3
             style={{
               marginTop: "1.25rem",
@@ -1463,6 +1599,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               )}
             </div>
           )}
+          </>
+          )}
+          {view === "roster" && (
+          <>
           <h3
             style={{
               marginTop: "1.75rem",
@@ -1803,6 +1943,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               })}
             </div>
           )}
+          </>
+          )}
+          {view === "arrived" && (
+          <>
           <h3
             style={{
               marginTop: "1.75rem",
@@ -1833,7 +1977,9 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               )}
             </div>
           )}
-          {(() => {
+          </>
+          )}
+          {view === "attendance" && (() => {
             const sortedAttendance = [...attendance].sort((a, b) => {
               const sa = studentByStudentId.get(a.studentId);
               const sb = studentByStudentId.get(b.studentId);
@@ -2108,7 +2254,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     </section>
   );
 }
-
 function BehaviorReviewSection({
   students,
   onChange,
