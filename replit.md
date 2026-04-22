@@ -62,6 +62,30 @@ Files: `lib/db/src/schema/{staff,customRoles}.ts`,
 - **Combobox pattern**: native `<input list=…>` + `<datalist>` for
   search-filter pickers; plain `<select>` for fixed dropdowns.
 
+## Multi-tenancy — Day 1 (April 2026)
+
+PulseEDU is migrating from single-tenant to silo-per-district. Day 1 of the
+Week 1 plan added the foundation tables; data tables remain unscoped until
+Day 2.
+
+- New tables: `districts`, `schools` (`lib/db/src/schema/{districts,schools}.ts`).
+- Seeded: `Hernando County School District` (slug `hernando`, state code `27`)
+  with 5 schools — D. S. Parrott Middle (PRIMARY, code 0241), F. W. Springstead
+  High (0181), Nature Coast Technical High (0351), Weeki Wachee High (0391),
+  Powell Middle (0221).
+- New SuperUser-only Settings tile: **Tenancy** (`TenancyPanel.tsx`) showing
+  the registered district + schools and current district-wide row counts.
+- API: `GET /api/tenancy/status` (SuperUser-gated) — `routes/tenancy.ts`.
+- Tables created via direct SQL because drizzle-kit push prompts on rename
+  detection between unrelated existing tables (same workaround used for the
+  PBIS thresholds columns).
+
+Day 2 will add `school_id` to all ~22 tenant-scoped tables, backfill every
+existing row to D. S. Parrott (`is_primary = true`), make `school_id` NOT
+NULL, carry `schoolId` on the auth session, and scope every route query.
+
+Multi-day plan tracked in `.local/session_plan.md`.
+
 ## Bell Schedule (April 2026)
 
 School Bell Schedule management lives at top-level nav "Bell Schedule" and is

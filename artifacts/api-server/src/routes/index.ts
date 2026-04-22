@@ -33,6 +33,7 @@ import sectionLookupRouter from "./sectionLookup";
 import bellSchedulesRouter from "./bellSchedules";
 import issRosterRouter from "./issRoster";
 import issAttendanceRouter from "./issAttendance";
+import tenancyRouter from "./tenancy";
 
 const router: IRouter = Router();
 
@@ -70,5 +71,6 @@ router.use(sectionLookupRouter);
 router.use(bellSchedulesRouter);
 router.use(issRosterRouter);
 router.use(issAttendanceRouter);
+router.use(tenancyRouter);
 
 export default router;

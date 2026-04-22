@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { seedIfEmpty } from "./seed";
+import { seedIfEmpty, seedTenancy } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 
@@ -18,7 +18,7 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-seedIfEmpty()
+Promise.all([seedIfEmpty(), seedTenancy()])
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {
     app.listen(port, (err) => {

@@ -1,3 +1,5 @@
+export * from "./districts";
+export * from "./schools";
 export * from "./hallPasses";
 export * from "./tardies";
 export * from "./pbisEntries";

@@ -6,6 +6,7 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
+import TenancyPanel from "./components/TenancyPanel";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
@@ -16164,6 +16165,15 @@ function App() {
                 legacy: true,
               },
             ];
+            if (isSuperUser) {
+              tiles.push({
+                id: "tenancy",
+                icon: "🏛️",
+                title: "Tenancy",
+                subtitle:
+                  "Districts, schools, and per-school data assignment. SuperUser only.",
+              });
+            }
             return tiles;
           })()}
           onSelect={setSettingsTile}
@@ -16172,6 +16182,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile !== null && (
         <SettingsBackBar onBack={() => setSettingsTile(null)} />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "tenancy" && isSuperUser && (
+        <TenancyPanel />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "notifications" && (

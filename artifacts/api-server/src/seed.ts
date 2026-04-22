@@ -1,5 +1,7 @@
 import {
   db,
+  districtsTable,
+  schoolsTable,
   hallPassesTable,
   tardiesTable,
   pbisEntriesTable,
@@ -23,6 +25,42 @@ import { sql } from "drizzle-orm";
 import { generateSeedData } from "./data/seedGen";
 
 const TEMP_PASSWORD = "pulseed-temp";
+
+// Idempotent. Always runs at boot. Ensures the Hernando County district and
+// the five pre-seeded schools exist so the Tenancy panel and Day 2 backfill
+// always have a stable home, even after a fresh DB reset.
+export async function seedTenancy() {
+  const HERNANDO_SCHOOLS = [
+    { name: "D. S. Parrott Middle School",        shortName: "Parrott",      stateSchoolCode: "0241", isPrimary: true },
+    { name: "F. W. Springstead High School",      shortName: "Springstead",  stateSchoolCode: "0181", isPrimary: false },
+    { name: "Nature Coast Technical High School", shortName: "Nature Coast", stateSchoolCode: "0351", isPrimary: false },
+    { name: "Weeki Wachee High School",           shortName: "Weeki Wachee", stateSchoolCode: "0391", isPrimary: false },
+    { name: "Powell Middle School",               shortName: "Powell",       stateSchoolCode: "0221", isPrimary: false },
+  ];
+
+  await db
+    .insert(districtsTable)
+    .values({
+      name: "Hernando County School District",
+      slug: "hernando",
+      stateDistrictCode: "27",
+      timezone: "America/New_York",
+    })
+    .onConflictDoNothing({ target: districtsTable.slug });
+
+  const [district] = await db
+    .select()
+    .from(districtsTable)
+    .where(sql`slug = 'hernando'`);
+  if (!district) return;
+
+  for (const s of HERNANDO_SCHOOLS) {
+    await db
+      .insert(schoolsTable)
+      .values({ districtId: district.id, ...s })
+      .onConflictDoNothing();
+  }
+}
 
 export async function seedIfEmpty() {
   const [marker] = await db
