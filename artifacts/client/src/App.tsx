@@ -13107,6 +13107,7 @@ function App() {
               const siteMgmtKeys = new Set<HubKey>([
                 "hallPassMgmt",
                 "interventions",
+                "trustedAdultInterventions",
               ]);
               const behaviorReportingKeys = new Set<HubKey>([
                 "behaviorReview",
