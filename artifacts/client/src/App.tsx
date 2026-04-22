@@ -2986,7 +2986,13 @@ function App() {
 
   const loadInterventionEntries = async () => {
     try {
-      const res = await authFetch("/api/interventions");
+      const res = await authFetch("/api/interventions", {
+        cache: "no-store",
+      });
+      if (res.status === 304) {
+        // Not modified: keep current entries rather than wiping them.
+        return;
+      }
       if (!res.ok) {
         setInterventionEntries([]);
         return;
