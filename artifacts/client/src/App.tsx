@@ -11744,7 +11744,13 @@ function App() {
                 type="button"
                 className="back-button-purple"
                 style={{ marginBottom: 0 }}
-                onClick={() => setActiveSection("behaviorSpecialist")}
+                onClick={() =>
+                  setActiveSection(
+                    isAdmin || isBehaviorSpec || authUser?.isSuperUser
+                      ? "behaviorSpecialist"
+                      : "hallPasses",
+                  )
+                }
               >
                 ← Back
               </button>
