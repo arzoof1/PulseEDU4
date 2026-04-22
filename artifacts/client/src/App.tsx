@@ -5438,7 +5438,7 @@ function App() {
                     onClick={() => window.print()}
                     style={{
                       flex: 1,
-                      background: "#86efac",
+                      background: "#10b981",
                       border: "none",
                       borderRadius: 12,
                       color: "white",
