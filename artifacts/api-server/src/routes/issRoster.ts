@@ -14,6 +14,7 @@ import {
 } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import { sendPulloutReturnEmail } from "../lib/pulloutEmail";
+import { upsertIssAttendance } from "./issAttendance";
 
 const router: IRouter = Router();
 
@@ -100,6 +101,17 @@ router.post(
         addedByName: staff.displayName,
       })
       .returning();
+    try {
+      await upsertIssAttendance({
+        studentId: sId,
+        source: "manual",
+        addedById: staff.id,
+        addedByName: staff.displayName,
+        notes: noteStr,
+      });
+    } catch (e) {
+      console.error("[iss-attendance] manual upsert failed:", e);
+    }
     res.status(201).json(row);
   },
 );

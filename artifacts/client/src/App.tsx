@@ -1031,6 +1031,36 @@ type IssRosterEntry = {
   createdAt: string;
 };
 
+type IssAttendanceRow = {
+  id: number;
+  studentId: string;
+  day: string;
+  source: "manual" | "pullout";
+  pulloutId: number | null;
+  dispatchedByName: string | null;
+  verifiedByName: string | null;
+  presentPeriods: number[];
+  notes: string | null;
+  addedByName: string | null;
+};
+
+type BellPeriod = {
+  id: number;
+  periodNumber: number;
+  name: string;
+  startTime: string;
+  endTime: string;
+};
+
+type BellSchedule = {
+  id: number;
+  name: string;
+  kind: string;
+  isDefault: boolean;
+  active: boolean;
+  periods: BellPeriod[];
+};
+
 function IssDashboardSection({ students }: { students: Student[] }) {
   const [rows, setRows] = useState<PulloutRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1049,6 +1079,9 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   const [editingRosterId, setEditingRosterId] = useState<number | null>(null);
   const [editPeriod, setEditPeriod] = useState("");
   const [editNotes, setEditNotes] = useState("");
+  const [attendance, setAttendance] = useState<IssAttendanceRow[]>([]);
+  const [bellPeriods, setBellPeriods] = useState<BellPeriod[]>([]);
+  const [attendanceBusyId, setAttendanceBusyId] = useState<number | null>(null);
 
   const studentName = (id: string) => {
     const s = students.find((x) => x.studentId === id);
@@ -1059,9 +1092,11 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     setLoading(true);
     setMsg(null);
     try {
-      const [pr, rr] = await Promise.all([
+      const [pr, rr, ar, br] = await Promise.all([
         authFetch("/api/pullouts?scope=active"),
         authFetch("/api/iss-roster"),
+        authFetch("/api/iss-attendance"),
+        authFetch("/api/iss-attendance/today-periods"),
       ]);
       if (!pr.ok) {
         setMsg({ ok: false, text: "Could not load ISS dashboard." });
@@ -1069,8 +1104,19 @@ function IssDashboardSection({ students }: { students: Student[] }) {
       } else {
         setRows(await pr.json());
       }
-      if (rr.ok) {
-        setRoster(await rr.json());
+      if (rr.ok) setRoster(await rr.json());
+      if (ar.ok) {
+        const data = await ar.json();
+        setAttendance(Array.isArray(data?.rows) ? data.rows : []);
+      }
+      if (br.ok) {
+        const data = await br.json();
+        const periods: BellPeriod[] = Array.isArray(data?.periods)
+          ? data.periods
+          : [];
+        setBellPeriods(
+          [...periods].sort((a, b) => a.periodNumber - b.periodNumber),
+        );
       }
     } catch {
       setMsg({ ok: false, text: "Network error." });
@@ -1796,6 +1842,263 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               )}
             </div>
           )}
+          {(() => {
+            const sortedAttendance = [...attendance].sort((a, b) => {
+              const sa = studentByStudentId.get(a.studentId);
+              const sb = studentByStudentId.get(b.studentId);
+              const la = (sa?.lastName ?? "").toLowerCase();
+              const lb = (sb?.lastName ?? "").toLowerCase();
+              if (la !== lb) return la.localeCompare(lb);
+              const fa = (sa?.firstName ?? "").toLowerCase();
+              const fb = (sb?.firstName ?? "").toLowerCase();
+              return fa.localeCompare(fb);
+            });
+            const periods =
+              bellPeriods.length > 0
+                ? bellPeriods
+                : [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({
+                    id: -n,
+                    periodNumber: n,
+                    name: `P${n}`,
+                    startTime: "",
+                    endTime: "",
+                  }));
+            const togglePeriod = async (
+              row: IssAttendanceRow,
+              periodNumber: number,
+            ) => {
+              const current = new Set(row.presentPeriods ?? []);
+              if (current.has(periodNumber)) current.delete(periodNumber);
+              else current.add(periodNumber);
+              const next = Array.from(current).sort((a, b) => a - b);
+              setAttendance((prev) =>
+                prev.map((r) =>
+                  r.id === row.id ? { ...r, presentPeriods: next } : r,
+                ),
+              );
+              setAttendanceBusyId(row.id);
+              const recover = async () => {
+                try {
+                  const ar = await authFetch("/api/iss-attendance");
+                  if (ar.ok) {
+                    const data = await ar.json();
+                    setAttendance(
+                      Array.isArray(data?.rows) ? data.rows : [],
+                    );
+                  }
+                } catch {
+                  // ignore
+                }
+              };
+              try {
+                const r = await authFetch(`/api/iss-attendance/${row.id}`, {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ presentPeriods: next }),
+                });
+                if (!r.ok) {
+                  setMsg({ ok: false, text: "Could not save attendance." });
+                  await recover();
+                }
+              } catch {
+                setMsg({ ok: false, text: "Network error saving attendance." });
+                await recover();
+              } finally {
+                setAttendanceBusyId(null);
+              }
+            };
+            return (
+              <>
+                <h3 style={{ marginTop: "1.5rem" }}>
+                  Today's ISS Attendance ({sortedAttendance.length})
+                </h3>
+                <div
+                  style={{
+                    fontSize: "0.85rem",
+                    color: "#64748b",
+                    marginBottom: "0.5rem",
+                  }}
+                >
+                  Check off each period the student was actually present in
+                  ISS. Includes everyone on today's roster, even after they
+                  returned.
+                </div>
+                {sortedAttendance.length === 0 ? (
+                  <div style={{ color: "var(--text-subtle, #64748b)" }}>
+                    No ISS attendance recorded today yet.
+                  </div>
+                ) : (
+                  <div style={{ overflowX: "auto" }}>
+                    <table
+                      style={{
+                        width: "100%",
+                        borderCollapse: "collapse",
+                        fontSize: "0.9rem",
+                      }}
+                    >
+                      <thead>
+                        <tr
+                          style={{
+                            background: "#f1f5f9",
+                            textAlign: "left",
+                          }}
+                        >
+                          <th
+                            style={{
+                              padding: "0.5rem 0.6rem",
+                              borderBottom: "1px solid #cbd5e1",
+                            }}
+                          >
+                            Student
+                          </th>
+                          <th
+                            style={{
+                              padding: "0.5rem 0.6rem",
+                              borderBottom: "1px solid #cbd5e1",
+                            }}
+                          >
+                            ID
+                          </th>
+                          {periods.map((p) => (
+                            <th
+                              key={p.periodNumber}
+                              style={{
+                                padding: "0.5rem 0.4rem",
+                                borderBottom: "1px solid #cbd5e1",
+                                textAlign: "center",
+                                whiteSpace: "nowrap",
+                              }}
+                              title={
+                                p.startTime && p.endTime
+                                  ? `${p.startTime}–${p.endTime}`
+                                  : undefined
+                              }
+                            >
+                              {p.name || `P${p.periodNumber}`}
+                            </th>
+                          ))}
+                          <th
+                            style={{
+                              padding: "0.5rem 0.6rem",
+                              borderBottom: "1px solid #cbd5e1",
+                            }}
+                          >
+                            Source
+                          </th>
+                          <th
+                            style={{
+                              padding: "0.5rem 0.6rem",
+                              borderBottom: "1px solid #cbd5e1",
+                            }}
+                          >
+                            From
+                          </th>
+                          <th
+                            style={{
+                              padding: "0.5rem 0.6rem",
+                              borderBottom: "1px solid #cbd5e1",
+                            }}
+                          >
+                            Verified by
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {sortedAttendance.map((row) => {
+                          const accent =
+                            row.source === "manual" ? "#22c55e" : "#7c3aed";
+                          const present = new Set(row.presentPeriods ?? []);
+                          return (
+                            <tr
+                              key={row.id}
+                              style={{ borderBottom: "1px solid #e2e8f0" }}
+                            >
+                              <td
+                                style={{
+                                  padding: "0.45rem 0.6rem",
+                                  borderLeft: `4px solid ${accent}`,
+                                }}
+                              >
+                                <strong>{studentName(row.studentId)}</strong>
+                              </td>
+                              <td
+                                style={{
+                                  padding: "0.45rem 0.6rem",
+                                  color: "#475569",
+                                }}
+                              >
+                                {row.studentId}
+                              </td>
+                              {periods.map((p) => (
+                                <td
+                                  key={p.periodNumber}
+                                  style={{
+                                    padding: "0.45rem 0.4rem",
+                                    textAlign: "center",
+                                  }}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    checked={present.has(p.periodNumber)}
+                                    disabled={attendanceBusyId === row.id}
+                                    onChange={() =>
+                                      togglePeriod(row, p.periodNumber)
+                                    }
+                                    aria-label={`${studentName(row.studentId)} period ${p.periodNumber}`}
+                                  />
+                                </td>
+                              ))}
+                              <td
+                                style={{
+                                  padding: "0.45rem 0.6rem",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                <span
+                                  style={{
+                                    fontSize: "0.72rem",
+                                    background: accent,
+                                    color: "white",
+                                    padding: "2px 8px",
+                                    borderRadius: 999,
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  {row.source === "manual"
+                                    ? "Manual (ODR)"
+                                    : "Pullout"}
+                                </span>
+                              </td>
+                              <td
+                                style={{
+                                  padding: "0.45rem 0.6rem",
+                                  color: "#475569",
+                                }}
+                              >
+                                {row.source === "pullout"
+                                  ? row.dispatchedByName || "—"
+                                  : row.addedByName || "—"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "0.45rem 0.6rem",
+                                  color: "#475569",
+                                }}
+                              >
+                                {row.source === "pullout"
+                                  ? row.verifiedByName || "—"
+                                  : "—"}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
+            );
+          })()}
         </>
       )}
     </section>

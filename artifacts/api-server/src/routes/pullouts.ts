@@ -18,6 +18,7 @@ import {
   sendPulloutDispatchEmail,
   sendPulloutReturnEmail,
 } from "../lib/pulloutEmail";
+import { upsertIssAttendance } from "./issAttendance";
 
 const router: IRouter = Router();
 
@@ -544,6 +545,19 @@ router.patch(
       }
     } catch (e) {
       console.error("[iss-roster] auto-insert failed:", e);
+    }
+    try {
+      await upsertIssAttendance({
+        studentId: existing.studentId,
+        source: "pullout",
+        pulloutId: id,
+        dispatchedByName: existing.referringTeacherName ?? null,
+        verifiedByName: existing.verifiedByName ?? null,
+        addedById: staff.id,
+        addedByName: staff.displayName,
+      });
+    } catch (e) {
+      console.error("[iss-attendance] auto-upsert failed:", e);
     }
     const [row] = await db
       .select()
