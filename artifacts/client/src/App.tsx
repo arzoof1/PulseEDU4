@@ -11664,66 +11664,139 @@ function App() {
               </div>
             </div>
 
-            <div
-              className="card no-print"
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fill, minmax(240px, 1fr))",
-                gap: "0.75rem",
-              }}
-            >
-              {tools
-                .filter((t) => t.show)
-                .map((t) => (
-                  <button
-                    key={t.key}
-                    type="button"
-                    onClick={() => setActiveSection(t.key)}
+            {(() => {
+              const siteMgmtKeys = new Set<HubKey>([
+                "hallPassMgmt",
+                "interventions",
+              ]);
+              const renderTile = (t: HubTool) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setActiveSection(t.key)}
+                  style={{
+                    textAlign: "left",
+                    background: "white",
+                    border: `1px solid ${t.color}33`,
+                    borderLeft: `4px solid ${t.color}`,
+                    borderRadius: 8,
+                    padding: "0.85rem 1rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <div
                     style={{
-                      textAlign: "left",
-                      background: "white",
-                      border: `1px solid ${t.color}33`,
-                      borderLeft: `4px solid ${t.color}`,
-                      borderRadius: 8,
-                      padding: "0.85rem 1rem",
-                      cursor: "pointer",
                       display: "flex",
-                      flexDirection: "column",
-                      gap: 4,
+                      alignItems: "center",
+                      justifyContent: "space-between",
                     }}
                   >
+                    <span style={{ fontWeight: 600, color: t.color }}>
+                      {t.label}
+                    </span>
+                    {t.badge && t.badge > 0 ? (
+                      <span
+                        style={{
+                          background: "#dc2626",
+                          color: "white",
+                          borderRadius: 999,
+                          padding: "0 7px",
+                          fontSize: "0.75rem",
+                          fontWeight: 700,
+                        }}
+                      >
+                        {t.badge}
+                      </span>
+                    ) : null}
+                  </div>
+                  <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+                    {t.desc}
+                  </span>
+                </button>
+              );
+              const bsTools = tools.filter(
+                (t) => t.show && !siteMgmtKeys.has(t.key),
+              );
+              const siteTools = tools.filter(
+                (t) => t.show && siteMgmtKeys.has(t.key),
+              );
+              return (
+                <>
+                  {bsTools.length > 0 && (
                     <div
+                      className="card no-print"
                       style={{
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "space-between",
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fill, minmax(240px, 1fr))",
+                        gap: "0.75rem",
                       }}
                     >
-                      <span style={{ fontWeight: 600, color: t.color }}>
-                        {t.label}
-                      </span>
-                      {t.badge && t.badge > 0 ? (
-                        <span
-                          style={{
-                            background: "#dc2626",
-                            color: "white",
-                            borderRadius: 999,
-                            padding: "0 7px",
-                            fontSize: "0.75rem",
-                            fontWeight: 700,
-                          }}
-                        >
-                          {t.badge}
-                        </span>
-                      ) : null}
+                      {bsTools.map(renderTile)}
                     </div>
-                    <span style={{ color: "#475569", fontSize: "0.85rem" }}>
-                      {t.desc}
-                    </span>
-                  </button>
-                ))}
-            </div>
+                  )}
+
+                  {siteTools.length > 0 && (
+                    <>
+                      <svg
+                        className="ekg-separator"
+                        viewBox="0 0 600 28"
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          className="track"
+                          d="M0 14 H140 L150 14 L155 6 L162 22 L168 8 L175 14 H300 L310 14 L315 6 L322 22 L328 8 L335 14 H460 L470 14 L475 6 L482 22 L488 8 L495 14 H600"
+                        />
+                      </svg>
+
+                      <div
+                        style={{
+                          borderTopLeftRadius: "var(--radius-lg, 8px)",
+                          borderTopRightRadius: "var(--radius-lg, 8px)",
+                          overflow: "hidden",
+                          marginBottom: "-1px",
+                        }}
+                      >
+                        <div
+                          className="section-header-bar-teal"
+                          style={{ width: "100%", margin: 0 }}
+                        />
+                        <div
+                          className="section-header-band-hub"
+                          style={{ width: "100%", margin: 0 }}
+                        >
+                          <h2
+                            style={{
+                              margin: 0,
+                              color: "white",
+                              fontSize: "1.5rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Site Management
+                          </h2>
+                        </div>
+                      </div>
+                      <div
+                        className="card no-print"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "repeat(auto-fill, minmax(240px, 1fr))",
+                          gap: "0.75rem",
+                        }}
+                      >
+                        {siteTools.map(renderTile)}
+                      </div>
+                    </>
+                  )}
+                </>
+              );
+            })()}
           </>
         );
       })()}
