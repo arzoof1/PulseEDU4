@@ -880,6 +880,19 @@ ul[style*="listStyle: none"] li button:hover {
 }
 .cp-cta-button:hover { background: #059669; }
 
+.back-button-purple {
+  background: #ede9fe;
+  color: #6d28d9;
+  border: 1px solid #ddd6fe;
+  border-radius: 6px;
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  margin-bottom: 0.75rem;
+}
+.back-button-purple:hover { background: #ddd6fe; }
+
 .cp-overlay {
   position: fixed;
   inset: 0;

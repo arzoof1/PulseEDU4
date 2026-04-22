@@ -11586,23 +11586,6 @@ function App() {
 
       {activeSection === "logIntervention" && (
         <section className="card">
-          <button
-            type="button"
-            onClick={() => setActiveSection("behaviorSpecialist")}
-            style={{
-              background: "#ede9fe",
-              color: "#6d28d9",
-              border: "1px solid #ddd6fe",
-              borderRadius: 6,
-              padding: "0.35rem 0.75rem",
-              fontSize: "0.85rem",
-              fontWeight: 600,
-              cursor: "pointer",
-              marginBottom: "0.75rem",
-            }}
-          >
-            ← Back
-          </button>
           <h2>Log Intervention</h2>
           <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
             Record a classroom intervention you tried with a student. Your
