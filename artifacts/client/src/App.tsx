@@ -11729,8 +11729,38 @@ function App() {
       })()}
 
       {activeSection === "logIntervention" && (
-        <section className="card">
-          <h2>Log Intervention</h2>
+        <>
+          <div
+            style={{
+              borderTopLeftRadius: "var(--radius-lg, 8px)",
+              borderTopRightRadius: "var(--radius-lg, 8px)",
+              overflow: "hidden",
+              marginBottom: "-1px",
+            }}
+          >
+            <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+            <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
+              <button
+                type="button"
+                className="back-button-purple"
+                style={{ marginBottom: 0 }}
+                onClick={() => setActiveSection("behaviorSpecialist")}
+              >
+                ← Back
+              </button>
+            </div>
+          </div>
+          <section className="card">
+            <h2
+              style={{
+                margin: "0 0 0.5rem",
+                fontSize: "1.5rem",
+                fontWeight: 700,
+                color: "#7c3aed",
+              }}
+            >
+              Log Intervention
+            </h2>
           <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
             Record a classroom intervention you tried with a student. Your
             behavior specialist will see school-wide history; everyone else
@@ -11986,6 +12016,7 @@ function App() {
             );
           })()}
         </section>
+        </>
       )}
 
       {activeSection === "ese" && isEseCoord && (
