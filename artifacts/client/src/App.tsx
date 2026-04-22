@@ -206,7 +206,6 @@ function RequestPulloutSection({
 }) {
   const [studentSearch, setStudentSearch] = useState("");
   const [studentId, setStudentId] = useState<string>("");
-  const [period, setPeriod] = useState<string>("");
   const [reasonChoice, setReasonChoice] = useState<string>("");
   const [reasonOther, setReasonOther] = useState<string>("");
   const reason =
@@ -379,7 +378,7 @@ function RequestPulloutSection({
         body: JSON.stringify({
           studentId,
           reason: reason.trim(),
-          period: period ? Number(period) : null,
+          period: null,
           interventionsTried: interventionsTried.trim() || null,
           acknowledgeNoIntervention,
         }),
@@ -403,7 +402,6 @@ function RequestPulloutSection({
         });
         setStudentId("");
         setStudentSearch("");
-        setPeriod("");
         setReasonChoice("");
         setReasonOther("");
         setSelectedInterventionIds(new Set());
@@ -500,20 +498,6 @@ function RequestPulloutSection({
               : `⚠ No classroom interventions are logged for ${selectedStudentLabel} in the past ${preflight.windowDays} days.`}
           </div>
         )}
-        <label style={{ display: "grid", gap: 4 }}>
-          <span>Period</span>
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-          >
-            <option value="">— optional —</option>
-            {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
-              <option key={p} value={p}>
-                Period {p}
-              </option>
-            ))}
-          </select>
-        </label>
         <label style={{ display: "grid", gap: 4 }}>
           <span>Reason for pullout</span>
           {activeReasonOptions.length === 0 ? (
