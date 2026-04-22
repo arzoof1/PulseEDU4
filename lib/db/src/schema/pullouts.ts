@@ -4,6 +4,7 @@ export const pulloutsTable = pgTable(
   "pullouts",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     studentId: text("student_id").notNull(),
     requestedById: integer("requested_by_id"),
     requestedByName: text("requested_by_name").notNull(),

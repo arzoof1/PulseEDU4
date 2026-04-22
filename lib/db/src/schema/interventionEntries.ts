@@ -5,6 +5,7 @@ import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
 // historical entries.
 export const interventionEntriesTable = pgTable("intervention_entries", {
   id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().default(1),
   studentId: text("student_id").notNull(),
   interventionType: text("intervention_type").notNull(),
   note: text("note"),

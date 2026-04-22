@@ -1,24 +1,37 @@
 import { Router, type IRouter } from "express";
 import { db, supportNotesTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
 router.get("/support-notes", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { studentId } = req.query;
   if (typeof studentId === "string" && studentId) {
     const rows = await db
       .select()
       .from(supportNotesTable)
-      .where(eq(supportNotesTable.studentId, studentId));
+      .where(
+        and(
+          eq(supportNotesTable.studentId, studentId),
+          eq(supportNotesTable.schoolId, schoolId),
+        ),
+      );
     res.json(rows);
     return;
   }
-  const rows = await db.select().from(supportNotesTable);
+  const rows = await db
+    .select()
+    .from(supportNotesTable)
+    .where(eq(supportNotesTable.schoolId, schoolId));
   res.json(rows);
 });
 
 router.post("/support-notes", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { studentId, noteType, noteText, staffName } = req.body ?? {};
 
   if (typeof studentId !== "string" || !studentId) {
@@ -37,6 +50,7 @@ router.post("/support-notes", async (req, res) => {
   const [note] = await db
     .insert(supportNotesTable)
     .values({
+      schoolId,
       studentId,
       noteType,
       noteText,

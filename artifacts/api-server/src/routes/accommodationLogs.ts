@@ -9,6 +9,7 @@ import {
   staffTable,
 } from "@workspace/db";
 import { eq, and, isNull, sql, inArray } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -51,22 +52,34 @@ async function requireStaff(
 }
 
 router.get("/accommodation-logs", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { studentId } = req.query;
   if (typeof studentId === "string" && studentId) {
     const rows = await db
       .select()
       .from(accommodationLogsTable)
-      .where(eq(accommodationLogsTable.studentId, studentId));
+      .where(
+        and(
+          eq(accommodationLogsTable.studentId, studentId),
+          eq(accommodationLogsTable.schoolId, schoolId),
+        ),
+      );
     res.json(rows);
     return;
   }
-  const rows = await db.select().from(accommodationLogsTable);
+  const rows = await db
+    .select()
+    .from(accommodationLogsTable)
+    .where(eq(accommodationLogsTable.schoolId, schoolId));
   res.json(rows);
 });
 
 // Single log (manual button: "Log Accommodation Provided" / "Refused today").
 // Auth required; staff name comes from session.
 router.post("/accommodation-logs", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
   const { studentId, accommodation, accommodationId, period, status } =
     req.body ?? {};
@@ -114,6 +127,7 @@ router.post("/accommodation-logs", requireStaff, async (req, res) => {
   const [log] = await db
     .insert(accommodationLogsTable)
     .values({
+      schoolId,
       studentId,
       accommodationId: resolvedId,
       accommodation: resolvedName,
@@ -141,6 +155,8 @@ router.post(
   "/accommodation-logs/bulk",
   requireStaff,
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
     const { period, presentStudentIds, accommodationIds } = req.body ?? {};
 
@@ -269,6 +285,7 @@ router.post(
           continue;
         }
         toInsert.push({
+          schoolId,
           studentId,
           accommodationId: acc.id,
           accommodation: acc.name,

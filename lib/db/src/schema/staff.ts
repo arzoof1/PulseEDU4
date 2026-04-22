@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, timestamp, integer } from "drizzle-orm/pg-core";
 
 // Staff schema. Two parallel concepts live here:
 //
@@ -18,6 +18,10 @@ import { pgTable, serial, text, boolean, timestamp } from "drizzle-orm/pg-core";
 // Role flags stay as labels + presets even after the cutover.
 export const staffTable = pgTable("staff", {
   id: serial("id").primaryKey(),
+  // The staff member's HOME school. Multi-tenancy: every staff row belongs
+  // to one school. SuperUsers can act as any school via session override
+  // (req.schoolId), but staff.school_id is still their default landing.
+  schoolId: integer("school_id").notNull().default(1),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),

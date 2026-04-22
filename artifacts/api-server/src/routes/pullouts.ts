@@ -19,6 +19,29 @@ import {
   sendPulloutReturnEmail,
 } from "../lib/pulloutEmail";
 import { upsertIssAttendance } from "./issAttendance";
+import { requireSchool } from "../lib/scope.js";
+
+// Helper: load a pullout row scoped to the active school. Returns null and
+// writes 404 if the row doesn't exist OR belongs to another school. This
+// keeps SuperUsers honest while operating in a switched school: even if
+// they know an id from another school, they can't act on it without
+// switching back.
+async function loadScopedPullout(req: Request, res: Response, id: number) {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return null;
+  }
+  const [row] = await db
+    .select()
+    .from(pulloutsTable)
+    .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, schoolId)));
+  if (!row) {
+    res.status(404).json({ error: "Pullout not found" });
+    return null;
+  }
+  return row;
+}
 
 const router: IRouter = Router();
 
@@ -135,6 +158,7 @@ router.get(
     const all = await db
       .select()
       .from(pulloutsTable)
+      .where(eq(pulloutsTable.schoolId, staff.schoolId))
       .orderBy(desc(pulloutsTable.requestedAt))
       .limit(500);
 
@@ -228,6 +252,7 @@ router.post(
     const [row] = await db
       .insert(pulloutsTable)
       .values({
+        schoolId: staff.schoolId,
         studentId: studentId.trim(),
         requestedById: staff.id,
         requestedByName: staff.displayName,
@@ -279,7 +304,7 @@ router.patch(
     const [existing] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     if (!existing) {
       res.status(404).json({ error: "Pullout not found" });
       return;
@@ -318,7 +343,7 @@ router.patch(
     const [row] = await db
       .update(pulloutsTable)
       .set(updates)
-      .where(eq(pulloutsTable.id, id))
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
     res.json(row);
   },
@@ -342,7 +367,7 @@ router.patch(
     const [existing] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     if (!existing) {
       res.status(404).json({ error: "Pullout not found" });
       return;
@@ -362,7 +387,7 @@ router.patch(
         verifiedById: staff.id,
         verifiedByName: staff.displayName,
       })
-      .where(eq(pulloutsTable.id, id))
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
     res.json(row);
   },
@@ -379,10 +404,16 @@ router.get(
       res.status(400).json({ error: "studentId required" });
       return;
     }
+    const staff = (req as Request & { staff: StaffRow }).staff;
     const rows = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.studentId, sid))
+      .where(
+        and(
+          eq(pulloutsTable.studentId, sid),
+          eq(pulloutsTable.schoolId, staff.schoolId),
+        ),
+      )
       .orderBy(desc(pulloutsTable.requestedAt));
     res.json(rows);
   },
@@ -402,6 +433,7 @@ router.get(
     "ISS dashboard role",
   ),
   async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
     let days = Number(req.query.days ?? 30);
     if (!Number.isFinite(days) || days < 1 || days > 365) days = 30;
     const since = daysAgoIso(days);
@@ -409,7 +441,12 @@ router.get(
     const all = await db
       .select()
       .from(pulloutsTable)
-      .where(gte(pulloutsTable.requestedAt, since))
+      .where(
+        and(
+          eq(pulloutsTable.schoolId, staff.schoolId),
+          gte(pulloutsTable.requestedAt, since),
+        ),
+      )
       .orderBy(desc(pulloutsTable.requestedAt));
 
     type Counters = {
@@ -503,7 +540,7 @@ router.patch(
     const [existing] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     if (!existing) {
       res.status(404).json({ error: "Pullout not found" });
       return;
@@ -523,7 +560,7 @@ router.patch(
         arrivedById: staff.id,
         arrivedByName: staff.displayName,
       })
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     // Send parent email synchronously so the operator sees the result.
     const emailResult = await sendPulloutArrivalEmail(id);
     if (emailResult && emailResult.status === "error") {
@@ -568,7 +605,7 @@ router.patch(
     const [row] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     res.json({ pullout: row, parentEmail: emailResult });
   },
 );
@@ -585,7 +622,7 @@ router.patch(
     const [existing] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     if (!existing) {
       res.status(404).json({ error: "Pullout not found" });
       return;
@@ -599,7 +636,7 @@ router.patch(
     const [row] = await db
       .update(pulloutsTable)
       .set({ status: "returned", returnedAt: new Date().toISOString() })
-      .where(eq(pulloutsTable.id, id))
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
     // Remove from ISS roster + send parent return email.
     try {
@@ -630,7 +667,7 @@ router.patch(
     const [existing] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     if (!existing) {
       res.status(404).json({ error: "Pullout not found" });
       return;
@@ -647,7 +684,7 @@ router.patch(
     const [row] = await db
       .update(pulloutsTable)
       .set({ status: "closed", closedAt: new Date().toISOString() })
-      .where(eq(pulloutsTable.id, id))
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
     res.json(row);
   },
@@ -676,7 +713,7 @@ router.patch(
     const [existing] = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.id, id));
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)));
     if (!existing) {
       res.status(404).json({ error: "Pullout not found" });
       return;
@@ -701,7 +738,7 @@ router.patch(
         reviewedByName: staff.displayName,
         reviewNotes,
       })
-      .where(eq(pulloutsTable.id, id))
+      .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
     res.json(row);
   },

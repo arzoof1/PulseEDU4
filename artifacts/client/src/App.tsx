@@ -17,6 +17,7 @@ import SettingsHub, {
   type SettingsTile,
   type SettingsTileId,
 } from "./components/SettingsHub";
+import SchoolSwitcher from "./components/SchoolSwitcher";
 import { authFetch } from "./lib/authToken";
 import {
   AreaChart,
@@ -6275,6 +6276,7 @@ function App() {
           </svg>
         </div>
         <div className="header-controls">
+          <SchoolSwitcher />
           <label>
             Show
             <select

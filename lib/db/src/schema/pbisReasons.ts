@@ -4,6 +4,7 @@ export const pbisReasonsTable = pgTable(
   "pbis_reasons",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     name: text("name").notNull(),
     category: text("category").notNull().default("General"),
     defaultPoints: integer("default_points").notNull().default(1),

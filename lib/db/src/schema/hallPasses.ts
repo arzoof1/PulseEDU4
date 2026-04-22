@@ -2,6 +2,7 @@ import { pgTable, serial, text, integer, boolean } from "drizzle-orm/pg-core";
 
 export const hallPassesTable = pgTable("hall_passes", {
   id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().default(1),
   studentId: text("student_id").notNull(),
   destination: text("destination").notNull(),
   originRoom: text("origin_room").notNull(),

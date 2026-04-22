@@ -13,6 +13,7 @@ import {
 } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -93,13 +94,20 @@ function parseLocationBody(body: unknown): {
   return out;
 }
 
-router.get("/locations", async (_req, res) => {
-  const rows = await db.select().from(locationsTable);
+router.get("/locations", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(locationsTable)
+    .where(eq(locationsTable.schoolId, schoolId));
   rows.sort((a, b) => a.name.localeCompare(b.name));
   res.json(rows);
 });
 
 router.post("/locations", requireAdminOrSuper(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const parsed = parseLocationBody(req.body);
   if (parsed.error) {
     res.status(400).json({ error: parsed.error });
@@ -113,6 +121,7 @@ router.post("/locations", requireAdminOrSuper(), async (req, res) => {
     const [row] = await db
       .insert(locationsTable)
       .values({
+        schoolId,
         name: parsed.name,
         kind: parsed.kind ?? "classroom",
         isOrigin: parsed.isOrigin ?? false,

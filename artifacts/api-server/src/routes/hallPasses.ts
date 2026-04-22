@@ -1,7 +1,8 @@
 import { Router, type IRouter } from "express";
 import { db, hallPassesTable, recordEditsTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { config } from "../data/config";
+import { requireSchool } from "../lib/scope.js";
 import {
   findPolarityConflict,
   polarityConflictMessage,
@@ -13,12 +14,19 @@ import {
 
 const router: IRouter = Router();
 
-router.get("/hall-passes", async (_req, res) => {
-  const rows = await db.select().from(hallPassesTable);
+router.get("/hall-passes", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(hallPassesTable)
+    .where(eq(hallPassesTable.schoolId, schoolId));
   res.json(rows);
 });
 
 router.post("/hall-passes", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const {
     studentId,
     destination,
@@ -75,6 +83,7 @@ router.post("/hall-passes", async (req, res) => {
   const [pass] = await db
     .insert(hallPassesTable)
     .values({
+      schoolId,
       studentId,
       destination,
       originRoom,
@@ -98,6 +107,8 @@ router.post("/hall-passes", async (req, res) => {
 });
 
 router.patch("/hall-passes/:id/end", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   const system = req.body?.system === true;
   const [pass] = await db
@@ -106,7 +117,9 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
       status: system ? "system_ended" : "ended",
       endedAt: new Date().toISOString(),
     })
-    .where(eq(hallPassesTable.id, id))
+    .where(
+      and(eq(hallPassesTable.id, id), eq(hallPassesTable.schoolId, schoolId)),
+    )
     .returning();
 
   if (!pass) {
@@ -117,6 +130,8 @@ router.patch("/hall-passes/:id/end", async (req, res) => {
 });
 
 router.patch("/hall-passes/:id", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   const { endedAt, createdAt, editedBy } = req.body ?? {};
 
@@ -157,7 +172,9 @@ router.patch("/hall-passes/:id", async (req, res) => {
   const [existing] = await db
     .select()
     .from(hallPassesTable)
-    .where(eq(hallPassesTable.id, id));
+    .where(
+      and(eq(hallPassesTable.id, id), eq(hallPassesTable.schoolId, schoolId)),
+    );
 
   if (!existing) {
     res.status(404).json({ error: "Hall pass not found" });
@@ -206,7 +223,9 @@ router.patch("/hall-passes/:id", async (req, res) => {
   const [updated] = await db
     .update(hallPassesTable)
     .set(updates)
-    .where(eq(hallPassesTable.id, id))
+    .where(
+      and(eq(hallPassesTable.id, id), eq(hallPassesTable.schoolId, schoolId)),
+    )
     .returning();
 
   const nowIso = new Date().toISOString();

@@ -12,9 +12,10 @@ import {
   staffTable,
   studentsTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { sendPulloutReturnEmail } from "../lib/pulloutEmail";
 import { upsertIssAttendance } from "./issAttendance";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -51,10 +52,13 @@ function requireRosterMW() {
   };
 }
 
-router.get("/iss-roster", requireRosterMW(), async (_req, res) => {
+router.get("/iss-roster", requireRosterMW(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
   const rows = await db
     .select()
     .from(issRosterTable)
+    .where(eq(issRosterTable.schoolId, schoolId))
     .orderBy(issRosterTable.createdAt);
   res.json(rows);
 });
@@ -63,6 +67,8 @@ router.post(
   "/iss-roster",
   requireRosterMW(),
   async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
     const staff = (req as Request & { staff: StaffRow }).staff;
     const { studentId, period, notes } = req.body ?? {};
     if (typeof studentId !== "string" || !studentId.trim()) {
@@ -99,6 +105,7 @@ router.post(
         notes: noteStr,
         addedById: staff.id,
         addedByName: staff.displayName,
+        schoolId,
       })
       .returning();
     try {
@@ -120,6 +127,8 @@ router.put(
   "/iss-roster/:id",
   requireRosterMW(),
   async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: "Invalid id" });
@@ -140,7 +149,7 @@ router.put(
     const [row] = await db
       .update(issRosterTable)
       .set({ period: periodNum, notes: noteStr })
-      .where(eq(issRosterTable.id, id))
+      .where(and(eq(issRosterTable.id, id), eq(issRosterTable.schoolId, schoolId)))
       .returning();
     if (!row) {
       res.status(404).json({ error: "Roster entry not found" });
@@ -154,15 +163,20 @@ router.delete(
   "/iss-roster/:id",
   requireRosterMW(),
   async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: "Invalid id" });
       return;
     }
+    // Scope by both id AND school_id so a staff member in school A cannot
+    // delete (and trigger a "Returned" email for) a roster entry from
+    // school B by guessing an id.
     const [existing] = await db
       .select()
       .from(issRosterTable)
-      .where(eq(issRosterTable.id, id));
+      .where(and(eq(issRosterTable.id, id), eq(issRosterTable.schoolId, schoolId)));
     if (!existing) {
       res.status(404).json({ error: "Roster entry not found" });
       return;
@@ -170,17 +184,29 @@ router.delete(
     let parentEmail: Awaited<ReturnType<typeof sendPulloutReturnEmail>> | null =
       null;
     // If pullout-sourced, mark pullout returned (if not already) and send parent email.
+    // Pullout lookup is also school-scoped — defense in depth in case a pulloutId
+    // ever points to a row from another school.
     if (existing.pulloutId) {
       const [pullout] = await db
         .select()
         .from(pulloutsTable)
-        .where(eq(pulloutsTable.id, existing.pulloutId));
+        .where(
+          and(
+            eq(pulloutsTable.id, existing.pulloutId),
+            eq(pulloutsTable.schoolId, schoolId),
+          ),
+        );
       if (pullout) {
         if (pullout.status !== "returned" && pullout.status !== "closed") {
           await db
             .update(pulloutsTable)
             .set({ status: "returned", returnedAt: new Date().toISOString() })
-            .where(eq(pulloutsTable.id, existing.pulloutId));
+            .where(
+              and(
+                eq(pulloutsTable.id, existing.pulloutId),
+                eq(pulloutsTable.schoolId, schoolId),
+              ),
+            );
         }
         parentEmail = await sendPulloutReturnEmail(existing.pulloutId);
         if (parentEmail && parentEmail.status === "error") {
@@ -191,7 +217,9 @@ router.delete(
         }
       }
     }
-    await db.delete(issRosterTable).where(eq(issRosterTable.id, id));
+    await db
+      .delete(issRosterTable)
+      .where(and(eq(issRosterTable.id, id), eq(issRosterTable.schoolId, schoolId)));
     res.json({ ok: true, parentEmail });
   },
 );

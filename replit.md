@@ -108,9 +108,59 @@ PulseEDU is migrating from single-tenant to silo-per-district.
   `bell_schedule_periods` (child of `bell_schedules`, scoped via parent),
   `user_sessions`, `check_in_with_options` (legacy).
 
-**Day 3 (next)** — auth session carries `schoolId`; `req.schoolId` middleware
-enforces scoping; SuperUser school switcher in the top bar; create-school
-flow; remove the `school_id` DEFAULT once every INSERT path is explicit.
+**Day 3 (in progress)** — silo-per-school request scoping.
+
+Wave 1 (foundation):
+- `req.schoolId`, `req.homeSchoolId`, `req.isSchoolSwitched` resolved on every
+  request (`artifacts/api-server/src/app.ts`).
+- `lib/scope.ts` exports `requireSchool(req, res)` — handler helper that
+  returns the active school id or writes 401.
+- 13 Drizzle schema files updated with `schoolId: integer().notNull().default(1)`
+  so route code can reference the column without raw SQL.
+- New routes (`artifacts/api-server/src/routes/tenancy.ts`):
+  - `GET  /api/tenancy/schools` — pickable schools (SuperUser sees all,
+    everyone else sees their own home school).
+  - `POST /api/tenancy/switch-school { schoolId }` — SuperUser-only; persists
+    `session.activeSchoolId`. `schoolId: null` clears the override.
+  - `POST /api/tenancy/schools` — SuperUser-only create-school flow used by
+    the Tenancy panel to prove silo isolation against an empty school.
+- `/api/auth/me` and `/api/auth/login` now return
+  `{ schoolId, homeSchoolId, isSchoolSwitched }`.
+
+Wave 2 (route scoping). Each route below filters reads by `req.schoolId` and
+stamps `school_id` on every INSERT:
+- `students`, `hall-passes` (all CRUD), `tardies`, `support-notes`,
+  `accommodation-logs` (GET + POST + bulk),
+- `pbis` (list, leaderboard, POST, bulk, home-stats, needs-attention with
+  student/staff denominators all scoped via `staff.school_id` join until the
+  config tables migrate to per-school in Day 4),
+- `pullouts` (list, by-student, report, POST, **all 6 PATCH actions** —
+  `verify`, `reject`, `arrived`, `returned`, `closed`, `review` — now match
+  `id AND school_id`),
+- `locations` (GET, POST),
+- `interventions` (GET + POST),
+- `reports/teachers` (filters by `staff.school_id`).
+
+Top bar (`artifacts/client/src/components/SchoolSwitcher.tsx`):
+- Shows the active school as a 🏫 pill. SuperUsers click to open a switcher
+  popover. When switched away from the home school, an amber "⚠ Acting as X"
+  badge plus an "Exit switch" button appear so SuperUsers never get stuck.
+- On a successful switch the page hard-reloads — every list refetches scoped
+  data. Cheaper than threading a query-key through every `useState` list.
+
+Tenancy panel (`TenancyPanel.tsx`) now includes a "Create new school" form
+(SuperUser-only) that POSTs `/api/tenancy/schools`, refetches the status, and
+instructs the SuperUser to switch into the new (empty) school to verify silo
+isolation. Server validates name/code uniqueness within the district until the
+composite unique index lands in Day 4.
+
+Routes intentionally NOT scoped yet (config singletons → per-school in Day 4):
+`bell-schedules`, `pbis-reasons` (lists), `school-settings`, `kiosk-activations`.
+
+The DB-level `DEFAULT 1` on `school_id` stays until every INSERT path
+(including kiosk + admin tools) is explicit; planned for end of Day 3 / start
+of Day 4. `class_sections` and `section_roster` still lack `school_id` — also
+Day 4.
 
 Multi-day plan tracked in `.local/session_plan.md`.
 

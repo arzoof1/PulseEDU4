@@ -1,15 +1,23 @@
 import { Router, type IRouter } from "express";
 import { db, tardiesTable, staffTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
-router.get("/tardies", async (_req, res) => {
-  const rows = await db.select().from(tardiesTable);
+router.get("/tardies", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(tardiesTable)
+    .where(eq(tardiesTable.schoolId, schoolId));
   res.json(rows);
 });
 
 router.post("/tardies", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const {
     studentId,
     teacherName,
@@ -68,6 +76,7 @@ router.post("/tardies", async (req, res) => {
   const [tardy] = await db
     .insert(tardiesTable)
     .values({
+      schoolId,
       studentId,
       teacherName,
       period,

@@ -95,10 +95,22 @@ function TenancyPanelInner() {
   const [status, setStatus] = useState<TenancyStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [reloadKey, setReloadKey] = useState(0);
+
+  // Create-school form state. Kept local to the panel; on success we bump
+  // reloadKey to refetch /tenancy/status so the new school appears in the
+  // table and per-school count grid.
+  const [newName, setNewName] = useState("");
+  const [newShort, setNewShort] = useState("");
+  const [newCode, setNewCode] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [createOk, setCreateOk] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setLoading(true);
       try {
         const r = await authFetch("/api/tenancy/status");
         if (!r.ok) {
@@ -117,7 +129,40 @@ function TenancyPanelInner() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reloadKey]);
+
+  const submitCreate = async (districtId: number) => {
+    setCreating(true);
+    setCreateError(null);
+    setCreateOk(null);
+    try {
+      const r = await authFetch("/api/tenancy/schools", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          districtId,
+          name: newName,
+          shortName: newShort || null,
+          stateSchoolCode: newCode || null,
+        }),
+      });
+      const body = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(body?.error ?? `HTTP ${r.status}`);
+      }
+      setCreateOk(
+        `Created “${body?.school?.name ?? newName}” (id ${body?.school?.id}). Switch to it from the school badge in the top bar — dashboards should be empty.`,
+      );
+      setNewName("");
+      setNewShort("");
+      setNewCode("");
+      setReloadKey((k) => k + 1);
+    } catch (e) {
+      setCreateError(e instanceof Error ? e.message : "Create failed");
+    } finally {
+      setCreating(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -220,6 +265,98 @@ function TenancyPanelInner() {
               tz: {district.timezone}
             </span>
           </div>
+        </section>
+      )}
+
+      {district && (
+        <section
+          style={{
+            marginBottom: "1.25rem",
+            border: "1px dashed var(--border, #2a3447)",
+            borderRadius: 6,
+            padding: "0.75rem",
+          }}
+        >
+          <h3 style={{ marginTop: 0, marginBottom: "0.4rem" }}>
+            Create new school
+          </h3>
+          <p
+            style={{
+              color: "var(--text-subtle)",
+              marginTop: 0,
+              fontSize: 13,
+            }}
+          >
+            New schools start empty. After creating one, use the school badge
+            in the top bar to switch into it — every dashboard should be blank
+            until you add data, proving silo isolation. Switch back to your
+            home school to restore the original view.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1.6fr 0.8fr 0.8fr auto",
+              gap: "0.5rem",
+              alignItems: "end",
+            }}
+          >
+            <label style={{ display: "block", fontSize: 13 }}>
+              School name
+              <input
+                type="text"
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                placeholder="e.g. Test Middle School"
+                style={{ display: "block", width: "100%", padding: "0.35rem" }}
+              />
+            </label>
+            <label style={{ display: "block", fontSize: 13 }}>
+              Short name (optional)
+              <input
+                type="text"
+                value={newShort}
+                onChange={(e) => setNewShort(e.target.value)}
+                placeholder="Test"
+                style={{ display: "block", width: "100%", padding: "0.35rem" }}
+              />
+            </label>
+            <label style={{ display: "block", fontSize: 13 }}>
+              State code (optional)
+              <input
+                type="text"
+                value={newCode}
+                onChange={(e) => setNewCode(e.target.value)}
+                placeholder="9999"
+                style={{ display: "block", width: "100%", padding: "0.35rem" }}
+              />
+            </label>
+            <button
+              type="button"
+              disabled={creating || !newName.trim()}
+              onClick={() => submitCreate(district.id)}
+              style={{
+                padding: "0.5rem 0.9rem",
+                background: "#0d9488",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: creating || !newName.trim() ? "not-allowed" : "pointer",
+                opacity: creating || !newName.trim() ? 0.6 : 1,
+              }}
+            >
+              {creating ? "Creating…" : "Create school"}
+            </button>
+          </div>
+          {createError && (
+            <p style={{ color: "#b91c1c", fontSize: 13, marginBottom: 0 }}>
+              {createError}
+            </p>
+          )}
+          {createOk && (
+            <p style={{ color: "#166534", fontSize: 13, marginBottom: 0 }}>
+              {createOk}
+            </p>
+          )}
         </section>
       )}
 

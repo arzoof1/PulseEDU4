@@ -19,6 +19,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     id: row.id,
     email: row.email,
     displayName: row.displayName,
+    schoolId: row.schoolId,
     isSuperUser: row.isSuperUser,
     isAdmin: row.isAdmin,
     isEseCoordinator: row.isEseCoordinator,
@@ -163,7 +164,13 @@ router.get("/auth/me", async (req, res) => {
     });
     return;
   }
-  res.json({ ...publicStaff(staff), authToken: issueAuthToken(staff.id) });
+  res.json({
+    ...publicStaff(staff),
+    authToken: issueAuthToken(staff.id),
+    activeSchoolId: req.schoolId ?? staff.schoolId,
+    homeSchoolId: req.homeSchoolId ?? staff.schoolId,
+    isSchoolSwitched: !!req.isSchoolSwitched,
+  });
 });
 
 export default router;

@@ -19,6 +19,7 @@ import {
   staffTable,
 } from "@workspace/db";
 import { and, desc, eq } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -45,16 +46,19 @@ async function requireStaff(
 }
 
 router.get("/interventions", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
   const isPrivileged = staff.isAdmin || staff.isBehaviorSpecialist;
+  const scope = eq(interventionEntriesTable.schoolId, schoolId);
   const rows = await db
     .select()
     .from(interventionEntriesTable)
     .where(
       isPrivileged
-        ? undefined
-        : eq(interventionEntriesTable.staffId, staff.id),
+        ? scope
+        : and(scope, eq(interventionEntriesTable.staffId, staff.id)),
     )
     .orderBy(desc(interventionEntriesTable.createdAt))
     .limit(200);
@@ -62,6 +66,8 @@ router.get("/interventions", requireStaff, async (req, res) => {
 });
 
 router.post("/interventions", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
   const { studentId, interventionTypeId, note } = req.body ?? {};
@@ -106,6 +112,7 @@ router.post("/interventions", requireStaff, async (req, res) => {
       note: noteText || null,
       staffId: staff.id,
       staffName: staff.displayName,
+      schoolId,
       createdAt: new Date().toISOString(),
     })
     .returning();

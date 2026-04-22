@@ -25,6 +25,7 @@ import {
   pbisEntriesTable,
 } from "@workspace/db";
 import { and, eq, isNull, inArray, sql, desc } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -82,12 +83,16 @@ function eachDateInclusive(fromIso: string, toIso: string): string[] {
 // List of teachers (active staff who teach at least one non-planning section).
 // Used by the Reports UI's teacher picker. Admin / ESE only.
 router.get("/reports/teachers", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
   if (!staff.isAdmin && !staff.isEseCoordinator) {
     res.status(403).json({ error: "Admin or ESE coordinator only" });
     return;
   }
+  // Scope by staff.school_id. classSections does not yet carry school_id
+  // (D4), so we scope through the teacher record instead.
   const rows = await db
     .selectDistinct({
       id: staffTable.id,
@@ -98,7 +103,13 @@ router.get("/reports/teachers", requireStaff, async (req, res) => {
       classSectionsTable,
       eq(classSectionsTable.teacherStaffId, staffTable.id),
     )
-    .where(and(eq(staffTable.active, true), eq(classSectionsTable.isPlanning, false)));
+    .where(
+      and(
+        eq(staffTable.active, true),
+        eq(classSectionsTable.isPlanning, false),
+        eq(staffTable.schoolId, schoolId),
+      ),
+    );
   rows.sort((a, b) => a.displayName.localeCompare(b.displayName));
   res.json({ teachers: rows });
 });

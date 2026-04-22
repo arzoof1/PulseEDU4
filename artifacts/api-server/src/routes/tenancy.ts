@@ -1,13 +1,13 @@
 import { Router, type IRouter } from "express";
 import { db, staffTable, districtsTable, schoolsTable } from "@workspace/db";
-import { eq, asc } from "drizzle-orm";
+import { eq, asc, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-// SuperUser-only guard. Loads the staff row and returns it on success, or
-// writes the appropriate error response and returns null on failure.
-async function requireSuperUser(req: any, res: any) {
+// Loads the caller's staff row. Returns null on failure (after writing
+// the appropriate error response to res).
+async function loadStaff(req: any, res: any) {
   const id = req.staffId ?? null;
   if (!id) {
     res.status(401).json({ error: "Sign-in required" });
@@ -21,12 +21,206 @@ async function requireSuperUser(req: any, res: any) {
     res.status(401).json({ error: "Sign-in required" });
     return null;
   }
+  return staff;
+}
+
+async function requireSuperUser(req: any, res: any) {
+  const staff = await loadStaff(req, res);
+  if (!staff) return null;
   if (!staff.isSuperUser) {
     res.status(403).json({ error: "SuperUser access required" });
     return null;
   }
   return staff;
 }
+
+// ---------------------------------------------------------------------------
+// GET /api/tenancy/schools
+//   Lists schools the caller can pick from. SuperUsers see all active schools.
+//   Regular staff see exactly their home school. Used to populate the top-bar
+//   switcher (SuperUser) and the read-only badge (everyone else).
+// ---------------------------------------------------------------------------
+router.get("/tenancy/schools", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+
+  const all = await db
+    .select()
+    .from(schoolsTable)
+    .where(eq(schoolsTable.active, true))
+    .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
+
+  const visible = staff.isSuperUser
+    ? all
+    : all.filter((s) => s.id === staff.schoolId);
+
+  res.json({
+    homeSchoolId: staff.schoolId,
+    activeSchoolId: req.schoolId ?? staff.schoolId,
+    isSwitched: !!req.isSchoolSwitched,
+    canSwitch: !!staff.isSuperUser,
+    schools: visible.map((s) => ({
+      id: s.id,
+      districtId: s.districtId,
+      name: s.name,
+      shortName: s.shortName,
+      stateSchoolCode: s.stateSchoolCode,
+      isPrimary: s.isPrimary,
+    })),
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/tenancy/switch-school { schoolId }
+//   SuperUser-only. Persists session.activeSchoolId so subsequent requests
+//   resolve req.schoolId to the chosen school. Pass schoolId=null (or the
+//   caller's home school id) to clear the override.
+// ---------------------------------------------------------------------------
+router.post("/tenancy/switch-school", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const raw = (req.body ?? {}) as { schoolId?: unknown };
+  const wantsClear = raw.schoolId === null || raw.schoolId === undefined;
+
+  if (wantsClear) {
+    delete req.session.activeSchoolId;
+    req.session.save((err) => {
+      if (err) {
+        res.status(500).json({ error: "Could not save session" });
+        return;
+      }
+      res.json({
+        ok: true,
+        activeSchoolId: staff.schoolId,
+        isSwitched: false,
+      });
+    });
+    return;
+  }
+
+  const schoolId = Number(raw.schoolId);
+  if (!Number.isInteger(schoolId) || schoolId <= 0) {
+    res.status(400).json({ error: "schoolId must be a positive integer" });
+    return;
+  }
+
+  const [school] = await db
+    .select()
+    .from(schoolsTable)
+    .where(and(eq(schoolsTable.id, schoolId), eq(schoolsTable.active, true)));
+  if (!school) {
+    res.status(404).json({ error: "School not found or inactive" });
+    return;
+  }
+
+  req.session.activeSchoolId = schoolId;
+  req.session.save((err) => {
+    if (err) {
+      res.status(500).json({ error: "Could not save session" });
+      return;
+    }
+    res.json({
+      ok: true,
+      activeSchoolId: schoolId,
+      isSwitched: schoolId !== staff.schoolId,
+      schoolName: school.name,
+    });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/tenancy/schools
+//   SuperUser-only. Creates a new school inside a district. Used by the
+//   Tenancy panel "Create new school" action so SuperUsers can prove silo
+//   isolation by switching into a brand-new (empty) school.
+// ---------------------------------------------------------------------------
+router.post("/tenancy/schools", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const body = (req.body ?? {}) as {
+    districtId?: unknown;
+    name?: unknown;
+    shortName?: unknown;
+    stateSchoolCode?: unknown;
+  };
+
+  const districtId = Number(body.districtId);
+  if (!Number.isInteger(districtId) || districtId <= 0) {
+    res.status(400).json({ error: "districtId must be a positive integer" });
+    return;
+  }
+  const [district] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId));
+  if (!district) {
+    res.status(404).json({ error: "District not found" });
+    return;
+  }
+
+  const name = typeof body.name === "string" ? body.name.trim() : "";
+  if (!name) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+
+  const shortName =
+    typeof body.shortName === "string" && body.shortName.trim()
+      ? body.shortName.trim()
+      : null;
+  const stateSchoolCode =
+    typeof body.stateSchoolCode === "string" && body.stateSchoolCode.trim()
+      ? body.stateSchoolCode.trim()
+      : null;
+
+  // Reject duplicate name OR state code within the same district. The DB
+  // doesn't have a composite unique yet (D4) so we enforce it here.
+  const existing = await db
+    .select()
+    .from(schoolsTable)
+    .where(eq(schoolsTable.districtId, districtId));
+  if (existing.some((s) => s.name.toLowerCase() === name.toLowerCase())) {
+    res
+      .status(409)
+      .json({ error: `A school named "${name}" already exists in this district` });
+    return;
+  }
+  if (
+    stateSchoolCode &&
+    existing.some((s) => s.stateSchoolCode === stateSchoolCode)
+  ) {
+    res
+      .status(409)
+      .json({ error: `State code ${stateSchoolCode} is already used in this district` });
+    return;
+  }
+
+  const [created] = await db
+    .insert(schoolsTable)
+    .values({
+      districtId,
+      name,
+      shortName,
+      stateSchoolCode,
+      isPrimary: false,
+      active: true,
+    })
+    .returning();
+
+  res.status(201).json({
+    school: {
+      id: created.id,
+      districtId: created.districtId,
+      name: created.name,
+      shortName: created.shortName,
+      stateSchoolCode: created.stateSchoolCode,
+      isPrimary: created.isPrimary,
+      active: created.active,
+    },
+  });
+});
 
 // Tables we report row counts for. All have a school_id column as of Day 2.
 const COUNT_TABLES = [
@@ -56,7 +250,6 @@ router.get("/tenancy/status", async (req, res) => {
     .from(schoolsTable)
     .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
 
-  // Per-school + global counts in one pass per table.
   const counts: Record<string, number> = {};
   const perSchool: Record<string, Record<number, number>> = {};
   const orphans: Record<string, number> = {};

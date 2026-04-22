@@ -15,6 +15,7 @@ import {
   processMilestonesForStudent,
   processMilestonesForStudents,
 } from "../lib/pbisMilestones";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -53,8 +54,13 @@ async function logEdit(
   });
 }
 
-router.get("/pbis", async (_req, res) => {
-  const rows = await db.select().from(pbisEntriesTable);
+router.get("/pbis", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(pbisEntriesTable)
+    .where(eq(pbisEntriesTable.schoolId, schoolId));
   res.json(rows);
 });
 
@@ -89,7 +95,10 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
     return;
   }
 
-  const all = await db.select().from(pbisEntriesTable);
+  const all = await db
+    .select()
+    .from(pbisEntriesTable)
+    .where(eq(pbisEntriesTable.schoolId, staff.schoolId));
   const fromIso = from ? from.toISOString() : null;
   const filtered = all.filter((e) => {
     if (e.voidedAt) return false;
@@ -144,6 +153,8 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
 });
 
 router.post("/pbis", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { studentId, reason, points, staffName } = req.body ?? {};
   const sessionStaffId = req.staffId;
   let resolvedStaffId: number | null = null;
@@ -177,6 +188,7 @@ router.post("/pbis", async (req, res) => {
   const [entry] = await db
     .insert(pbisEntriesTable)
     .values({
+      schoolId,
       studentId,
       reason,
       points: pts,
@@ -243,6 +255,7 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
       const [row] = await db
         .insert(pbisEntriesTable)
         .values({
+          schoolId: staff.schoolId,
           studentId: id,
           reason: reason.trim(),
           points: pts,
@@ -448,6 +461,7 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, windowStart.toISOString()),
         lt(pbisEntriesTable.createdAt, windowEnd.toISOString()),
@@ -493,23 +507,30 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
   }
 
   // Denominators: total students; total active staff who teach a real
-  // (non-planning) class section.
+  // (non-planning) class section. All scoped to the active school.
   const allStudents = await db
     .select({ id: studentsTable.id })
-    .from(studentsTable);
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, staff.schoolId));
   const totalStudents = allStudents.length;
 
+  // class_sections has not yet been migrated to school_id (scheduled for D4).
+  // For now we constrain via the joined staff row's school_id so a different
+  // school's sections can't slip into this denominator.
   const teachingRows = await db
     .select({
       staffId: classSectionsTable.teacherStaffId,
       isPlanning: classSectionsTable.isPlanning,
       active: staffTable.active,
+      staffSchoolId: staffTable.schoolId,
     })
     .from(classSectionsTable)
     .innerJoin(staffTable, eq(staffTable.id, classSectionsTable.teacherStaffId));
   const teachingStaffSet = new Set<number>();
   for (const r of teachingRows) {
-    if (!r.isPlanning && r.active) teachingStaffSet.add(r.staffId);
+    if (!r.isPlanning && r.active && r.staffSchoolId === staff.schoolId) {
+      teachingStaffSet.add(r.staffId);
+    }
   }
   const totalTeachingStaff = teachingStaffSet.size;
 
@@ -601,7 +622,8 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
       displayName: staffTable.displayName,
       active: staffTable.active,
     })
-    .from(staffTable);
+    .from(staffTable)
+    .where(eq(staffTable.schoolId, staff.schoolId));
 
   const teachingRows = await db
     .select({
@@ -622,7 +644,8 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
     })
-    .from(studentsTable);
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, staff.schoolId));
   const studentNameById = new Map<string, string>(
     allStudents.map((s) => [
       s.id,
@@ -638,6 +661,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, quietWindow.toISOString()),
       ),
@@ -659,6 +683,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, invisibleWindow.toISOString()),
       ),
@@ -683,6 +708,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, thisMonday.toISOString()),
         lt(pbisEntriesTable.createdAt, nextMonday.toISOString()),

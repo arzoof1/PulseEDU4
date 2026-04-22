@@ -10,6 +10,7 @@ import {
 
 export const bellSchedulesTable = pgTable("bell_schedules", {
   id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().default(1),
   name: text("name").notNull(),
   kind: text("kind").notNull().default("regular"),
   isDefault: boolean("is_default").notNull().default(false),
