@@ -5494,8 +5494,29 @@ function App() {
           }
         }
         return (
+          <>
+            <div
+              style={{
+                borderTopLeftRadius: "var(--radius-lg, 8px)",
+                borderTopRightRadius: "var(--radius-lg, 8px)",
+                overflow: "hidden",
+                marginBottom: "-1px",
+              }}
+            >
+              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }} />
+            </div>
           <div className="card">
-            <h2>Hall Pass Summary</h2>
+            <h2
+              style={{
+                margin: 0,
+                fontSize: "1.5rem",
+                fontWeight: 700,
+                color: "#7c3aed",
+              }}
+            >
+              Hall Pass Summary
+            </h2>
             <div
               style={{
                 display: "grid",
@@ -5612,6 +5633,7 @@ function App() {
               </div>
             </div>
           </div>
+          </>
         );
       })()}
 
