@@ -6172,16 +6172,35 @@ function App() {
         const peak = buckets.reduce((m, b) => Math.max(m, b.count), 0);
         return (
           <>
-            <div className="card">
-              <h2>
+            <div
+              style={{
+                borderTopLeftRadius: "var(--radius-lg, 8px)",
+                borderTopRightRadius: "var(--radius-lg, 8px)",
+                overflow: "hidden",
+                marginBottom: "-1px",
+              }}
+            >
+              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
                 <button
                   type="button"
-                  className="no-print"
+                  className="back-button-purple"
+                  style={{ marginBottom: 0 }}
                   onClick={() => setHpReportSection("hub")}
-                  style={{ marginRight: "0.75rem", fontSize: "0.85rem" }}
                 >
                   ← Back
                 </button>
+              </div>
+            </div>
+            <div className="card">
+              <h2
+                style={{
+                  margin: 0,
+                  fontSize: "1.5rem",
+                  fontWeight: 700,
+                  color: "#7c3aed",
+                }}
+              >
                 Overview
                 <input
                   type="date"
