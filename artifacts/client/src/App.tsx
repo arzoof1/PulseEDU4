@@ -7836,7 +7836,7 @@ function App() {
             <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
             <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }} />
           </div>
-          <section className="card">
+          <section className="card" style={{ overflow: "visible", minHeight: "24rem" }}>
             <h2
               style={{
                 margin: "0 0 0.5rem",
