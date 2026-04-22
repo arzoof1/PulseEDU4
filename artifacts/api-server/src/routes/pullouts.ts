@@ -577,6 +577,10 @@ router.patch(
         .where(eq(issRosterTable.pulloutId, id));
       if (existingRoster.length === 0) {
         await db.insert(issRosterTable).values({
+          // D5: stamp schoolId from the parent pullout so the roster row is
+          // tenant-scoped (otherwise DB DEFAULT 1 would mis-tenant non-Parrott
+          // arrivals).
+          schoolId: existing.schoolId,
           studentId: existing.studentId,
           source: "pullout",
           pulloutId: id,
@@ -592,6 +596,7 @@ router.patch(
     try {
       await upsertIssAttendance({
         studentId: existing.studentId,
+        schoolId: existing.schoolId,
         source: "pullout",
         pulloutId: id,
         dispatchedByName: existing.referringTeacherName ?? null,

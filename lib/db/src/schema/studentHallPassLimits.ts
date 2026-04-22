@@ -17,6 +17,7 @@ export const studentHallPassLimitsTable = pgTable(
   "student_hall_pass_limits",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     studentId: text("student_id").notNull(),
     dailyLimit: integer("daily_limit").notNull(),
     note: text("note"),
@@ -29,8 +30,10 @@ export const studentHallPassLimitsTable = pgTable(
       .defaultNow(),
   },
   (t) => ({
+    // D5: per-school active uniqueness — both schools can independently
+    // hold one active row for the same student id.
     studentIdx: uniqueIndex("student_hall_pass_limits_student_active")
-      .on(t.studentId)
+      .on(t.studentId, t.schoolId)
       .where(sql`${t.active} = true`),
   }),
 );

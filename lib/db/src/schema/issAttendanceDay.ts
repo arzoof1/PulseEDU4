@@ -13,6 +13,7 @@ export const issAttendanceDayTable = pgTable(
   "iss_attendance_day",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     studentId: text("student_id").notNull(),
     day: date("day").notNull(),
     source: text("source").notNull(),
@@ -33,9 +34,12 @@ export const issAttendanceDayTable = pgTable(
       .defaultNow(),
   },
   (t) => ({
+    // D5: include schoolId so two schools can both have a row for the same
+    // student id on the same day (transferred students with reused ids).
     studentDayIdx: uniqueIndex("iss_attendance_day_student_day_idx").on(
       t.studentId,
       t.day,
+      t.schoolId,
     ),
   }),
 );

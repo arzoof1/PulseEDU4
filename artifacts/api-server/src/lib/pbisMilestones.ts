@@ -18,17 +18,31 @@ export type MilestoneResult = {
 
 export async function processMilestonesForStudent(
   studentId: string,
+  schoolId: number,
 ): Promise<MilestoneResult[]> {
+  // D5: read milestones, entries, and prior email log scoped to caller's
+  // school. Without this, awarding a student in school A would compare
+  // against school B's milestone thresholds and dedupe history.
   const milestones = await db
     .select()
     .from(pbisMilestonesTable)
-    .where(eq(pbisMilestonesTable.active, true));
+    .where(
+      and(
+        eq(pbisMilestonesTable.active, true),
+        eq(pbisMilestonesTable.schoolId, schoolId),
+      ),
+    );
   if (milestones.length === 0) return [];
 
   const entries = await db
     .select()
     .from(pbisEntriesTable)
-    .where(eq(pbisEntriesTable.studentId, studentId));
+    .where(
+      and(
+        eq(pbisEntriesTable.studentId, studentId),
+        eq(pbisEntriesTable.schoolId, schoolId),
+      ),
+    );
   const total = entries
     .filter((e) => !e.voidedAt)
     .reduce((s, e) => s + e.points, 0);
@@ -39,7 +53,12 @@ export async function processMilestonesForStudent(
   const sent = await db
     .select()
     .from(pbisMilestoneEmailsTable)
-    .where(eq(pbisMilestoneEmailsTable.studentId, studentId));
+    .where(
+      and(
+        eq(pbisMilestoneEmailsTable.studentId, studentId),
+        eq(pbisMilestoneEmailsTable.schoolId, schoolId),
+      ),
+    );
   const sentSet = new Set(sent.map((s) => s.milestonePoints));
 
   const candidates = reached
@@ -56,6 +75,7 @@ export async function processMilestonesForStudent(
     try {
       await db.insert(pbisMilestoneEmailsTable).values({
         studentId,
+        schoolId,
         milestonePoints: m.points,
         sentAt: claimedAt,
         emailTo: null,
@@ -69,10 +89,20 @@ export async function processMilestonesForStudent(
   }
   if (todo.length === 0) return [];
 
+  // D5: scope student lookup by (studentId, schoolId). Today
+  // students.student_id is globally unique, so this is defense-in-depth,
+  // but if district expansion ever relaxes that to per-school uniqueness,
+  // an unscoped lookup would let school A's milestone email pull
+  // school B's parent name/email — a cross-tenant PII leak.
   const [student] = await db
     .select()
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, studentId));
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
   const [settings] = await db.select().from(schoolSettingsTable);
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
@@ -94,6 +124,7 @@ export async function processMilestonesForStudent(
           and(
             eq(pbisMilestoneEmailsTable.studentId, studentId),
             eq(pbisMilestoneEmailsTable.milestonePoints, m.points),
+            eq(pbisMilestoneEmailsTable.schoolId, schoolId),
           ),
         );
       results.push({
@@ -118,6 +149,7 @@ export async function processMilestonesForStudent(
           and(
             eq(pbisMilestoneEmailsTable.studentId, studentId),
             eq(pbisMilestoneEmailsTable.milestonePoints, m.points),
+            eq(pbisMilestoneEmailsTable.schoolId, schoolId),
           ),
         );
       results.push({
@@ -170,6 +202,7 @@ export async function processMilestonesForStudent(
           and(
             eq(pbisMilestoneEmailsTable.studentId, studentId),
             eq(pbisMilestoneEmailsTable.milestonePoints, m.points),
+            eq(pbisMilestoneEmailsTable.schoolId, schoolId),
           ),
         );
       results.push({
@@ -192,6 +225,7 @@ export async function processMilestonesForStudent(
           and(
             eq(pbisMilestoneEmailsTable.studentId, studentId),
             eq(pbisMilestoneEmailsTable.milestonePoints, m.points),
+            eq(pbisMilestoneEmailsTable.schoolId, schoolId),
           ),
         );
       results.push({
@@ -208,13 +242,14 @@ export async function processMilestonesForStudent(
 // Used for bulk: sequential to avoid rate-limit + duplicate inserts.
 export async function processMilestonesForStudents(
   studentIds: string[],
+  schoolId: number,
 ): Promise<Record<string, MilestoneResult[]>> {
   const out: Record<string, MilestoneResult[]> = {};
   const seen = new Set<string>();
   for (const id of studentIds) {
     if (seen.has(id)) continue;
     seen.add(id);
-    out[id] = await processMilestonesForStudent(id);
+    out[id] = await processMilestonesForStudent(id, schoolId);
   }
   return out;
 }

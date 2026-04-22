@@ -71,9 +71,14 @@ function requireBsAdmin(
 // ---- Helpers ----
 
 /**
- * Returns the active per-student daily limit row for `studentId`, or null.
+ * Returns the active per-student daily limit row for `studentId` at the
+ * given school. D5: school-scoped so two tenants holding active rows for the
+ * same student id don't bleed into each other's pass enforcement.
  */
-export async function getActiveStudentLimit(studentId: string) {
+export async function getActiveStudentLimit(
+  studentId: string,
+  schoolId: number,
+) {
   const trimmed = studentId.trim();
   if (!trimmed) return null;
   const [row] = await db
@@ -82,6 +87,7 @@ export async function getActiveStudentLimit(studentId: string) {
     .where(
       and(
         eq(studentHallPassLimitsTable.studentId, trimmed),
+        eq(studentHallPassLimitsTable.schoolId, schoolId),
         eq(studentHallPassLimitsTable.active, true),
       ),
     )
@@ -101,9 +107,14 @@ function endOfTodayIso(): string {
 }
 
 /**
- * Returns how many hall passes `studentId` has had today (any status).
+ * Returns how many hall passes `studentId` has had today (any status) at the
+ * given school. D5: scoped by schoolId so a transferred student with the
+ * same id at two schools doesn't have today's counts merged.
  */
-export async function countPassesToday(studentId: string): Promise<number> {
+export async function countPassesToday(
+  studentId: string,
+  schoolId: number,
+): Promise<number> {
   const trimmed = studentId.trim();
   if (!trimmed) return 0;
   const rows = await db
@@ -112,6 +123,7 @@ export async function countPassesToday(studentId: string): Promise<number> {
     .where(
       and(
         eq(hallPassesTable.studentId, trimmed),
+        eq(hallPassesTable.schoolId, schoolId),
         gte(hallPassesTable.createdAt, startOfTodayIso()),
         lte(hallPassesTable.createdAt, endOfTodayIso()),
       ),
@@ -127,7 +139,7 @@ export async function getEffectiveDailyLimit(
   studentId: string,
   schoolId: number,
 ): Promise<{ limit: number; source: "student" | "global" } | null> {
-  const studentRow = await getActiveStudentLimit(studentId);
+  const studentRow = await getActiveStudentLimit(studentId, schoolId);
   if (studentRow && studentRow.dailyLimit > 0) {
     return { limit: studentRow.dailyLimit, source: "student" };
   }
@@ -154,7 +166,7 @@ export async function findDailyLimitConflict(
 } | null> {
   const eff = await getEffectiveDailyLimit(studentId, schoolId);
   if (!eff) return null;
-  const used = await countPassesToday(studentId);
+  const used = await countPassesToday(studentId, schoolId);
   if (used >= eff.limit) {
     return { used, limit: eff.limit, source: eff.source };
   }
@@ -176,7 +188,13 @@ export function dailyLimitConflictMessage(c: {
 router.get(
   "/student-hall-pass-limits",
   requireBsAdmin,
-  async (_req, res) => {
+  async (req, res) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    // D5: only return limits for THIS school.
     const rows = await db
       .select({
         id: studentHallPassLimitsTable.id,
@@ -194,9 +212,20 @@ router.get(
       .from(studentHallPassLimitsTable)
       .leftJoin(
         studentsTable,
-        eq(studentHallPassLimitsTable.studentId, studentsTable.studentId),
+        // D5: also match school on the join so school A's listing never
+        // surfaces school B's first/last name even if a stale limit row
+        // exists for a since-transferred student.
+        and(
+          eq(studentHallPassLimitsTable.studentId, studentsTable.studentId),
+          eq(studentHallPassLimitsTable.schoolId, studentsTable.schoolId),
+        ),
       )
-      .where(eq(studentHallPassLimitsTable.active, true));
+      .where(
+        and(
+          eq(studentHallPassLimitsTable.active, true),
+          eq(studentHallPassLimitsTable.schoolId, schoolId),
+        ),
+      );
     res.json(rows);
   },
 );
@@ -205,6 +234,11 @@ router.post(
   "/student-hall-pass-limits",
   requireBsAdmin,
   async (req, res): Promise<void> => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
     const { studentId, dailyLimit, note, parentApproved } = req.body ?? {};
@@ -226,17 +260,27 @@ router.post(
     const trimmedNote =
       typeof note === "string" && note.trim() ? note.trim() : null;
 
-    // Verify student exists.
+    // D5: verify student exists *in this school*. An unscoped lookup
+    // would let a school A admin enumerate school B's student ids
+    // (200 created vs 404 oracle) and then surface school B's first/last
+    // name through the GET listing's leftJoin.
     const [stu] = await db
       .select()
       .from(studentsTable)
-      .where(eq(studentsTable.studentId, studentId.trim()));
+      .where(
+        and(
+          eq(studentsTable.studentId, studentId.trim()),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
     if (!stu) {
       res.status(404).json({ error: "Student not found" });
       return;
     }
 
-    // Soft-deactivate any existing active limit for this student.
+    // Soft-deactivate any existing active limit for this student
+    // *within this school*. Another school may legitimately have its own
+    // active row for the same student id.
     await db
       .update(studentHallPassLimitsTable)
       .set({ active: false })
@@ -244,6 +288,7 @@ router.post(
         and(
           eq(studentHallPassLimitsTable.studentId, studentId.trim()),
           eq(studentHallPassLimitsTable.active, true),
+          eq(studentHallPassLimitsTable.schoolId, schoolId),
         ),
       );
 
@@ -251,6 +296,7 @@ router.post(
       .insert(studentHallPassLimitsTable)
       .values({
         studentId: studentId.trim(),
+        schoolId,
         dailyLimit,
         note: trimmedNote,
         parentApproved: parentApproved === true,
@@ -267,15 +313,27 @@ router.delete(
   "/student-hall-pass-limits/:id",
   requireBsAdmin,
   async (req, res): Promise<void> => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: "Invalid id" });
       return;
     }
+    // D5: scope by (id, schoolId) so an admin can't deactivate another
+    // school's row by id.
     const [updated] = await db
       .update(studentHallPassLimitsTable)
       .set({ active: false })
-      .where(eq(studentHallPassLimitsTable.id, id))
+      .where(
+        and(
+          eq(studentHallPassLimitsTable.id, id),
+          eq(studentHallPassLimitsTable.schoolId, schoolId),
+        ),
+      )
       .returning();
     if (!updated) {
       res.status(404).json({ error: "Limit not found" });

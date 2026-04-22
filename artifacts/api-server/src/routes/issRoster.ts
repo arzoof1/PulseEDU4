@@ -76,10 +76,18 @@ router.post(
       return;
     }
     const sId = studentId.trim();
+    // D5: scope by (studentId, schoolId). Even though students.student_id
+    // is currently globally unique, an unscoped lookup would let a school A
+    // admin probe for school B's student ids by observing 200 vs 404.
     const [student] = await db
       .select()
       .from(studentsTable)
-      .where(eq(studentsTable.studentId, sId));
+      .where(
+        and(
+          eq(studentsTable.studentId, sId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
     if (!student) {
       res.status(404).json({ error: "Student not found" });
       return;
@@ -111,6 +119,7 @@ router.post(
     try {
       await upsertIssAttendance({
         studentId: sId,
+        schoolId,
         source: "manual",
         addedById: staff.id,
         addedByName: staff.displayName,

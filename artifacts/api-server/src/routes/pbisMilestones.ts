@@ -131,7 +131,12 @@ router.get(
       res.status(403).json({ error: "Admin or PBIS coordinator only" });
       return;
     }
-    const rows = await db.select().from(pbisMilestoneEmailsTable);
+    // D5: scope email log to caller's school. Email rows are stamped with
+    // school_id when the milestone helper inserts them (D5 follow-up).
+    const rows = await db
+      .select()
+      .from(pbisMilestoneEmailsTable)
+      .where(eq(pbisMilestoneEmailsTable.schoolId, staff.schoolId));
     rows.sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1));
     res.json(rows.slice(0, 100));
   },

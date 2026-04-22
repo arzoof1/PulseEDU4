@@ -33,6 +33,7 @@ export const pbisMilestoneEmailsTable = pgTable(
   "pbis_milestone_emails",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     studentId: text("student_id").notNull(),
     milestonePoints: integer("milestone_points").notNull(),
     sentAt: text("sent_at").notNull(),
@@ -41,9 +42,12 @@ export const pbisMilestoneEmailsTable = pgTable(
     errorMsg: text("error_msg"),
   },
   (t) => ({
+    // D5: include schoolId so school A claiming/sending a student's
+    // milestone email doesn't silently block school B (same student id at
+    // both schools) from sending its own milestone email.
     studentMilestoneUnique: uniqueIndex(
       "pbis_milestone_emails_student_pts_unique",
-    ).on(t.studentId, t.milestonePoints),
+    ).on(t.studentId, t.milestonePoints, t.schoolId),
   }),
 );
 export type PbisMilestoneEmailRow = typeof pbisMilestoneEmailsTable.$inferSelect;

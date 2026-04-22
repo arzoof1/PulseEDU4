@@ -198,7 +198,10 @@ router.post("/pbis", async (req, res) => {
     })
     .returning();
 
-  const milestoneResults = await processMilestonesForStudent(studentId);
+  const milestoneResults = await processMilestonesForStudent(
+    studentId,
+    schoolId,
+  );
   res.status(201).json({ ...entry, milestoneResults });
 });
 
@@ -277,7 +280,7 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
   // return immediately and run the processing in the background. Results land
   // in pbis_milestone_emails (visible in PBIS Lists -> Milestone Parent Emails).
   const idsToProcess = created.map((c) => c.studentId);
-  void processMilestonesForStudents(idsToProcess).catch((err) => {
+  void processMilestonesForStudents(idsToProcess, staff.schoolId).catch((err) => {
     console.error("[bulk milestones] background failure", err);
   });
   res.status(201).json({
@@ -300,10 +303,17 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid id" });
     return;
   }
+  // D5: load by (id, school) so an admin in school A can't edit a row
+  // belonging to school B even if they know the id.
   const [entry] = await db
     .select()
     .from(pbisEntriesTable)
-    .where(eq(pbisEntriesTable.id, id));
+    .where(
+      and(
+        eq(pbisEntriesTable.id, id),
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
+      ),
+    );
   if (!entry) {
     res.status(404).json({ error: "Entry not found" });
     return;
@@ -342,7 +352,12 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
   const [updated] = await db
     .update(pbisEntriesTable)
     .set(updates)
-    .where(eq(pbisEntriesTable.id, id))
+    .where(
+      and(
+        eq(pbisEntriesTable.id, id),
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
+      ),
+    )
     .returning();
 
   if (updates.reason !== undefined && updates.reason !== entry.reason) {
@@ -374,10 +389,17 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
     res.status(400).json({ error: "invalid id" });
     return;
   }
+  // D5: load by (id, school) so a coordinator in school A can't void a
+  // row belonging to school B by id.
   const [entry] = await db
     .select()
     .from(pbisEntriesTable)
-    .where(eq(pbisEntriesTable.id, id));
+    .where(
+      and(
+        eq(pbisEntriesTable.id, id),
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
+      ),
+    );
   if (!entry) {
     res.status(404).json({ error: "Entry not found" });
     return;
@@ -405,7 +427,12 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
       voidedByName: staff.displayName,
       voidReason: reasonText,
     })
-    .where(eq(pbisEntriesTable.id, id))
+    .where(
+      and(
+        eq(pbisEntriesTable.id, id),
+        eq(pbisEntriesTable.schoolId, staff.schoolId),
+      ),
+    )
     .returning();
   await logEdit(id, "voided", null, reasonText, staff);
   res.json(updated);
@@ -757,6 +784,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     | { studentCount: number; percentOfPoints: number; sample: string[] }
     | null = null;
   {
+    // D5: scope monthly recognition analytics to caller's school only.
     const monthEntries = await db
       .select({
         studentId: pbisEntriesTable.studentId,
@@ -767,6 +795,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
         and(
           isNull(pbisEntriesTable.voidedAt),
           gte(pbisEntriesTable.createdAt, monthStart.toISOString()),
+          eq(pbisEntriesTable.schoolId, staff.schoolId),
         ),
       );
     const perStudent = new Map<string, number>();

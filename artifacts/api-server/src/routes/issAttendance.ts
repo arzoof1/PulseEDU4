@@ -55,6 +55,11 @@ router.get(
   "/iss-attendance",
   requireAttendanceMW(),
   async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
     const dateParam =
       typeof req.query.date === "string" && req.query.date.trim()
         ? req.query.date.trim()
@@ -63,10 +68,17 @@ router.get(
       res.status(400).json({ error: "date must be YYYY-MM-DD" });
       return;
     }
+    // D5: only return attendance rows for the caller's school. Otherwise
+    // a dean in school A would see school B's roster on the same day.
     const rows = await db
       .select()
       .from(issAttendanceDayTable)
-      .where(eq(issAttendanceDayTable.day, dateParam));
+      .where(
+        and(
+          eq(issAttendanceDayTable.day, dateParam),
+          eq(issAttendanceDayTable.schoolId, schoolId),
+        ),
+      );
     res.json({ date: dateParam, rows });
   },
 );
@@ -114,6 +126,11 @@ router.put(
   "/iss-attendance/:id",
   requireAttendanceMW(),
   async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id <= 0) {
       res.status(400).json({ error: "Invalid id" });
@@ -158,7 +175,12 @@ router.put(
     const [row] = await db
       .update(issAttendanceDayTable)
       .set(update)
-      .where(eq(issAttendanceDayTable.id, id))
+      .where(
+        and(
+          eq(issAttendanceDayTable.id, id),
+          eq(issAttendanceDayTable.schoolId, schoolId),
+        ),
+      )
       .returning();
     if (!row) {
       res.status(404).json({ error: "Attendance row not found" });
@@ -169,8 +191,11 @@ router.put(
 );
 
 // Helper used by other routes (manual roster add, pullout arrival).
+// schoolId is required so the inserted row is stamped to the correct
+// tenant — callers pass it from req.schoolId or staff.schoolId.
 export async function upsertIssAttendance(opts: {
   studentId: string;
+  schoolId: number;
   source: "manual" | "pullout";
   pulloutId?: number | null;
   dispatchedByName?: string | null;
@@ -185,6 +210,7 @@ export async function upsertIssAttendance(opts: {
     .insert(issAttendanceDayTable)
     .values({
       studentId: opts.studentId,
+      schoolId: opts.schoolId,
       day,
       source: opts.source,
       pulloutId: opts.pulloutId ?? null,
@@ -196,10 +222,19 @@ export async function upsertIssAttendance(opts: {
       addedByName: opts.addedByName ?? null,
     })
     .onConflictDoNothing({
-      target: [issAttendanceDayTable.studentId, issAttendanceDayTable.day],
+      // D5: conflict target must include schoolId — matches the
+      // (student_id, day, school_id) unique index. Without it, two schools
+      // would collide on the same student+day even though they're separate
+      // tenants.
+      target: [
+        issAttendanceDayTable.studentId,
+        issAttendanceDayTable.day,
+        issAttendanceDayTable.schoolId,
+      ],
     });
   // If a pullout arrival comes in for a row that started manual, enrich it
-  // with pullout details (only fills nullable pullout fields).
+  // with pullout details (only fills nullable pullout fields). Scoped by
+  // schoolId so a pullout in school A can't enrich school B's manual row.
   if (opts.source === "pullout" && opts.pulloutId) {
     await db
       .update(issAttendanceDayTable)
@@ -215,6 +250,7 @@ export async function upsertIssAttendance(opts: {
           eq(issAttendanceDayTable.studentId, opts.studentId),
           eq(issAttendanceDayTable.day, day),
           eq(issAttendanceDayTable.source, "manual"),
+          eq(issAttendanceDayTable.schoolId, opts.schoolId),
         ),
       );
   }

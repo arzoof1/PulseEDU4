@@ -229,41 +229,98 @@ were closed:
   `bell_schedules`, `pbis_reasons`, `pbis_milestones`. SuperUsers see
   "1 settings row per school visited" once each school's UI loads.
 
-**Known D5 gaps (deferred).**
-The following downstream consumers still read
-`schoolSettings...limit(1)` (singleton, effectively Parrott) because
-they run from background jobs / email helpers without a `req` in
-scope. Threading `schoolId` through requires a bigger refactor:
-- `lib/dailyDigest.ts` — daily digest scheduler.
-- `lib/pulloutEmail.ts`, `routes/email.ts`, `routes/parentEmail.ts`,
-  `lib/pbisMilestones.ts` — email composition (fromName, signature,
-  schoolName).
-These read display-only fields (school name, sender name, signature),
-so they degrade gracefully but should be tenant-aware in D5.
+## Multi-tenancy — Day 5 (April 2026)
 
-Additional D5 follow-ups surfaced by code review (cross-school *data*
-leak risk — distinct from the per-school *settings* this wave fixed):
-- `routes/issAttendance.ts` `GET /iss-attendance` (day-only filter) and
-  `PUT /iss-attendance/:id` (id-only update).
-- `routes/pbis.ts` `/pbis/needs-attention` top-heavy `monthEntries`
-  query, plus `PATCH /pbis/:id` and `POST /pbis/:id/void` (id-only).
-- `routes/pbisMilestones.ts` `/pbis-milestone-emails` listing.
-- `routes/studentHallPassLimits.ts` `countPassesToday`, GET active
-  limits, DELETE by id.
-These do NOT block the D4 acceptance criterion (settings isolation),
-but should be scoped before any second district goes live.
+D5 closes the cross-school *data* leaks that D4's settings-focused
+work didn't cover. Acceptance: an admin or coordinator in school A
+cannot read or mutate school B's ISS attendance, PBIS entries,
+milestone-email log, or hall-pass limits even with a known row id.
 
-**Verification.**
-SQL spot-check after migration:
-```
-INSERT INTO school_settings (school_id, school_name, pbis_quiet_teacher_days)
-VALUES (5, 'Powell Middle', 2);
-SELECT school_id, school_name, pbis_quiet_teacher_days FROM school_settings;
--- → 1|PulseEDU|5    5|Powell Middle|2
-```
-Independent rows; PBIS query reads the one matching the caller's
-school. `school_settings_school_id_unique` index guarantees the
-lazy-create can't double-insert under contention.
+**Drizzle schemas — exposed schoolId on four more tables.** All four
+DB tables already had `school_id` from D2 backfill; the ORM was just
+unaware:
+- `studentHallPassLimits`, `issAttendanceDay`, `issRoster`,
+  `pbisMilestoneEmails`.
+
+**Routes.**
+- `routes/issAttendance.ts`:
+  - `GET /iss-attendance` filters by `req.schoolId` (was day-only).
+  - `PUT /iss-attendance/:id` matches by `(id, schoolId)`.
+  - `upsertIssAttendance` helper now requires `schoolId` and stamps
+    it on insert. Both callers updated: `issRoster` manual add uses
+    `req.schoolId`; `pullouts` arrival uses `existing.schoolId` from
+    the parent pullout row.
+- `routes/pbis.ts`:
+  - `PATCH /pbis/:id` and `POST /pbis/:id/void` load + update by
+    `(id, staff.schoolId)`.
+  - `/pbis/needs-attention` top-heavy `monthEntries` query AND'd on
+    `staff.schoolId` (analytics no longer mix schools).
+- `routes/pbisMilestones.ts` `/pbis-milestone-emails` filters by
+  `staff.schoolId`.
+- `routes/studentHallPassLimits.ts`:
+  - `countPassesToday(studentId, schoolId)` — caller passes school;
+    counts only today's passes at that school.
+  - `findDailyLimitConflict` threads schoolId through.
+  - `GET /student-hall-pass-limits` filters by `req.schoolId`.
+  - `POST /student-hall-pass-limits` stamps `schoolId`; the
+    "deactivate prior active row" sweep is also scoped per-school
+    so two schools can hold their own active row for the same
+    student id.
+  - `DELETE /student-hall-pass-limits/:id` matches by
+    `(id, schoolId)`.
+
+**Background helper — milestone email pipeline.**
+`lib/pbisMilestones.ts` `processMilestonesForStudent(id, schoolId)`
+and `processMilestonesForStudents(ids, schoolId)` now take school
+explicitly. The helper:
+- reads only THIS school's milestones (otherwise points awarded in
+  Powell would be checked against Parrott's thresholds),
+- reads only THIS school's prior PBIS entries when summing total
+  points,
+- reads/inserts the email-log row with `school_id` stamped.
+Both call sites in `routes/pbis.ts` (single + bulk award) pass
+`staff.schoolId`.
+
+**DB unique indexes — relaxed to be school-scoped.** Three indexes
+that previously enforced "one row per student id" globally are now
+"one row per (student id, school id)":
+- `iss_attendance_day_student_day_idx` →
+  `(student_id, day, school_id)`. Conflict target on the
+  `upsertIssAttendance` insert was updated to match; the manual→pullout
+  enrichment update also includes `schoolId` in its WHERE.
+- `pbis_milestone_emails_student_pts_unique` →
+  `(student_id, milestone_points, school_id)`. Without this, school A
+  claiming/sending a student's milestone email silently blocked
+  school B from sending its own. All 4 status-update WHEREs in
+  `lib/pbisMilestones.ts` (skip-no-roster, skip-no-email, sent, error)
+  now include `schoolId`.
+- `student_hall_pass_limits_student_active` partial index →
+  `(student_id, school_id) WHERE active = true`.
+  `getActiveStudentLimit(studentId, schoolId)` was previously
+  unscoped (school A's effective limit could be school B's row);
+  now school-scoped end-to-end.
+
+**Pullouts → ISS roster.** `routes/pullouts.ts` `/pullouts/:id/arrived`
+now stamps `existing.schoolId` on the auto-inserted `iss_roster` row
+(was relying on DB DEFAULT 1, mis-tenanting non-Parrott arrivals).
+
+**Still deferred to a future pass.** Display-only readers in
+`lib/dailyDigest.ts`, `lib/pulloutEmail.ts`, `routes/email.ts`,
+`routes/parentEmail.ts` still read `schoolSettings...limit(1)` for
+fromName/signature/schoolName. They run from cron / send-email paths
+without a `req` and would need a `schoolId` parameter threaded in
+from each callsite. Degrades gracefully (Parrott branding on emails)
+but should be cleaned up before a second district goes live.
+
+**Verification.** SQL spot-checks confirmed:
+- Two schools can each hold an active hall-pass limit, an ISS
+  attendance day row, and a milestone-email row for the same
+  student id (cross-school dups now permitted).
+- Same-school dups still rejected with
+  `duplicate key value violates unique constraint
+  "student_hall_pass_limits_student_active"
+  Key (student_id, school_id)=(D5VERIFY2, 1) already exists`.
+- API restarts clean and serves requests.
 
 ## Bell Schedule (April 2026)
 
