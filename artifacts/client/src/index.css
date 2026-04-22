@@ -170,22 +170,27 @@ strong {
   font-weight: 800;
   font-size: 1.5rem;
   letter-spacing: -0.02em;
-  color: #0b1424;
   line-height: 1;
+  background: linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
 }
 
 .app-header .brand .wordmark .accent {
-  color: var(--accent);
   font-style: italic;
   font-weight: 900;
   letter-spacing: -0.03em;
   margin-left: 1px;
-  text-shadow:
-    0 0 2px #ffffff,
-    1px 0 0 #ffffff,
-    -1px 0 0 #ffffff,
-    0 1px 0 #ffffff,
-    0 -1px 0 #ffffff;
+  background: linear-gradient(135deg, #0e7490 0%, #7c3aed 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  filter:
+    drop-shadow(0 0 6px rgba(124, 58, 237, 0.85))
+    drop-shadow(0 0 2px rgba(124, 58, 237, 1));
 }
 
 .app-header .header-controls {
