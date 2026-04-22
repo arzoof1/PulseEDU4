@@ -1433,7 +1433,18 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         </button>
       ) : (
         <>
-          <h3 style={{ marginTop: "1rem" }}>
+          <h3
+            style={{
+              marginTop: "1.25rem",
+              marginBottom: "0.6rem",
+              padding: "0.55rem 0.85rem",
+              borderLeft: "5px solid #2563eb",
+              background: "#eff6ff",
+              color: "#1e3a8a",
+              fontSize: "1.05rem",
+              borderRadius: 4,
+            }}
+          >
             On the way ({onTheWay.length})
           </h3>
           {onTheWay.length === 0 ? (
@@ -1450,7 +1461,18 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               )}
             </div>
           )}
-          <h3 style={{ marginTop: "1.5rem" }}>
+          <h3
+            style={{
+              marginTop: "1.75rem",
+              marginBottom: "0.6rem",
+              padding: "0.55rem 0.85rem",
+              borderLeft: "5px solid #7c3aed",
+              background: "#f5f3ff",
+              color: "#4c1d95",
+              fontSize: "1.05rem",
+              borderRadius: 4,
+            }}
+          >
             ISS Daily Roster ({sortedRoster.length})
           </h3>
           <div
@@ -1777,7 +1799,18 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               })}
             </div>
           )}
-          <h3 style={{ marginTop: "1.25rem" }}>
+          <h3
+            style={{
+              marginTop: "1.75rem",
+              marginBottom: "0.6rem",
+              padding: "0.55rem 0.85rem",
+              borderLeft: "5px solid #16a34a",
+              background: "#ecfdf5",
+              color: "#065f46",
+              fontSize: "1.05rem",
+              borderRadius: 4,
+            }}
+          >
             Arrived ({arrived.length})
           </h3>
           {arrived.length === 0 ? (
@@ -1861,7 +1894,18 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             };
             return (
               <>
-                <h3 style={{ marginTop: "1.5rem" }}>
+                <h3
+                  style={{
+                    marginTop: "1.75rem",
+                    marginBottom: "0.6rem",
+                    padding: "0.55rem 0.85rem",
+                    borderLeft: "5px solid #0d9488",
+                    background: "#f0fdfa",
+                    color: "#115e59",
+                    fontSize: "1.05rem",
+                    borderRadius: 4,
+                  }}
+                >
                   Today's ISS Attendance ({sortedAttendance.length})
                 </h3>
                 <div
