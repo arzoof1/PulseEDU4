@@ -1437,12 +1437,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             style={{
               marginTop: "1.25rem",
               marginBottom: "0.6rem",
-              padding: "0.55rem 0.85rem",
-              borderLeft: "5px solid #2563eb",
-              background: "#eff6ff",
-              color: "#1e3a8a",
+              padding: "0.6rem 0.95rem",
+              background:
+                "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+              color: "#ffffff",
               fontSize: "1.05rem",
-              borderRadius: 4,
+              fontWeight: 700,
+              borderRadius: 6,
+              boxShadow: "0 1px 2px rgba(15,23,42,0.12)",
             }}
           >
             On the way ({onTheWay.length})
@@ -1465,12 +1467,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             style={{
               marginTop: "1.75rem",
               marginBottom: "0.6rem",
-              padding: "0.55rem 0.85rem",
-              borderLeft: "5px solid #7c3aed",
-              background: "#f5f3ff",
-              color: "#4c1d95",
+              padding: "0.6rem 0.95rem",
+              background:
+                "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+              color: "#ffffff",
               fontSize: "1.05rem",
-              borderRadius: 4,
+              fontWeight: 700,
+              borderRadius: 6,
+              boxShadow: "0 1px 2px rgba(15,23,42,0.12)",
             }}
           >
             ISS Daily Roster ({sortedRoster.length})
@@ -1803,12 +1807,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             style={{
               marginTop: "1.75rem",
               marginBottom: "0.6rem",
-              padding: "0.55rem 0.85rem",
-              borderLeft: "5px solid #16a34a",
-              background: "#ecfdf5",
-              color: "#065f46",
+              padding: "0.6rem 0.95rem",
+              background:
+                "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+              color: "#ffffff",
               fontSize: "1.05rem",
-              borderRadius: 4,
+              fontWeight: 700,
+              borderRadius: 6,
+              boxShadow: "0 1px 2px rgba(15,23,42,0.12)",
             }}
           >
             Arrived ({arrived.length})
@@ -1898,12 +1904,14 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                   style={{
                     marginTop: "1.75rem",
                     marginBottom: "0.6rem",
-                    padding: "0.55rem 0.85rem",
-                    borderLeft: "5px solid #0d9488",
-                    background: "#f0fdfa",
-                    color: "#115e59",
+                    padding: "0.6rem 0.95rem",
+                    background:
+                      "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                    color: "#ffffff",
                     fontSize: "1.05rem",
-                    borderRadius: 4,
+                    fontWeight: 700,
+                    borderRadius: 6,
+                    boxShadow: "0 1px 2px rgba(15,23,42,0.12)",
                   }}
                 >
                   Today's ISS Attendance ({sortedAttendance.length})
