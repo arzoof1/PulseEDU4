@@ -1573,7 +1573,16 @@ function PulloutReportSection({ students }: { students: Student[] }) {
     label: (v: string) => string,
   ) => (
     <div style={{ marginTop: "0.75rem" }}>
-      <h4 style={{ margin: "0.25rem 0" }}>{title}</h4>
+      <h4
+        style={{
+          margin: "0.25rem 0",
+          fontSize: "1.5rem",
+          fontWeight: 700,
+          color: "#7c3aed",
+        }}
+      >
+        {title}
+      </h4>
       {rows.length === 0 ? (
         <p style={{ color: "#666" }}>None.</p>
       ) : (
