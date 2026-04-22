@@ -4985,6 +4985,31 @@ function App() {
     };
   }, [canVerifyPullouts, pendingPulloutsTick]);
 
+  // Active pullout count for the ISS Dashboard badge (verified/enroute/arrived).
+  const [activePulloutCount, setActivePulloutCount] = useState<number>(0);
+  useEffect(() => {
+    if (!canViewIssDashboard) {
+      setActivePulloutCount(0);
+      return;
+    }
+    let cancelled = false;
+    const fetchCount = () => {
+      authFetch("/api/pullouts?scope=active")
+        .then((r) => (r.ok ? r.json() : []))
+        .then((rows: unknown) => {
+          if (cancelled) return;
+          if (Array.isArray(rows)) setActivePulloutCount(rows.length);
+        })
+        .catch(() => {});
+    };
+    fetchCount();
+    const interval = setInterval(fetchCount, 15000);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
+  }, [canViewIssDashboard]);
+
   // Unreviewed pullout count for the behavior-review badge.
   const canReviewPullouts = isAdmin || isBehaviorSpec;
   const [unreviewedPulloutCount, setUnreviewedPulloutCount] =
@@ -5132,6 +5157,9 @@ function App() {
     };
     if (key === "verifyPullouts" && pendingPulloutCount > 0) {
       return <span style={badgeStyle}>{pendingPulloutCount}</span>;
+    }
+    if (key === "issDashboard" && activePulloutCount > 0) {
+      return <span style={badgeStyle}>{activePulloutCount}</span>;
     }
     if (key === "behaviorReview" && unreviewedPulloutCount > 0) {
       return <span style={badgeStyle}>{unreviewedPulloutCount}</span>;
