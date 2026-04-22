@@ -23,6 +23,7 @@ export * from "./pbisGoals";
 export * from "./pbisMilestones";
 export * from "./pullouts";
 export * from "./pulloutReasons";
+export * from "./checkInWithOptions";
 export * from "./polarityPairs";
 export * from "./teacherDestinationAllowlist";
 export * from "./studentHallPassLimits";
