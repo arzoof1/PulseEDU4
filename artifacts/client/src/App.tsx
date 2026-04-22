@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
+import LogTardyModal from "./components/LogTardyModal";
+import CheckInOutModal from "./components/CheckInOutModal";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
@@ -81,6 +83,7 @@ interface Tardy {
   entryType: "tardy" | "checkin" | "checkout";
   checkInWith: string | null;
   notes: string;
+  createdBy: string | null;
   createdAt: string;
 }
 
@@ -1954,6 +1957,8 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
+  const [logTardyOpen, setLogTardyOpen] = useState(false);
+  const [checkInOutOpen, setCheckInOutOpen] = useState(false);
   const [teacherAllowlistMap, setTeacherAllowlistMap] = useState<
     Record<string, string[]>
   >({});
@@ -5537,6 +5542,93 @@ function App() {
         }}
       />
 
+      <LogTardyModal
+        open={logTardyOpen}
+        onClose={() => setLogTardyOpen(false)}
+        students={students}
+        periods={["1", "2", "3", "4", "5", "6", "7"]}
+        onSubmit={async (payload) => {
+          const res = await authFetch("/api/tardies", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId: payload.studentId,
+              teacherName: currentStaffUser,
+              period: payload.period,
+              reason: "",
+              entryType: "tardy",
+              checkInWith: null,
+              notes: "",
+              createdBy: currentStaffUser,
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to log tardy.");
+          }
+          if (payload.createReturnPass) {
+            const lookupRes = await authFetch(
+              `/api/section-lookup?studentId=${encodeURIComponent(payload.studentId)}&period=${encodeURIComponent(payload.period)}`,
+            );
+            if (!lookupRes.ok) {
+              loadTardies();
+              const text = await lookupRes.text();
+              throw new Error(
+                text ||
+                  `No teacher found for student ${payload.studentId} in period ${payload.period}.`,
+              );
+            }
+            const info = await lookupRes.json();
+            const passRes = await authFetch("/api/hall-passes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                studentId: payload.studentId,
+                destination: info.teacherName,
+                originRoom: "Front Office",
+                teacherName: currentStaffUser,
+                destinationTeacher: info.teacherName,
+              }),
+            });
+            if (!passRes.ok) {
+              loadTardies();
+              const text = await passRes.text();
+              throw new Error(text || "Failed to create return pass.");
+            }
+            loadHallPasses();
+          }
+          loadTardies();
+        }}
+      />
+
+      <CheckInOutModal
+        open={checkInOutOpen}
+        onClose={() => setCheckInOutOpen(false)}
+        students={students}
+        checkInWithOptions={checkInWithOptions}
+        onSubmit={async (payload) => {
+          const res = await authFetch("/api/tardies", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId: payload.studentId,
+              teacherName: currentStaffUser,
+              period: "",
+              reason: "",
+              entryType: payload.entryType,
+              checkInWith: payload.checkInWith,
+              notes: payload.notes,
+              createdBy: currentStaffUser,
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to log entry.");
+          }
+          loadTardies();
+        }}
+      />
+
       <div className="card">
         <div
           style={{
@@ -7454,7 +7546,17 @@ function App() {
       </>)}
 
       {activeSection === "tardies" && (<>
-      <div className="card">
+      <div className="card cp-cta-card">
+        <div className="cp-cta-text">Student Arriving Late?</div>
+        <button
+          type="button"
+          className="cp-cta-button"
+          onClick={() => setLogTardyOpen(true)}
+        >
+          + Log Tardy
+        </button>
+      </div>
+      <div className="card" style={{ display: "none" }}>
       <h2>Log Tardy / Check-In</h2>
       <form onSubmit={handleTardySubmit} style={{ marginBottom: "1rem" }}>
         <div style={{ marginBottom: "0.5rem" }}>
@@ -7674,6 +7776,7 @@ function App() {
             <th>Reason</th>
             <th>Check-In With</th>
             <th>Notes</th>
+            <th>Created By</th>
             <th>Logged</th>
           </tr>
         </thead>
@@ -7699,6 +7802,7 @@ function App() {
               <td>{t.reason}</td>
               <td>{t.checkInWith ?? "-"}</td>
               <td>{t.notes}</td>
+              <td>{t.createdBy ?? "-"}</td>
               <td>{fmtTime(t.createdAt)}</td>
             </tr>
           ))}
@@ -11521,6 +11625,22 @@ function App() {
             behavior specialist will see school-wide history; everyone else
             sees only their own entries.
           </p>
+          <div
+            style={{
+              display: "flex",
+              gap: "0.5rem",
+              flexWrap: "wrap",
+              marginBottom: "1rem",
+            }}
+          >
+            <button
+              type="button"
+              className="cp-cta-button"
+              onClick={() => setCheckInOutOpen(true)}
+            >
+              + Log Check-In / Check-Out
+            </button>
+          </div>
           {intervListMsg && (
             <div
               style={{

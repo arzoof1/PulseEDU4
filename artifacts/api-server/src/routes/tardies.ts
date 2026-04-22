@@ -1,5 +1,6 @@
 import { Router, type IRouter } from "express";
-import { db, tardiesTable } from "@workspace/db";
+import { db, tardiesTable, staffTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
@@ -18,6 +19,21 @@ router.post("/tardies", async (req, res) => {
     checkInWith,
     notes,
   } = req.body ?? {};
+
+  const sessionStaffId = req.staffId;
+  if (!sessionStaffId) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const [sessionStaff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, sessionStaffId));
+  if (!sessionStaff || !sessionStaff.active) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const serverCreatedBy = sessionStaff.displayName || sessionStaff.id;
 
   if (
     typeof studentId !== "string" ||
@@ -62,6 +78,7 @@ router.post("/tardies", async (req, res) => {
           ? (checkInWith as string)
           : null,
       notes: typeof notes === "string" ? notes : "",
+      createdBy: serverCreatedBy,
       createdAt: new Date().toISOString(),
     })
     .returning();

@@ -29,6 +29,7 @@ import polarityPairsRouter from "./polarityPairs";
 import teacherAllowlistRouter from "./teacherAllowlist";
 import studentHallPassLimitsRouter from "./studentHallPassLimits";
 import customRolesRouter from "./customRoles";
+import sectionLookupRouter from "./sectionLookup";
 
 const router: IRouter = Router();
 
@@ -62,5 +63,6 @@ router.use(polarityPairsRouter);
 router.use(teacherAllowlistRouter);
 router.use(studentHallPassLimitsRouter);
 router.use(customRolesRouter);
+router.use(sectionLookupRouter);
 
 export default router;

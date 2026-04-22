@@ -9,6 +9,7 @@ export const tardiesTable = pgTable("tardies", {
   entryType: text("entry_type").notNull(),
   checkInWith: text("check_in_with"),
   notes: text("notes").notNull(),
+  createdBy: text("created_by"),
   createdAt: text("created_at").notNull(),
 });
 
