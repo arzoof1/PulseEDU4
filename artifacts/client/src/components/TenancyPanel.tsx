@@ -1,5 +1,45 @@
-import { useEffect, useState } from "react";
+import { Component, type ReactNode, useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
+
+class TenancyErrorBoundary extends Component<
+  { children: ReactNode },
+  { error: Error | null }
+> {
+  state = { error: null as Error | null };
+  static getDerivedStateFromError(error: Error) {
+    return { error };
+  }
+  componentDidCatch(error: Error) {
+    console.error("TenancyPanel crashed:", error);
+  }
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Tenancy</h2>
+          <p style={{ color: "#b91c1c" }}>
+            The tenancy panel hit an error and was isolated so the rest of the
+            app keeps working. Please reload the page. If you still see this
+            after a hard refresh, let the team know.
+          </p>
+          <pre
+            style={{
+              fontSize: 11,
+              background: "#1f2937",
+              color: "#f9fafb",
+              padding: "0.5rem",
+              borderRadius: 4,
+              overflow: "auto",
+            }}
+          >
+            {String(this.state.error?.message ?? this.state.error)}
+          </pre>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 interface DistrictRow {
   id: number;
@@ -44,6 +84,14 @@ const tableLabels: Record<string, string> = {
 };
 
 export default function TenancyPanel() {
+  return (
+    <TenancyErrorBoundary>
+      <TenancyPanelInner />
+    </TenancyErrorBoundary>
+  );
+}
+
+function TenancyPanelInner() {
   const [status, setStatus] = useState<TenancyStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -89,11 +137,23 @@ export default function TenancyPanel() {
   }
   if (!status) return null;
 
-  const district = status.districts[0] ?? null;
+  // Defensive defaults in case an older API response shape is cached or the
+  // server is mid-deploy. Never let undefined fields crash the panel.
+  const districts = Array.isArray(status.districts) ? status.districts : [];
+  const schools = Array.isArray(status.schools) ? status.schools : [];
+  const counts = (status.counts ?? {}) as Record<string, number>;
+  const perSchool = (status.perSchool ?? {}) as Record<
+    string,
+    Record<string, number>
+  >;
+  const orphans = (status.orphans ?? {}) as Record<string, number>;
+  const totalOrphans = Number(status.totalOrphans ?? 0);
+
+  const district = districts[0] ?? null;
   const schoolsForDistrict = district
-    ? status.schools.filter((s) => s.districtId === district.id)
+    ? schools.filter((s) => s.districtId === district.id)
     : [];
-  const orphansClean = status.totalOrphans === 0;
+  const orphansClean = totalOrphans === 0;
 
   const cellStyle = { padding: "0.4rem", textAlign: "right" as const };
   const headStyle = {
@@ -247,13 +307,13 @@ export default function TenancyPanel() {
           >
             {orphansClean
               ? `✓ All records assigned to a school (0 orphans)`
-              : `✗ ${status.totalOrphans} orphan rows`}
+              : `✗ ${totalOrphans} orphan rows`}
           </span>
         </div>
         {!orphansClean && (
           <p style={{ color: "#991b1b", marginTop: 0, fontSize: 13 }}>
             Tables with orphans:&nbsp;
-            {Object.entries(status.orphans)
+            {Object.entries(orphans)
               .filter(([, n]) => n > 0)
               .map(([k, n]) => `${tableLabels[k] ?? k} (${n})`)
               .join(", ")}
@@ -296,7 +356,7 @@ export default function TenancyPanel() {
               </tr>
             </thead>
             <tbody>
-              {Object.entries(status.counts).map(([key, total]) => (
+              {Object.entries(counts).map(([key, total]) => (
                 <tr
                   key={key}
                   style={{
@@ -307,7 +367,7 @@ export default function TenancyPanel() {
                     {tableLabels[key] ?? key}
                   </td>
                   {schoolsForDistrict.map((s) => {
-                    const n = status.perSchool[key]?.[String(s.id)] ?? 0;
+                    const n = perSchool[key]?.[String(s.id)] ?? 0;
                     return (
                       <td
                         key={s.id}
