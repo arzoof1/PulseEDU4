@@ -1328,9 +1328,6 @@ function IssDashboardSection({ students }: { students: Student[] }) {
           {p.period ? ` · period ${p.period}` : ""}
         </div>
       </div>
-      <div style={{ marginTop: 4, fontSize: "0.92rem" }}>
-        <em>Reason:</em> {p.editedReason ?? p.reason}
-      </div>
       {p.status === "arrived" && (
         <div
           style={{ marginTop: 4, fontSize: "0.85rem", color: "#475569" }}
