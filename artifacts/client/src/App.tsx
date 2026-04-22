@@ -129,12 +129,15 @@ const pbisOptions: { reason: string; points: number }[] = [
   { reason: "Academic Excellence", points: 5 },
 ];
 
-type CheckInWithOption = {
-  id: number;
-  label: string;
-  position: number;
-  isActive: boolean;
-};
+const checkInWithOptions = [
+  "Counselor",
+  "Interventionist",
+  "Behavior Specialist",
+  "Trusted Adult",
+  "Administrator",
+  "Teacher",
+  "Other",
+];
 
 function fmtTime(iso?: string | null): string {
   if (!iso) return "-";
@@ -2953,19 +2956,6 @@ function StudentCombobox({
 
 function App() {
   const [students, setStudents] = useState<Student[]>([]);
-  const [checkInWithOptions, setCheckInWithOptions] = useState<
-    CheckInWithOption[]
-  >([]);
-  const [checkInWithSaving, setCheckInWithSaving] = useState(false);
-  const [checkInWithMsg, setCheckInWithMsg] = useState<{
-    ok: boolean;
-    text: string;
-  } | null>(null);
-  const [checkInWithDraft, setCheckInWithDraft] = useState("");
-  const [checkInWithEditId, setCheckInWithEditId] = useState<number | null>(
-    null,
-  );
-  const [checkInWithEditLabel, setCheckInWithEditLabel] = useState("");
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
   const [logTardyOpen, setLogTardyOpen] = useState(false);
@@ -3083,7 +3073,6 @@ function App() {
     | "settings"
     | "staffRoles"
     | "bellSchedule"
-    | "checkInWithList"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -4320,7 +4309,6 @@ function App() {
       .catch((err) => console.error("Health check failed:", err));
 
     loadStudents();
-    loadCheckInWithOptions();
 
     authFetch("/api/location-allowed-destinations")
       .then((res) => res.json())
@@ -4685,17 +4673,6 @@ function App() {
       .then((res) => res.json())
       .then((data: Student[]) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
-  };
-
-  const loadCheckInWithOptions = () => {
-    authFetch("/api/check-in-with-options")
-      .then((res) => res.json())
-      .then((data: CheckInWithOption[]) =>
-        setCheckInWithOptions(Array.isArray(data) ? data : []),
-      )
-      .catch((err) =>
-        console.error("Failed to load check-in/out options:", err),
-      );
   };
 
   const loadSchoolAccommodations = () => {
@@ -9049,13 +9026,11 @@ function App() {
                 required
               >
                 <option value="">-- select --</option>
-                {checkInWithOptions
-                  .filter((o) => o.isActive)
-                  .map((o) => (
-                    <option key={o.id} value={o.label}>
-                      {o.label}
-                    </option>
-                  ))}
+                {checkInWithOptions.map((o) => (
+                  <option key={o} value={o}>
+                    {o}
+                  </option>
+                ))}
               </select>
             </label>
           </div>
@@ -12985,8 +12960,7 @@ function App() {
           | "interventions"
           | "hallPassMgmt"
           | "logIntervention"
-          | "verifyPullouts"
-          | "checkInWithList";
+          | "verifyPullouts";
         type HubTool = {
           key: HubKey;
           label: string;
@@ -13030,13 +13004,6 @@ function App() {
             label: "Hall Pass Management",
             desc: "Keep-Apart pairs and other hall-pass safeguards.",
             color: "#0d9488",
-            show: canManageBehaviorLists,
-          },
-          {
-            key: "checkInWithList",
-            label: "Check-In/Out List",
-            desc: "Manage the dropdown of who students check in or out with.",
-            color: "#7c3aed",
             show: canManageBehaviorLists,
           },
           {
@@ -13130,7 +13097,6 @@ function App() {
               const siteMgmtKeys = new Set<HubKey>([
                 "hallPassMgmt",
                 "interventions",
-                "checkInWithList",
               ]);
               const behaviorReportingKeys = new Set<HubKey>([
                 "behaviorReview",
@@ -13328,478 +13294,6 @@ function App() {
           </>
         );
       })()}
-
-      {activeSection === "checkInWithList" && canManageBehaviorLists && (
-        <>
-          <div
-            style={{
-              borderTopLeftRadius: "var(--radius-lg, 8px)",
-              borderTopRightRadius: "var(--radius-lg, 8px)",
-              overflow: "hidden",
-              marginBottom: "-1px",
-            }}
-          >
-            <div
-              className="section-header-bar-teal"
-              style={{ width: "100%", margin: 0 }}
-            />
-            <div
-              className="section-header-band-hub"
-              style={{ width: "100%", margin: 0 }}
-            >
-              <button
-                type="button"
-                className="back-button-purple"
-                style={{ marginBottom: 0 }}
-                onClick={() => setActiveSection("behaviorSpecialist")}
-              >
-                ← Back
-              </button>
-              <h2
-                style={{
-                  margin: 0,
-                  color: "white",
-                  fontSize: "1.25rem",
-                  fontWeight: 700,
-                  marginLeft: "0.75rem",
-                }}
-              >
-                Check-In/Out List
-              </h2>
-            </div>
-          </div>
-          <div className="card">
-            <p style={{ color: "#475569", marginTop: 0 }}>
-              Manage the dropdown of staff or roles students can check in or
-              out with. Removing an entry hides it from the dropdown but keeps
-              historical records intact.
-            </p>
-
-            {checkInWithMsg && (
-              <div
-                style={{
-                  marginBottom: "0.75rem",
-                  padding: "0.5rem 0.75rem",
-                  borderRadius: 6,
-                  background: checkInWithMsg.ok ? "#ecfdf5" : "#fef2f2",
-                  color: checkInWithMsg.ok ? "#065f46" : "#991b1b",
-                  border: `1px solid ${checkInWithMsg.ok ? "#a7f3d0" : "#fecaca"}`,
-                  fontSize: "0.9rem",
-                }}
-              >
-                {checkInWithMsg.text}
-              </div>
-            )}
-
-            <form
-              onSubmit={async (e) => {
-                e.preventDefault();
-                const label = checkInWithDraft.trim();
-                if (!label) return;
-                setCheckInWithSaving(true);
-                setCheckInWithMsg(null);
-                try {
-                  const res = await authFetch("/api/check-in-with-options", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ label }),
-                  });
-                  if (!res.ok) {
-                    const text = await res.text();
-                    throw new Error(text || "Failed to add option");
-                  }
-                  setCheckInWithDraft("");
-                  setCheckInWithMsg({ ok: true, text: `Added “${label}”.` });
-                  loadCheckInWithOptions();
-                } catch (err) {
-                  setCheckInWithMsg({
-                    ok: false,
-                    text:
-                      err instanceof Error ? err.message : "Failed to add",
-                  });
-                } finally {
-                  setCheckInWithSaving(false);
-                }
-              }}
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                marginBottom: "1rem",
-              }}
-            >
-              <input
-                type="text"
-                value={checkInWithDraft}
-                onChange={(e) => setCheckInWithDraft(e.target.value)}
-                placeholder="New option (e.g., Social Worker)"
-                style={{
-                  flex: 1,
-                  padding: "0.4rem 0.6rem",
-                  border: "1px solid #cbd5e1",
-                  borderRadius: 6,
-                }}
-              />
-              <button
-                type="submit"
-                disabled={checkInWithSaving || !checkInWithDraft.trim()}
-                style={{
-                  padding: "0.4rem 0.9rem",
-                  background: "#0f766e",
-                  color: "white",
-                  border: 0,
-                  borderRadius: 6,
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  opacity:
-                    checkInWithSaving || !checkInWithDraft.trim() ? 0.6 : 1,
-                }}
-              >
-                {checkInWithSaving ? "Adding…" : "+ Add"}
-              </button>
-            </form>
-
-            <table
-              style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "0.9rem",
-              }}
-            >
-              <thead>
-                <tr style={{ background: "#f1f5f9" }}>
-                  <th
-                    style={{
-                      textAlign: "left",
-                      padding: "0.5rem",
-                      width: 80,
-                    }}
-                  >
-                    Order
-                  </th>
-                  <th style={{ textAlign: "left", padding: "0.5rem" }}>
-                    Label
-                  </th>
-                  <th
-                    style={{
-                      textAlign: "left",
-                      padding: "0.5rem",
-                      width: 110,
-                    }}
-                  >
-                    Status
-                  </th>
-                  <th
-                    style={{
-                      textAlign: "right",
-                      padding: "0.5rem",
-                      width: 220,
-                    }}
-                  >
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody>
-                {checkInWithOptions.length === 0 && (
-                  <tr>
-                    <td
-                      colSpan={4}
-                      style={{
-                        padding: "0.75rem",
-                        color: "#64748b",
-                        textAlign: "center",
-                      }}
-                    >
-                      No options yet.
-                    </td>
-                  </tr>
-                )}
-                {checkInWithOptions.map((o, idx) => {
-                  const editing = checkInWithEditId === o.id;
-                  const move = async (dir: -1 | 1) => {
-                    const j = idx + dir;
-                    if (j < 0 || j >= checkInWithOptions.length) return;
-                    const other = checkInWithOptions[j];
-                    setCheckInWithMsg(null);
-                    try {
-                      await Promise.all([
-                        authFetch(`/api/check-in-with-options/${o.id}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ position: other.position }),
-                        }),
-                        authFetch(`/api/check-in-with-options/${other.id}`, {
-                          method: "PATCH",
-                          headers: { "Content-Type": "application/json" },
-                          body: JSON.stringify({ position: o.position }),
-                        }),
-                      ]);
-                      loadCheckInWithOptions();
-                    } catch {
-                      setCheckInWithMsg({
-                        ok: false,
-                        text: "Failed to reorder.",
-                      });
-                    }
-                  };
-                  return (
-                    <tr
-                      key={o.id}
-                      style={{ borderBottom: "1px solid #e2e8f0" }}
-                    >
-                      <td style={{ padding: "0.5rem" }}>
-                        <button
-                          type="button"
-                          onClick={() => move(-1)}
-                          disabled={idx === 0}
-                          title="Move up"
-                          style={{
-                            padding: "2px 6px",
-                            marginRight: 4,
-                            cursor: idx === 0 ? "not-allowed" : "pointer",
-                            opacity: idx === 0 ? 0.4 : 1,
-                          }}
-                        >
-                          ↑
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => move(1)}
-                          disabled={idx === checkInWithOptions.length - 1}
-                          title="Move down"
-                          style={{
-                            padding: "2px 6px",
-                            cursor:
-                              idx === checkInWithOptions.length - 1
-                                ? "not-allowed"
-                                : "pointer",
-                            opacity:
-                              idx === checkInWithOptions.length - 1 ? 0.4 : 1,
-                          }}
-                        >
-                          ↓
-                        </button>
-                      </td>
-                      <td style={{ padding: "0.5rem" }}>
-                        {editing ? (
-                          <input
-                            type="text"
-                            value={checkInWithEditLabel}
-                            onChange={(e) =>
-                              setCheckInWithEditLabel(e.target.value)
-                            }
-                            style={{
-                              width: "100%",
-                              padding: "0.3rem 0.5rem",
-                              border: "1px solid #cbd5e1",
-                              borderRadius: 4,
-                            }}
-                          />
-                        ) : (
-                          <span style={{ color: o.isActive ? "#0f172a" : "#94a3b8" }}>
-                            {o.label}
-                          </span>
-                        )}
-                      </td>
-                      <td style={{ padding: "0.5rem" }}>
-                        <span
-                          style={{
-                            padding: "2px 8px",
-                            borderRadius: 999,
-                            fontSize: "0.75rem",
-                            fontWeight: 600,
-                            background: o.isActive ? "#dcfce7" : "#fee2e2",
-                            color: o.isActive ? "#166534" : "#991b1b",
-                          }}
-                        >
-                          {o.isActive ? "Active" : "Removed"}
-                        </span>
-                      </td>
-                      <td style={{ padding: "0.5rem", textAlign: "right" }}>
-                        {editing ? (
-                          <>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const newLabel = checkInWithEditLabel.trim();
-                                if (!newLabel) return;
-                                setCheckInWithMsg(null);
-                                try {
-                                  const res = await authFetch(
-                                    `/api/check-in-with-options/${o.id}`,
-                                    {
-                                      method: "PATCH",
-                                      headers: {
-                                        "Content-Type": "application/json",
-                                      },
-                                      body: JSON.stringify({ label: newLabel }),
-                                    },
-                                  );
-                                  if (!res.ok) {
-                                    const text = await res.text();
-                                    throw new Error(text || "Save failed");
-                                  }
-                                  setCheckInWithEditId(null);
-                                  setCheckInWithEditLabel("");
-                                  loadCheckInWithOptions();
-                                } catch (err) {
-                                  setCheckInWithMsg({
-                                    ok: false,
-                                    text:
-                                      err instanceof Error
-                                        ? err.message
-                                        : "Save failed",
-                                  });
-                                }
-                              }}
-                              style={{
-                                padding: "0.3rem 0.7rem",
-                                background: "#0f766e",
-                                color: "white",
-                                border: 0,
-                                borderRadius: 4,
-                                marginRight: 6,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Save
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCheckInWithEditId(null);
-                                setCheckInWithEditLabel("");
-                              }}
-                              style={{
-                                padding: "0.3rem 0.7rem",
-                                background: "white",
-                                border: "1px solid #cbd5e1",
-                                borderRadius: 4,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Cancel
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setCheckInWithEditId(o.id);
-                                setCheckInWithEditLabel(o.label);
-                              }}
-                              style={{
-                                padding: "0.3rem 0.7rem",
-                                background: "white",
-                                border: "1px solid #cbd5e1",
-                                borderRadius: 4,
-                                marginRight: 6,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Edit
-                            </button>
-                            {o.isActive ? (
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  setCheckInWithMsg(null);
-                                  try {
-                                    const res = await authFetch(
-                                      `/api/check-in-with-options/${o.id}`,
-                                      { method: "DELETE" },
-                                    );
-                                    if (!res.ok) {
-                                      const text = await res.text();
-                                      throw new Error(text || "Remove failed");
-                                    }
-                                    setCheckInWithMsg({
-                                      ok: true,
-                                      text: `Removed “${o.label}”.`,
-                                    });
-                                    loadCheckInWithOptions();
-                                  } catch (err) {
-                                    setCheckInWithMsg({
-                                      ok: false,
-                                      text:
-                                        err instanceof Error
-                                          ? err.message
-                                          : "Remove failed",
-                                    });
-                                  }
-                                }}
-                                style={{
-                                  padding: "0.3rem 0.7rem",
-                                  background: "#fef2f2",
-                                  color: "#991b1b",
-                                  border: "1px solid #fecaca",
-                                  borderRadius: 4,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                Remove
-                              </button>
-                            ) : (
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  setCheckInWithMsg(null);
-                                  try {
-                                    const res = await authFetch(
-                                      `/api/check-in-with-options/${o.id}`,
-                                      {
-                                        method: "PATCH",
-                                        headers: {
-                                          "Content-Type": "application/json",
-                                        },
-                                        body: JSON.stringify({
-                                          isActive: true,
-                                        }),
-                                      },
-                                    );
-                                    if (!res.ok) {
-                                      const text = await res.text();
-                                      throw new Error(text || "Restore failed");
-                                    }
-                                    setCheckInWithMsg({
-                                      ok: true,
-                                      text: `Restored “${o.label}”.`,
-                                    });
-                                    loadCheckInWithOptions();
-                                  } catch (err) {
-                                    setCheckInWithMsg({
-                                      ok: false,
-                                      text:
-                                        err instanceof Error
-                                          ? err.message
-                                          : "Restore failed",
-                                    });
-                                  }
-                                }}
-                                style={{
-                                  padding: "0.3rem 0.7rem",
-                                  background: "#ecfdf5",
-                                  color: "#065f46",
-                                  border: "1px solid #a7f3d0",
-                                  borderRadius: 4,
-                                  cursor: "pointer",
-                                }}
-                              >
-                                Restore
-                              </button>
-                            )}
-                          </>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        </>
-      )}
 
       {activeSection === "mtssCoordinator" && canAccessMtssHub && (() => {
         type MtssHubKey = "mtssTemplates";
