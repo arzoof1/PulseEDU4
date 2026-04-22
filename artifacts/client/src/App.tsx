@@ -14138,7 +14138,6 @@ function App() {
         open={checkInOutOpen}
         onClose={() => setCheckInOutOpen(false)}
         students={students}
-        checkInWithOptions={checkInWithOptions}
         currentUser={currentStaffUser}
         onSubmit={async (payload) => {
           const res = await authFetch("/api/tardies", {

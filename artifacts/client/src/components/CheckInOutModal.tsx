@@ -18,7 +18,6 @@ interface Props {
   open: boolean;
   onClose: () => void;
   students: CheckInStudent[];
-  checkInWithOptions: string[];
   currentUser: string;
   onSubmit: (payload: CheckInOutPayload) => Promise<void> | void;
 }
@@ -27,7 +26,6 @@ export default function CheckInOutModal({
   open,
   onClose,
   students,
-  checkInWithOptions,
   currentUser,
   onSubmit,
 }: Props) {
@@ -37,7 +35,6 @@ export default function CheckInOutModal({
   const [selectedStudent, setSelectedStudent] = useState<CheckInStudent | null>(
     null,
   );
-  const [checkInWith, setCheckInWith] = useState<string>("");
   const [notes, setNotes] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +46,6 @@ export default function CheckInOutModal({
     setEntryType("checkin");
     setStudentQuery("");
     setSelectedStudent(null);
-    setCheckInWith(currentUser);
     setNotes("");
     setError(null);
     setSubmitting(false);
@@ -86,21 +82,21 @@ export default function CheckInOutModal({
 
   if (!open) return null;
 
-  const handleSubmit = async () => {
-    if (!selectedStudent || !checkInWith) return;
+  const handleSubmit = async (student: CheckInStudent) => {
     setSubmitting(true);
     setError(null);
     try {
       await onSubmit({
-        studentId: selectedStudent.studentId,
+        studentId: student.studentId,
         entryType,
-        checkInWith,
+        checkInWith: currentUser,
         notes,
       });
       onClose();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Failed to log entry.";
       setError(msg);
+      setStep(3);
     } finally {
       setSubmitting(false);
     }
@@ -135,7 +131,7 @@ export default function CheckInOutModal({
           <div className="cp-title">
             {step === 1 && "Check-In or Check-Out?"}
             {step === 2 && "Select Student"}
-            {step === 3 && (entryType === "checkin" ? "Checking in with…" : "Checking out with…")}
+            {step === 3 && (entryType === "checkin" ? "Confirm Check-In" : "Confirm Check-Out")}
           </div>
           <button
             type="button"
@@ -212,9 +208,10 @@ export default function CheckInOutModal({
                     <button
                       type="button"
                       className="cp-list-item"
+                      disabled={submitting}
                       onClick={() => {
                         setSelectedStudent(s);
-                        setStep(3);
+                        handleSubmit(s);
                       }}
                     >
                       <span className="cp-avatar" aria-hidden="true">
