@@ -1998,7 +1998,6 @@ function App() {
   // Hall pass top-level view: overview (current default) vs reports (admin/ESE).
   const [hpView, setHpView] = useState<"overview" | "reports">("overview");
   const [hpReportSection, setHpReportSection] = useState<"hub" | "overview" | "byDay" | "ytd" | "research">("hub");
-  const [hpHubExiting, setHpHubExiting] = useState<null | "overview" | "byDay" | "ytd" | "research">(null);
   const [researchStart, setResearchStart] = useState<string>(() => {
     const d = new Date();
     return `${d.getFullYear()}-01-01`;
@@ -5828,21 +5827,12 @@ function App() {
         return (
           <>
             <div
-              key={hpHubExiting ? `shrink-${hpHubExiting}` : "burst"}
-              className={`card no-print ${hpHubExiting ? "reports-header-shrink" : "reports-header-burst"}`}
+              className="card no-print"
               style={{
                 background:
                   "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #1d4ed8 100%)",
                 color: "white",
                 padding: "1.25rem 1.5rem",
-              }}
-              onAnimationEnd={(e) => {
-                if (e.target !== e.currentTarget) return;
-                if (hpHubExiting) {
-                  const target = hpHubExiting;
-                  setHpHubExiting(null);
-                  setHpReportSection(target);
-                }
               }}
             >
               <div
@@ -5868,10 +5858,7 @@ function App() {
                     <button
                       key={r.key}
                       type="button"
-                      onClick={() => {
-                        if (hpHubExiting) return;
-                        setHpHubExiting(r.key);
-                      }}
+                      onClick={() => setHpReportSection(r.key)}
                       style={{
                         background: "rgba(255,255,255,0.15)",
                         border: "1px solid rgba(255,255,255,0.4)",
@@ -5887,6 +5874,43 @@ function App() {
                   ))}
                 </div>
               </div>
+            </div>
+
+            <div
+              className="card no-print"
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fill, minmax(240px, 1fr))",
+                gap: "0.75rem",
+              }}
+            >
+              {reports.map((r) => (
+                <button
+                  key={r.key}
+                  type="button"
+                  onClick={() => setHpReportSection(r.key)}
+                  style={{
+                    textAlign: "left",
+                    background: "white",
+                    border: `1px solid ${r.color}33`,
+                    borderLeft: `4px solid ${r.color}`,
+                    borderRadius: 8,
+                    padding: "0.85rem 1rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <span style={{ fontWeight: 600, color: r.color }}>
+                    {r.label}
+                  </span>
+                  <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+                    {r.desc}
+                  </span>
+                </button>
+              ))}
             </div>
           </>
         );

@@ -443,52 +443,6 @@ button:active:not(:disabled) {
   background: #e2e8f0;
 }
 
-@keyframes reportsHeaderBurst {
-  0% {
-    opacity: 0;
-    transform: translate(-40px, -28px) scale(0.05);
-    filter: blur(4px);
-  }
-  55% {
-    opacity: 1;
-    filter: blur(0);
-  }
-  100% {
-    opacity: 1;
-    transform: translate(0, 0) scale(1);
-    filter: blur(0);
-  }
-}
-
-.reports-header-burst {
-  transform-origin: top left;
-  animation: reportsHeaderBurst 480ms cubic-bezier(0.22, 1.4, 0.36, 1) both;
-  will-change: transform, opacity;
-}
-
-@keyframes reportsHeaderShrink {
-  0% {
-    opacity: 1;
-    transform: translate(0, 0) scale(1);
-    filter: blur(0);
-  }
-  45% {
-    opacity: 1;
-    filter: blur(0);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-40px, -28px) scale(0.05);
-    filter: blur(4px);
-  }
-}
-
-.reports-header-shrink {
-  transform-origin: top left;
-  animation: reportsHeaderShrink 380ms cubic-bezier(0.55, 0, 0.7, 0.2) both;
-  will-change: transform, opacity;
-}
-
 button:disabled {
   background: var(--primary-soft);
   color: var(--primary);
