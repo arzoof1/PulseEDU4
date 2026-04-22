@@ -13096,6 +13096,7 @@ function App() {
       {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
         <section className="card">
           <div className="section-header-bar-teal" />
+          <div className="section-header-band-hub" />
           <h2>Per-Student Daily Pass Limits</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
             Cap a specific student's daily hall passes — typically at parental
@@ -13276,6 +13277,7 @@ function App() {
       {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
         <section className="card">
           <div className="section-header-bar-teal" />
+          <div className="section-header-band-hub" />
           <h2>Keep-Apart Pairs</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
             Two students who must <strong>not</strong> both be out on a hall
