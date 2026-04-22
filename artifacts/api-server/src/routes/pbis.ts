@@ -6,6 +6,9 @@ import {
   studentsTable,
   classSectionsTable,
   recordEditsTable,
+  schoolSettingsTable,
+  bellSchedulesTable,
+  bellSchedulePeriodsTable,
 } from "@workspace/db";
 import { eq, and, isNull, gte, lt } from "drizzle-orm";
 import {
@@ -531,5 +534,350 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
     lastWeek,
   });
 });
+
+// "Needs Attention" alerts for the PBIS Hub home panel.
+// Reads tunable thresholds from school_settings and surfaces 5 alert types.
+// Voided entries are excluded everywhere.
+router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const allowed =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isPbisCoordinator ||
+    staff.isBehaviorSpecialist ||
+    staff.isMtssCoordinator ||
+    staff.isDean;
+  if (!allowed) {
+    res.status(403).json({ error: "Not authorized" });
+    return;
+  }
+
+  // Load tunable thresholds (with safe defaults).
+  const [settingsRow] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .limit(1);
+  const QUIET_DAYS = settingsRow?.pbisQuietTeacherDays ?? 5;
+  const INVISIBLE_DAYS = settingsRow?.pbisInvisibleStudentDays ?? 10;
+  const IMBALANCE_PCT = settingsRow?.pbisReasonImbalancePct ?? 60;
+  const COLD_MULTIPLE = settingsRow?.pbisColdPeriodMultiple ?? 5;
+
+  // ---------- Date helpers (Mon–Fri only school days) ----------
+  const now = new Date();
+  const today = new Date(now);
+  today.setHours(0, 0, 0, 0);
+
+  // Subtract N school days (skipping Sat/Sun) and return that midnight.
+  const subtractSchoolDays = (n: number): Date => {
+    const d = new Date(today);
+    let remaining = n;
+    while (remaining > 0) {
+      d.setDate(d.getDate() - 1);
+      const dow = d.getDay();
+      if (dow !== 0 && dow !== 6) remaining--;
+    }
+    return d;
+  };
+
+  // Monday of current school week.
+  const day = now.getDay();
+  const daysSinceMonday = (day + 6) % 7;
+  const thisMonday = new Date(today);
+  thisMonday.setDate(thisMonday.getDate() - daysSinceMonday);
+  const nextMonday = new Date(thisMonday);
+  nextMonday.setDate(nextMonday.getDate() + 7);
+
+  // Start of current month.
+  const monthStart = new Date(today.getFullYear(), today.getMonth(), 1);
+
+  // ---------- Reference data ----------
+  const allStaff = await db
+    .select({
+      id: staffTable.id,
+      displayName: staffTable.displayName,
+      active: staffTable.active,
+    })
+    .from(staffTable);
+
+  const teachingRows = await db
+    .select({
+      staffId: classSectionsTable.teacherStaffId,
+      isPlanning: classSectionsTable.isPlanning,
+    })
+    .from(classSectionsTable);
+  const teachingStaffIds = new Set<number>();
+  for (const r of teachingRows) {
+    if (!r.isPlanning) teachingStaffIds.add(r.staffId);
+  }
+  const teachingStaff = allStaff.filter(
+    (s) => s.active && teachingStaffIds.has(s.id),
+  );
+  const allStudents = await db
+    .select({
+      id: studentsTable.id,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+    })
+    .from(studentsTable);
+  const studentNameById = new Map<string, string>(
+    allStudents.map((s) => [
+      s.id,
+      `${s.lastName ?? ""}, ${s.firstName ?? ""}`.trim(),
+    ]),
+  );
+
+  // ---------- 1. Quiet teachers ----------
+  // Teachers with no non-voided entries in the last QUIET_DAYS school days.
+  const quietWindow = subtractSchoolDays(QUIET_DAYS);
+  const recentTeacherEntries = await db
+    .select({ staffId: pbisEntriesTable.staffId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, quietWindow.toISOString()),
+      ),
+    );
+  const activeStaffIds = new Set<number>();
+  for (const r of recentTeacherEntries) {
+    if (r.staffId != null) activeStaffIds.add(r.staffId);
+  }
+  const quietTeachers = teachingStaff.filter((s) => !activeStaffIds.has(s.id));
+  const quietTeacherSample = quietTeachers
+    .slice(0, 3)
+    .map((s) => s.displayName);
+
+  // ---------- 2. Invisible students ----------
+  // Students with 0 non-voided entries in the last INVISIBLE_DAYS school days.
+  const invisibleWindow = subtractSchoolDays(INVISIBLE_DAYS);
+  const recentStudentEntries = await db
+    .select({ studentId: pbisEntriesTable.studentId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, invisibleWindow.toISOString()),
+      ),
+    );
+  const recognizedStudentIds = new Set<string>();
+  for (const r of recentStudentEntries) recognizedStudentIds.add(r.studentId);
+  const invisibleStudents = allStudents.filter(
+    (s) => !recognizedStudentIds.has(s.id),
+  );
+  const invisibleStudentSample = invisibleStudents
+    .slice(0, 3)
+    .map((s) => studentNameById.get(s.id) ?? s.id);
+
+  // ---------- This-week entries (drives alerts 3–5) ----------
+  const weekEntries = await db
+    .select({
+      reason: pbisEntriesTable.reason,
+      points: pbisEntriesTable.points,
+      studentId: pbisEntriesTable.studentId,
+      createdAt: pbisEntriesTable.createdAt,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, thisMonday.toISOString()),
+        lt(pbisEntriesTable.createdAt, nextMonday.toISOString()),
+      ),
+    );
+
+  // ---------- 3. Reason imbalance ----------
+  let reasonImbalance:
+    | { topReason: string; percent: number; weekTotal: number }
+    | null = null;
+  {
+    const reasonTotals = new Map<string, number>();
+    let weekTotal = 0;
+    for (const e of weekEntries) {
+      const dow = new Date(e.createdAt).getDay();
+      if (dow === 0 || dow === 6) continue;
+      const p = e.points || 0;
+      weekTotal += p;
+      reasonTotals.set(e.reason, (reasonTotals.get(e.reason) ?? 0) + p);
+    }
+    // Require a minimum sample to avoid Monday-morning noise where a single
+    // entry would otherwise read as 100% of a tiny denominator.
+    const MIN_WEEK_TOTAL_FOR_IMBALANCE = 25;
+    if (weekTotal >= MIN_WEEK_TOTAL_FOR_IMBALANCE) {
+      let topReason = "";
+      let topPoints = 0;
+      for (const [r, pts] of reasonTotals) {
+        if (pts > topPoints) {
+          topPoints = pts;
+          topReason = r;
+        }
+      }
+      const pct = Math.round((topPoints / weekTotal) * 100);
+      if (pct >= IMBALANCE_PCT && topReason) {
+        reasonImbalance = { topReason, percent: pct, weekTotal };
+      }
+    }
+  }
+
+  // ---------- 4. Top-heavy recognition (this month) ----------
+  // Find smallest set of students that account for ≥50% of monthly points;
+  // flag if they are <10% of the recognized population.
+  let topHeavyRecognition:
+    | { studentCount: number; percentOfPoints: number; sample: string[] }
+    | null = null;
+  {
+    const monthEntries = await db
+      .select({
+        studentId: pbisEntriesTable.studentId,
+        points: pbisEntriesTable.points,
+      })
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          isNull(pbisEntriesTable.voidedAt),
+          gte(pbisEntriesTable.createdAt, monthStart.toISOString()),
+        ),
+      );
+    const perStudent = new Map<string, number>();
+    let total = 0;
+    for (const e of monthEntries) {
+      const p = e.points || 0;
+      total += p;
+      perStudent.set(e.studentId, (perStudent.get(e.studentId) ?? 0) + p);
+    }
+    if (total > 0 && perStudent.size > 0) {
+      const sorted = [...perStudent.entries()].sort((a, b) => b[1] - a[1]);
+      let running = 0;
+      let count = 0;
+      const topIds: string[] = [];
+      for (const [sid, pts] of sorted) {
+        running += pts;
+        count++;
+        topIds.push(sid);
+        if (running / total >= 0.5) break;
+      }
+      const recognizedCount = perStudent.size;
+      if (count / recognizedCount < 0.1) {
+        topHeavyRecognition = {
+          studentCount: count,
+          percentOfPoints: Math.round((running / total) * 100),
+          sample: topIds
+            .slice(0, 3)
+            .map((id) => studentNameById.get(id) ?? id),
+        };
+      }
+    }
+  }
+
+  // ---------- 5. Cold periods (this week) ----------
+  // Use the default bell schedule's periods to bucket entries by period.
+  const coldPeriods: Array<{
+    period: number;
+    name: string;
+    weekTotal: number;
+    schoolAverage: number;
+  }> = [];
+  {
+    const [defaultSched] = await db
+      .select({ id: bellSchedulesTable.id })
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      )
+      .limit(1);
+    if (defaultSched) {
+      const periods = await db
+        .select({
+          periodNumber: bellSchedulePeriodsTable.periodNumber,
+          name: bellSchedulePeriodsTable.name,
+          startTime: bellSchedulePeriodsTable.startTime,
+          endTime: bellSchedulePeriodsTable.endTime,
+        })
+        .from(bellSchedulePeriodsTable)
+        .where(eq(bellSchedulePeriodsTable.scheduleId, defaultSched.id));
+
+      // Parse "HH:MM" → minutes since midnight.
+      const toMin = (t: string): number => {
+        const [hh, mm] = t.split(":").map((x) => parseInt(x, 10));
+        if (!Number.isFinite(hh) || !Number.isFinite(mm)) return -1;
+        return hh * 60 + mm;
+      };
+      const periodWindows = periods
+        .map((p) => ({
+          number: p.periodNumber,
+          name: p.name,
+          start: toMin(p.startTime),
+          end: toMin(p.endTime),
+        }))
+        .filter((p) => p.start >= 0 && p.end >= 0);
+
+      const totals = new Map<number, number>();
+      for (const p of periodWindows) totals.set(p.number, 0);
+
+      for (const e of weekEntries) {
+        const d = new Date(e.createdAt);
+        const dow = d.getDay();
+        if (dow === 0 || dow === 6) continue;
+        const minutes = d.getHours() * 60 + d.getMinutes();
+        const match = periodWindows.find(
+          (p) => minutes >= p.start && minutes < p.end,
+        );
+        if (!match) continue;
+        totals.set(
+          match.number,
+          (totals.get(match.number) ?? 0) + (e.points || 0),
+        );
+      }
+
+      const values = [...totals.values()];
+      const sum = values.reduce((a, b) => a + b, 0);
+      const avg = values.length > 0 ? sum / values.length : 0;
+      if (avg > 0) {
+        for (const p of periodWindows) {
+          const t = totals.get(p.number) ?? 0;
+          if (t * COLD_MULTIPLE <= avg) {
+            coldPeriods.push({
+              period: p.number,
+              name: p.name,
+              weekTotal: t,
+              schoolAverage: +avg.toFixed(1),
+            });
+          }
+        }
+      }
+    }
+  }
+
+  res.json({
+    thresholds: {
+      quietTeacherDays: QUIET_DAYS,
+      invisibleStudentDays: INVISIBLE_DAYS,
+      reasonImbalancePct: IMBALANCE_PCT,
+      coldPeriodMultiple: COLD_MULTIPLE,
+    },
+    quietTeachers: {
+      count: quietTeachers.length,
+      total: teachingStaff.length,
+      sampleNames: quietTeacherSample,
+    },
+    invisibleStudents: {
+      count: invisibleStudents.length,
+      total: allStudents.length,
+      sampleNames: invisibleStudentSample,
+    },
+    reasonImbalance,
+    topHeavyRecognition,
+    coldPeriods,
+  });
+});
+
+// Silence unused-import warnings for staffNameById helper kept for future use.
+void staffTable;
 
 export default router;

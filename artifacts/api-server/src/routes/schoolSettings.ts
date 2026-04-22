@@ -29,6 +29,10 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     hallPassMaxMinutes,
     hallPassDefaultMinutes,
     globalDailyHallPassLimit,
+    pbisQuietTeacherDays,
+    pbisInvisibleStudentDays,
+    pbisReasonImbalancePct,
+    pbisColdPeriodMultiple,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -100,6 +104,62 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     } else {
       updates.globalDailyHallPassLimit = globalDailyHallPassLimit;
+    }
+  }
+
+  const intRange = (
+    name: string,
+    val: unknown,
+    min: number,
+    max: number,
+    field: keyof typeof schoolSettingsTable.$inferInsert,
+  ): string | null => {
+    if (val === undefined) return null;
+    if (
+      typeof val !== "number" ||
+      !Number.isInteger(val) ||
+      val < min ||
+      val > max
+    ) {
+      return `${name} must be an integer between ${min} and ${max}`;
+    }
+    (updates as Record<string, unknown>)[field as string] = val;
+    return null;
+  };
+
+  for (const err of [
+    intRange(
+      "pbisQuietTeacherDays",
+      pbisQuietTeacherDays,
+      1,
+      60,
+      "pbisQuietTeacherDays",
+    ),
+    intRange(
+      "pbisInvisibleStudentDays",
+      pbisInvisibleStudentDays,
+      1,
+      180,
+      "pbisInvisibleStudentDays",
+    ),
+    intRange(
+      "pbisReasonImbalancePct",
+      pbisReasonImbalancePct,
+      10,
+      100,
+      "pbisReasonImbalancePct",
+    ),
+    intRange(
+      "pbisColdPeriodMultiple",
+      pbisColdPeriodMultiple,
+      2,
+      20,
+      "pbisColdPeriodMultiple",
+    ),
+  ]) {
+    if (err) {
+      res.status(400).json({ error: err });
+      return;
     }
   }
 

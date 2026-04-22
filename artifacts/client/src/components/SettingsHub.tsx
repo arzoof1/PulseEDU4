@@ -8,7 +8,8 @@ export type SettingsTileId =
   | "locations"
   | "staff-defaults"
   | "school"
-  | "bell-schedule";
+  | "bell-schedule"
+  | "pbis-thresholds";
 
 export interface SettingsTile {
   id: SettingsTileId;

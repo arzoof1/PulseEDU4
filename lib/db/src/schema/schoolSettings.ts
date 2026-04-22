@@ -13,6 +13,17 @@ export const schoolSettingsTable = pgTable("school_settings", {
   // Optional school-wide cap on the number of hall passes a student can take
   // in one school day. Null means no global cap.
   globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),
+  // PBIS Hub "Needs Attention" thresholds
+  pbisQuietTeacherDays: integer("pbis_quiet_teacher_days").notNull().default(5),
+  pbisInvisibleStudentDays: integer("pbis_invisible_student_days")
+    .notNull()
+    .default(10),
+  pbisReasonImbalancePct: integer("pbis_reason_imbalance_pct")
+    .notNull()
+    .default(60),
+  pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
+    .notNull()
+    .default(5),
 });
 
 export type SchoolSettingsRow = typeof schoolSettingsTable.$inferSelect;
