@@ -893,6 +893,22 @@ ul[style*="listStyle: none"] li button:hover {
 }
 .back-button-purple:hover { background: #ddd6fe; }
 
+.ekg-separator {
+  display: block;
+  width: 100%;
+  height: 28px;
+  margin: 0.75rem 0;
+  overflow: visible;
+}
+.ekg-separator .track {
+  fill: none;
+  stroke: #0e7490;
+  stroke-width: 1.75;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  opacity: 0.55;
+}
+
 .cp-overlay {
   position: fixed;
   inset: 0;
