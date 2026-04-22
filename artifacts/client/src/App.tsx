@@ -11398,9 +11398,16 @@ function App() {
 
       {activeSection === "behaviorReview" && canReviewPullouts && (
         <>
-          <section className="card" style={{ paddingTop: 0, paddingBottom: 0 }}>
-            <div className="section-header-bar-teal" />
-            <div className="section-header-band-hub">
+          <div
+            style={{
+              borderTopLeftRadius: "var(--radius-lg, 8px)",
+              borderTopRightRadius: "var(--radius-lg, 8px)",
+              overflow: "hidden",
+              marginBottom: "-1px",
+            }}
+          >
+            <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+            <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
               <button
                 type="button"
                 className="back-button-purple"
@@ -11410,11 +11417,13 @@ function App() {
                 ← Back
               </button>
             </div>
-          </section>
-          <BehaviorReviewSection
-            students={students}
-            onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
-          />
+          </div>
+          <div style={{ marginTop: 0 }} className="bs-attached-card-wrapper">
+            <BehaviorReviewSection
+              students={students}
+              onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
+            />
+          </div>
         </>
       )}
 
