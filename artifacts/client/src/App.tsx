@@ -11367,24 +11367,49 @@ function App() {
       )}
 
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
-        <VerifyPulloutsSection
-          students={students}
-          onChange={() => setPendingPulloutsTick((t) => t + 1)}
-        />
+        <>
+          <button
+            type="button"
+            className="back-button-purple"
+            onClick={() => setActiveSection("behaviorSpecialist")}
+          >
+            ← Back
+          </button>
+          <VerifyPulloutsSection
+            students={students}
+            onChange={() => setPendingPulloutsTick((t) => t + 1)}
+          />
+        </>
       )}
 
       {activeSection === "issDashboard" && canViewIssDashboard && (
         <>
+          <button
+            type="button"
+            className="back-button-purple"
+            onClick={() => setActiveSection("behaviorSpecialist")}
+          >
+            ← Back
+          </button>
           <PulloutReportSection students={students} />
           <IssDashboardSection students={students} />
         </>
       )}
 
       {activeSection === "behaviorReview" && canReviewPullouts && (
-        <BehaviorReviewSection
-          students={students}
-          onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
-        />
+        <>
+          <button
+            type="button"
+            className="back-button-purple"
+            onClick={() => setActiveSection("behaviorSpecialist")}
+          >
+            ← Back
+          </button>
+          <BehaviorReviewSection
+            students={students}
+            onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
+          />
+        </>
       )}
 
       {activeSection === "behaviorSpecialist" && isBehaviorSpec && (() => {
@@ -12865,6 +12890,13 @@ function App() {
 
       {activeSection === "interventions" && canManageBehaviorLists && (
         <section className="card">
+          <button
+            type="button"
+            className="back-button-purple"
+            onClick={() => setActiveSection("behaviorSpecialist")}
+          >
+            ← Back
+          </button>
           <h2>Classroom Interventions</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
             Manage the intervention types teachers can pick when logging a
@@ -12987,6 +13019,13 @@ function App() {
 
       {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
         <section className="card">
+          <button
+            type="button"
+            className="back-button-purple"
+            onClick={() => setActiveSection("behaviorSpecialist")}
+          >
+            ← Back
+          </button>
           <h2>Global Daily Pass Limit</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
             School-wide cap on how many hall passes any one student can take
