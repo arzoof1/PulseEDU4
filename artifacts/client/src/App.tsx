@@ -5542,93 +5542,6 @@ function App() {
         }}
       />
 
-      <LogTardyModal
-        open={logTardyOpen}
-        onClose={() => setLogTardyOpen(false)}
-        students={students}
-        periods={["1", "2", "3", "4", "5", "6", "7"]}
-        onSubmit={async (payload) => {
-          const res = await authFetch("/api/tardies", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              studentId: payload.studentId,
-              teacherName: currentStaffUser,
-              period: payload.period,
-              reason: "",
-              entryType: "tardy",
-              checkInWith: null,
-              notes: "",
-              createdBy: currentStaffUser,
-            }),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to log tardy.");
-          }
-          if (payload.createReturnPass) {
-            const lookupRes = await authFetch(
-              `/api/section-lookup?studentId=${encodeURIComponent(payload.studentId)}&period=${encodeURIComponent(payload.period)}`,
-            );
-            if (!lookupRes.ok) {
-              loadTardies();
-              const text = await lookupRes.text();
-              throw new Error(
-                text ||
-                  `No teacher found for student ${payload.studentId} in period ${payload.period}.`,
-              );
-            }
-            const info = await lookupRes.json();
-            const passRes = await authFetch("/api/hall-passes", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                studentId: payload.studentId,
-                destination: info.teacherName,
-                originRoom: "Front Office",
-                teacherName: currentStaffUser,
-                destinationTeacher: info.teacherName,
-              }),
-            });
-            if (!passRes.ok) {
-              loadTardies();
-              const text = await passRes.text();
-              throw new Error(text || "Failed to create return pass.");
-            }
-            loadHallPasses();
-          }
-          loadTardies();
-        }}
-      />
-
-      <CheckInOutModal
-        open={checkInOutOpen}
-        onClose={() => setCheckInOutOpen(false)}
-        students={students}
-        checkInWithOptions={checkInWithOptions}
-        onSubmit={async (payload) => {
-          const res = await authFetch("/api/tardies", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              studentId: payload.studentId,
-              teacherName: currentStaffUser,
-              period: "",
-              reason: "",
-              entryType: payload.entryType,
-              checkInWith: payload.checkInWith,
-              notes: payload.notes,
-              createdBy: currentStaffUser,
-            }),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to log entry.");
-          }
-          loadTardies();
-        }}
-      />
-
       <div className="card">
         <div
           style={{
@@ -14115,6 +14028,91 @@ function App() {
         )}
         </>
       )}
+
+      <LogTardyModal
+        open={logTardyOpen}
+        onClose={() => setLogTardyOpen(false)}
+        students={students}
+        periods={["1", "2", "3", "4", "5", "6", "7"]}
+        onSubmit={async (payload) => {
+          const res = await authFetch("/api/tardies", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId: payload.studentId,
+              teacherName: currentStaffUser,
+              period: payload.period,
+              reason: "",
+              entryType: "tardy",
+              checkInWith: null,
+              notes: "",
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to log tardy.");
+          }
+          if (payload.createReturnPass) {
+            const lookupRes = await authFetch(
+              `/api/section-lookup?studentId=${encodeURIComponent(payload.studentId)}&period=${encodeURIComponent(payload.period)}`,
+            );
+            if (!lookupRes.ok) {
+              loadTardies();
+              const text = await lookupRes.text();
+              throw new Error(
+                text ||
+                  `No teacher found for student ${payload.studentId} in period ${payload.period}.`,
+              );
+            }
+            const info = await lookupRes.json();
+            const passRes = await authFetch("/api/hall-passes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                studentId: payload.studentId,
+                destination: info.teacherName,
+                originRoom: "Front Office",
+                teacherName: currentStaffUser,
+                destinationTeacher: info.teacherName,
+              }),
+            });
+            if (!passRes.ok) {
+              loadTardies();
+              const text = await passRes.text();
+              throw new Error(text || "Failed to create return pass.");
+            }
+            loadHallPasses();
+          }
+          loadTardies();
+        }}
+      />
+
+      <CheckInOutModal
+        open={checkInOutOpen}
+        onClose={() => setCheckInOutOpen(false)}
+        students={students}
+        checkInWithOptions={checkInWithOptions}
+        onSubmit={async (payload) => {
+          const res = await authFetch("/api/tardies", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              studentId: payload.studentId,
+              teacherName: currentStaffUser,
+              period: "",
+              reason: "",
+              entryType: payload.entryType,
+              checkInWith: payload.checkInWith,
+              notes: payload.notes,
+            }),
+          });
+          if (!res.ok) {
+            const text = await res.text();
+            throw new Error(text || "Failed to log entry.");
+          }
+          loadTardies();
+        }}
+      />
       </main>
     </div>
   );
