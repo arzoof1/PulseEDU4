@@ -7,7 +7,8 @@ export type SettingsTileId =
   | "allowlist"
   | "locations"
   | "staff-defaults"
-  | "school";
+  | "school"
+  | "bell-schedule";
 
 export interface SettingsTile {
   id: SettingsTileId;

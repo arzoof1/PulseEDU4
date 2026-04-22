@@ -14752,6 +14752,13 @@ function App() {
                 subtitle: "Branding, sender name, periods, and bell schedule.",
               },
               {
+                id: "bell-schedule",
+                icon: "🔔",
+                title: "School Bell Schedule",
+                subtitle:
+                  "Manage Regular, Activity, and Early Release bell schedules.",
+              },
+              {
                 id: "staff-defaults",
                 icon: "📋",
                 title: "Staff Defaults",
@@ -15009,6 +15016,10 @@ function App() {
           </div>
         );
       })()}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "bell-schedule" && (
+        <BellScheduleSection />
+      )}
 
       {activeSection === "settings" && canManageSettings && (settingsTile === "allowlist" || settingsTile === "locations" || settingsTile === "staff-defaults" || settingsTile === "school") && (
         <>
