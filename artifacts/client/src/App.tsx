@@ -2157,6 +2157,7 @@ function App() {
   >([]);
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
+  const [summaryChecks, setSummaryChecks] = useState<Record<string, boolean>>({});
   const [studentTab, setStudentTab] = useState<
     | "summary"
     | "hallPasses"
@@ -7948,27 +7949,76 @@ function App() {
           {activityStudentId && (
             <>
               <div style={{ marginBottom: "1rem" }}>
-                {(
-                  [
-                    ["summary", "Summary"],
+                {(() => {
+                  const tabs = [
                     ["hallPasses", "Hall Passes"],
                     ["tardy", "Tardy / Support Logs"],
                     ["pbis", "PBIS"],
                     ["supportNotes", "Support Notes"],
                     ["contact", "Contact / Communication"],
                     ["pullouts", "Pullouts"],
-                  ] as const
-                ).map(([key, label]) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => setStudentTab(key)}
-                    disabled={studentTab === key}
-                    style={{ marginRight: "0.25rem" }}
-                  >
-                    {label}
-                  </button>
-                ))}
+                  ] as const;
+                  const allChecked = tabs.every(
+                    ([k]) => summaryChecks[k as string],
+                  );
+                  return (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const next: Record<string, boolean> = {};
+                          tabs.forEach(([k]) => {
+                            next[k] = !allChecked;
+                          });
+                          setSummaryChecks(next);
+                          setStudentTab("summary");
+                        }}
+                        style={{
+                          marginRight: "0.5rem",
+                          background: "#7c3aed",
+                          color: "#fff",
+                          border: "none",
+                          padding: "0.35rem 0.75rem",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          fontWeight: 600,
+                        }}
+                      >
+                        {allChecked ? "Uncheck All" : "Check All"}
+                      </button>
+                      {tabs.map(([key, label]) => (
+                        <span
+                          key={key}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            marginRight: "0.5rem",
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={Boolean(summaryChecks[key])}
+                            onChange={(e) =>
+                              setSummaryChecks((prev) => ({
+                                ...prev,
+                                [key]: e.target.checked,
+                              }))
+                            }
+                            aria-label={`Include ${label} in summary`}
+                          />
+                          <button
+                            type="button"
+                            onClick={() => setStudentTab(key)}
+                            disabled={studentTab === key}
+                          >
+                            {label}
+                          </button>
+                        </span>
+                      ))}
+                    </>
+                  );
+                })()}
               </div>
 
               <div style={{ marginBottom: "0.75rem" }}>
