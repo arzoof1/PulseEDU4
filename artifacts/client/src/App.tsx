@@ -14074,6 +14074,7 @@ function App() {
                 originRoom: "Front Office",
                 teacherName: currentStaffUser,
                 destinationTeacher: info.teacherName,
+                contactedAcknowledged: true,
               }),
             });
             if (!passRes.ok) {
