@@ -11398,13 +11398,19 @@ function App() {
 
       {activeSection === "behaviorReview" && canReviewPullouts && (
         <>
-          <button
-            type="button"
-            className="back-button-purple"
-            onClick={() => setActiveSection("behaviorSpecialist")}
-          >
-            ← Back
-          </button>
+          <section className="card" style={{ paddingTop: 0, paddingBottom: 0 }}>
+            <div className="section-header-bar-teal" />
+            <div className="section-header-band-hub">
+              <button
+                type="button"
+                className="back-button-purple"
+                style={{ marginBottom: 0 }}
+                onClick={() => setActiveSection("behaviorSpecialist")}
+              >
+                ← Back
+              </button>
+            </div>
+          </section>
           <BehaviorReviewSection
             students={students}
             onChange={() => setUnreviewedPulloutsTick((t) => t + 1)}
