@@ -1627,7 +1627,16 @@ function PulloutReportSection({ students }: { students: Student[] }) {
       className="card"
       style={{ marginBottom: "1rem", background: "#f6f8fb" }}
     >
-      <h3 style={{ marginTop: 0 }}>Pullout Report</h3>
+      <h3
+        style={{
+          marginTop: 0,
+          fontSize: "1.5rem",
+          fontWeight: 700,
+          color: "#7c3aed",
+        }}
+      >
+        Pullout Report
+      </h3>
       <div style={{ marginBottom: "0.5rem" }}>
         Window:{" "}
         <select
