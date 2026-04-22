@@ -11669,6 +11669,9 @@ function App() {
                 "hallPassMgmt",
                 "interventions",
               ]);
+              const behaviorReportingKeys = new Set<HubKey>([
+                "behaviorReview",
+              ]);
               const renderTile = (t: HubTool) => (
                 <button
                   key={t.key}
@@ -11718,7 +11721,13 @@ function App() {
                 </button>
               );
               const bsTools = tools.filter(
-                (t) => t.show && !siteMgmtKeys.has(t.key),
+                (t) =>
+                  t.show &&
+                  !siteMgmtKeys.has(t.key) &&
+                  !behaviorReportingKeys.has(t.key),
+              );
+              const reportingTools = tools.filter(
+                (t) => t.show && behaviorReportingKeys.has(t.key),
               );
               const siteTools = tools.filter(
                 (t) => t.show && siteMgmtKeys.has(t.key),
@@ -11737,6 +11746,62 @@ function App() {
                     >
                       {bsTools.map(renderTile)}
                     </div>
+                  )}
+
+                  {reportingTools.length > 0 && (
+                    <>
+                      <svg
+                        className="ekg-separator"
+                        viewBox="0 0 600 28"
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          className="track"
+                          d="M0 14 H140 L150 14 L155 6 L162 22 L168 8 L175 14 H300 L310 14 L315 6 L322 22 L328 8 L335 14 H460 L470 14 L475 6 L482 22 L488 8 L495 14 H600"
+                        />
+                      </svg>
+
+                      <div
+                        style={{
+                          borderTopLeftRadius: "var(--radius-lg, 8px)",
+                          borderTopRightRadius: "var(--radius-lg, 8px)",
+                          overflow: "hidden",
+                          marginBottom: "-1px",
+                        }}
+                      >
+                        <div
+                          className="section-header-bar-teal"
+                          style={{ width: "100%", margin: 0 }}
+                        />
+                        <div
+                          className="section-header-band-hub"
+                          style={{ width: "100%", margin: 0 }}
+                        >
+                          <h2
+                            style={{
+                              margin: 0,
+                              color: "white",
+                              fontSize: "1.5rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Behavior Reporting
+                          </h2>
+                        </div>
+                      </div>
+                      <div
+                        className="card no-print"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "repeat(auto-fill, minmax(240px, 1fr))",
+                          gap: "0.75rem",
+                        }}
+                      >
+                        {reportingTools.map(renderTile)}
+                      </div>
+                    </>
                   )}
 
                   {siteTools.length > 0 && (
