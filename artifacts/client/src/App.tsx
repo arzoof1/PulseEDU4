@@ -2113,6 +2113,8 @@ function App() {
     | "behaviorReview"
     | "behaviorSpecialist"
     | "hallPassMgmt"
+    | "mtssCoordinator"
+    | "mtssTemplates"
     | "settings"
     | "staffRoles"
   >("hallPasses");
@@ -2158,6 +2160,58 @@ function App() {
   const [activityStudentId, setActivityStudentId] = useState("");
   const [activityStudentSearch, setActivityStudentSearch] = useState("");
   const [summaryChecks, setSummaryChecks] = useState<Record<string, boolean>>({});
+  type MtssTemplate = { id: string; name: string; subject: string; body: string };
+  const MTSS_TEMPLATES_KEY = "pulseed.mtssTemplates.v1";
+  const defaultMtssTemplates: MtssTemplate[] = [
+    {
+      id: "tpl-positive",
+      name: "Positive Update",
+      subject: "Positive Update for {{studentName}}",
+      body:
+        "Hello {{parentName}},\n\nI wanted to share a positive update about {{studentName}}. " +
+        "They have earned {{pbisPoints}} PBIS points recently and are showing great effort.\n\nThank you for your support.",
+    },
+    {
+      id: "tpl-pbis",
+      name: "PBIS Recognition",
+      subject: "PBIS Recognition for {{studentName}}",
+      body:
+        "Hello {{parentName}},\n\n{{studentName}} has earned {{pbisPoints}} PBIS points " +
+        "across {{pbisCount}} entries. Please join us in recognizing their effort.",
+    },
+    {
+      id: "tpl-tardy",
+      name: "Attendance / Tardy Concern",
+      subject: "Attendance / Tardy Concern for {{studentName}}",
+      body:
+        "Hello {{parentName}},\n\nWe wanted to make you aware that {{studentName}} has " +
+        "{{tardyCount}} tardies and {{hallPassCount}} hall passes on record. " +
+        "Please reach out so we can support attendance.",
+    },
+    {
+      id: "tpl-checkin",
+      name: "Check-In / Check-Out Notice",
+      subject: "Check-In / Check-Out Notice for {{studentName}}",
+      body:
+        "Hello {{parentName}},\n\nThis is a notice that {{studentName}} had " +
+        "{{checkInCount}} check-ins and {{checkOutCount}} check-outs recorded.",
+    },
+  ];
+  const [mtssTemplates, setMtssTemplates] = useState<MtssTemplate[]>(() => {
+    try {
+      const raw = localStorage.getItem(MTSS_TEMPLATES_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as MtssTemplate[];
+        if (Array.isArray(parsed) && parsed.length) return parsed;
+      }
+    } catch {}
+    return defaultMtssTemplates;
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem(MTSS_TEMPLATES_KEY, JSON.stringify(mtssTemplates));
+    } catch {}
+  }, [mtssTemplates]);
   const [studentTab, setStudentTab] = useState<
     | "summary"
     | "hallPasses"
@@ -5009,6 +5063,14 @@ function App() {
   const behaviorSpecNavSections: NavSection[] = [
     { key: "behaviorSpecialist", label: "Behavior Specialist", icon: IconClipboard },
   ];
+  const mtssCoordNavSections: NavSection[] = [
+    { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
+  ];
+  const canAccessMtssHub =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isMtss ||
+    isBehaviorSpec;
   const adminNavSections: NavSection[] = [
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
@@ -5327,6 +5389,7 @@ function App() {
           canVerifyPullouts ||
           canViewIssDashboard ||
           canReviewPullouts ||
+          canAccessMtssHub ||
           isAdmin ||
           canManageStaffRoles;
         return (
@@ -5351,6 +5414,7 @@ function App() {
                 {isEseCoord && eseNavSections.map(renderNavItem)}
                 {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
                 {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
+                {canAccessMtssHub && mtssCoordNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
@@ -11931,6 +11995,405 @@ function App() {
                 </>
               );
             })()}
+          </>
+        );
+      })()}
+
+      {activeSection === "mtssCoordinator" && canAccessMtssHub && (() => {
+        type MtssHubKey = "mtssTemplates";
+        type MtssTool = {
+          key: MtssHubKey;
+          label: string;
+          desc: string;
+          color: string;
+        };
+        const tools: MtssTool[] = [
+          {
+            key: "mtssTemplates",
+            label: "Templates",
+            desc: "Create, edit, and save parent communication templates.",
+            color: "#7c3aed",
+          },
+        ];
+        return (
+          <>
+            <div
+              className="card no-print"
+              style={{
+                background:
+                  "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                color: "white",
+                padding: "1.25rem 1.5rem",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "1rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: 0, color: "white" }}>MTSS Coordinator</h2>
+                  <div style={{ opacity: 0.9, fontSize: "0.9rem", marginTop: 4 }}>
+                    Hub for MTSS workflows, communication templates, and student
+                    support tooling.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  {tools.map((t) => (
+                    <button
+                      key={t.key}
+                      type="button"
+                      onClick={() => setActiveSection(t.key)}
+                      style={{
+                        background: "rgba(255,255,255,0.15)",
+                        border: "1px solid rgba(255,255,255,0.4)",
+                        color: "white",
+                        padding: "0.4rem 0.8rem",
+                        borderRadius: 999,
+                        fontSize: "0.85rem",
+                        cursor: "pointer",
+                      }}
+                    >
+                      {t.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div
+              style={{
+                borderTopLeftRadius: "var(--radius-lg, 8px)",
+                borderTopRightRadius: "var(--radius-lg, 8px)",
+                overflow: "hidden",
+                marginBottom: "-1px",
+              }}
+            >
+              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
+                <h2
+                  style={{
+                    margin: 0,
+                    color: "white",
+                    fontSize: "1.5rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  Templates
+                </h2>
+              </div>
+            </div>
+            <div
+              className="card no-print"
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(240px, 1fr))",
+                gap: "0.75rem",
+              }}
+            >
+              {tools.map((t) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setActiveSection(t.key)}
+                  style={{
+                    textAlign: "left",
+                    background: "white",
+                    border: `1px solid ${t.color}33`,
+                    borderLeft: `4px solid ${t.color}`,
+                    borderRadius: 8,
+                    padding: "0.85rem 1rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <span style={{ fontWeight: 600, color: t.color }}>
+                    {t.label}
+                  </span>
+                  <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+                    {t.desc}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        );
+      })()}
+
+      {activeSection === "mtssTemplates" && canAccessMtssHub && (() => {
+        const mergeTokens: Array<{ token: string; label: string }> = [
+          { token: "studentName", label: "Student Name" },
+          { token: "studentId", label: "Student ID" },
+          { token: "parentName", label: "Parent Name" },
+          { token: "parentEmail", label: "Parent Email" },
+          { token: "hallPassCount", label: "Hall Pass Count" },
+          { token: "tardyCount", label: "Tardy Count" },
+          { token: "checkInCount", label: "Check-In Count" },
+          { token: "checkOutCount", label: "Check-Out Count" },
+          { token: "pbisCount", label: "PBIS Entries Count" },
+          { token: "pbisPoints", label: "PBIS Points Total" },
+          { token: "lostMinutes", label: "Lost Instructional Minutes" },
+          { token: "supportNotesCount", label: "Support Notes Count" },
+          { token: "pulloutsCount", label: "Pullouts Count" },
+        ];
+        return (
+          <>
+            <div
+              style={{
+                borderTopLeftRadius: "var(--radius-lg, 8px)",
+                borderTopRightRadius: "var(--radius-lg, 8px)",
+                overflow: "hidden",
+                marginBottom: "-1px",
+              }}
+            >
+              <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+              <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }}>
+                <button
+                  type="button"
+                  className="back-button-purple"
+                  style={{ marginBottom: 0 }}
+                  onClick={() => setActiveSection("mtssCoordinator")}
+                >
+                  ← Back
+                </button>
+              </div>
+            </div>
+            <section className="card" style={{ overflow: "visible" }}>
+              <h2
+                style={{
+                  margin: "0 0 0.75rem",
+                  fontSize: "1.5rem",
+                  fontWeight: 700,
+                  color: "#7c3aed",
+                }}
+              >
+                Templates
+              </h2>
+              <p style={{ color: "#475569", marginTop: 0 }}>
+                Create and edit parent communication templates. Use the{" "}
+                <strong>Insert</strong> buttons to add Student Activity merge
+                fields like <code>{"{{studentName}}"}</code> or{" "}
+                <code>{"{{pbisPoints}}"}</code>. They are filled in
+                automatically when you send from the Student Activity page.
+              </p>
+
+              <div style={{ marginBottom: "1rem" }}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const id = `tpl-${Date.now()}`;
+                    setMtssTemplates((prev) => [
+                      ...prev,
+                      {
+                        id,
+                        name: "New Template",
+                        subject: "",
+                        body: "",
+                      },
+                    ]);
+                  }}
+                  style={{
+                    background: "#7c3aed",
+                    color: "#fff",
+                    border: "none",
+                    padding: "0.45rem 0.9rem",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  + New Template
+                </button>
+              </div>
+
+              {mtssTemplates.length === 0 && (
+                <div style={{ color: "#64748b" }}>No templates yet.</div>
+              )}
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
+                {mtssTemplates.map((tpl, idx) => (
+                  <div
+                    key={tpl.id}
+                    style={{
+                      border: "1px solid #cbd5e1",
+                      borderRadius: 8,
+                      padding: "0.85rem 1rem",
+                      background: "#fafafa",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: "0.5rem",
+                        alignItems: "center",
+                        marginBottom: "0.5rem",
+                      }}
+                    >
+                      <input
+                        type="text"
+                        value={tpl.name}
+                        onChange={(e) =>
+                          setMtssTemplates((prev) =>
+                            prev.map((t, i) =>
+                              i === idx ? { ...t, name: e.target.value } : t,
+                            ),
+                          )
+                        }
+                        placeholder="Template name"
+                        style={{
+                          flex: 1,
+                          padding: "0.35rem 0.5rem",
+                          fontWeight: 600,
+                        }}
+                      />
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (
+                            window.confirm(
+                              `Delete template "${tpl.name}"?`,
+                            )
+                          ) {
+                            setMtssTemplates((prev) =>
+                              prev.filter((_, i) => i !== idx),
+                            );
+                          }
+                        }}
+                        style={{
+                          background: "#fee2e2",
+                          color: "#b91c1c",
+                          border: "1px solid #fecaca",
+                          borderRadius: 6,
+                          padding: "0.35rem 0.6rem",
+                          cursor: "pointer",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </div>
+
+                    <label
+                      style={{
+                        display: "block",
+                        marginBottom: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <div style={{ marginBottom: 2 }}>Subject:</div>
+                      <input
+                        type="text"
+                        value={tpl.subject}
+                        onChange={(e) =>
+                          setMtssTemplates((prev) =>
+                            prev.map((t, i) =>
+                              i === idx
+                                ? { ...t, subject: e.target.value }
+                                : t,
+                            ),
+                          )
+                        }
+                        style={{ width: "100%", padding: "0.35rem 0.5rem" }}
+                      />
+                    </label>
+
+                    <label
+                      style={{
+                        display: "block",
+                        marginBottom: "0.5rem",
+                        fontSize: "0.85rem",
+                      }}
+                    >
+                      <div style={{ marginBottom: 2 }}>Body:</div>
+                      <textarea
+                        value={tpl.body}
+                        onChange={(e) =>
+                          setMtssTemplates((prev) =>
+                            prev.map((t, i) =>
+                              i === idx ? { ...t, body: e.target.value } : t,
+                            ),
+                          )
+                        }
+                        rows={6}
+                        style={{
+                          width: "100%",
+                          padding: "0.4rem 0.5rem",
+                          fontFamily: "inherit",
+                        }}
+                      />
+                    </label>
+
+                    <div style={{ marginTop: "0.5rem" }}>
+                      <div
+                        style={{
+                          fontSize: "0.8rem",
+                          color: "#475569",
+                          marginBottom: 4,
+                        }}
+                      >
+                        Insert Student Activity field:
+                      </div>
+                      <div
+                        style={{
+                          display: "flex",
+                          flexWrap: "wrap",
+                          gap: "0.35rem",
+                        }}
+                      >
+                        {mergeTokens.map((m) => (
+                          <button
+                            key={m.token}
+                            type="button"
+                            onClick={() => {
+                              const insert = `{{${m.token}}}`;
+                              setMtssTemplates((prev) =>
+                                prev.map((t, i) =>
+                                  i === idx
+                                    ? {
+                                        ...t,
+                                        body: t.body
+                                          ? t.body + " " + insert
+                                          : insert,
+                                      }
+                                    : t,
+                                ),
+                              );
+                            }}
+                            style={{
+                              background: "#ede9fe",
+                              color: "#5b21b6",
+                              border: "1px solid #ddd6fe",
+                              borderRadius: 999,
+                              padding: "0.2rem 0.6rem",
+                              fontSize: "0.78rem",
+                              cursor: "pointer",
+                            }}
+                            title={`Insert {{${m.token}}}`}
+                          >
+                            + {m.label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <div
+                style={{
+                  marginTop: "1rem",
+                  fontSize: "0.8rem",
+                  color: "#64748b",
+                }}
+              >
+                Templates save automatically.
+              </div>
+            </section>
           </>
         );
       })()}
