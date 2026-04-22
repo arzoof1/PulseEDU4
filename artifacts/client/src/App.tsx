@@ -7,6 +7,7 @@ import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
+import BellScheduleSection from "./components/BellScheduleSection";
 import SettingsHub, {
   SettingsBackBar,
   type SettingsTile,
@@ -2136,6 +2137,7 @@ function App() {
     | "mtssTemplates"
     | "settings"
     | "staffRoles"
+    | "bellSchedule"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -5110,6 +5112,14 @@ function App() {
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
   ];
+  const bellScheduleNavSections: NavSection[] = [
+    { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
+  ];
+  const canManageBellSchedules =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isMtss ||
+    isBehaviorSpec;
   const canManageStaffRoles =
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
@@ -5470,6 +5480,8 @@ function App() {
                     label: "Behavior Review",
                     icon: IconClipboard,
                   })}
+                {canManageBellSchedules &&
+                  bellScheduleNavSections.map(renderNavItem)}
                 {isAdmin
                   ? adminNavSections.map(renderNavItem)
                   : canManageStaffRoles &&
@@ -14688,6 +14700,10 @@ function App() {
 
       {activeSection === "staffRoles" && canManageStaffRoles && authUser && (
         <StaffRolesMatrix currentUser={authUser} />
+      )}
+
+      {activeSection === "bellSchedule" && canManageBellSchedules && (
+        <BellScheduleSection />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === null && (

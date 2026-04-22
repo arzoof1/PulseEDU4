@@ -28,3 +28,4 @@ export * from "./teacherDestinationAllowlist";
 export * from "./studentHallPassLimits";
 export * from "./districtIntegrations";
 export * from "./customRoles";
+export * from "./bellSchedules";

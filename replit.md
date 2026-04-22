@@ -48,3 +48,31 @@ toggle each capability per user and apply role presets.
 Files: `lib/db/src/schema/{staff,customRoles}.ts`,
 `artifacts/api-server/src/routes/{adminStaff,customRoles}.ts`,
 `artifacts/client/src/components/StaffRolesMatrix.tsx`.
+
+## UI Style Conventions (April 2026)
+
+- **Default for all new top-level section pages**: Hub Section Header treatment
+  — a teal accent bar (`.section-header-bar-teal`) on top of a teal→purple
+  gradient band (`.section-header-band-hub`) containing the section title in
+  white, 1.5rem, bold. Defined in `artifacts/client/src/index.css`. Apply this
+  by default unless the user explicitly asks for a different treatment.
+- **Back / cancel buttons**: light-purple pill style — `#ede9fe` background,
+  `#6d28d9` text, `#ddd6fe` border (referred to as "back-button-purple").
+- **Primary save / submit buttons**: teal `#0d9488` background, white text.
+- **Combobox pattern**: native `<input list=…>` + `<datalist>` for
+  search-filter pickers; plain `<select>` for fixed dropdowns.
+
+## Bell Schedule (April 2026)
+
+School Bell Schedule management lives at top-level nav "Bell Schedule" and is
+gated to SuperUser, Admin, MTSS Coordinator, and Behavior Specialist. Hub
+landing offers Regular / Activity / Early Release sub-tiles; each opens a list
+of schedules of that kind with add/edit/delete and "set default" actions. The
+editor lets users pick number of periods, period names, and start/end times.
+
+- DB tables: `bell_schedules` and `bell_schedule_periods`
+  (`lib/db/src/schema/bellSchedules.ts`).
+- API routes: `GET/POST/PUT/DELETE /api/bell-schedules`
+  (`artifacts/api-server/src/routes/bellSchedules.ts`).
+- UI: `artifacts/client/src/components/BellScheduleSection.tsx`,
+  rendered from `App.tsx` when `activeSection === "bellSchedule"`.

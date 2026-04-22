@@ -30,6 +30,7 @@ import teacherAllowlistRouter from "./teacherAllowlist";
 import studentHallPassLimitsRouter from "./studentHallPassLimits";
 import customRolesRouter from "./customRoles";
 import sectionLookupRouter from "./sectionLookup";
+import bellSchedulesRouter from "./bellSchedules";
 
 const router: IRouter = Router();
 
@@ -64,5 +65,6 @@ router.use(teacherAllowlistRouter);
 router.use(studentHallPassLimitsRouter);
 router.use(customRolesRouter);
 router.use(sectionLookupRouter);
+router.use(bellSchedulesRouter);
 
 export default router;
