@@ -5638,7 +5638,7 @@ function App() {
       })()}
 
       <div className="card cp-cta-card">
-        <div className="cp-cta-text">Student Going Somewhere?</div>
+        <div className="cp-cta-text">Need to Create a Pass?</div>
         <button
           type="button"
           className="cp-cta-button"
