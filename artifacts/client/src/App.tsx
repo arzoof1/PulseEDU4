@@ -6520,7 +6520,7 @@ function App() {
         const grades = Array.from(new Set(students.map((s) => s.grade))).sort(
           (a, b) => a - b,
         );
-        const gradeColors = ["#22c55e", "#ef4444", "#f59e0b", "#3b82f6", "#a855f7", "#0ea5e9"];
+        const gradeColors = ["#0f766e", "#0e7490", "#6366f1", "#7c3aed", "#0ea5e9", "#a855f7"];
 
         const yearStart = new Date(today.getFullYear(), 0, 1);
         const dayMs = 24 * 60 * 60 * 1000;
