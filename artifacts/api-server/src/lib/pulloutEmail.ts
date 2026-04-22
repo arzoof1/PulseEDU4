@@ -147,6 +147,80 @@ export async function sendPulloutArrivalEmail(
 }
 
 /**
+ * Send a parent return/release email when a student leaves ISS. Always sends
+ * (not idempotent on the pullout record — we don't want to suppress the email
+ * if the student is re-added later).
+ */
+export async function sendPulloutReturnEmail(
+  pulloutId: number,
+): Promise<PulloutEmailResult> {
+  const [p] = await db
+    .select()
+    .from(pulloutsTable)
+    .where(eq(pulloutsTable.id, pulloutId));
+  if (!p) {
+    return { status: "skipped", emailTo: null, errorMsg: "Pullout not found" };
+  }
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(eq(studentsTable.studentId, p.studentId));
+  if (!student) {
+    return {
+      status: "skipped",
+      emailTo: null,
+      errorMsg: "Student not found in roster",
+    };
+  }
+  const parentEmail = student.parentEmail?.trim() || null;
+  if (!parentEmail) {
+    return {
+      status: "skipped",
+      emailTo: null,
+      errorMsg: "No parent email on file",
+    };
+  }
+  const [settings] = await db.select().from(schoolSettingsTable);
+  const schoolName = settings?.schoolName ?? "PulseED";
+  const fromName = settings?.fromName ?? schoolName;
+  const signature = settings?.emailSignature ?? `Thank you,\n${schoolName}`;
+  const studentName = `${student.firstName} ${student.lastName}`;
+  const greeting = student.parentName
+    ? `Dear ${student.parentName},`
+    : "Dear Parent or Guardian,";
+  const returnedAt = new Date().toLocaleString();
+  const subject = `${schoolName}: ${studentName} returned to class`;
+  const body =
+    `${greeting}\n\n` +
+    `This is a follow-up to let you know that ${studentName} has returned to class from our intervention room at ${returnedAt}.\n\n` +
+    `Please reach out if you have any questions.\n\n` +
+    `${signature}`;
+  const html =
+    `<p>${greeting.replace(/\n/g, "<br>")}</p>` +
+    `<p>This is a follow-up to let you know that <strong>${studentName}</strong> has returned to class from our intervention room at <strong>${returnedAt}</strong>.</p>` +
+    `<p>Please reach out if you have any questions.</p>` +
+    `<p>${signature.replace(/\n/g, "<br>")}</p>`;
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const fromHeader = `${fromName} <${fromEmail}>`;
+    const sendRes = await client.emails.send({
+      from: fromHeader,
+      to: parentEmail,
+      subject,
+      text: body,
+      html,
+    });
+    if (sendRes.error) {
+      throw new Error(sendRes.error.message ?? "Resend error");
+    }
+    return { status: "sent", emailTo: parentEmail, errorMsg: null };
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    return { status: "error", emailTo: parentEmail, errorMsg: errMsg };
+  }
+}
+
+/**
  * Notify the dispatch team (admins, deans, MTSS coordinators, ISS staff)
  * that a new pullout request has been submitted. Mirrors the Resend
  * front-desk radio call. Idempotent via dispatchEmailSentAt.

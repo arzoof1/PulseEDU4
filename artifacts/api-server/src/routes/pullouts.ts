@@ -10,11 +10,13 @@ import {
   pulloutsTable,
   staffTable,
   interventionEntriesTable,
+  issRosterTable,
 } from "@workspace/db";
 import { eq, and, gte, desc } from "drizzle-orm";
 import {
   sendPulloutArrivalEmail,
   sendPulloutDispatchEmail,
+  sendPulloutReturnEmail,
 } from "../lib/pulloutEmail";
 
 const router: IRouter = Router();
@@ -104,6 +106,7 @@ router.get(
     const isVerifier =
       staff.isAdmin || staff.isDean || staff.isMtssCoordinator;
     const isIssView =
+      staff.isSuperUser ||
       staff.isAdmin ||
       staff.isIssTeacher ||
       staff.isBehaviorSpecialist ||
@@ -479,6 +482,7 @@ router.get(
 
 // ISS dashboard actions: mark arrived / returned / closed.
 const isIssActor = (s: StaffRow) =>
+  s.isSuperUser ||
   s.isAdmin ||
   s.isIssTeacher ||
   s.isBehaviorSpecialist ||
@@ -521,6 +525,26 @@ router.patch(
       .where(eq(pulloutsTable.id, id));
     // Send parent email synchronously so the operator sees the result.
     const emailResult = await sendPulloutArrivalEmail(id);
+    // Add to ISS roster (idempotent via unique pullout_id index).
+    try {
+      const existingRoster = await db
+        .select()
+        .from(issRosterTable)
+        .where(eq(issRosterTable.pulloutId, id));
+      if (existingRoster.length === 0) {
+        await db.insert(issRosterTable).values({
+          studentId: existing.studentId,
+          source: "pullout",
+          pulloutId: id,
+          period: existing.period,
+          notes: null,
+          addedById: staff.id,
+          addedByName: staff.displayName,
+        });
+      }
+    } catch (e) {
+      console.error("[iss-roster] auto-insert failed:", e);
+    }
     const [row] = await db
       .select()
       .from(pulloutsTable)
@@ -557,7 +581,14 @@ router.patch(
       .set({ status: "returned", returnedAt: new Date().toISOString() })
       .where(eq(pulloutsTable.id, id))
       .returning();
-    res.json(row);
+    // Remove from ISS roster + send parent return email.
+    try {
+      await db.delete(issRosterTable).where(eq(issRosterTable.pulloutId, id));
+    } catch (e) {
+      console.error("[iss-roster] auto-remove failed:", e);
+    }
+    const parentEmail = await sendPulloutReturnEmail(id);
+    res.json({ pullout: row, parentEmail });
   },
 );
 

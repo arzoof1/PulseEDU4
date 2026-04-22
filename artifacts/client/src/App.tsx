@@ -1019,11 +1019,36 @@ function VerifyPulloutsSection({
   );
 }
 
+type IssRosterEntry = {
+  id: number;
+  studentId: string;
+  source: "manual" | "pullout";
+  pulloutId: number | null;
+  period: number | null;
+  notes: string | null;
+  addedById: number | null;
+  addedByName: string | null;
+  createdAt: string;
+};
+
 function IssDashboardSection({ students }: { students: Student[] }) {
   const [rows, setRows] = useState<PulloutRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [busyId, setBusyId] = useState<number | null>(null);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [roster, setRoster] = useState<IssRosterEntry[]>([]);
+  const [rosterBusyId, setRosterBusyId] = useState<number | null>(null);
+  const [confirmRosterDeleteId, setConfirmRosterDeleteId] = useState<
+    number | null
+  >(null);
+  const [addStudentSearch, setAddStudentSearch] = useState("");
+  const [addStudentId, setAddStudentId] = useState("");
+  const [addPeriod, setAddPeriod] = useState("");
+  const [addNotes, setAddNotes] = useState("");
+  const [addingRoster, setAddingRoster] = useState(false);
+  const [editingRosterId, setEditingRosterId] = useState<number | null>(null);
+  const [editPeriod, setEditPeriod] = useState("");
+  const [editNotes, setEditNotes] = useState("");
 
   const studentName = (id: string) => {
     const s = students.find((x) => x.studentId === id);
@@ -1034,17 +1059,32 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     setLoading(true);
     setMsg(null);
     try {
-      const r = await authFetch("/api/pullouts?scope=active");
-      if (!r.ok) {
+      const [pr, rr] = await Promise.all([
+        authFetch("/api/pullouts?scope=active"),
+        authFetch("/api/iss-roster"),
+      ]);
+      if (!pr.ok) {
         setMsg({ ok: false, text: "Could not load ISS dashboard." });
         setRows([]);
       } else {
-        setRows(await r.json());
+        setRows(await pr.json());
+      }
+      if (rr.ok) {
+        setRoster(await rr.json());
       }
     } catch {
       setMsg({ ok: false, text: "Network error." });
     } finally {
       setLoading(false);
+    }
+  };
+
+  const refreshRoster = async () => {
+    try {
+      const rr = await authFetch("/api/iss-roster");
+      if (rr.ok) setRoster(await rr.json());
+    } catch {
+      // ignore
     }
   };
 
@@ -1056,6 +1096,142 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     return () => clearInterval(interval);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const studentByStudentId = useMemo(() => {
+    const m = new Map<string, Student>();
+    for (const s of students) m.set(s.studentId, s);
+    return m;
+  }, [students]);
+
+  const sortedStudents = useMemo(() => {
+    const q = addStudentSearch.trim().toLowerCase();
+    const list = q
+      ? students.filter(
+          (s) =>
+            s.firstName.toLowerCase().includes(q) ||
+            s.lastName.toLowerCase().includes(q) ||
+            s.studentId.toLowerCase().includes(q),
+        )
+      : students;
+    return list.slice(0, 50);
+  }, [students, addStudentSearch]);
+
+  const sortedRoster = useMemo(() => {
+    return [...roster].sort((a, b) => {
+      const sa = studentByStudentId.get(a.studentId);
+      const sb = studentByStudentId.get(b.studentId);
+      const la = (sa?.lastName ?? "").toLowerCase();
+      const lb = (sb?.lastName ?? "").toLowerCase();
+      if (la !== lb) return la.localeCompare(lb);
+      const fa = (sa?.firstName ?? "").toLowerCase();
+      const fb = (sb?.firstName ?? "").toLowerCase();
+      return fa.localeCompare(fb);
+    });
+  }, [roster, studentByStudentId]);
+
+  const addToRoster = async () => {
+    if (!addStudentId.trim()) {
+      setMsg({ ok: false, text: "Pick a student to add." });
+      return;
+    }
+    setAddingRoster(true);
+    setMsg(null);
+    try {
+      const r = await authFetch("/api/iss-roster", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: addStudentId.trim(),
+          period: addPeriod ? Number(addPeriod) : null,
+          notes: addNotes.trim() || null,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not add to roster." });
+      } else {
+        setAddStudentId("");
+        setAddStudentSearch("");
+        setAddPeriod("");
+        setAddNotes("");
+        await refreshRoster();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setAddingRoster(false);
+    }
+  };
+
+  const beginEditRoster = (entry: IssRosterEntry) => {
+    setEditingRosterId(entry.id);
+    setEditPeriod(entry.period == null ? "" : String(entry.period));
+    setEditNotes(entry.notes ?? "");
+  };
+
+  const saveEditRoster = async (id: number) => {
+    setRosterBusyId(id);
+    setMsg(null);
+    try {
+      const r = await authFetch(`/api/iss-roster/${id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          period: editPeriod ? Number(editPeriod) : null,
+          notes: editNotes.trim() || null,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not save." });
+      } else {
+        setEditingRosterId(null);
+        await refreshRoster();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setRosterBusyId(null);
+    }
+  };
+
+  const deleteRosterEntry = async (id: number) => {
+    setRosterBusyId(id);
+    setMsg(null);
+    try {
+      const r = await authFetch(`/api/iss-roster/${id}`, { method: "DELETE" });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({ ok: false, text: data?.error || "Could not remove." });
+      } else {
+        const er = data?.parentEmail;
+        if (er?.status === "sent") {
+          setMsg({
+            ok: true,
+            text: `Removed. Parent return email sent to ${er.emailTo}.`,
+          });
+        } else if (er?.status === "skipped") {
+          setMsg({
+            ok: true,
+            text: `Removed. Parent return email skipped: ${er.errorMsg}.`,
+          });
+        } else if (er?.status === "error") {
+          setMsg({
+            ok: false,
+            text: `Removed, but parent return email failed: ${er.errorMsg}.`,
+          });
+        } else {
+          setMsg({ ok: true, text: "Removed from roster." });
+        }
+        setConfirmRosterDeleteId(null);
+        await refresh();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setRosterBusyId(null);
+    }
+  };
 
   const act = async (
     p: PulloutRow,
@@ -1274,6 +1450,333 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                   { label: "Cancel (close)", action: "closed" },
                 ]),
               )}
+            </div>
+          )}
+          <h3 style={{ marginTop: "1.5rem" }}>
+            ISS Daily Roster ({sortedRoster.length})
+          </h3>
+          <div
+            style={{
+              border: "1px solid var(--border, #e2e8f0)",
+              borderRadius: 8,
+              padding: "0.75rem 0.9rem",
+              marginBottom: "0.75rem",
+              background: "var(--surface, #f8fafc)",
+              display: "grid",
+              gap: "0.5rem",
+            }}
+          >
+            <div style={{ fontWeight: 600, fontSize: "0.95rem" }}>
+              Add student to roster
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "minmax(200px, 2fr) 110px 1fr auto",
+                gap: "0.5rem",
+                alignItems: "end",
+              }}
+            >
+              <label style={{ display: "grid", gap: 2 }}>
+                <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                  Student
+                </span>
+                <input
+                  type="text"
+                  list="iss-roster-add-student-options"
+                  placeholder="Type name or ID…"
+                  value={addStudentSearch}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setAddStudentSearch(v);
+                    const m = sortedStudents.find(
+                      (s) =>
+                        `${s.firstName} ${s.lastName} (${s.studentId})` ===
+                          v || s.studentId === v.trim(),
+                    );
+                    setAddStudentId(m ? m.studentId : "");
+                  }}
+                />
+                <datalist id="iss-roster-add-student-options">
+                  {sortedStudents.map((s) => (
+                    <option
+                      key={s.id}
+                      value={`${s.firstName} ${s.lastName} (${s.studentId})`}
+                    />
+                  ))}
+                </datalist>
+              </label>
+              <label style={{ display: "grid", gap: 2 }}>
+                <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                  Period
+                </span>
+                <select
+                  value={addPeriod}
+                  onChange={(e) => setAddPeriod(e.target.value)}
+                >
+                  <option value="">—</option>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
+                    <option key={p} value={p}>
+                      {p}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 2 }}>
+                <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+                  Notes (optional)
+                </span>
+                <input
+                  type="text"
+                  value={addNotes}
+                  onChange={(e) => setAddNotes(e.target.value)}
+                  placeholder="e.g. half-day"
+                />
+              </label>
+              <button
+                type="button"
+                className="btn-primary"
+                disabled={addingRoster || !addStudentId}
+                onClick={addToRoster}
+              >
+                {addingRoster ? "Adding…" : "Add"}
+              </button>
+            </div>
+          </div>
+          {sortedRoster.length === 0 ? (
+            <div style={{ color: "var(--text-subtle, #64748b)" }}>
+              Roster is empty.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: "0.5rem" }}>
+              {sortedRoster.map((entry) => {
+                const accent =
+                  entry.source === "manual" ? "#22c55e" : "#7c3aed";
+                const accentBg =
+                  entry.source === "manual" ? "#f0fdf4" : "#f5f3ff";
+                const isEditing = editingRosterId === entry.id;
+                const isConfirming = confirmRosterDeleteId === entry.id;
+                return (
+                  <div
+                    key={entry.id}
+                    style={{
+                      border: `1px solid ${accent}`,
+                      borderLeft: `5px solid ${accent}`,
+                      borderRadius: 8,
+                      padding: "0.6rem 0.85rem",
+                      background: accentBg,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        justifyContent: "space-between",
+                        gap: 8,
+                        flexWrap: "wrap",
+                        alignItems: "center",
+                      }}
+                    >
+                      <div>
+                        <strong>{studentName(entry.studentId)}</strong>{" "}
+                        <span style={{ color: "#64748b" }}>
+                          (#{entry.studentId})
+                        </span>
+                        {entry.period != null && (
+                          <span
+                            style={{
+                              marginLeft: 8,
+                              fontSize: "0.85rem",
+                              color: "#475569",
+                            }}
+                          >
+                            · period {entry.period}
+                          </span>
+                        )}
+                        <span
+                          style={{
+                            marginLeft: 8,
+                            fontSize: "0.72rem",
+                            background: accent,
+                            color: "white",
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            fontWeight: 600,
+                          }}
+                        >
+                          {entry.source === "manual" ? "Manual" : "Pullout"}
+                        </span>
+                      </div>
+                      {!isEditing && !isConfirming && (
+                        <div style={{ display: "flex", gap: 6 }}>
+                          <button
+                            type="button"
+                            disabled={rosterBusyId === entry.id}
+                            onClick={() => beginEditRoster(entry)}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid #cbd5e1",
+                              borderRadius: 6,
+                              padding: "0.3rem 0.65rem",
+                              cursor: "pointer",
+                              font: "inherit",
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={rosterBusyId === entry.id}
+                            onClick={() => setConfirmRosterDeleteId(entry.id)}
+                            style={{
+                              background: "#fee2e2",
+                              color: "#b91c1c",
+                              border: "1px solid #fecaca",
+                              borderRadius: 6,
+                              padding: "0.3rem 0.65rem",
+                              cursor: "pointer",
+                              font: "inherit",
+                            }}
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      )}
+                      {isConfirming && (
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
+                          <span
+                            style={{
+                              fontSize: "0.85rem",
+                              color: "#b91c1c",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {entry.source === "pullout"
+                              ? "Mark returned & remove?"
+                              : "Remove?"}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={rosterBusyId === entry.id}
+                            onClick={() => deleteRosterEntry(entry.id)}
+                            style={{
+                              background: "#dc2626",
+                              color: "white",
+                              border: "none",
+                              borderRadius: 6,
+                              padding: "0.3rem 0.65rem",
+                              cursor: "pointer",
+                              font: "inherit",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {rosterBusyId === entry.id
+                              ? "…"
+                              : entry.source === "pullout"
+                                ? "Yes, return"
+                                : "Yes, remove"}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={rosterBusyId === entry.id}
+                            onClick={() => setConfirmRosterDeleteId(null)}
+                            style={{
+                              background: "transparent",
+                              border: "1px solid #cbd5e1",
+                              borderRadius: 6,
+                              padding: "0.3rem 0.65rem",
+                              cursor: "pointer",
+                              font: "inherit",
+                            }}
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    {entry.notes && !isEditing && (
+                      <div
+                        style={{
+                          marginTop: 4,
+                          fontSize: "0.88rem",
+                          color: "#475569",
+                        }}
+                      >
+                        {entry.notes}
+                      </div>
+                    )}
+                    {isEditing && (
+                      <div
+                        style={{
+                          marginTop: 8,
+                          display: "grid",
+                          gridTemplateColumns: "110px 1fr auto auto",
+                          gap: 8,
+                          alignItems: "end",
+                        }}
+                      >
+                        <label style={{ display: "grid", gap: 2 }}>
+                          <span
+                            style={{ fontSize: "0.8rem", color: "#64748b" }}
+                          >
+                            Period
+                          </span>
+                          <select
+                            value={editPeriod}
+                            onChange={(e) => setEditPeriod(e.target.value)}
+                          >
+                            <option value="">—</option>
+                            {[1, 2, 3, 4, 5, 6, 7, 8].map((p) => (
+                              <option key={p} value={p}>
+                                {p}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                        <label style={{ display: "grid", gap: 2 }}>
+                          <span
+                            style={{ fontSize: "0.8rem", color: "#64748b" }}
+                          >
+                            Notes
+                          </span>
+                          <input
+                            type="text"
+                            value={editNotes}
+                            onChange={(e) => setEditNotes(e.target.value)}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-primary"
+                          disabled={rosterBusyId === entry.id}
+                          onClick={() => saveEditRoster(entry.id)}
+                        >
+                          Save
+                        </button>
+                        <button
+                          type="button"
+                          disabled={rosterBusyId === entry.id}
+                          onClick={() => setEditingRosterId(null)}
+                          style={{
+                            background: "transparent",
+                            border: "1px solid #cbd5e1",
+                            borderRadius: 6,
+                            padding: "0.35rem 0.75rem",
+                            cursor: "pointer",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
           <h3 style={{ marginTop: "1.25rem" }}>
@@ -4956,8 +5459,14 @@ function App() {
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
   const canVerifyPullouts = isAdmin || isDean || isMtss;
+  const isSuperUser = authUser?.isSuperUser === true;
   const canViewIssDashboard =
-    isAdmin || isIssTeacher || isBehaviorSpec || isDean || isMtss;
+    isSuperUser ||
+    isAdmin ||
+    isIssTeacher ||
+    isBehaviorSpec ||
+    isDean ||
+    isMtss;
 
   // Pending pullout count for the verifier badge.
   const [pendingPulloutCount, setPendingPulloutCount] = useState<number>(0);
