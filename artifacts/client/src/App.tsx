@@ -1050,6 +1050,11 @@ function IssDashboardSection({ students }: { students: Student[] }) {
 
   useEffect(() => {
     refresh();
+    const interval = setInterval(() => {
+      refresh();
+    }, 15000);
+    return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const act = async (
