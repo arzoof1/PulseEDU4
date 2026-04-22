@@ -67,6 +67,18 @@ router.post("/auth/login", async (req: Request, res) => {
     return;
   }
 
+  // Safety net: clear any stale SuperUser "act as another school" override on
+  // every fresh login. Without this, an expired session/token in the middle
+  // of a switch can leave a SuperUser stranded acting-as another school with
+  // no way to call /tenancy/switch-school. A re-login always lands at home.
+  if (staff.activeSchoolOverride !== null) {
+    await db
+      .update(staffTable)
+      .set({ activeSchoolOverride: null })
+      .where(eq(staffTable.id, staff.id));
+    staff.activeSchoolOverride = null;
+  }
+
   req.session.regenerate((err) => {
     if (err) {
       res.status(500).json({ error: "Could not start session" });
