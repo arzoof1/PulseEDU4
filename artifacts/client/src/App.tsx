@@ -7627,7 +7627,7 @@ function App() {
 
                 {/* Top student lost instruction */}
                 <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Students by Lost Instruction</h3>
+                  <h3 style={{ display: "none" }}>Top 10 Students by Lost Instruction</h3>
                   {hpReportData.topStudentLostMinutes.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
@@ -7657,7 +7657,7 @@ function App() {
 
                 {/* Top teacher granters */}
                 <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Teacher Pass Granters</h3>
+                  <h3 style={{ display: "none" }}>Top 10 Teacher Pass Granters</h3>
                   {hpReportData.topTeacherGranters.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
@@ -7684,7 +7684,7 @@ function App() {
 
                 {/* Top destinations */}
                 <div>
-                  <h3 style={{ marginTop: 0 }}>Top 10 Pass-To Locations</h3>
+                  <h3 style={{ display: "none" }}>Top 10 Pass-To Locations</h3>
                   {hpReportData.topDestinations.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
