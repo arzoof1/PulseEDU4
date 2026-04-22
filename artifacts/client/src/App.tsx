@@ -7824,8 +7824,29 @@ function App() {
       </>)}
 
       {activeSection === "student" && (
-        <section className="card">
-          <h2>Student Activity</h2>
+        <>
+          <div
+            style={{
+              borderTopLeftRadius: "var(--radius-lg, 8px)",
+              borderTopRightRadius: "var(--radius-lg, 8px)",
+              overflow: "hidden",
+              marginBottom: "-1px",
+            }}
+          >
+            <div className="section-header-bar-teal" style={{ width: "100%", margin: 0 }} />
+            <div className="section-header-band-hub" style={{ width: "100%", margin: 0 }} />
+          </div>
+          <section className="card">
+            <h2
+              style={{
+                margin: "0 0 0.5rem",
+                fontSize: "1.5rem",
+                fontWeight: 700,
+                color: "#7c3aed",
+              }}
+            >
+              Student Activity
+            </h2>
           <div style={{ marginBottom: "0.5rem" }}>
             <label>
               Student:{" "}
@@ -8742,6 +8763,7 @@ function App() {
             </>
           )}
         </section>
+        </>
       )}
 
       {activeSection === "accommodations" && (<>
