@@ -119,7 +119,7 @@ strong {
   position: relative;
   display: inline-flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   width: 220px;
   height: 40px;
   color: var(--text);
@@ -140,7 +140,7 @@ strong {
 
 .app-header .brand .ekg-track {
   fill: none;
-  stroke: rgba(14, 116, 144, 0.3);
+  stroke: rgba(220, 38, 38, 0.3);
   stroke-width: 1.75;
   stroke-linecap: round;
   stroke-linejoin: round;
@@ -148,15 +148,15 @@ strong {
 
 .app-header .brand .ekg-pulse {
   fill: none;
-  stroke: #0e7490;
+  stroke: #dc2626;
   stroke-width: 2.5;
   stroke-linecap: round;
   stroke-linejoin: round;
   stroke-dasharray: 38 260;
   stroke-dashoffset: 298;
   animation: ekg-sweep 2.2s linear infinite;
-  filter: drop-shadow(0 0 4px rgba(14, 116, 144, 0.85))
-    drop-shadow(0 0 1.5px rgba(14, 116, 144, 1));
+  filter: drop-shadow(0 0 4px rgba(220, 38, 38, 0.85))
+    drop-shadow(0 0 1.5px rgba(220, 38, 38, 1));
 }
 
 @keyframes ekg-sweep {
