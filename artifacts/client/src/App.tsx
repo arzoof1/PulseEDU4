@@ -2980,6 +2980,9 @@ function App() {
   const [logIntervNote, setLogIntervNote] = useState("");
   const [logIntervMsg, setLogIntervMsg] = useState("");
   const [logIntervBusy, setLogIntervBusy] = useState(false);
+  const [intervNotePopoverId, setIntervNotePopoverId] = useState<number | null>(
+    null,
+  );
 
   const loadInterventionEntries = async () => {
     try {
@@ -11815,34 +11818,152 @@ function App() {
               }}
             >
               <thead>
-                <tr style={{ textAlign: "left", borderBottom: "1px solid #e5e7eb" }}>
-                  <th style={{ padding: "0.4rem 0.5rem" }}>When</th>
-                  <th style={{ padding: "0.4rem 0.5rem" }}>Student</th>
-                  <th style={{ padding: "0.4rem 0.5rem" }}>Intervention</th>
-                  <th style={{ padding: "0.4rem 0.5rem" }}>Note</th>
-                  <th style={{ padding: "0.4rem 0.5rem" }}>Staff</th>
+                <tr
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "2px solid #cbd5e1",
+                    background: "#f8fafc",
+                  }}
+                >
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Date / Time</th>
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Student ID</th>
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Student Name</th>
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Grade</th>
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Intervention</th>
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Logged By</th>
+                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Notes</th>
                 </tr>
               </thead>
               <tbody>
                 {interventionEntries.slice(0, 50).map((e) => {
                   const s = students.find((s) => s.studentId === e.studentId);
+                  const hasNote = !!(e.note && e.note.trim());
+                  const canViewNote =
+                    Boolean(authUser?.isAdmin) || isBehaviorSpec;
                   return (
                     <tr key={e.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                      <td style={{ padding: "0.5rem 0.5rem", whiteSpace: "nowrap" }}>
                         {new Date(e.createdAt).toLocaleString()}
                       </td>
-                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                      <td style={{ padding: "0.5rem 0.5rem", fontFamily: "monospace" }}>
                         {e.studentId}
-                        {s ? ` — ${s.firstName} ${s.lastName}` : ""}
                       </td>
-                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                      <td style={{ padding: "0.5rem 0.5rem" }}>
+                        {s ? `${s.firstName} ${s.lastName}` : "—"}
+                      </td>
+                      <td style={{ padding: "0.5rem 0.5rem" }}>
+                        {s ? String(s.grade).padStart(2, "0") : "—"}
+                      </td>
+                      <td style={{ padding: "0.5rem 0.5rem" }}>
                         {e.interventionType}
                       </td>
-                      <td style={{ padding: "0.4rem 0.5rem" }}>
-                        {e.note || ""}
-                      </td>
-                      <td style={{ padding: "0.4rem 0.5rem" }}>
+                      <td style={{ padding: "0.5rem 0.5rem" }}>
                         {e.staffName}
+                      </td>
+                      <td style={{ padding: "0.5rem 0.5rem", position: "relative" }}>
+                        {hasNote ? (
+                          canViewNote ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setIntervNotePopoverId(
+                                  intervNotePopoverId === e.id ? null : e.id,
+                                )
+                              }
+                              style={{
+                                padding: "2px 10px",
+                                borderRadius: 999,
+                                background: "#ede9fe",
+                                color: "#5b21b6",
+                                border: "1px solid #c4b5fd",
+                                fontWeight: 600,
+                                fontSize: "0.75rem",
+                                cursor: "pointer",
+                              }}
+                              aria-label="View note"
+                            >
+                              Notes
+                            </button>
+                          ) : (
+                            <span
+                              style={{
+                                padding: "2px 10px",
+                                borderRadius: 999,
+                                background: "#f1f5f9",
+                                color: "#64748b",
+                                border: "1px solid #e2e8f0",
+                                fontWeight: 600,
+                                fontSize: "0.75rem",
+                              }}
+                            >
+                              Notes
+                            </span>
+                          )
+                        ) : (
+                          <span style={{ color: "#cbd5e1" }}>—</span>
+                        )}
+                        {intervNotePopoverId === e.id && hasNote && canViewNote && (
+                          <div
+                            style={{
+                              position: "absolute",
+                              top: "calc(100% + 4px)",
+                              right: 0,
+                              zIndex: 20,
+                              width: 320,
+                              background: "white",
+                              border: "1px solid #c4b5fd",
+                              borderRadius: 8,
+                              boxShadow: "0 8px 24px rgba(15,23,42,0.15)",
+                              padding: "0.75rem",
+                            }}
+                          >
+                            <div
+                              style={{
+                                display: "flex",
+                                justifyContent: "space-between",
+                                alignItems: "center",
+                                marginBottom: "0.4rem",
+                              }}
+                            >
+                              <strong style={{ fontSize: "0.8rem", color: "#475569" }}>
+                                Note from {e.staffName}
+                              </strong>
+                              <button
+                                type="button"
+                                onClick={() => setIntervNotePopoverId(null)}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  fontSize: "1.1rem",
+                                  cursor: "pointer",
+                                  color: "#64748b",
+                                  lineHeight: 1,
+                                }}
+                                aria-label="Close note"
+                              >
+                                ×
+                              </button>
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "0.85rem",
+                                color: "#0f172a",
+                                whiteSpace: "pre-wrap",
+                                marginBottom: "0.4rem",
+                              }}
+                            >
+                              {e.note}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: "0.7rem",
+                                color: "#94a3b8",
+                              }}
+                            >
+                              {new Date(e.createdAt).toLocaleString()}
+                            </div>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   );
