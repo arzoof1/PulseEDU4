@@ -9135,8 +9135,12 @@ function App() {
                   (() => {
                     const isEseCoord =
                       authUser?.isEseCoordinator === true ||
-                      authUser?.isAdmin === true;
-                    // Admin/ESE coordinator can browse any teacher's roster.
+                      authUser?.isAdmin === true ||
+                      authUser?.isSuperUser === true ||
+                      authUser?.isBehaviorSpecialist === true ||
+                      authUser?.isMtssCoordinator === true;
+                    // Admin / SuperUser / ESE / Behavior Specialist /
+                    // MTSS Coordinator can browse any teacher's roster.
                     // Teachers see their own sections.
                     const teacherOptions = isEseCoord
                       ? Array.from(
@@ -9281,11 +9285,20 @@ function App() {
                                         p < 7
                                           ? "1px solid var(--border)"
                                           : "none",
+                                      borderRadius: 0,
                                       padding: "0.25rem 0.7rem",
                                       background: isActive
-                                        ? "var(--primary)"
+                                        ? "var(--accent)"
                                         : "transparent",
-                                      color: isActive ? "white" : undefined,
+                                      color: isActive
+                                        ? "white"
+                                        : disabled
+                                          ? "var(--text-subtle)"
+                                          : undefined,
+                                      opacity: disabled && !isActive ? 0.55 : 1,
+                                      boxShadow: isActive
+                                        ? "inset 3px 0 0 var(--accent)"
+                                        : "none",
                                       cursor: disabled
                                         ? "not-allowed"
                                         : "pointer",
