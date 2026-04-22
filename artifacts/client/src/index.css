@@ -909,6 +909,16 @@ ul[style*="listStyle: none"] li button:hover {
   opacity: 0.55;
 }
 
+.section-header-bar-teal {
+  display: block;
+  width: calc(100% + 2.5rem);
+  height: 8px;
+  margin: -1.25rem -1.25rem 1rem -1.25rem;
+  background: linear-gradient(90deg, #0e7490 0%, #14b8a6 100%);
+  border-top-left-radius: 8px;
+  border-top-right-radius: 8px;
+}
+
 .cp-overlay {
   position: fixed;
   inset: 0;
