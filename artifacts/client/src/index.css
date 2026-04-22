@@ -189,8 +189,8 @@ strong {
   color: transparent;
   -webkit-text-fill-color: transparent;
   filter:
-    drop-shadow(0 0 6px rgba(124, 58, 237, 0.85))
-    drop-shadow(0 0 2px rgba(124, 58, 237, 1));
+    drop-shadow(0 0 3px rgba(124, 58, 237, 0.43))
+    drop-shadow(0 0 1px rgba(124, 58, 237, 0.5));
 }
 
 .app-header .header-controls {
