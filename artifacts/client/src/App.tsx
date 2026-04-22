@@ -419,7 +419,19 @@ function RequestPulloutSection({
 
   return (
     <section className="card">
-      <h2>Request Pullout</h2>
+      <div className="section-header-bar-teal" />
+      <div className="section-header-band-hub">
+        <h2
+          style={{
+            margin: 0,
+            color: "white",
+            fontSize: "1.5rem",
+            fontWeight: 700,
+          }}
+        >
+          Request Pullout
+        </h2>
+      </div>
       <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
         Submit a pullout request when a student needs to be removed from class
         after classroom interventions have been tried. An administrator, dean,
