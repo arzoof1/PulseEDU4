@@ -2980,7 +2980,7 @@ function App() {
   const [logIntervNote, setLogIntervNote] = useState("");
   const [logIntervMsg, setLogIntervMsg] = useState("");
   const [logIntervBusy, setLogIntervBusy] = useState(false);
-  const [intervNotePopoverId, setIntervNotePopoverId] = useState<number | null>(
+  const [intervNotePopoverId, setIntervNotePopoverId] = useState<string | null>(
     null,
   );
 
@@ -11811,11 +11811,51 @@ function App() {
           </form>
 
           <h3 style={{ marginTop: "1.25rem" }}>Recent interventions</h3>
-          {interventionEntries.length === 0 ? (
-            <p style={{ color: "var(--text-subtle, #64748b)" }}>
-              No interventions logged yet.
-            </p>
-          ) : (
+          {(() => {
+            type CombinedRow = {
+              key: string;
+              createdAt: string;
+              studentId: string;
+              typeLabel: string;
+              staffName: string;
+              note: string | null;
+              source: "intervention" | "checkInOut";
+            };
+            const combined: CombinedRow[] = [
+              ...interventionEntries.map((e) => ({
+                key: `i-${e.id}`,
+                createdAt: e.createdAt,
+                studentId: e.studentId,
+                typeLabel: e.interventionType,
+                staffName: e.staffName,
+                note: e.note,
+                source: "intervention" as const,
+              })),
+              ...tardies
+                .filter(
+                  (t) =>
+                    t.entryType === "checkin" || t.entryType === "checkout",
+                )
+                .map((t) => ({
+                  key: `t-${t.id}`,
+                  createdAt: t.createdAt,
+                  studentId: t.studentId,
+                  typeLabel:
+                    t.entryType === "checkin" ? "Check-In" : "Check-Out",
+                  staffName: t.createdBy || t.checkInWith || t.teacherName,
+                  note: (t.notes && t.notes.trim()) || null,
+                  source: "checkInOut" as const,
+                })),
+            ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+            const rows = combined.slice(0, 50);
+            if (rows.length === 0) {
+              return (
+                <p style={{ color: "var(--text-subtle, #64748b)" }}>
+                  No interventions logged yet.
+                </p>
+              );
+            }
+            return (
             <table
               style={{
                 width: "100%",
@@ -11841,18 +11881,19 @@ function App() {
                 </tr>
               </thead>
               <tbody>
-                {interventionEntries.slice(0, 50).map((e) => {
-                  const s = students.find((s) => s.studentId === e.studentId);
-                  const hasNote = !!(e.note && e.note.trim());
+                {rows.map((row) => {
+                  const s = students.find((s) => s.studentId === row.studentId);
+                  const hasNote = !!(row.note && row.note.trim());
                   const canViewNote =
                     Boolean(authUser?.isAdmin) || isBehaviorSpec;
+                  const popoverActive = intervNotePopoverId === row.key;
                   return (
-                    <tr key={e.id} style={{ borderBottom: "1px solid #f1f5f9" }}>
+                    <tr key={row.key} style={{ borderBottom: "1px solid #f1f5f9" }}>
                       <td style={{ padding: "0.5rem 0.5rem", whiteSpace: "nowrap" }}>
-                        {new Date(e.createdAt).toLocaleString()}
+                        {new Date(row.createdAt).toLocaleString()}
                       </td>
                       <td style={{ padding: "0.5rem 0.5rem", fontFamily: "monospace" }}>
-                        {e.studentId}
+                        {row.studentId}
                       </td>
                       <td style={{ padding: "0.5rem 0.5rem" }}>
                         {s ? `${s.firstName} ${s.lastName}` : "—"}
@@ -11861,10 +11902,10 @@ function App() {
                         {s ? String(s.grade).padStart(2, "0") : "—"}
                       </td>
                       <td style={{ padding: "0.5rem 0.5rem" }}>
-                        {e.interventionType}
+                        {row.typeLabel}
                       </td>
                       <td style={{ padding: "0.5rem 0.5rem" }}>
-                        {e.staffName}
+                        {row.staffName}
                       </td>
                       <td style={{ padding: "0.5rem 0.5rem", position: "relative" }}>
                         {hasNote ? (
@@ -11873,7 +11914,7 @@ function App() {
                               type="button"
                               onClick={() =>
                                 setIntervNotePopoverId(
-                                  intervNotePopoverId === e.id ? null : e.id,
+                                  popoverActive ? null : numericId,
                                 )
                               }
                               style={{
@@ -11908,7 +11949,7 @@ function App() {
                         ) : (
                           <span style={{ color: "#cbd5e1" }}>—</span>
                         )}
-                        {intervNotePopoverId === e.id && hasNote && canViewNote && (
+                        {popoverActive && hasNote && canViewNote && (
                           <div
                             style={{
                               position: "absolute",
@@ -11932,7 +11973,7 @@ function App() {
                               }}
                             >
                               <strong style={{ fontSize: "0.8rem", color: "#475569" }}>
-                                Note from {e.staffName}
+                                Note from {row.staffName}
                               </strong>
                               <button
                                 type="button"
@@ -11958,7 +11999,7 @@ function App() {
                                 marginBottom: "0.4rem",
                               }}
                             >
-                              {e.note}
+                              {row.note}
                             </div>
                             <div
                               style={{
@@ -11966,7 +12007,7 @@ function App() {
                                 color: "#94a3b8",
                               }}
                             >
-                              {new Date(e.createdAt).toLocaleString()}
+                              {new Date(row.createdAt).toLocaleString()}
                             </div>
                           </div>
                         )}
@@ -11976,7 +12017,8 @@ function App() {
                 })}
               </tbody>
             </table>
-          )}
+            );
+          })()}
         </section>
       )}
 
