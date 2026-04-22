@@ -9795,21 +9795,13 @@ function App() {
                           </h3>
                           <button
                             type="button"
-                            className="no-print"
+                            className="back-button-purple no-print"
                             onClick={() => window.print()}
                             style={{
-                              background: "#7c3aed",
-                              color: "#fff",
-                              border: "1px solid #6d28d9",
-                              padding: "0.35rem 0.95rem",
-                              fontSize: "0.85rem",
-                              fontWeight: 600,
-                              borderRadius: 999,
-                              cursor: "pointer",
+                              marginBottom: 0,
                               display: "inline-flex",
                               alignItems: "center",
                               gap: "0.35rem",
-                              boxShadow: "0 1px 2px rgba(124,58,237,0.25)",
                             }}
                             title="Print this view"
                           >
