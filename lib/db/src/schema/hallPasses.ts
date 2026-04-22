@@ -12,6 +12,7 @@ export const hallPassesTable = pgTable("hall_passes", {
   createdAt: text("created_at").notNull(),
   maxDurationMinutes: integer("max_duration_minutes").notNull(),
   endedAt: text("ended_at"),
+  isTardyReturn: boolean("is_tardy_return").notNull().default(false),
 });
 
 export type HallPassRow = typeof hallPassesTable.$inferSelect;

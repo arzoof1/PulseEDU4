@@ -67,6 +67,7 @@ interface HallPass {
   maxDurationMinutes: number;
   createdAt: string;
   endedAt: string | null;
+  isTardyReturn?: boolean;
 }
 
 const teachers = ["Ms. Rivera", "Mr. Johnson", "Coach Lee"];
@@ -5633,7 +5634,9 @@ function App() {
             return (
               <div style={{ display: "grid", gap: "0.5rem" }}>
                 {visible.map((p) => {
-                  const bg = getTimeStatusColor(p, now);
+                  const bg = p.isTardyReturn
+                    ? "#ede9fe"
+                    : getTimeStatusColor(p, now);
                   const status = formatTimeStatus(p, now);
                   const overdue = status === "Overdue";
                   return (
@@ -5648,7 +5651,9 @@ function App() {
                         padding: "0.6rem 0.75rem",
                         borderRadius: 8,
                         background: bg,
-                        border: "1px solid var(--border)",
+                        border: p.isTardyReturn
+                          ? "1px solid #c4b5fd"
+                          : "1px solid var(--border)",
                       }}
                     >
                       <div>
@@ -5662,6 +5667,22 @@ function App() {
                           }}
                         >
                           {p.studentId} · from {p.originRoom}
+                          {p.isTardyReturn && (
+                            <span
+                              style={{
+                                marginLeft: 6,
+                                padding: "1px 6px",
+                                borderRadius: 4,
+                                background: "#a78bfa",
+                                color: "white",
+                                fontWeight: 700,
+                                fontSize: 10,
+                                letterSpacing: 0.5,
+                              }}
+                            >
+                              TARDY
+                            </span>
+                          )}
                         </div>
                       </div>
                       <div>
@@ -7208,7 +7229,13 @@ function App() {
                         const info = studentInfo.get(p.studentId);
                         const d = durMin(p);
                         return (
-                          <tr key={p.id} style={{ borderTop: "1px solid #e2e8f0" }}>
+                          <tr
+                            key={p.id}
+                            style={{
+                              borderTop: "1px solid #e2e8f0",
+                              background: p.isTardyReturn ? "#ede9fe" : undefined,
+                            }}
+                          >
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               <span
                                 style={{
@@ -7221,7 +7248,25 @@ function App() {
                               />
                             </td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{info?.name || "—"}</td>
-                            <td style={{ padding: "0.5rem 0.75rem" }}>{p.originRoom}</td>
+                            <td style={{ padding: "0.5rem 0.75rem" }}>
+                              {p.originRoom}
+                              {p.isTardyReturn && (
+                                <span
+                                  style={{
+                                    marginLeft: 6,
+                                    padding: "1px 6px",
+                                    borderRadius: 4,
+                                    background: "#a78bfa",
+                                    color: "white",
+                                    fontWeight: 700,
+                                    fontSize: 10,
+                                    letterSpacing: 0.5,
+                                  }}
+                                >
+                                  TARDY
+                                </span>
+                              )}
+                            </td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>{p.destination}</td>
                             <td style={{ padding: "0.5rem 0.75rem" }}>
                               {info ? String(info.grade).padStart(2, "0") : "—"}
@@ -14075,6 +14120,7 @@ function App() {
                 teacherName: currentStaffUser,
                 destinationTeacher: info.teacherName,
                 contactedAcknowledged: true,
+                isTardyReturn: true,
               }),
             });
             if (!passRes.ok) {

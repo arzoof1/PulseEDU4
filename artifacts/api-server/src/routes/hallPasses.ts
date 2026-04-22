@@ -27,6 +27,7 @@ router.post("/hall-passes", async (req, res) => {
     destinationTeacher,
     contactedAcknowledged,
     maxDurationMinutes,
+    isTardyReturn,
   } = req.body ?? {};
 
   if (
@@ -90,6 +91,7 @@ router.post("/hall-passes", async (req, res) => {
           ? Math.round(maxDurationMinutes)
           : config.defaultHallPassDurationMinutes,
       endedAt: null,
+      isTardyReturn: isTardyReturn === true,
     })
     .returning();
   res.status(201).json(pass);
