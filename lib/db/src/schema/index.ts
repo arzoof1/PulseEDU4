@@ -19,6 +19,7 @@ export * from "./adminNotifications";
 export * from "./pbisReasons";
 export * from "./interventionTypes";
 export * from "./interventionEntries";
+export * from "./trustedAdultInterventions";
 export * from "./pbisGoals";
 export * from "./pbisMilestones";
 export * from "./pullouts";

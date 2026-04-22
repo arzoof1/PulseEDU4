@@ -19,6 +19,7 @@ import {
   db,
   pbisReasonsTable,
   interventionTypesTable,
+  trustedAdultInterventionsTable,
   staffTable,
 } from "@workspace/db";
 import { eq, sql } from "drizzle-orm";
@@ -230,6 +231,88 @@ router.patch("/intervention-types/:id", requireInterventionAdmin, async (req, re
     return;
   }
   res.json(row);
+});
+
+// ---- Trusted Adult Interventions ----
+
+router.get("/trusted-adult-interventions", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  const rows = await db
+    .select()
+    .from(trustedAdultInterventionsTable)
+    .orderBy(trustedAdultInterventionsTable.category, trustedAdultInterventionsTable.name);
+  res.json(rows);
+});
+
+router.post("/trusted-adult-interventions", requireInterventionAdmin, async (req, res) => {
+  const { name, category } = req.body ?? {};
+  if (typeof name !== "string" || !name.trim()) {
+    res.status(400).json({ error: "name is required" });
+    return;
+  }
+  const cat =
+    typeof category === "string" && category.trim()
+      ? category.trim()
+      : "Trusted Adult";
+  const existing = await db
+    .select()
+    .from(trustedAdultInterventionsTable)
+    .where(sql`lower(${trustedAdultInterventionsTable.name}) = lower(${name.trim()})`);
+  if (existing.length > 0) {
+    res.status(409).json({ error: "Intervention name already exists" });
+    return;
+  }
+  const [row] = await db
+    .insert(trustedAdultInterventionsTable)
+    .values({ name: name.trim(), category: cat, active: true })
+    .returning();
+  res.status(201).json(row);
+});
+
+router.patch("/trusted-adult-interventions/:id", requireInterventionAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const { name, category, active } = req.body ?? {};
+  const updates: Partial<typeof trustedAdultInterventionsTable.$inferInsert> = {};
+  if (typeof name === "string" && name.trim()) updates.name = name.trim();
+  if (typeof category === "string" && category.trim())
+    updates.category = category.trim();
+  if (typeof active === "boolean") updates.active = active;
+  if (Object.keys(updates).length === 0) {
+    res.status(400).json({ error: "No updates" });
+    return;
+  }
+  const [row] = await db
+    .update(trustedAdultInterventionsTable)
+    .set(updates)
+    .where(eq(trustedAdultInterventionsTable.id, id))
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.json(row);
+});
+
+router.delete("/trusted-adult-interventions/:id", requireInterventionAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const [row] = await db
+    .delete(trustedAdultInterventionsTable)
+    .where(eq(trustedAdultInterventionsTable.id, id))
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  res.json({ ok: true, id: row.id });
 });
 
 export default router;

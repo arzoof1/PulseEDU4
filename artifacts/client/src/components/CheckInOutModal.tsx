@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 export interface CheckInStudent {
   id: number | string;
@@ -14,6 +15,13 @@ export interface CheckInOutPayload {
   notes: string;
 }
 
+interface TrustedAdultIntervention {
+  id: number;
+  name: string;
+  category: string;
+  active: boolean;
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -26,7 +34,6 @@ export default function CheckInOutModal({
   open,
   onClose,
   students,
-  currentUser,
   onSubmit,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
@@ -40,6 +47,10 @@ export default function CheckInOutModal({
   const [error, setError] = useState<string | null>(null);
   const studentInputRef = useRef<HTMLInputElement>(null);
 
+  const [interventions, setInterventions] = useState<TrustedAdultIntervention[]>([]);
+  const [interventionsLoading, setInterventionsLoading] = useState(false);
+  const [interventionId, setInterventionId] = useState<string>("");
+
   useEffect(() => {
     if (!open) return;
     setStep(1);
@@ -49,6 +60,33 @@ export default function CheckInOutModal({
     setNotes("");
     setError(null);
     setSubmitting(false);
+    setInterventionId("");
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    let cancelled = false;
+    setInterventionsLoading(true);
+    (async () => {
+      try {
+        const r = await authFetch("/api/trusted-adult-interventions");
+        if (!r.ok) throw new Error("load failed");
+        const rows: TrustedAdultIntervention[] = await r.json();
+        if (!cancelled)
+          setInterventions(
+            rows
+              .filter((i) => i.active)
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          );
+      } catch {
+        if (!cancelled) setInterventions([]);
+      } finally {
+        if (!cancelled) setInterventionsLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [open]);
 
   useEffect(() => {
@@ -80,16 +118,25 @@ export default function CheckInOutModal({
     return scored.map((x) => x.s);
   }, [students, studentQuery]);
 
+  const selectedIntervention = useMemo(
+    () => interventions.find((i) => String(i.id) === interventionId) ?? null,
+    [interventions, interventionId],
+  );
+
   if (!open) return null;
 
   const handleSubmit = async (student: CheckInStudent) => {
+    if (!selectedIntervention) {
+      setError("Pick an intervention type.");
+      return;
+    }
     setSubmitting(true);
     setError(null);
     try {
       await onSubmit({
         studentId: student.studentId,
         entryType,
-        checkInWith: currentUser,
+        checkInWith: selectedIntervention.name,
         notes,
       });
       onClose();
@@ -249,6 +296,38 @@ export default function CheckInOutModal({
                   </strong>
                 </div>
               </div>
+
+              <label
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  marginTop: "1rem",
+                  fontSize: "0.85rem",
+                  color: "#475569",
+                  gap: 4,
+                }}
+              >
+                Intervention <span style={{ color: "#b91c1c" }}>*</span>
+                <select
+                  value={interventionId}
+                  onChange={(e) => setInterventionId(e.target.value)}
+                  className="cp-input"
+                  disabled={interventionsLoading || interventions.length === 0}
+                >
+                  <option value="">
+                    {interventionsLoading
+                      ? "Loading…"
+                      : interventions.length === 0
+                        ? "No interventions configured"
+                        : "Select an intervention…"}
+                  </option>
+                  {interventions.map((i) => (
+                    <option key={i.id} value={String(i.id)}>
+                      {i.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
 
               <label
                 style={{

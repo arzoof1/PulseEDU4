@@ -3,6 +3,7 @@ import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
+import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
@@ -3061,6 +3062,7 @@ function App() {
     | "ese"
     | "pbisLists"
     | "interventions"
+    | "trustedAdultInterventions"
     | "logIntervention"
     | "requestPullout"
     | "verifyPullouts"
@@ -12958,6 +12960,7 @@ function App() {
           | "issReporting"
           | "behaviorReview"
           | "interventions"
+          | "trustedAdultInterventions"
           | "hallPassMgmt"
           | "logIntervention"
           | "verifyPullouts";
@@ -12996,6 +12999,13 @@ function App() {
             key: "interventions",
             label: "Edit Log Intervention",
             desc: "Edit the list of interventions offered to students.",
+            color: "#7c3aed",
+            show: canManageBehaviorLists,
+          },
+          {
+            key: "trustedAdultInterventions",
+            label: "Trusted Adult Interventions",
+            desc: "Edit the interventions a trusted adult can deliver during check-ins.",
             color: "#7c3aed",
             show: canManageBehaviorLists,
           },
@@ -15650,6 +15660,10 @@ function App() {
         </section>
       )}
 
+      {activeSection === "trustedAdultInterventions" && canManageBehaviorLists && (
+        <TrustedAdultInterventionsAdmin />
+      )}
+
       {activeSection === "staffRoles" && canManageStaffRoles && authUser && (
         <StaffRolesMatrix currentUser={authUser} />
       )}
@@ -16352,7 +16366,9 @@ function App() {
               reason: "",
               entryType: payload.entryType,
               checkInWith: payload.checkInWith,
-              notes: payload.notes,
+              notes: payload.checkInWith
+                ? `[Intervention: ${payload.checkInWith}]${payload.notes ? " " + payload.notes : ""}`
+                : payload.notes,
             }),
           });
           if (!res.ok) {
