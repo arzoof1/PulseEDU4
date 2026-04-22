@@ -4989,7 +4989,7 @@ function App() {
   };
   const baseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
-    { key: "tardies", label: "Tardy / Check-Ins", icon: IconClock },
+    { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Student Activity", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
