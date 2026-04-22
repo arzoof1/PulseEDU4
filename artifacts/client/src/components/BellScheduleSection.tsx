@@ -62,6 +62,7 @@ export default function BellScheduleSection() {
   // View modes: hub (3 kind tiles) -> kind list (schedules of that kind) -> editor
   const [activeKind, setActiveKind] = useState<ScheduleKind | null>(null);
   const [editingId, setEditingId] = useState<number | "new" | null>(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
 
   const refresh = async () => {
     setLoading(true);
@@ -143,12 +144,15 @@ export default function BellScheduleSection() {
           onBack={() => setActiveKind(null)}
           onEdit={(id) => setEditingId(id)}
           onNew={() => setEditingId("new")}
-          onDelete={async (id) => {
-            if (!confirm("Delete this schedule? This cannot be undone.")) return;
+          confirmDeleteId={confirmDeleteId}
+          onRequestDelete={(id) => setConfirmDeleteId(id)}
+          onCancelDelete={() => setConfirmDeleteId(null)}
+          onConfirmDelete={async (id) => {
             const r = await authFetch(`/api/bell-schedules/${id}`, { method: "DELETE" });
+            setConfirmDeleteId(null);
             if (!r.ok) {
               const t = await r.text();
-              alert(t || "Delete failed");
+              setError(t || "Delete failed");
               return;
             }
             await refresh();
@@ -273,7 +277,10 @@ function KindScheduleList({
   onBack,
   onEdit,
   onNew,
-  onDelete,
+  confirmDeleteId,
+  onRequestDelete,
+  onCancelDelete,
+  onConfirmDelete,
   onSetDefault,
 }: {
   kind: ScheduleKind;
@@ -281,7 +288,10 @@ function KindScheduleList({
   onBack: () => void;
   onEdit: (id: number) => void;
   onNew: () => void;
-  onDelete: (id: number) => void;
+  confirmDeleteId: number | null;
+  onRequestDelete: (id: number) => void;
+  onCancelDelete: () => void;
+  onConfirmDelete: (id: number) => Promise<void> | void;
   onSetDefault: (id: number) => void;
 }) {
   return (
@@ -395,23 +405,70 @@ function KindScheduleList({
                   >
                     Edit
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => onDelete(s.id)}
-                    disabled={s.isDefault}
-                    title={s.isDefault ? "Set another schedule as default first" : "Delete"}
-                    style={{
-                      background: s.isDefault ? "#f3f4f6" : "#fee2e2",
-                      color: s.isDefault ? "#9ca3af" : "#b91c1c",
-                      border: `1px solid ${s.isDefault ? "#e5e7eb" : "#fecaca"}`,
-                      padding: "0.3rem 0.65rem",
-                      borderRadius: 6,
-                      cursor: s.isDefault ? "not-allowed" : "pointer",
-                      font: "inherit",
-                    }}
-                  >
-                    Delete
-                  </button>
+                  {confirmDeleteId === s.id ? (
+                    <>
+                      <span
+                        style={{
+                          marginRight: 6,
+                          fontSize: "0.85rem",
+                          color: "#b91c1c",
+                          fontWeight: 600,
+                        }}
+                      >
+                        Delete?
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => onConfirmDelete(s.id)}
+                        style={{
+                          background: "#dc2626",
+                          color: "white",
+                          border: "none",
+                          padding: "0.3rem 0.65rem",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          font: "inherit",
+                          marginRight: 6,
+                          fontWeight: 600,
+                        }}
+                      >
+                        Yes, delete
+                      </button>
+                      <button
+                        type="button"
+                        onClick={onCancelDelete}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid var(--border, #2a3447)",
+                          color: "inherit",
+                          padding: "0.3rem 0.65rem",
+                          borderRadius: 6,
+                          cursor: "pointer",
+                          font: "inherit",
+                        }}
+                      >
+                        Cancel
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={() => onRequestDelete(s.id)}
+                      disabled={s.isDefault}
+                      title={s.isDefault ? "Set another schedule as default first" : "Delete"}
+                      style={{
+                        background: s.isDefault ? "#f3f4f6" : "#fee2e2",
+                        color: s.isDefault ? "#9ca3af" : "#b91c1c",
+                        border: `1px solid ${s.isDefault ? "#e5e7eb" : "#fecaca"}`,
+                        padding: "0.3rem 0.65rem",
+                        borderRadius: 6,
+                        cursor: s.isDefault ? "not-allowed" : "pointer",
+                        font: "inherit",
+                      }}
+                    >
+                      Delete
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}
