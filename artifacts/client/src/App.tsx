@@ -2290,6 +2290,7 @@ function App() {
     .sort((a, b) => a - b);
   // Daily Class Log state
   const [dailyPeriod, setDailyPeriod] = useState<string>("");
+  const [dailyTeacherId, setDailyTeacherId] = useState<number | null>(null);
   const [dailyAbsent, setDailyAbsent] = useState<Set<string>>(new Set());
   const [dailyAbsentConfirmed, setDailyAbsentConfirmed] = useState(false);
   const [dailySelectedAccs, setDailySelectedAccs] = useState<Set<number>>(
@@ -4267,7 +4268,22 @@ function App() {
       return;
     }
     const periodNum = Number(dailyPeriod);
-    const allInPeriod = periodRoster[dailyPeriod] ?? [];
+    const isElevated =
+      authUser?.isAdmin === true ||
+      authUser?.isSuperUser === true ||
+      authUser?.isEseCoordinator === true ||
+      authUser?.isMtssCoordinator === true ||
+      authUser?.isBehaviorSpecialist === true;
+    const effectiveSections =
+      isElevated && dailyTeacherId != null
+        ? allSections.filter((s) => s.teacherStaffId === dailyTeacherId)
+        : mySections;
+    const effectivePeriodRoster: Record<string, string[]> = Object.fromEntries(
+      effectiveSections.map((s) => [String(s.period), s.studentIds]),
+    );
+    const allInPeriod = effectivePeriodRoster[dailyPeriod] ?? [];
+    const submitStaffId =
+      isElevated && dailyTeacherId != null ? dailyTeacherId : authUser?.id;
     // Only send students who (a) are in the period, (b) are not absent, and
     // (c) actually have at least one IEP/504/ELL accommodation. Sending the
     // whole roster makes the server's "skipped not on student's plan" count
@@ -4291,8 +4307,8 @@ function App() {
     }
     setDailySubmitMsg("Submitting...");
     try {
-      const url = authUser?.id
-        ? `/api/accommodation-logs/bulk?staffId=${authUser.id}`
+      const url = submitStaffId
+        ? `/api/accommodation-logs/bulk?staffId=${submitStaffId}`
         : "/api/accommodation-logs/bulk";
       const res = await fetch(url, {
         method: "POST",
@@ -4302,7 +4318,7 @@ function App() {
           period: periodNum,
           presentStudentIds: present,
           accommodationIds: Array.from(dailySelectedAccs),
-          staffId: authUser?.id,
+          staffId: submitStaffId,
         }),
       });
       if (!res.ok) {
@@ -9643,8 +9659,43 @@ function App() {
                   </>
                 ) : accView === "daily" ? (
                   (() => {
+                    const isElevated =
+                      authUser?.isAdmin === true ||
+                      authUser?.isSuperUser === true ||
+                      authUser?.isEseCoordinator === true ||
+                      authUser?.isMtssCoordinator === true ||
+                      authUser?.isBehaviorSpecialist === true;
+                    const teacherOptions = isElevated
+                      ? Array.from(
+                          new Map(
+                            allSections.map(
+                              (s) =>
+                                [s.teacherStaffId, s.teacherName] as const,
+                            ),
+                          ).entries(),
+                        )
+                          .map(([id, name]) => ({ id, name }))
+                          .sort((a, b) => a.name.localeCompare(b.name))
+                      : [];
+                    const effectiveSections =
+                      isElevated && dailyTeacherId != null
+                        ? allSections.filter(
+                            (s) => s.teacherStaffId === dailyTeacherId,
+                          )
+                        : mySections;
+                    const effectivePeriodRoster: Record<string, string[]> =
+                      Object.fromEntries(
+                        effectiveSections.map((s) => [
+                          String(s.period),
+                          s.studentIds,
+                        ]),
+                      );
+                    const effectivePeriods: number[] = effectiveSections
+                      .filter((s) => !s.isPlanning)
+                      .map((s) => s.period)
+                      .sort((a, b) => a - b);
                     const allInPeriod = dailyPeriod
-                      ? periodRoster[dailyPeriod] ?? []
+                      ? effectivePeriodRoster[dailyPeriod] ?? []
                       : [];
                     const presentIds = allInPeriod.filter(
                       (id) => !dailyAbsent.has(id),
@@ -9766,6 +9817,39 @@ function App() {
                             Print
                           </button>
                         </div>
+                        {isElevated && (
+                          <div style={{ marginBottom: "0.5rem" }}>
+                            <label>
+                              Teacher:{" "}
+                              <select
+                                value={
+                                  dailyTeacherId == null
+                                    ? ""
+                                    : String(dailyTeacherId)
+                                }
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  setDailyTeacherId(
+                                    v === "" ? null : Number(v),
+                                  );
+                                  setDailyPeriod("");
+                                  setDailyAbsent(new Set());
+                                  setDailyAbsentConfirmed(false);
+                                  setDailySelectedAccs(new Set());
+                                  setDailySubmitMsg("");
+                                }}
+                                style={{ minWidth: 220 }}
+                              >
+                                <option value="">Select teacher…</option>
+                                {teacherOptions.map((t) => (
+                                  <option key={t.id} value={String(t.id)}>
+                                    {t.name}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                          </div>
+                        )}
                         <div style={{ marginBottom: "0.75rem" }}>
                           <label>
                             Period:{" "}
@@ -9778,22 +9862,33 @@ function App() {
                                 setDailySelectedAccs(new Set());
                                 setDailySubmitMsg("");
                               }}
+                              disabled={
+                                isElevated && dailyTeacherId == null
+                              }
                             >
                               <option value="">-- Select period --</option>
-                              {myPeriods.map((p) => (
+                              {effectivePeriods.map((p) => (
                                 <option key={p} value={String(p)}>
                                   Period {p}
                                 </option>
                               ))}
                             </select>
                           </label>
-                          {myPeriods.length === 0 && (
+                          {isElevated && dailyTeacherId == null ? (
                             <span
                               style={{ marginLeft: "0.5rem", color: "#666" }}
                             >
-                              No teaching periods assigned to you.
+                              Pick a teacher first.
                             </span>
-                          )}
+                          ) : effectivePeriods.length === 0 ? (
+                            <span
+                              style={{ marginLeft: "0.5rem", color: "#666" }}
+                            >
+                              {isElevated && dailyTeacherId != null
+                                ? "No teaching periods for this teacher."
+                                : "No teaching periods assigned to you."}
+                            </span>
+                          ) : null}
                         </div>
                         {!dailyPeriod ? (
                           <div>Pick a period to start.</div>
