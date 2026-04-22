@@ -826,7 +826,16 @@ function VerifyPulloutsSection({
 
   return (
     <section className="card">
-      <h2>Verify Pullouts</h2>
+      <h2
+        style={{
+          margin: "0 0 0.5rem",
+          fontSize: "1.5rem",
+          fontWeight: 700,
+          color: "#7c3aed",
+        }}
+      >
+        Verify Pullouts
+      </h2>
       <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
         Review pending pullout requests. You can edit the reason, period, or
         referring teacher name before verifying — those edits become the
