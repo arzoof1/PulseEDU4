@@ -13020,13 +13020,16 @@ function App() {
       {activeSection === "hallPassMgmt" && canManageBehaviorLists && (
         <section className="card">
           <div className="section-header-bar-teal" />
-          <button
-            type="button"
-            className="back-button-purple"
-            onClick={() => setActiveSection("behaviorSpecialist")}
-          >
-            ← Back
-          </button>
+          <div className="section-header-band-hub">
+            <button
+              type="button"
+              className="back-button-purple"
+              style={{ marginBottom: 0 }}
+              onClick={() => setActiveSection("behaviorSpecialist")}
+            >
+              ← Back
+            </button>
+          </div>
           <h2>Global Daily Pass Limit</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
             School-wide cap on how many hall passes any one student can take
