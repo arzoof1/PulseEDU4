@@ -10,7 +10,7 @@ export interface CheckInStudent {
 
 export interface CheckInOutPayload {
   studentId: string;
-  entryType: "checkin" | "checkout";
+  entryType: "checkin" | "checkout" | "intervention";
   checkInWith: string;
   notes: string;
 }
@@ -37,7 +37,10 @@ export default function CheckInOutModal({
   onSubmit,
 }: Props) {
   const [step, setStep] = useState<1 | 2 | 3>(1);
-  const [entryType, setEntryType] = useState<"checkin" | "checkout">("checkin");
+  const [entryType, setEntryType] = useState<
+    "checkin" | "checkout" | "intervention"
+  >("checkin");
+  const [chosenInterventionName, setChosenInterventionName] = useState<string>("");
   const [studentQuery, setStudentQuery] = useState("");
   const [selectedStudent, setSelectedStudent] = useState<CheckInStudent | null>(
     null,
@@ -55,12 +58,12 @@ export default function CheckInOutModal({
     if (!open) return;
     setStep(1);
     setEntryType("checkin");
+    setChosenInterventionName("");
     setStudentQuery("");
     setSelectedStudent(null);
     setNotes("");
     setError(null);
     setSubmitting(false);
-    setInterventionId("");
   }, [open]);
 
   useEffect(() => {
@@ -118,25 +121,25 @@ export default function CheckInOutModal({
     return scored.map((x) => x.s);
   }, [students, studentQuery]);
 
-  const selectedIntervention = useMemo(
-    () => interventions.find((i) => String(i.id) === interventionId) ?? null,
-    [interventions, interventionId],
-  );
-
   if (!open) return null;
 
+  const pickTile = (
+    type: "checkin" | "checkout" | "intervention",
+    name: string,
+  ) => {
+    setEntryType(type);
+    setChosenInterventionName(name);
+    setStep(2);
+  };
+
   const handleSubmit = async (student: CheckInStudent) => {
-    if (!selectedIntervention) {
-      setError("Pick an intervention type.");
-      return;
-    }
     setSubmitting(true);
     setError(null);
     try {
       await onSubmit({
         studentId: student.studentId,
         entryType,
-        checkInWith: selectedIntervention.name,
+        checkInWith: chosenInterventionName,
         notes,
       });
       onClose();
@@ -197,10 +200,7 @@ export default function CheckInOutModal({
                 <button
                   type="button"
                   className="cp-list-item"
-                  onClick={() => {
-                    setEntryType("checkin");
-                    setStep(2);
-                  }}
+                  onClick={() => pickTile("checkin", "Check-In")}
                 >
                   <span
                     className="cp-dest-dot cp-dest-dot-near"
@@ -218,10 +218,7 @@ export default function CheckInOutModal({
                 <button
                   type="button"
                   className="cp-list-item"
-                  onClick={() => {
-                    setEntryType("checkout");
-                    setStep(2);
-                  }}
+                  onClick={() => pickTile("checkout", "Check-Out")}
                 >
                   <span
                     className="cp-dest-dot cp-dest-dot-other"
@@ -235,6 +232,29 @@ export default function CheckInOutModal({
                   </span>
                 </button>
               </li>
+              {interventionsLoading && (
+                <li className="cp-empty">Loading interventions…</li>
+              )}
+              {!interventionsLoading &&
+                interventions.map((i) => (
+                  <li key={i.id}>
+                    <button
+                      type="button"
+                      className="cp-list-item"
+                      onClick={() => pickTile("intervention", i.name)}
+                    >
+                      <span
+                        className="cp-dest-dot cp-dest-dot-other"
+                        aria-hidden="true"
+                        style={{ background: "#7c3aed" }}
+                      />
+                      <span className="cp-list-text">
+                        <strong>{i.name}</strong>
+                        <span className="cp-list-sub">{i.category}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
             </ul>
           )}
 
@@ -290,44 +310,10 @@ export default function CheckInOutModal({
                   </strong>
                 </div>
                 <div className="cp-context-row">
-                  <span className="cp-context-label">Type</span>
-                  <strong>
-                    {entryType === "checkin" ? "Check-In" : "Check-Out"}
-                  </strong>
+                  <span className="cp-context-label">Intervention</span>
+                  <strong>{chosenInterventionName}</strong>
                 </div>
               </div>
-
-              <label
-                style={{
-                  display: "flex",
-                  flexDirection: "column",
-                  marginTop: "1rem",
-                  fontSize: "0.85rem",
-                  color: "#475569",
-                  gap: 4,
-                }}
-              >
-                Intervention <span style={{ color: "#b91c1c" }}>*</span>
-                <select
-                  value={interventionId}
-                  onChange={(e) => setInterventionId(e.target.value)}
-                  className="cp-input"
-                  disabled={interventionsLoading || interventions.length === 0}
-                >
-                  <option value="">
-                    {interventionsLoading
-                      ? "Loading…"
-                      : interventions.length === 0
-                        ? "No interventions configured"
-                        : "Select an intervention…"}
-                  </option>
-                  {interventions.map((i) => (
-                    <option key={i.id} value={String(i.id)}>
-                      {i.name}
-                    </option>
-                  ))}
-                </select>
-              </label>
 
               <label
                 style={{

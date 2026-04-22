@@ -83,7 +83,7 @@ interface Tardy {
   teacherName: string;
   period: string;
   reason: string;
-  entryType: "tardy" | "checkin" | "checkout";
+  entryType: "tardy" | "checkin" | "checkout" | "intervention";
   checkInWith: string | null;
   notes: string;
   createdBy: string | null;
@@ -13812,15 +13812,25 @@ function App() {
               ...tardies
                 .filter(
                   (t) =>
-                    t.entryType === "checkin" || t.entryType === "checkout",
+                    t.entryType === "checkin" ||
+                    t.entryType === "checkout" ||
+                    t.entryType === "intervention",
                 )
                 .map((t) => ({
                   key: `t-${t.id}`,
                   createdAt: t.createdAt,
                   studentId: t.studentId,
                   typeLabel:
-                    t.entryType === "checkin" ? "Check-In" : "Check-Out",
-                  staffName: t.createdBy || t.checkInWith || t.teacherName,
+                    t.entryType === "intervention"
+                      ? t.checkInWith || "Intervention"
+                      : t.entryType === "checkin"
+                        ? "Check-In"
+                        : "Check-Out",
+                  staffName:
+                    t.createdBy ||
+                    (t.entryType === "intervention"
+                      ? t.teacherName
+                      : t.checkInWith || t.teacherName),
                   note: (t.notes && t.notes.trim()) || null,
                   source: "checkInOut" as const,
                 })),
@@ -16366,9 +16376,10 @@ function App() {
               reason: "",
               entryType: payload.entryType,
               checkInWith: payload.checkInWith,
-              notes: payload.checkInWith
-                ? `[Intervention: ${payload.checkInWith}]${payload.notes ? " " + payload.notes : ""}`
-                : payload.notes,
+              notes:
+                payload.entryType === "intervention" && payload.checkInWith
+                  ? `[Intervention: ${payload.checkInWith}]${payload.notes ? " " + payload.notes : ""}`
+                  : payload.notes,
             }),
           });
           if (!res.ok) {
