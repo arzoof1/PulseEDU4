@@ -267,12 +267,6 @@ router.delete(
         res.status(404).json({ error: "Schedule not found" });
         return;
       }
-      if (existing.isDefault) {
-        res.status(400).json({
-          error: "Cannot delete the default schedule. Set another as default first.",
-        });
-        return;
-      }
       await db.delete(bellSchedulesTable).where(eq(bellSchedulesTable.id, id));
       const data = await listSchedules();
       res.json({ schedules: data });

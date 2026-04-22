@@ -180,7 +180,7 @@ export default function BellScheduleSection() {
               id: 0,
               name: "",
               kind: activeKind ?? "regular",
-              isDefault: schedulesByKind[activeKind ?? "regular"].length === 0,
+              isDefault: false,
               active: true,
               sortOrder: 0,
               createdAt: "",
@@ -454,15 +454,14 @@ function KindScheduleList({
                     <button
                       type="button"
                       onClick={() => onRequestDelete(s.id)}
-                      disabled={s.isDefault}
-                      title={s.isDefault ? "Set another schedule as default first" : "Delete"}
+                      title="Delete"
                       style={{
-                        background: s.isDefault ? "#f3f4f6" : "#fee2e2",
-                        color: s.isDefault ? "#9ca3af" : "#b91c1c",
-                        border: `1px solid ${s.isDefault ? "#e5e7eb" : "#fecaca"}`,
+                        background: "#fee2e2",
+                        color: "#b91c1c",
+                        border: "1px solid #fecaca",
                         padding: "0.3rem 0.65rem",
                         borderRadius: 6,
-                        cursor: s.isDefault ? "not-allowed" : "pointer",
+                        cursor: "pointer",
                         font: "inherit",
                       }}
                     >
