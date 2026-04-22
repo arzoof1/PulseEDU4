@@ -183,6 +183,12 @@ router.delete(
             .where(eq(pulloutsTable.id, existing.pulloutId));
         }
         parentEmail = await sendPulloutReturnEmail(existing.pulloutId);
+        if (parentEmail && parentEmail.status === "error") {
+          console.error(
+            `[iss-roster] parent return email failed (rosterId=${id}, pulloutId=${existing.pulloutId}):`,
+            parentEmail.errorMsg,
+          );
+        }
       }
     }
     await db.delete(issRosterTable).where(eq(issRosterTable.id, id));

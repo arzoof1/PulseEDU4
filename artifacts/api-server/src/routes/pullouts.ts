@@ -526,6 +526,12 @@ router.patch(
       .where(eq(pulloutsTable.id, id));
     // Send parent email synchronously so the operator sees the result.
     const emailResult = await sendPulloutArrivalEmail(id);
+    if (emailResult && emailResult.status === "error") {
+      console.error(
+        `[pullouts] arrival email failed (pulloutId=${id}):`,
+        emailResult.errorMsg,
+      );
+    }
     // Add to ISS roster (idempotent via unique pullout_id index).
     try {
       const existingRoster = await db
@@ -602,6 +608,12 @@ router.patch(
       console.error("[iss-roster] auto-remove failed:", e);
     }
     const parentEmail = await sendPulloutReturnEmail(id);
+    if (parentEmail && parentEmail.status === "error") {
+      console.error(
+        `[pullouts] return email failed (pulloutId=${id}):`,
+        parentEmail.errorMsg,
+      );
+    }
     res.json({ pullout: row, parentEmail });
   },
 );

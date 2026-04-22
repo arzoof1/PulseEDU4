@@ -1250,25 +1250,9 @@ function IssDashboardSection({ students }: { students: Student[] }) {
       if (!r.ok) {
         setMsg({ ok: false, text: data?.error || "Could not remove." });
       } else {
-        const er = data?.parentEmail;
-        if (er?.status === "sent") {
-          setMsg({
-            ok: true,
-            text: `Removed. Parent return email sent to ${er.emailTo}.`,
-          });
-        } else if (er?.status === "skipped") {
-          setMsg({
-            ok: true,
-            text: `Removed. Parent return email skipped: ${er.errorMsg}.`,
-          });
-        } else if (er?.status === "error") {
-          setMsg({
-            ok: false,
-            text: `Removed, but parent return email failed: ${er.errorMsg}.`,
-          });
-        } else {
-          setMsg({ ok: true, text: "Removed from roster." });
-        }
+        // Parent email status is intentionally not surfaced; failures are
+        // logged on the server and will be addressed later.
+        setMsg({ ok: true, text: "Removed from roster." });
         setConfirmRosterDeleteId(null);
         await refresh();
       }
@@ -1293,25 +1277,8 @@ function IssDashboardSection({ students }: { students: Student[] }) {
       if (!r.ok) {
         setMsg({ ok: false, text: data?.error || `Could not ${action}.` });
       } else if (action === "arrived") {
-        const er = data?.parentEmail;
-        if (er?.status === "sent") {
-          setMsg({
-            ok: true,
-            text: `Arrived. Parent email sent to ${er.emailTo}.`,
-          });
-        } else if (er?.status === "skipped") {
-          setMsg({
-            ok: true,
-            text: `Arrived. Parent email skipped: ${er.errorMsg}.`,
-          });
-        } else if (er?.status === "error") {
-          setMsg({
-            ok: false,
-            text: `Arrived, but parent email failed: ${er.errorMsg}.`,
-          });
-        } else {
-          setMsg({ ok: true, text: "Marked arrived." });
-        }
+        // Email status intentionally suppressed; failures logged server-side.
+        setMsg({ ok: true, text: "Marked arrived." });
         await refresh();
       } else {
         setMsg({ ok: true, text: `Marked ${action}.` });
@@ -1368,22 +1335,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         <div
           style={{ marginTop: 4, fontSize: "0.85rem", color: "#475569" }}
         >
-          Arrived {new Date(p.arrivedAt!).toLocaleTimeString()}{" "}
-          {p.parentEmailStatus === "sent" && (
-            <span style={{ color: "#065f46" }}>
-              · parent email sent to {p.parentEmailTo}
-            </span>
-          )}
-          {p.parentEmailStatus === "skipped" && (
-            <span style={{ color: "#854d0e" }}>
-              · parent email skipped ({p.parentEmailErrorMsg})
-            </span>
-          )}
-          {p.parentEmailStatus === "error" && (
-            <span style={{ color: "#b91c1c" }}>
-              · parent email failed ({p.parentEmailErrorMsg})
-            </span>
-          )}
+          Arrived {new Date(p.arrivedAt!).toLocaleTimeString()}
         </div>
       )}
       <div
@@ -1424,38 +1376,41 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   return (
     <section className="card">
       <div
-        style={{
-          display: "flex",
-          justifyContent: "space-between",
-          alignItems: "baseline",
-        }}
+        className="section-header-bar-teal"
+        style={{ width: "100%", margin: 0 }}
+      />
+      <div
+        className="section-header-band-hub"
+        style={{ width: "100%", margin: 0 }}
       >
-        <h2
+        <div
           style={{
-            margin: 0,
-            fontSize: "1.5rem",
-            fontWeight: 700,
-            color: "#7c3aed",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            width: "100%",
           }}
         >
-          ISS Dashboard
-        </h2>
-        <button
-          type="button"
-          onClick={refresh}
-          style={{
-            background: "transparent",
-            border: "1px solid var(--border, #cbd5e1)",
-            borderRadius: 6,
-            padding: "0.3rem 0.7rem",
-            cursor: "pointer",
-            fontSize: "0.85rem",
-          }}
-        >
-          Refresh
-        </button>
+          <h2 style={{ margin: 0, color: "#ffffff", fontWeight: 700 }}>
+            ISS Dashboard
+          </h2>
+          <button
+            type="button"
+            onClick={refresh}
+            style={{
+              background: "rgba(255,255,255,0.85)",
+              border: "1px solid var(--border, #cbd5e1)",
+              borderRadius: 6,
+              padding: "0.3rem 0.7rem",
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
-      <p style={{ color: "var(--text-subtle, #64748b)", marginTop: 0 }}>
+      <p style={{ color: "var(--text-subtle, #64748b)", marginTop: "0.75rem" }}>
         Track verified pullouts. Marking <strong>Arrived</strong> sends the
         parent notification automatically.
       </p>
