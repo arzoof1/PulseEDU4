@@ -128,6 +128,7 @@ app.use(async (req, _res, next) => {
       const [staff] = await db
         .select({
           schoolId: staffTable.schoolId,
+          activeSchoolOverride: staffTable.activeSchoolOverride,
           isSuperUser: staffTable.isSuperUser,
           active: staffTable.active,
         })
@@ -135,7 +136,10 @@ app.use(async (req, _res, next) => {
         .where(eq(staffTable.id, sid));
       if (staff && staff.active) {
         req.homeSchoolId = staff.schoolId;
-        const override = req.session.activeSchoolId ?? null;
+        // Persisted on the staff row (not the session) so bearer-token
+        // requests inside the Replit preview iframe — where session cookies
+        // are blocked — keep the SuperUser's switch active across reloads.
+        const override = staff.activeSchoolOverride ?? null;
         if (staff.isSuperUser && override && override !== staff.schoolId) {
           req.schoolId = override;
           req.isSchoolSwitched = true;

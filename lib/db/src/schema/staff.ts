@@ -22,6 +22,11 @@ export const staffTable = pgTable("staff", {
   // to one school. SuperUsers can act as any school via session override
   // (req.schoolId), but staff.school_id is still their default landing.
   schoolId: integer("school_id").notNull().default(1),
+  // SuperUser-only "act as another school" override. Persisted on the staff
+  // row (rather than the express session) so the switch survives across
+  // bearer-token requests inside the Replit preview iframe, where session
+  // cookies are blocked. Null = use the home school.
+  activeSchoolOverride: integer("active_school_override"),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),

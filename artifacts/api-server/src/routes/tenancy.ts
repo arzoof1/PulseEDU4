@@ -83,18 +83,19 @@ router.post("/tenancy/switch-school", async (req, res) => {
   const raw = (req.body ?? {}) as { schoolId?: unknown };
   const wantsClear = raw.schoolId === null || raw.schoolId === undefined;
 
+  // We persist the override on the staff row instead of req.session because
+  // bearer-token requests (the Replit preview iframe blocks session cookies)
+  // create a fresh session each request, so session.activeSchoolId never
+  // survives a reload.
   if (wantsClear) {
-    delete req.session.activeSchoolId;
-    req.session.save((err) => {
-      if (err) {
-        res.status(500).json({ error: "Could not save session" });
-        return;
-      }
-      res.json({
-        ok: true,
-        activeSchoolId: staff.schoolId,
-        isSwitched: false,
-      });
+    await db
+      .update(staffTable)
+      .set({ activeSchoolOverride: null })
+      .where(eq(staffTable.id, staff.id));
+    res.json({
+      ok: true,
+      activeSchoolId: staff.schoolId,
+      isSwitched: false,
     });
     return;
   }
@@ -114,18 +115,20 @@ router.post("/tenancy/switch-school", async (req, res) => {
     return;
   }
 
-  req.session.activeSchoolId = schoolId;
-  req.session.save((err) => {
-    if (err) {
-      res.status(500).json({ error: "Could not save session" });
-      return;
-    }
-    res.json({
-      ok: true,
-      activeSchoolId: schoolId,
-      isSwitched: schoolId !== staff.schoolId,
-      schoolName: school.name,
-    });
+  // schoolId === staff.schoolId means the SuperUser picked their own home
+  // school explicitly. Treat that as "clear the override" so the badge
+  // returns to its non-switched state.
+  const overrideValue = schoolId === staff.schoolId ? null : schoolId;
+  await db
+    .update(staffTable)
+    .set({ activeSchoolOverride: overrideValue })
+    .where(eq(staffTable.id, staff.id));
+
+  res.json({
+    ok: true,
+    activeSchoolId: schoolId,
+    isSwitched: schoolId !== staff.schoolId,
+    schoolName: school.name,
   });
 });
 
