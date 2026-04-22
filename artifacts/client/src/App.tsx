@@ -10284,10 +10284,18 @@ function App() {
                           Accommodation Reports
                           <button
                             type="button"
-                            className="no-print"
+                            className="back-button-purple no-print"
                             onClick={() => window.print()}
-                            style={{ marginLeft: "0.75rem", fontSize: "0.85rem" }}
+                            style={{
+                              marginBottom: 0,
+                              marginLeft: "0.75rem",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: "0.35rem",
+                            }}
+                            title="Print this view"
                           >
+                            <span aria-hidden="true">🖨</span>
                             Print
                           </button>
                         </h3>
