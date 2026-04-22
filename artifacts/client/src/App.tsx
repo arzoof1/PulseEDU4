@@ -12994,8 +12994,8 @@ function App() {
           },
           {
             key: "interventions",
-            label: "Interventions",
-            desc: "Manage intervention types and pullout reasons.",
+            label: "Edit Log Intervention",
+            desc: "Edit the list of interventions offered to students.",
             color: "#7c3aed",
             show: canManageBehaviorLists,
           },
