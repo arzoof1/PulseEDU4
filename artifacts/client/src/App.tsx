@@ -4,6 +4,7 @@ import CreatePassModal from "./components/CreatePassModal";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
+import PbisHomePanel from "./components/PbisHomePanel";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
@@ -13463,6 +13464,8 @@ function App() {
                 </div>
               </div>
             </div>
+
+            <PbisHomePanel />
 
             {(() => {
               const siteMgmtKeys = new Set<PbisHubKey>([

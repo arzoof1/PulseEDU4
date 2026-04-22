@@ -3,9 +3,11 @@ import {
   db,
   pbisEntriesTable,
   staffTable,
+  studentsTable,
+  classSectionsTable,
   recordEditsTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { eq, and, isNull, gte, lt } from "drizzle-orm";
 import {
   processMilestonesForStudent,
   processMilestonesForStudents,
@@ -391,6 +393,143 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
     .returning();
   await logEdit(id, "voided", null, reasonText, staff);
   res.json(updated);
+});
+
+// Aggregate KPIs for the PBIS Hub home panel.
+// Returns 8 weeks of school-week buckets (Mon-Fri, no weekends) with
+// pointsAwarded, distinct studentsRecognized, distinct teachersActive,
+// and avgPointsPerStudent (over the full student body). Voided entries
+// are excluded everywhere.
+router.get("/pbis/home-stats", async (req: Request, res: Response) => {
+  const staff = await loadSessionStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const allowed =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isPbisCoordinator ||
+    staff.isBehaviorSpecialist ||
+    staff.isMtssCoordinator ||
+    staff.isDean;
+  if (!allowed) {
+    res.status(403).json({ error: "Not authorized" });
+    return;
+  }
+
+  const WEEKS = 8;
+
+  // Compute the Monday (00:00 local) of the current week.
+  const now = new Date();
+  const day = now.getDay(); // 0=Sun, 1=Mon
+  const daysSinceMonday = (day + 6) % 7;
+  const thisMonday = new Date(now);
+  thisMonday.setHours(0, 0, 0, 0);
+  thisMonday.setDate(thisMonday.getDate() - daysSinceMonday);
+
+  // Window: WEEKS weeks back, ending Friday end-of-day this week.
+  const windowStart = new Date(thisMonday);
+  windowStart.setDate(windowStart.getDate() - 7 * (WEEKS - 1));
+  const windowEnd = new Date(thisMonday);
+  windowEnd.setDate(windowEnd.getDate() + 5); // Saturday 00:00 = end of Fri
+
+  // Pull all non-voided entries in the window.
+  const entries = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      points: pbisEntriesTable.points,
+      staffId: pbisEntriesTable.staffId,
+      createdAt: pbisEntriesTable.createdAt,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, windowStart.toISOString()),
+        lt(pbisEntriesTable.createdAt, windowEnd.toISOString()),
+      ),
+    );
+
+  // Bucket by week index 0..WEEKS-1 (0 = oldest, WEEKS-1 = current).
+  type Bucket = {
+    weekStart: string;
+    weekEnd: string;
+    points: number;
+    studentIds: Set<string>;
+    staffIds: Set<number>;
+  };
+  const buckets: Bucket[] = [];
+  for (let i = 0; i < WEEKS; i++) {
+    const wStart = new Date(windowStart);
+    wStart.setDate(wStart.getDate() + 7 * i);
+    const wEnd = new Date(wStart);
+    wEnd.setDate(wEnd.getDate() + 5); // Sat 00:00
+    buckets.push({
+      weekStart: wStart.toISOString().slice(0, 10),
+      weekEnd: new Date(wEnd.getTime() - 1).toISOString().slice(0, 10),
+      points: 0,
+      studentIds: new Set<string>(),
+      staffIds: new Set<number>(),
+    });
+  }
+
+  for (const e of entries) {
+    const created = new Date(e.createdAt);
+    const dow = created.getDay(); // 0=Sun..6=Sat
+    if (dow === 0 || dow === 6) continue; // Mon-Fri only
+    const idx = Math.floor(
+      (created.getTime() - windowStart.getTime()) / (7 * 24 * 60 * 60 * 1000),
+    );
+    if (idx < 0 || idx >= WEEKS) continue;
+    const b = buckets[idx];
+    if (!b) continue;
+    b.points += e.points || 0;
+    b.studentIds.add(e.studentId);
+    if (e.staffId != null) b.staffIds.add(e.staffId);
+  }
+
+  // Denominators: total students; total active staff who teach a real
+  // (non-planning) class section.
+  const allStudents = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable);
+  const totalStudents = allStudents.length;
+
+  const teachingRows = await db
+    .select({
+      staffId: classSectionsTable.teacherStaffId,
+      isPlanning: classSectionsTable.isPlanning,
+      active: staffTable.active,
+    })
+    .from(classSectionsTable)
+    .innerJoin(staffTable, eq(staffTable.id, classSectionsTable.teacherStaffId));
+  const teachingStaffSet = new Set<number>();
+  for (const r of teachingRows) {
+    if (!r.isPlanning && r.active) teachingStaffSet.add(r.staffId);
+  }
+  const totalTeachingStaff = teachingStaffSet.size;
+
+  const weeks = buckets.map((b) => ({
+    weekStart: b.weekStart,
+    weekEnd: b.weekEnd,
+    pointsAwarded: b.points,
+    studentsRecognized: b.studentIds.size,
+    teachersActive: b.staffIds.size,
+    avgPointsPerStudent:
+      totalStudents > 0 ? +(b.points / totalStudents).toFixed(2) : 0,
+  }));
+
+  const thisWeek = weeks[weeks.length - 1] ?? null;
+  const lastWeek = weeks[weeks.length - 2] ?? null;
+
+  res.json({
+    weeks,
+    totalStudents,
+    totalTeachingStaff,
+    thisWeek,
+    lastWeek,
+  });
 });
 
 export default router;
