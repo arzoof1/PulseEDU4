@@ -3058,6 +3058,12 @@ function App() {
     | "tardies"
     | "student"
     | "pbis"
+    | "pbisRecent"
+    | "pbisReports"
+    | "pbisReasons"
+    | "pbisMilestoneEmails"
+    | "pbisStore"
+    | "pbisHub"
     | "accommodations"
     | "ese"
     | "pbisLists"
@@ -5904,6 +5910,12 @@ function App() {
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
   const canVerifyPullouts = isAdmin || isDean || isMtss;
+  const canAccessPbisHub =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    isPbisCoord;
   const isSuperUser = authUser?.isSuperUser === true;
   const canViewIssDashboard =
     isSuperUser ||
@@ -5997,8 +6009,25 @@ function App() {
     if (!isEseCoord && activeSection === "ese") {
       setActiveSection("hallPasses");
     }
-    if (!isPbisCoord && activeSection === "pbisLists") {
+    if (activeSection === "pbisLists") {
+      setActiveSection(canAccessPbisHub ? "pbisHub" : "hallPasses");
+    }
+    if (!canAccessPbisHub && activeSection === "pbisHub") {
       setActiveSection("hallPasses");
+    }
+    if (
+      !canAccessPbisHub &&
+      (activeSection === "pbisRecent" ||
+        activeSection === "pbisReports" ||
+        activeSection === "pbisStore")
+    ) {
+      setActiveSection("hallPasses");
+    }
+    if (!isPbisCoord && activeSection === "pbisReasons") {
+      setActiveSection("pbisHub");
+    }
+    if (!isPbisCoord && activeSection === "pbisMilestoneEmails") {
+      setActiveSection("pbisHub");
     }
     if (!canManageBehaviorLists && activeSection === "interventions") {
       setActiveSection("hallPasses");
@@ -6008,17 +6037,23 @@ function App() {
     isEseCoord,
     isPbisCoord,
     isBehaviorSpec,
+    canAccessPbisHub,
     canManageBehaviorLists,
     activeSection,
   ]);
 
   useEffect(() => {
-    if (activeSection === "pbisLists" && isPbisCoord) {
+    if (
+      (activeSection === "pbisLists" ||
+        activeSection === "pbisReasons" ||
+        activeSection === "pbisMilestoneEmails") &&
+      isPbisCoord
+    ) {
       loadPbisReasons();
       loadPbisMilestones();
       loadMilestoneEmails();
     }
-    if (activeSection === "pbis") {
+    if (activeSection === "pbis" || activeSection === "pbisRecent") {
       loadPbisGoals();
       loadMySections();
       loadLeaderboard();
@@ -6081,6 +6116,9 @@ function App() {
     isAdmin ||
     isMtss ||
     isBehaviorSpec;
+  const pbisHubNavSections: NavSection[] = [
+    { key: "pbisHub", label: "PBIS Hub", icon: IconStar },
+  ];
   const adminNavSections: NavSection[] = [
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
@@ -6433,7 +6471,7 @@ function App() {
                 </div>
                 <div className="section-label nav-admin-label">Tools</div>
                 {isEseCoord && eseNavSections.map(renderNavItem)}
-                {isPbisCoord && pbisListsNavSections.map(renderNavItem)}
+                {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
                 {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
                 {canAccessMtssHub && mtssCoordNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
@@ -11806,8 +11844,9 @@ function App() {
         </section>
       </>)}
 
-      {activeSection === "pbis" && (<>
+      {(activeSection === "pbis" || activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
         <section className="card">
+          {activeSection === "pbis" && (<>
           <h2>PBIS Points</h2>
           {recentMilestoneToasts.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.75rem" }}>
@@ -12257,8 +12296,10 @@ function App() {
               Save PBIS Entry
             </button>
           </form>
+          </>)}
 
-          <h3>Recent PBIS Entries</h3>
+          {activeSection === "pbisRecent" && (<>
+          <h3 style={{ marginTop: 0 }}>Recent PBIS Entries</h3>
           <table
             border={1}
             cellPadding={6}
@@ -12619,8 +12660,10 @@ function App() {
               )}
             </div>
           )}
+          </>)}
 
-          <h3 style={{ marginTop: "1.5rem" }}>PBIS Report</h3>
+          {activeSection === "pbisReports" && (<>
+          <h3 style={{ marginTop: 0 }}>PBIS Report</h3>
           <p style={{ marginTop: 0, color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
             {isPbisCoord || isAdmin || isEseCoord
               ? "School-wide. Leave a filter blank to ignore it."
@@ -12852,6 +12895,7 @@ function App() {
               )}
             </div>
           )}
+          </>)}
         </section>
       </>)}
 
@@ -13305,6 +13349,331 @@ function App() {
           </>
         );
       })()}
+
+      {activeSection === "pbisHub" && canAccessPbisHub && (() => {
+        type PbisHubKey =
+          | "pbis"
+          | "pbisRecent"
+          | "pbisReports"
+          | "pbisReasons"
+          | "pbisMilestoneEmails"
+          | "pbisStore";
+        type PbisTool = {
+          key: PbisHubKey;
+          label: string;
+          desc: string;
+          color: string;
+          show: boolean;
+        };
+        const tools: PbisTool[] = [
+          {
+            key: "pbis",
+            label: "PBIS Points",
+            desc: "Award PBIS points to students.",
+            color: "#7c3aed",
+            show: true,
+          },
+          {
+            key: "pbisRecent",
+            label: "Recent PBIS Entries",
+            desc: "Browse, edit, or void recent PBIS point entries.",
+            color: "#0e7490",
+            show: true,
+          },
+          {
+            key: "pbisReports",
+            label: "PBIS Reports",
+            desc: "Filter and analyze PBIS point activity.",
+            color: "#0d9488",
+            show: true,
+          },
+          {
+            key: "pbisReasons",
+            label: "PBIS Reasons",
+            desc: "Edit the positive-behavior reasons teachers can pick.",
+            color: "#7c3aed",
+            show: isPbisCoord,
+          },
+          {
+            key: "pbisMilestoneEmails",
+            label: "Milestone Parent Emails",
+            desc: "Configure milestone thresholds and parent email templates.",
+            color: "#7c3aed",
+            show: isPbisCoord,
+          },
+          {
+            key: "pbisStore",
+            label: "PBIS Store",
+            desc: "Manage rewards students can redeem with PBIS points.",
+            color: "#b45309",
+            show: true,
+          },
+        ];
+        return (
+          <>
+            <div
+              className="card no-print"
+              style={{
+                background:
+                  "linear-gradient(135deg, #7c3aed 0%, #0e7490 60%, #0d9488 100%)",
+                color: "white",
+                padding: "1.25rem 1.5rem",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: "1rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <div>
+                  <h2 style={{ margin: 0, color: "white" }}>PBIS Hub</h2>
+                  <div style={{ opacity: 0.9, fontSize: "0.9rem", marginTop: 4 }}>
+                    Your hub for awarding points, reviewing entries, and
+                    managing PBIS rewards.
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+                  {tools
+                    .filter((t) => t.show)
+                    .map((t) => (
+                      <button
+                        key={t.key}
+                        type="button"
+                        onClick={() => setActiveSection(t.key)}
+                        style={{
+                          background: "rgba(255,255,255,0.15)",
+                          border: "1px solid rgba(255,255,255,0.4)",
+                          color: "white",
+                          padding: "0.4rem 0.8rem",
+                          borderRadius: 999,
+                          fontSize: "0.85rem",
+                          cursor: "pointer",
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 6,
+                        }}
+                      >
+                        {t.label}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            </div>
+
+            {(() => {
+              const siteMgmtKeys = new Set<PbisHubKey>([
+                "pbisReasons",
+                "pbisMilestoneEmails",
+              ]);
+              const reportingKeys = new Set<PbisHubKey>([
+                "pbisRecent",
+                "pbisReports",
+              ]);
+              const renderTile = (t: PbisTool) => (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setActiveSection(t.key)}
+                  style={{
+                    textAlign: "left",
+                    background: "white",
+                    border: `1px solid ${t.color}33`,
+                    borderLeft: `4px solid ${t.color}`,
+                    borderRadius: 8,
+                    padding: "0.85rem 1rem",
+                    cursor: "pointer",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <span style={{ fontWeight: 600, color: t.color }}>
+                      {t.label}
+                    </span>
+                  </div>
+                  <span style={{ color: "#475569", fontSize: "0.85rem" }}>
+                    {t.desc}
+                  </span>
+                </button>
+              );
+              const mainTools = tools.filter(
+                (t) =>
+                  t.show &&
+                  !siteMgmtKeys.has(t.key) &&
+                  !reportingKeys.has(t.key),
+              );
+              const reportingTools = tools.filter(
+                (t) => t.show && reportingKeys.has(t.key),
+              );
+              const siteTools = tools.filter(
+                (t) => t.show && siteMgmtKeys.has(t.key),
+              );
+              return (
+                <>
+                  {mainTools.length > 0 && (
+                    <div
+                      className="card no-print"
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns:
+                          "repeat(auto-fill, minmax(240px, 1fr))",
+                        gap: "0.75rem",
+                      }}
+                    >
+                      {mainTools.map(renderTile)}
+                    </div>
+                  )}
+
+                  {reportingTools.length > 0 && (
+                    <>
+                      <svg
+                        className="ekg-separator"
+                        viewBox="0 0 600 28"
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          className="track"
+                          d="M0 14 H140 L150 14 L155 6 L162 22 L168 8 L175 14 H300 L310 14 L315 6 L322 22 L328 8 L335 14 H460 L470 14 L475 6 L482 22 L488 8 L495 14 H600"
+                        />
+                      </svg>
+
+                      <div
+                        style={{
+                          borderTopLeftRadius: "var(--radius-lg, 8px)",
+                          borderTopRightRadius: "var(--radius-lg, 8px)",
+                          overflow: "hidden",
+                          marginBottom: "-1px",
+                        }}
+                      >
+                        <div
+                          className="section-header-bar-teal"
+                          style={{ width: "100%", margin: 0 }}
+                        />
+                        <div
+                          className="section-header-band-hub"
+                          style={{ width: "100%", margin: 0 }}
+                        >
+                          <h2
+                            style={{
+                              margin: 0,
+                              color: "white",
+                              fontSize: "1.5rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            PBIS Reporting
+                          </h2>
+                        </div>
+                      </div>
+                      <div
+                        className="card no-print"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "repeat(auto-fill, minmax(240px, 1fr))",
+                          gap: "0.75rem",
+                        }}
+                      >
+                        {reportingTools.map(renderTile)}
+                      </div>
+                    </>
+                  )}
+
+                  {siteTools.length > 0 && (
+                    <>
+                      <svg
+                        className="ekg-separator"
+                        viewBox="0 0 600 28"
+                        preserveAspectRatio="none"
+                        aria-hidden="true"
+                      >
+                        <path
+                          className="track"
+                          d="M0 14 H140 L150 14 L155 6 L162 22 L168 8 L175 14 H300 L310 14 L315 6 L322 22 L328 8 L335 14 H460 L470 14 L475 6 L482 22 L488 8 L495 14 H600"
+                        />
+                      </svg>
+
+                      <div
+                        style={{
+                          borderTopLeftRadius: "var(--radius-lg, 8px)",
+                          borderTopRightRadius: "var(--radius-lg, 8px)",
+                          overflow: "hidden",
+                          marginBottom: "-1px",
+                        }}
+                      >
+                        <div
+                          className="section-header-bar-teal"
+                          style={{ width: "100%", margin: 0 }}
+                        />
+                        <div
+                          className="section-header-band-hub"
+                          style={{ width: "100%", margin: 0 }}
+                        >
+                          <h2
+                            style={{
+                              margin: 0,
+                              color: "white",
+                              fontSize: "1.5rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            Site Management
+                          </h2>
+                        </div>
+                      </div>
+                      <div
+                        className="card no-print"
+                        style={{
+                          display: "grid",
+                          gridTemplateColumns:
+                            "repeat(auto-fill, minmax(240px, 1fr))",
+                          gap: "0.75rem",
+                        }}
+                      >
+                        {siteTools.map(renderTile)}
+                      </div>
+                    </>
+                  )}
+                </>
+              );
+            })()}
+          </>
+        );
+      })()}
+
+      {activeSection === "pbisStore" && canAccessPbisHub && (
+        <section className="card">
+          <h2>PBIS Store</h2>
+          <p style={{ marginTop: 0, color: "var(--muted, #64748b)" }}>
+            Manage the rewards that students can redeem with their PBIS points.
+          </p>
+          <div
+            style={{
+              marginTop: "1rem",
+              padding: "1.5rem",
+              border: "1px dashed var(--muted, #cbd5e1)",
+              borderRadius: 8,
+              color: "#64748b",
+              textAlign: "center",
+            }}
+          >
+            Coming soon. The PBIS Store will let you publish reward items,
+            track inventory, and approve student redemptions here.
+          </div>
+        </section>
+      )}
 
       {activeSection === "mtssCoordinator" && canAccessMtssHub && (() => {
         type MtssHubKey = "mtssTemplates";
@@ -14801,7 +15170,7 @@ function App() {
         </section>
       )}
 
-      {activeSection === "pbisLists" && isPbisCoord && (
+      {activeSection === "pbisReasons" && isPbisCoord && (
         <section className="card">
           <h2>PBIS Reasons</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
@@ -14910,7 +15279,7 @@ function App() {
         </section>
       )}
 
-      {activeSection === "pbisLists" && isPbisCoord && (
+      {activeSection === "pbisMilestoneEmails" && isPbisCoord && (
         <section className="card" style={{ marginTop: "1rem" }}>
           <h2>Milestone Parent Emails</h2>
           <p style={{ marginTop: 0, color: "var(--muted, #666)" }}>
