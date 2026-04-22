@@ -1552,17 +1552,8 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             <button
               type="button"
               onClick={() => setView("hub")}
-              style={{
-                marginTop: "1rem",
-                background: "transparent",
-                border: "1px solid var(--border, #cbd5e1)",
-                borderRadius: 6,
-                padding: "0.35rem 0.8rem",
-                cursor: "pointer",
-                fontSize: "0.85rem",
-                color: "#0f766e",
-                fontWeight: 600,
-              }}
+              className="back-button-purple"
+              style={{ marginTop: "1rem", marginBottom: 0 }}
             >
               ← Back to ISS Hub
             </button>
