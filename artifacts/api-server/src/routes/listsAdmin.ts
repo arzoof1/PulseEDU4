@@ -172,18 +172,26 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
 });
 
 // ---- Intervention Types ----
+// Per-school: every endpoint AND-filters by req.schoolId so school A cannot
+// list, edit, or delete school B's intervention types — and uniqueness is
+// per-school so each school can own its own "Verbal Redirect" entry.
 
 router.get("/intervention-types", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select()
     .from(interventionTypesTable)
+    .where(eq(interventionTypesTable.schoolId, schoolId))
     .orderBy(interventionTypesTable.category, interventionTypesTable.name);
   res.json(rows);
 });
 
 router.post("/intervention-types", requireInterventionAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { name, category, requiresNote } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -195,7 +203,12 @@ router.post("/intervention-types", requireInterventionAdmin, async (req, res) =>
   const existing = await db
     .select()
     .from(interventionTypesTable)
-    .where(sql`lower(${interventionTypesTable.name}) = lower(${name.trim()})`);
+    .where(
+      and(
+        eq(interventionTypesTable.schoolId, schoolId),
+        sql`lower(${interventionTypesTable.name}) = lower(${name.trim()})`,
+      ),
+    );
   if (existing.length > 0) {
     res.status(409).json({ error: "Intervention name already exists" });
     return;
@@ -203,6 +216,7 @@ router.post("/intervention-types", requireInterventionAdmin, async (req, res) =>
   const [row] = await db
     .insert(interventionTypesTable)
     .values({
+      schoolId,
       name: name.trim(),
       category: cat,
       requiresNote: reqNote,
@@ -213,6 +227,8 @@ router.post("/intervention-types", requireInterventionAdmin, async (req, res) =>
 });
 
 router.delete("/intervention-types/:id", requireInterventionAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -220,7 +236,12 @@ router.delete("/intervention-types/:id", requireInterventionAdmin, async (req, r
   }
   const [row] = await db
     .delete(interventionTypesTable)
-    .where(eq(interventionTypesTable.id, id))
+    .where(
+      and(
+        eq(interventionTypesTable.id, id),
+        eq(interventionTypesTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });
@@ -230,6 +251,8 @@ router.delete("/intervention-types/:id", requireInterventionAdmin, async (req, r
 });
 
 router.patch("/intervention-types/:id", requireInterventionAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -249,7 +272,12 @@ router.patch("/intervention-types/:id", requireInterventionAdmin, async (req, re
   const [row] = await db
     .update(interventionTypesTable)
     .set(updates)
-    .where(eq(interventionTypesTable.id, id))
+    .where(
+      and(
+        eq(interventionTypesTable.id, id),
+        eq(interventionTypesTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });
@@ -259,18 +287,24 @@ router.patch("/intervention-types/:id", requireInterventionAdmin, async (req, re
 });
 
 // ---- Trusted Adult Interventions ----
+// Per-school, same isolation rules as Intervention Types.
 
 router.get("/trusted-adult-interventions", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select()
     .from(trustedAdultInterventionsTable)
+    .where(eq(trustedAdultInterventionsTable.schoolId, schoolId))
     .orderBy(trustedAdultInterventionsTable.category, trustedAdultInterventionsTable.name);
   res.json(rows);
 });
 
 router.post("/trusted-adult-interventions", requireInterventionAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { name, category } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -283,19 +317,26 @@ router.post("/trusted-adult-interventions", requireInterventionAdmin, async (req
   const existing = await db
     .select()
     .from(trustedAdultInterventionsTable)
-    .where(sql`lower(${trustedAdultInterventionsTable.name}) = lower(${name.trim()})`);
+    .where(
+      and(
+        eq(trustedAdultInterventionsTable.schoolId, schoolId),
+        sql`lower(${trustedAdultInterventionsTable.name}) = lower(${name.trim()})`,
+      ),
+    );
   if (existing.length > 0) {
     res.status(409).json({ error: "Intervention name already exists" });
     return;
   }
   const [row] = await db
     .insert(trustedAdultInterventionsTable)
-    .values({ name: name.trim(), category: cat, active: true })
+    .values({ schoolId, name: name.trim(), category: cat, active: true })
     .returning();
   res.status(201).json(row);
 });
 
 router.patch("/trusted-adult-interventions/:id", requireInterventionAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -314,7 +355,12 @@ router.patch("/trusted-adult-interventions/:id", requireInterventionAdmin, async
   const [row] = await db
     .update(trustedAdultInterventionsTable)
     .set(updates)
-    .where(eq(trustedAdultInterventionsTable.id, id))
+    .where(
+      and(
+        eq(trustedAdultInterventionsTable.id, id),
+        eq(trustedAdultInterventionsTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });
@@ -324,6 +370,8 @@ router.patch("/trusted-adult-interventions/:id", requireInterventionAdmin, async
 });
 
 router.delete("/trusted-adult-interventions/:id", requireInterventionAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -331,7 +379,12 @@ router.delete("/trusted-adult-interventions/:id", requireInterventionAdmin, asyn
   }
   const [row] = await db
     .delete(trustedAdultInterventionsTable)
-    .where(eq(trustedAdultInterventionsTable.id, id))
+    .where(
+      and(
+        eq(trustedAdultInterventionsTable.id, id),
+        eq(trustedAdultInterventionsTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });

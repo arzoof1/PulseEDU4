@@ -1,7 +1,7 @@
 // Master list of common pullout reasons. Read by any signed-in staff so the
 // pullout request form can show a quick-pick dropdown. Write access is gated
 // to admin or behavior specialist (the same people who curate intervention
-// types).
+// types). Per-school: each school owns its own reason list.
 
 import {
   Router,
@@ -11,7 +11,8 @@ import {
   type NextFunction,
 } from "express";
 import { db, pulloutReasonsTable, staffTable } from "@workspace/db";
-import { eq, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -59,15 +60,20 @@ function requireReasonAdmin() {
   };
 }
 
-router.get("/pullout-reasons", requireSignedIn(), async (_req, res) => {
+router.get("/pullout-reasons", requireSignedIn(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select()
     .from(pulloutReasonsTable)
+    .where(eq(pulloutReasonsTable.schoolId, schoolId))
     .orderBy(pulloutReasonsTable.category, pulloutReasonsTable.name);
   res.json(rows);
 });
 
 router.post("/pullout-reasons", requireReasonAdmin(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { name, category } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -77,17 +83,23 @@ router.post("/pullout-reasons", requireReasonAdmin(), async (req, res) => {
     typeof category === "string" && category.trim()
       ? category.trim()
       : "General";
+  // Per-school case-insensitive duplicate check.
   const existing = await db
     .select()
     .from(pulloutReasonsTable)
-    .where(sql`lower(${pulloutReasonsTable.name}) = lower(${name.trim()})`);
+    .where(
+      and(
+        eq(pulloutReasonsTable.schoolId, schoolId),
+        sql`lower(${pulloutReasonsTable.name}) = lower(${name.trim()})`,
+      ),
+    );
   if (existing.length > 0) {
     res.status(409).json({ error: "Reason name already exists" });
     return;
   }
   const [row] = await db
     .insert(pulloutReasonsTable)
-    .values({ name: name.trim(), category: cat, active: true })
+    .values({ schoolId, name: name.trim(), category: cat, active: true })
     .returning();
   res.status(201).json(row);
 });
@@ -96,6 +108,8 @@ router.patch(
   "/pullout-reasons/:id",
   requireReasonAdmin(),
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
       res.status(400).json({ error: "Invalid id" });
@@ -114,7 +128,12 @@ router.patch(
     const [row] = await db
       .update(pulloutReasonsTable)
       .set(updates)
-      .where(eq(pulloutReasonsTable.id, id))
+      .where(
+        and(
+          eq(pulloutReasonsTable.id, id),
+          eq(pulloutReasonsTable.schoolId, schoolId),
+        ),
+      )
       .returning();
     if (!row) {
       res.status(404).json({ error: "Not found" });
@@ -128,6 +147,8 @@ router.delete(
   "/pullout-reasons/:id",
   requireReasonAdmin(),
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const id = Number(req.params.id);
     if (!Number.isInteger(id) || id < 1) {
       res.status(400).json({ error: "Invalid id" });
@@ -135,7 +156,12 @@ router.delete(
     }
     const [row] = await db
       .delete(pulloutReasonsTable)
-      .where(eq(pulloutReasonsTable.id, id))
+      .where(
+        and(
+          eq(pulloutReasonsTable.id, id),
+          eq(pulloutReasonsTable.schoolId, schoolId),
+        ),
+      )
       .returning();
     if (!row) {
       res.status(404).json({ error: "Not found" });

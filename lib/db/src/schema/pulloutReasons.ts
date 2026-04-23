@@ -1,15 +1,21 @@
-import { pgTable, serial, text, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 
 export const pulloutReasonsTable = pgTable(
   "pullout_reasons",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     name: text("name").notNull(),
     category: text("category").notNull().default("General"),
     active: boolean("active").notNull().default(true),
   },
   (t) => ({
-    nameUnique: uniqueIndex("pullout_reasons_name_unique").on(t.name),
+    // Per-school uniqueness: each school owns its own reasons list, so the
+    // same reason name can exist in two different schools without colliding.
+    schoolNameUnique: uniqueIndex("pullout_reasons_school_id_name_unique").on(
+      t.schoolId,
+      t.name,
+    ),
   }),
 );
 

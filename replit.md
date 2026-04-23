@@ -42,9 +42,14 @@ membership filters in JS are not sufficient — every query that touches
 `teacher_destination_allowlist`, or `location_allowed_destinations` must
 include `eq(table.schoolId, schoolId)` in SQL.
 
-Per-school uniqueness: `school_accommodations` uses composite unique
-`(school_id, name)` (`school_accommodations_school_id_name_unique`) so each
-school can carry the same accommodation name independently.
+Per-school uniqueness on master lists — composite `(school_id, name)`
+unique indexes on `school_accommodations`, `pullout_reasons`,
+`intervention_types`, `trusted_adult_interventions`, and `pbis_reasons`
+so each school can carry its own copy of "Extended Time" / "Verbal
+Redirect" / etc. without colliding with another school. Routes that
+consume these lists by id (e.g. `/interventions` POST validating
+`interventionTypeId`) must AND the FK lookup by `schoolId` to prevent a
+caller from attaching another school's master-list id to their own row.
 
 `adminStaff.ts` carve-out: SuperUser sees/edits district-wide; all other
 admins (incl. `cap_staff_roles` holders) are hard-scoped to

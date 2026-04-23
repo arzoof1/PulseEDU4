@@ -83,10 +83,19 @@ router.post("/interventions", requireStaff, async (req, res) => {
       .json({ error: "interventionTypeId (positive integer) is required" });
     return;
   }
+  // Intervention type must belong to the caller's school — without this AND
+  // a teacher in school A could attach a school B intervention type id to
+  // their intervention entry, polluting cross-school analytics and
+  // bypassing school B's curated list.
   const [type] = await db
     .select()
     .from(interventionTypesTable)
-    .where(eq(interventionTypesTable.id, typeId));
+    .where(
+      and(
+        eq(interventionTypesTable.id, typeId),
+        eq(interventionTypesTable.schoolId, schoolId),
+      ),
+    );
   if (!type) {
     res.status(404).json({ error: "Intervention type not found" });
     return;
