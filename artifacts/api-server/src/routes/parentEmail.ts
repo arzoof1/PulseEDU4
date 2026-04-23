@@ -82,7 +82,7 @@ router.post(
       .where(
         and(
           eq(studentsTable.studentId, sId),
-          eq(studentsTable.schoolId, staff.schoolId),
+          eq(studentsTable.schoolId, req.schoolId!),
         ),
       );
     if (!student) {
@@ -97,7 +97,7 @@ router.post(
       const [settings] = await db
         .select()
         .from(schoolSettingsTable)
-        .where(eq(schoolSettingsTable.schoolId, staff.schoolId));
+        .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
       const fromName = settings?.fromName?.trim() || "";
       const result = await client.emails.send({
         from: formatFromHeader(fromName, fromEmail),
@@ -128,7 +128,7 @@ router.post(
 
     try {
       await db.insert(supportNotesTable).values({
-        schoolId: staff.schoolId,
+        schoolId: req.schoolId!,
         studentId: sId,
         noteType: "parent_email",
         noteText,

@@ -136,7 +136,7 @@ router.get(
     const rows = await db
       .select()
       .from(pbisMilestoneEmailsTable)
-      .where(eq(pbisMilestoneEmailsTable.schoolId, staff.schoolId));
+      .where(eq(pbisMilestoneEmailsTable.schoolId, req.schoolId!));
     rows.sort((a, b) => (a.sentAt < b.sentAt ? 1 : -1));
     res.json(rows.slice(0, 100));
   },

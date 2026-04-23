@@ -100,7 +100,7 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
   const all = await db
     .select()
     .from(pbisEntriesTable)
-    .where(eq(pbisEntriesTable.schoolId, staff.schoolId));
+    .where(eq(pbisEntriesTable.schoolId, req.schoolId!));
   const fromIso = from ? from.toISOString() : null;
   const filtered = all.filter((e) => {
     if (e.voidedAt) return false;
@@ -260,7 +260,7 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
       const [row] = await db
         .insert(pbisEntriesTable)
         .values({
-          schoolId: staff.schoolId,
+          schoolId: req.schoolId!,
           studentId: id,
           reason: reason.trim(),
           points: pts,
@@ -282,7 +282,7 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
   // return immediately and run the processing in the background. Results land
   // in pbis_milestone_emails (visible in PBIS Lists -> Milestone Parent Emails).
   const idsToProcess = created.map((c) => c.studentId);
-  void processMilestonesForStudents(idsToProcess, staff.schoolId).catch((err) => {
+  void processMilestonesForStudents(idsToProcess, req.schoolId!).catch((err) => {
     console.error("[bulk milestones] background failure", err);
   });
   res.status(201).json({
@@ -315,7 +315,7 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     .where(
       and(
         eq(pbisEntriesTable.id, id),
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
       ),
     );
   if (!entry) {
@@ -359,7 +359,7 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     .where(
       and(
         eq(pbisEntriesTable.id, id),
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
       ),
     )
     .returning();
@@ -402,7 +402,7 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
     .where(
       and(
         eq(pbisEntriesTable.id, id),
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
       ),
     );
   if (!entry) {
@@ -435,11 +435,11 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
     .where(
       and(
         eq(pbisEntriesTable.id, id),
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
       ),
     )
     .returning();
-  await logEdit(id, "voided", null, reasonText, staff, staff.schoolId);
+  await logEdit(id, "voided", null, reasonText, staff, req.schoolId!);
   res.json(updated);
 });
 
@@ -493,7 +493,7 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, windowStart.toISOString()),
         lt(pbisEntriesTable.createdAt, windowEnd.toISOString()),
@@ -543,7 +543,7 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
   const allStudents = await db
     .select({ id: studentsTable.id })
     .from(studentsTable)
-    .where(eq(studentsTable.schoolId, staff.schoolId));
+    .where(eq(studentsTable.schoolId, req.schoolId!));
   const totalStudents = allStudents.length;
 
   // class_sections has not yet been migrated to school_id (scheduled for D4).
@@ -560,7 +560,7 @@ router.get("/pbis/home-stats", async (req: Request, res: Response) => {
     .innerJoin(staffTable, eq(staffTable.id, classSectionsTable.teacherStaffId));
   const teachingStaffSet = new Set<number>();
   for (const r of teachingRows) {
-    if (!r.isPlanning && r.active && r.staffSchoolId === staff.schoolId) {
+    if (!r.isPlanning && r.active && r.staffSchoolId === req.schoolId!) {
       teachingStaffSet.add(r.staffId);
     }
   }
@@ -615,7 +615,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   const [settingsRow] = await db
     .select()
     .from(schoolSettingsTable)
-    .where(eq(schoolSettingsTable.schoolId, staff.schoolId));
+    .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
   const QUIET_DAYS = settingsRow?.pbisQuietTeacherDays ?? 5;
   const INVISIBLE_DAYS = settingsRow?.pbisInvisibleStudentDays ?? 10;
   const IMBALANCE_PCT = settingsRow?.pbisReasonImbalancePct ?? 60;
@@ -657,7 +657,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
       active: staffTable.active,
     })
     .from(staffTable)
-    .where(eq(staffTable.schoolId, staff.schoolId));
+    .where(eq(staffTable.schoolId, req.schoolId!));
 
   const teachingRows = await db
     .select({
@@ -679,7 +679,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
       lastName: studentsTable.lastName,
     })
     .from(studentsTable)
-    .where(eq(studentsTable.schoolId, staff.schoolId));
+    .where(eq(studentsTable.schoolId, req.schoolId!));
   const studentNameById = new Map<string, string>(
     allStudents.map((s) => [
       s.id,
@@ -695,7 +695,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, quietWindow.toISOString()),
       ),
@@ -717,7 +717,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, invisibleWindow.toISOString()),
       ),
@@ -742,7 +742,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .from(pbisEntriesTable)
     .where(
       and(
-        eq(pbisEntriesTable.schoolId, staff.schoolId),
+        eq(pbisEntriesTable.schoolId, req.schoolId!),
         isNull(pbisEntriesTable.voidedAt),
         gte(pbisEntriesTable.createdAt, thisMonday.toISOString()),
         lt(pbisEntriesTable.createdAt, nextMonday.toISOString()),
@@ -800,7 +800,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
         and(
           isNull(pbisEntriesTable.voidedAt),
           gte(pbisEntriesTable.createdAt, monthStart.toISOString()),
-          eq(pbisEntriesTable.schoolId, staff.schoolId),
+          eq(pbisEntriesTable.schoolId, req.schoolId!),
         ),
       );
     const perStudent = new Map<string, number>();
@@ -852,7 +852,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
         and(
           eq(bellSchedulesTable.isDefault, true),
           eq(bellSchedulesTable.active, true),
-          eq(bellSchedulesTable.schoolId, staff.schoolId),
+          eq(bellSchedulesTable.schoolId, req.schoolId!),
         ),
       )
       .limit(1);

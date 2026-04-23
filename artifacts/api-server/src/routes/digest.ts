@@ -45,7 +45,7 @@ router.get(
   requireAdmin(),
   async (req: Request, res: Response) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
-    const d = await buildDailyDigest(new Date(), staff.schoolId);
+    const d = await buildDailyDigest(new Date(), req.schoolId!);
     res.json(d);
   },
 );
@@ -59,7 +59,7 @@ router.post(
     const staff = (req as Request & { staff: StaffRow }).staff;
     const result = await sendDailyDigestEmailForSchool(
       new Date(),
-      staff.schoolId,
+      req.schoolId!,
     );
     res.json(result);
   },

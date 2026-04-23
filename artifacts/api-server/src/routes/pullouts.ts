@@ -164,7 +164,7 @@ router.get(
     const all = await db
       .select()
       .from(pulloutsTable)
-      .where(eq(pulloutsTable.schoolId, staff.schoolId))
+      .where(eq(pulloutsTable.schoolId, req.schoolId!))
       .orderBy(desc(pulloutsTable.requestedAt))
       .limit(500);
 
@@ -222,7 +222,7 @@ router.post(
       periodNum = p;
     }
 
-    const has = await hasRecentIntervention(studentId.trim(), staff.schoolId);
+    const has = await hasRecentIntervention(studentId.trim(), req.schoolId!);
     if (!has && acknowledgeNoIntervention !== true) {
       res.status(409).json({
         error: `Pullouts require a logged classroom intervention in the past ${INTERVENTION_WINDOW_DAYS} days. If you have tried interventions but not logged them, set acknowledgeNoIntervention=true.`,
@@ -258,7 +258,7 @@ router.post(
     const [row] = await db
       .insert(pulloutsTable)
       .values({
-        schoolId: staff.schoolId,
+        schoolId: req.schoolId!,
         studentId: studentId.trim(),
         requestedById: staff.id,
         requestedByName: staff.displayName,
@@ -417,7 +417,7 @@ router.get(
       .where(
         and(
           eq(pulloutsTable.studentId, sid),
-          eq(pulloutsTable.schoolId, staff.schoolId),
+          eq(pulloutsTable.schoolId, req.schoolId!),
         ),
       )
       .orderBy(desc(pulloutsTable.requestedAt));
@@ -449,7 +449,7 @@ router.get(
       .from(pulloutsTable)
       .where(
         and(
-          eq(pulloutsTable.schoolId, staff.schoolId),
+          eq(pulloutsTable.schoolId, req.schoolId!),
           gte(pulloutsTable.requestedAt, since),
         ),
       )

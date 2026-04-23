@@ -771,5 +771,59 @@ two districts simultaneously will visually overwrite the "Creating…"
 indicator on the first form, but both POSTs still complete
 independently and the last response wins the banner. Acceptable
 trade-off — onboarding two districts in the same second isn't a real
-workflow. Architect review PASSED with no blockers; no other
-follow-ups documented.
+workflow. Architect review PASSED with no blockers.
+
+**D6 follow-up #3 — school-switcher consistency.** With cross-tenancy
+holes closed, an audit turned up a separate class of bug: about half
+the routes that touch school-scoped tables were reading
+`staff.schoolId` (always the home school) instead of `req.schoolId`
+(the active school after middleware resolution). For non-SuperUsers
+those are always equal, so nothing was visibly wrong. For SuperUsers
+who'd switched into another same-district school, the switcher was
+silently ignored — clicking "give a PBIS award" while viewing Pasco
+Sunlake from a Hernando SuperUser session still created the entry
+under their Hernando home school.
+
+Replaced `staff.schoolId` → `req.schoolId!` in the route handlers of
+`pullouts.ts` (5 sites: list / create / by-student / report /
+recent-intervention check), `pbis.ts` (~19 sites across leaderboard,
+awards, void, home-stats, needs-attention, settings, students, staff,
+schedule), `pbisMilestones.ts` (1 site: milestone email log),
+`parentEmail.ts` (3 sites: student lookup, school settings, audit
+note), and `digest.ts` (2 sites: preview / send-now). The `!`
+non-null assertion is safe because every changed call site is
+already inside a `requireStaffMW` / `requireAdmin` handler, and the
+middleware in `app.ts` guarantees `req.schoolId` is set whenever a
+staff session is loaded.
+
+Intentionally NOT changed:
+
+- `kiosk.ts` activation routes — they're unauthenticated (no
+  session, no `req.schoolId`); a kiosk's school is intrinsically the
+  activating staff member's home school.
+- `auth.ts /me` — already returns both `activeSchoolId` and
+  `homeSchoolId` so the UI can render the switcher correctly.
+- `tenancy.ts` and `app.ts` — those compute the actor's HOME
+  district to decide what's in scope; that resolution is intrinsically
+  about home, not active.
+
+Architect review PASSED. The verdict noted that because the D6
+middleware fix already guarantees `req.schoolId` is same-district
+as `staff.schoolId`, swapping one for the other can't introduce a
+cross-tenancy leak even theoretically — this change is purely a UX
+correctness pass on top of an already-secure foundation.
+
+**Silo migration: complete.** D1–D5 covered the schema columns,
+route filtering, UI scoping, SuperUser permissions, and cross-school
+sweeps. D6 closed the latent holes that surfaced once Pasco landed
+as the second district (8 server endpoints, schema for
+`custom_roles`, the request middleware override-school district
+check, the TenancyPanel iteration + per-district form state, and
+this final school-switcher consistency pass). The system is now
+silo-per-district with no documented follow-ups remaining. Two
+deferred items, only build them when a real caller appears: a
+test harness for the api-server (the architect suggested regression
+coverage for tenancy routes; no test framework exists yet — would
+require setting up vitest + supertest + a test database strategy),
+and an `isCrossDistrictSuperUser` flag for a Replit-side support
+persona that needs to move between districts.
