@@ -13,26 +13,22 @@ const router: IRouter = Router();
 async function resolveStaff(
   req: Request,
 ): Promise<typeof staffTable.$inferSelect | null> {
-  const sessionId = req.staffId;
-  const queryId = (() => {
-    const raw = req.query.staffId;
-    if (typeof raw !== "string") return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : null;
-  })();
-  const id = sessionId ?? queryId;
+  // Session-only — no ?staffId query fallback. The previous fallback was an
+  // intra-school impersonation surface (any signed-in user could request
+  // another teacher's schedule view). Session and schoolId are set by the
+  // same auth middleware, so if the cookie is missing, requireSchool 401s
+  // anyway and the fallback served no real purpose.
+  const id = req.staffId;
   if (!id) return null;
   const [staff] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return staff && staff.active ? staff : null;
 }
 
-// Returns sections for the signed-in staff (or ?staffId= fallback when cookies
-// are blocked, e.g. inside the Replit preview iframe). ?all=1 returns every
-// section in the SAME school as the caller (used by admins/ESE coordinators
-// for browsing). All paths require a signed-in session and AND-filter every
+// Returns sections for the signed-in staff. ?all=1 returns every section in
+// the SAME school as the caller (used by admins/ESE coordinators for
+// browsing). All paths require a signed-in session and AND-filter every
 // query by the caller's schoolId — this prevents school A from listing
-// school B's sections, teachers, or roster either via ?all=1 or via a
-// teacherStaffId belonging to another school.
+// school B's sections, teachers, or roster.
 router.get("/schedule", async (req: Request, res: Response) => {
   const wantAll = req.query.all === "1";
   const staff = await resolveStaff(req);

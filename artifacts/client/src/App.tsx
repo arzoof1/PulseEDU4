@@ -3722,7 +3722,7 @@ function App() {
       return;
     }
     try {
-      const res = await authFetch(`/api/schedule?staffId=${authUser.id}`, {
+      const res = await authFetch(`/api/schedule`, {
         credentials: "include",
       });
       if (!res.ok) {
@@ -4389,7 +4389,7 @@ function App() {
 
     loadAccommodationLogs();
 
-    authFetch(`/api/schedule?staffId=${authUser.id}`, { credentials: "include" })
+    authFetch(`/api/schedule`, { credentials: "include" })
       .then((res) => (res.ok ? res.json() : { sections: [] }))
       .then((data: { sections: MySection[] }) =>
         setMySections(data.sections ?? []),

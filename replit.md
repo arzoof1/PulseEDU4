@@ -54,6 +54,11 @@ caller from attaching another school's master-list id to their own row.
 `adminStaff.ts` carve-out: SuperUser sees/edits district-wide; all other
 admins (incl. `cap_staff_roles` holders) are hard-scoped to
 `actor.schoolId` for LIST, PATCH, POST, and password-reset.
+
+`schedule.ts` identity is session-only — the prior `?staffId=` query
+fallback was an intra-school impersonation surface and has been removed.
+Clients always rely on the session cookie; `?all=1` is the only
+documented variant and is still tenant-scoped to the caller's school.
 `accommodationsAdmin.ts` no longer accepts `?staffId` / body `staffId` as an
 actor identity — only the signed-in `req.staffId` is used.
 
