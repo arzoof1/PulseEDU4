@@ -58,7 +58,9 @@ admins (incl. `cap_staff_roles` holders) are hard-scoped to
 `schedule.ts` identity is session-only — the prior `?staffId=` query
 fallback was an intra-school impersonation surface and has been removed.
 Clients always rely on the session cookie; `?all=1` is the only
-documented variant and is still tenant-scoped to the caller's school.
+documented variant, still tenant-scoped to the caller's school, and
+gated server-side to `isAdmin || isEseCoordinator` so the UI gate is
+mirrored at the API boundary.
 `accommodationsAdmin.ts` no longer accepts `?staffId` / body `staffId` as an
 actor identity — only the signed-in `req.staffId` is used.
 

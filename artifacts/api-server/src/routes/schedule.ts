@@ -40,6 +40,14 @@ router.get("/schedule", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
 
+  // ?all=1 lets admins/ESE coordinators browse every section in their school.
+  // Mirror the client-side gate at the API boundary as defense-in-depth so a
+  // non-privileged user can't bypass UI checks by hitting the URL directly.
+  if (wantAll && !staff.isAdmin && !staff.isEseCoordinator) {
+    res.status(403).json({ error: "Admin or ESE coordinator only" });
+    return;
+  }
+
   const filterByTeacher = !wantAll;
 
   const sections = filterByTeacher
