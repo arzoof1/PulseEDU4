@@ -7,7 +7,7 @@ import {
 } from "express";
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
-import { eq, asc } from "drizzle-orm";
+import { and, eq, asc } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 
 const router: IRouter = Router();
@@ -140,17 +140,27 @@ const STAFF_SELECT = {
   capStaffRoles: staffTable.capStaffRoles,
   capManageRoles: staffTable.capManageRoles,
   defaultRoom: staffTable.defaultRoom,
+  schoolId: staffTable.schoolId,
 } as const;
 
-// List all staff with full role + capability flags.
+// List staff with full role + capability flags. SuperUsers see every school
+// (the role is intentionally district-wide). Everyone else — including
+// school admins and cap_staff_roles holders — sees only their own school.
 router.get(
   "/admin/staff",
   requireAdminOrSuper(),
-  async (_req: Request, res: Response) => {
-    const rows = await db
-      .select(STAFF_SELECT)
-      .from(staffTable)
-      .orderBy(asc(staffTable.displayName));
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    const rows = actor.isSuperUser
+      ? await db
+          .select(STAFF_SELECT)
+          .from(staffTable)
+          .orderBy(asc(staffTable.displayName))
+      : await db
+          .select(STAFF_SELECT)
+          .from(staffTable)
+          .where(eq(staffTable.schoolId, actor.schoolId))
+          .orderBy(asc(staffTable.displayName));
     res.json(rows);
   },
 );
@@ -237,10 +247,19 @@ router.patch(
       }
     }
 
+    // Non-SuperUsers can only manage staff in their own school. SuperUsers
+    // intentionally retain district-wide reach.
     const [target] = await db
       .select()
       .from(staffTable)
-      .where(eq(staffTable.id, targetId));
+      .where(
+        actor.isSuperUser
+          ? eq(staffTable.id, targetId)
+          : and(
+              eq(staffTable.id, targetId),
+              eq(staffTable.schoolId, actor.schoolId),
+            ),
+      );
     if (!target) {
       res.status(404).json({ error: "Staff not found" });
       return;
@@ -249,7 +268,14 @@ router.patch(
     const [updated] = await db
       .update(staffTable)
       .set(updates)
-      .where(eq(staffTable.id, targetId))
+      .where(
+        actor.isSuperUser
+          ? eq(staffTable.id, targetId)
+          : and(
+              eq(staffTable.id, targetId),
+              eq(staffTable.schoolId, actor.schoolId),
+            ),
+      )
       .returning(STAFF_SELECT);
     res.json(updated);
   },
@@ -303,6 +329,17 @@ router.post(
       delete updates.capManageRoles;
     }
 
+    // School assignment for the new row:
+    //   * SuperUser may target any school via body.schoolId (defaults to
+    //     their own if not supplied).
+    //   * Everyone else creates strictly into their own school — body
+    //     overrides are ignored to prevent cross-school staff seeding.
+    const bodySchoolId = Number((req.body as { schoolId?: unknown })?.schoolId);
+    const targetSchoolId =
+      actor.isSuperUser && Number.isInteger(bodySchoolId) && bodySchoolId > 0
+        ? bodySchoolId
+        : actor.schoolId;
+
     const passwordHash = await bcrypt.hash(password, 10);
     const [row] = await db
       .insert(staffTable)
@@ -310,6 +347,7 @@ router.post(
         email: normEmail,
         displayName: displayName.trim(),
         passwordHash,
+        schoolId: targetSchoolId,
         ...updates,
       })
       .returning(STAFF_SELECT);
@@ -359,10 +397,20 @@ router.post(
       return;
     }
 
+    // Same scoping as PATCH: non-SuperUser admins may only reset passwords
+    // for staff in their own school. Without this, a school A admin who
+    // knew a school B staff id could take over that account.
     const [target] = await db
       .select()
       .from(staffTable)
-      .where(eq(staffTable.id, targetId));
+      .where(
+        actor.isSuperUser
+          ? eq(staffTable.id, targetId)
+          : and(
+              eq(staffTable.id, targetId),
+              eq(staffTable.schoolId, actor.schoolId),
+            ),
+      );
     if (!target) {
       res.status(404).json({ error: "Staff not found" });
       return;

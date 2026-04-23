@@ -12,6 +12,7 @@ import {
   locationsTable,
 } from "@workspace/db";
 import { eq, and, sql } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -39,9 +40,12 @@ function requireAdmin() {
   };
 }
 
-// Read every default-room row joined with the (optional) staff record so
-// the client can render an admin grid without a second round-trip.
-router.get("/staff-defaults", async (_req, res) => {
+// Read default-room rows for THIS school. staff_defaults rows now carry
+// school_id directly (D2 backfill); we filter by it so school A doesn't
+// see school B's teacher → room assignments.
+router.get("/staff-defaults", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select({
       id: staffDefaultsTable.id,
@@ -49,7 +53,8 @@ router.get("/staff-defaults", async (_req, res) => {
       staffName: staffDefaultsTable.staffName,
       defaultLocationName: staffDefaultsTable.defaultLocationName,
     })
-    .from(staffDefaultsTable);
+    .from(staffDefaultsTable)
+    .where(eq(staffDefaultsTable.schoolId, schoolId));
   res.json(rows);
 });
 
@@ -58,6 +63,8 @@ router.get("/staff-defaults", async (_req, res) => {
 // re-keyed yet. Validates the location exists & is an origin so we can't
 // pin teachers to a non-existent or destination-only room.
 router.put("/staff-defaults", requireAdmin(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const staffId = Number(req.body?.staffId);
   const defaultLocationName =
     typeof req.body?.defaultLocationName === "string"
@@ -69,10 +76,13 @@ router.put("/staff-defaults", requireAdmin(), async (req, res) => {
     return;
   }
 
+  // Target staff must belong to the same school as the calling admin —
+  // an admin in school A must not be able to set school B's teacher's
+  // default room.
   const [staff] = await db
     .select()
     .from(staffTable)
-    .where(eq(staffTable.id, staffId));
+    .where(and(eq(staffTable.id, staffId), eq(staffTable.schoolId, schoolId)));
   if (!staff) {
     res.status(404).json({ error: "Staff not found" });
     return;
@@ -80,11 +90,13 @@ router.put("/staff-defaults", requireAdmin(), async (req, res) => {
 
   let normalizedRoom: string | null = null;
   if (defaultLocationName) {
+    // Origin location must also belong to this school.
     const [loc] = await db
       .select()
       .from(locationsTable)
       .where(
         and(
+          eq(locationsTable.schoolId, schoolId),
           eq(locationsTable.name, defaultLocationName),
           eq(locationsTable.isOrigin, true),
           eq(locationsTable.active, true),
@@ -102,11 +114,15 @@ router.put("/staff-defaults", requireAdmin(), async (req, res) => {
   // Atomic upsert keyed by staff_id (canonical) with a partial unique index
   // staff_defaults_staff_id_unique. If a legacy name-keyed row exists with a
   // null staff_id we promote it first so the conflict target lines up.
+  // The promotion update MUST AND-filter by schoolId — otherwise a school A
+  // admin could promote (i.e. take ownership of) a legacy null-staffId row
+  // that actually belongs to school B if the displayName collides.
   await db
     .update(staffDefaultsTable)
-    .set({ staffId })
+    .set({ staffId, schoolId })
     .where(
       and(
+        eq(staffDefaultsTable.schoolId, schoolId),
         eq(staffDefaultsTable.staffName, staff.displayName),
         sql`${staffDefaultsTable.staffId} IS NULL`,
       ),
@@ -115,6 +131,7 @@ router.put("/staff-defaults", requireAdmin(), async (req, res) => {
   await db
     .insert(staffDefaultsTable)
     .values({
+      schoolId,
       staffId,
       staffName: staff.displayName,
       defaultLocationName: normalizedRoom,
@@ -122,6 +139,7 @@ router.put("/staff-defaults", requireAdmin(), async (req, res) => {
     .onConflictDoUpdate({
       target: staffDefaultsTable.staffId,
       set: {
+        schoolId,
         defaultLocationName: normalizedRoom,
         staffName: staff.displayName,
       },

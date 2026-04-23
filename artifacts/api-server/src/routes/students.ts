@@ -19,10 +19,10 @@ router.get("/students", async (req, res) => {
     .from(studentsTable)
     .where(eq(studentsTable.schoolId, schoolId))
     .orderBy(studentsTable.lastName, studentsTable.firstName);
-  // Accommodations join is naturally scoped because it joins to studentsTable
-  // (via accommodation_id -> school_accommodations) and we filter by the
-  // student's school via the studentId membership below. No need to filter
-  // the join itself.
+  // student_id is NOT globally unique across schools, so an in-memory
+  // membership filter on the school's roster would still mis-attribute an
+  // assignment that belongs to a different school's student with the same
+  // student_id. AND-filter the assignments themselves by schoolId in SQL.
   const assignments = await db
     .select({
       studentId: studentAccommodationsTable.studentId,
@@ -33,12 +33,15 @@ router.get("/students", async (req, res) => {
       schoolAccommodationsTable,
       eq(studentAccommodationsTable.accommodationId, schoolAccommodationsTable.id),
     )
-    .where(isNull(studentAccommodationsTable.removedAt));
+    .where(
+      and(
+        eq(studentAccommodationsTable.schoolId, schoolId),
+        isNull(studentAccommodationsTable.removedAt),
+      ),
+    );
 
-  const studentIdsInSchool = new Set(rows.map((r) => r.studentId));
   const byStudent = new Map<string, string[]>();
   for (const a of assignments) {
-    if (!studentIdsInSchool.has(a.studentId)) continue;
     const list = byStudent.get(a.studentId) ?? [];
     list.push(a.name);
     byStudent.set(a.studentId, list);

@@ -117,6 +117,8 @@ router.get("/reports/teachers", requireStaff, async (req, res) => {
 router.get("/reports/accommodations", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const mode = String(req.query.mode ?? "");
 
   // ---- date range ----
@@ -172,10 +174,15 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     return;
   }
 
+  // Teacher must belong to the same school as the caller — otherwise an
+  // admin in school A could pull a teacher's full activity from school B
+  // by knowing the teacher's id.
   const [teacher] = await db
     .select()
     .from(staffTable)
-    .where(eq(staffTable.id, teacherIdNum));
+    .where(
+      and(eq(staffTable.id, teacherIdNum), eq(staffTable.schoolId, schoolId)),
+    );
   if (!teacher) {
     res.status(404).json({ error: "Teacher not found" });
     return;
@@ -197,7 +204,12 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
   const sectionsAll = await db
     .select()
     .from(classSectionsTable)
-    .where(eq(classSectionsTable.teacherStaffId, teacher.id));
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, teacher.id),
+      ),
+    );
 
   const sections =
     periodFilter == null
@@ -213,7 +225,12 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     ? await db
         .select()
         .from(sectionRosterTable)
-        .where(inArray(sectionRosterTable.sectionId, sectionIds))
+        .where(
+          and(
+            eq(sectionRosterTable.schoolId, schoolId),
+            inArray(sectionRosterTable.sectionId, sectionIds),
+          ),
+        )
     : [];
   const rosterBySection = new Map<number, string[]>();
   for (const r of rosterRows) {
@@ -233,6 +250,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
         .from(studentAccommodationsTable)
         .where(
           and(
+            eq(studentAccommodationsTable.schoolId, schoolId),
             inArray(
               studentAccommodationsTable.studentId,
               allRosterStudentIds,
@@ -266,6 +284,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     .from(accommodationLogsTable)
     .where(
       and(
+        eq(accommodationLogsTable.schoolId, schoolId),
         eq(accommodationLogsTable.staffId, teacher.id),
         sql`substring(${accommodationLogsTable.createdAt}, 1, 10) >= ${fromRaw}`,
         sql`substring(${accommodationLogsTable.createdAt}, 1, 10) <= ${toRaw}`,
@@ -359,6 +378,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
     .from(accommodationLogsTable)
     .where(
       and(
+        eq(accommodationLogsTable.schoolId, schoolId),
         eq(accommodationLogsTable.staffId, teacher.id),
         sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) >= ${fromRaw}`,
         sql`substring(${accommodationLogsTable.createdAt}::text, 1, 10) <= ${toRaw}`,
@@ -381,7 +401,12 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
           lastName: studentsTable.lastName,
         })
         .from(studentsTable)
-        .where(inArray(studentsTable.studentId, recentStudentIds))
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, recentStudentIds),
+          ),
+        )
     : [];
   const studentNameById = new Map(
     recentStudents.map((s) => [
@@ -559,6 +584,8 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
 router.get("/reports/pbis", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
 
   const fromRaw = req.query.from ? String(req.query.from) : todayIsoDate();
   const toRaw = req.query.to ? String(req.query.to) : todayIsoDate();
@@ -609,6 +636,7 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
   }
 
   const conds = [
+    eq(pbisEntriesTable.schoolId, schoolId),
     sql`substring(${pbisEntriesTable.createdAt}, 1, 10) >= ${fromRaw}`,
     sql`substring(${pbisEntriesTable.createdAt}, 1, 10) <= ${toRaw}`,
     sql`${pbisEntriesTable.voidedAt} IS NULL`,
@@ -639,7 +667,12 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
           lastName: studentsTable.lastName,
         })
         .from(studentsTable)
-        .where(inArray(studentsTable.studentId, rowStudentIds))
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, rowStudentIds),
+          ),
+        )
     : [];
   const nameById = new Map(
     studentRows.map((s) => [

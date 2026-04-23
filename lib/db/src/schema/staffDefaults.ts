@@ -15,6 +15,7 @@ import { staffTable } from "./staff";
 // table keyed by `staffId`, sourcing the room from the SIS.
 export const staffDefaultsTable = pgTable("staff_defaults", {
   id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().default(1),
   staffId: integer("staff_id").references(() => staffTable.id, {
     onDelete: "cascade",
   }),

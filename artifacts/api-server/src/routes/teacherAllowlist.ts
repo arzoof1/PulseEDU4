@@ -59,6 +59,8 @@ router.get(
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    // Defense-in-depth: also constrain the joined location to this school
+    // so a stale row pointing at another school's location id can't bleed.
     const rows = await db
       .select({
         id: teacherDestinationAllowlistTable.id,
@@ -70,9 +72,12 @@ router.get(
       .from(teacherDestinationAllowlistTable)
       .innerJoin(
         locationsTable,
-        eq(
-          locationsTable.id,
-          teacherDestinationAllowlistTable.destinationLocationId,
+        and(
+          eq(
+            locationsTable.id,
+            teacherDestinationAllowlistTable.destinationLocationId,
+          ),
+          eq(locationsTable.schoolId, schoolId),
         ),
       )
       .where(eq(teacherDestinationAllowlistTable.schoolId, schoolId));

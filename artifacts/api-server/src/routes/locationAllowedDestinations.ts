@@ -54,6 +54,9 @@ router.get("/location-allowed-destinations", async (req, res) => {
   const origin = alias(locationsTable, "origin_loc");
   const dest = alias(locationsTable, "dest_loc");
 
+  // Defense-in-depth: also constrain both joined locations to this school
+  // so a stale pairing pointing at another school's location id can't bleed
+  // a name through. The pairing table is already school-scoped.
   const rows = await db
     .select({
       id: locationAllowedDestinationsTable.id,
@@ -70,11 +73,17 @@ router.get("/location-allowed-destinations", async (req, res) => {
     .from(locationAllowedDestinationsTable)
     .innerJoin(
       origin,
-      eq(origin.id, locationAllowedDestinationsTable.originLocationId),
+      and(
+        eq(origin.id, locationAllowedDestinationsTable.originLocationId),
+        eq(origin.schoolId, schoolId),
+      ),
     )
     .innerJoin(
       dest,
-      eq(dest.id, locationAllowedDestinationsTable.destinationLocationId),
+      and(
+        eq(dest.id, locationAllowedDestinationsTable.destinationLocationId),
+        eq(dest.schoolId, schoolId),
+      ),
     )
     .where(eq(locationAllowedDestinationsTable.schoolId, schoolId));
 

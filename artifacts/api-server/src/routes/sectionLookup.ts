@@ -6,6 +6,7 @@ import {
   sectionRosterTable,
   staffTable,
 } from "@workspace/db";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -23,6 +24,8 @@ router.get("/section-lookup", async (req, res) => {
     res.status(401).json({ error: "Authentication required" });
     return;
   }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
 
   const studentId = String(req.query.studentId ?? "");
   const periodNum = Number(req.query.period);
@@ -32,6 +35,9 @@ router.get("/section-lookup", async (req, res) => {
     return;
   }
 
+  // student_id is NOT globally unique across schools — must AND-filter both
+  // section_roster and class_sections by this school so a student id that
+  // exists in a sister school can't surface that school's teacher / room.
   const rows = await db
     .select({
       teacherName: staffTable.displayName,
@@ -47,6 +53,8 @@ router.get("/section-lookup", async (req, res) => {
     .innerJoin(staffTable, eq(staffTable.id, classSectionsTable.teacherStaffId))
     .where(
       and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(classSectionsTable.schoolId, schoolId),
         eq(sectionRosterTable.studentId, studentId),
         eq(classSectionsTable.period, periodNum),
       ),

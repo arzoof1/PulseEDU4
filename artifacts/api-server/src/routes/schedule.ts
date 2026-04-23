@@ -1,11 +1,12 @@
-import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
+import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
   classSectionsTable,
   sectionRosterTable,
   staffTable,
 } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -27,16 +28,21 @@ async function resolveStaff(
 
 // Returns sections for the signed-in staff (or ?staffId= fallback when cookies
 // are blocked, e.g. inside the Replit preview iframe). ?all=1 returns every
-// section in the school (used by admins/ESE coordinators for browsing).
-// Response shape: { sections: [{ id, period, courseName, isPlanning, teacherStaffId, teacherName, studentIds }] }
-router.get("/schedule", async (req, res) => {
+// section in the SAME school as the caller (used by admins/ESE coordinators
+// for browsing). All paths require a signed-in session and AND-filter every
+// query by the caller's schoolId — this prevents school A from listing
+// school B's sections, teachers, or roster either via ?all=1 or via a
+// teacherStaffId belonging to another school.
+router.get("/schedule", async (req: Request, res: Response) => {
   const wantAll = req.query.all === "1";
   const staff = await resolveStaff(req);
 
-  if (!wantAll && !staff) {
+  if (!staff) {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
 
   const filterByTeacher = !wantAll;
 
@@ -44,8 +50,16 @@ router.get("/schedule", async (req, res) => {
     ? await db
         .select()
         .from(classSectionsTable)
-        .where(eq(classSectionsTable.teacherStaffId, staff!.id))
-    : await db.select().from(classSectionsTable);
+        .where(
+          and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.teacherStaffId, staff.id),
+          ),
+        )
+    : await db
+        .select()
+        .from(classSectionsTable)
+        .where(eq(classSectionsTable.schoolId, schoolId));
 
   if (sections.length === 0) {
     res.json({ sections: [] });
@@ -54,13 +68,29 @@ router.get("/schedule", async (req, res) => {
 
   const teacherIds = Array.from(new Set(sections.map((s) => s.teacherStaffId)));
   const teachers = teacherIds.length
-    ? await db.select().from(staffTable)
+    ? await db
+        .select()
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, teacherIds),
+          ),
+        )
     : [];
   const teacherById = new Map(teachers.map((t) => [t.id, t]));
 
   const sectionIds = sections.map((s) => s.id);
   const rosterRows = sectionIds.length
-    ? await db.select().from(sectionRosterTable)
+    ? await db
+        .select()
+        .from(sectionRosterTable)
+        .where(
+          and(
+            eq(sectionRosterTable.schoolId, schoolId),
+            inArray(sectionRosterTable.sectionId, sectionIds),
+          ),
+        )
     : [];
 
   const studentsBySection = new Map<number, string[]>();

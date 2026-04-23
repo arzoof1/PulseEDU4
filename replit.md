@@ -26,6 +26,32 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Multi-tenancy / Cross-school Isolation (April 2026)
+
+PulseEDU is multi-tenant by `school_id` (Hernando County: Parrott=1,
+Springstead=2, NCT=3, Weeki=4, Powell=5, Test Middle=36). The session sets
+`req.schoolId`; routes call `requireSchool(req,res)` from
+`artifacts/api-server/src/lib/scope.ts` and AND-filter every read/write by
+that id. SuperUser is intentionally district-wide and is the only role that
+escapes school scoping.
+
+`student_id` and `displayName` are NOT globally unique across schools, so
+membership filters in JS are not sufficient — every query that touches
+`students`, `class_sections`, `section_roster`, `student_accommodations`,
+`accommodation_logs`, `pbis_entries`, `staff_defaults`,
+`teacher_destination_allowlist`, or `location_allowed_destinations` must
+include `eq(table.schoolId, schoolId)` in SQL.
+
+Per-school uniqueness: `school_accommodations` uses composite unique
+`(school_id, name)` (`school_accommodations_school_id_name_unique`) so each
+school can carry the same accommodation name independently.
+
+`adminStaff.ts` carve-out: SuperUser sees/edits district-wide; all other
+admins (incl. `cap_staff_roles` holders) are hard-scoped to
+`actor.schoolId` for LIST, PATCH, POST, and password-reset.
+`accommodationsAdmin.ts` no longer accepts `?staffId` / body `staffId` as an
+actor identity — only the signed-in `req.staffId` is used.
+
 ## Staff & Roles (April 2026)
 
 PulseED has a per-page capability system on the `staff` table (`cap_*` columns)
