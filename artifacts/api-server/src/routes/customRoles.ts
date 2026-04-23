@@ -6,8 +6,9 @@ import {
   type NextFunction,
 } from "express";
 import { db, staffTable, customRolesTable } from "@workspace/db";
-import { eq, asc } from "drizzle-orm";
+import { and, eq, asc } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
+import { getDistrictIdForSchool } from "../lib/scope";
 
 const router: IRouter = Router();
 
@@ -100,10 +101,35 @@ function requireSuper() {
   };
 }
 
-router.get("/custom-roles", requireRead(), async (_req, res: Response) => {
+// Resolve the actor's district for every request that touches the
+// custom_roles table. Returns null + writes a 403 if the actor's
+// school can't be mapped to a district (which would mean the staff row
+// or its school was deleted mid-session — nothing should fall back to
+// "all districts").
+async function actorDistrictOr403(
+  req: Request,
+  res: Response,
+): Promise<number | null> {
+  const actor = (req as Request & { staff: StaffRow }).staff;
+  const did = await getDistrictIdForSchool(actor.schoolId);
+  if (did === null) {
+    res
+      .status(403)
+      .json({ error: "Actor is not associated with any district." });
+    return null;
+  }
+  return did;
+}
+
+// D6 follow-up: list returns ONLY the actor's district's role catalog.
+// Hernando admins see Hernando-defined roles; Pasco admins see Pasco's.
+router.get("/custom-roles", requireRead(), async (req: Request, res: Response) => {
+  const did = await actorDistrictOr403(req, res);
+  if (did === null) return;
   const rows = await db
     .select()
     .from(customRolesTable)
+    .where(eq(customRolesTable.districtId, did))
     .orderBy(asc(customRolesTable.label));
   res.json(rows);
 });
@@ -125,11 +151,14 @@ router.post("/custom-roles", requireSuper(), async (req: Request, res: Response)
     res.status(400).json({ error: "key, label, capabilities[] required" });
     return;
   }
+  const did = await actorDistrictOr403(req, res);
+  if (did === null) return;
   const actor = (req as Request & { staff: StaffRow }).staff;
   const safeCaps = sanitizeCaps(actor, capabilities as string[]);
   const [row] = await db
     .insert(customRolesTable)
     .values({
+      districtId: did,
       key: key.trim().toLowerCase().replace(/\s+/g, "_"),
       label: label.trim(),
       capabilities: safeCaps,
@@ -161,10 +190,21 @@ router.patch("/custom-roles/:id", requireSuper(), async (req: Request, res: Resp
     res.status(400).json({ error: "Nothing to update" });
     return;
   }
+  const did = await actorDistrictOr403(req, res);
+  if (did === null) return;
+  // Cross-district edit attempt 404s (not 403) — that matches how the
+  // adminStaff district scoping signals "not found in your scope" so an
+  // attacker can't use the response to enumerate role ids in other
+  // districts.
   const [row] = await db
     .update(customRolesTable)
     .set(updates)
-    .where(eq(customRolesTable.id, id))
+    .where(
+      and(
+        eq(customRolesTable.id, id),
+        eq(customRolesTable.districtId, did),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });
@@ -179,7 +219,18 @@ router.delete("/custom-roles/:id", requireSuper(), async (req: Request, res: Res
     res.status(400).json({ error: "Invalid id" });
     return;
   }
-  await db.delete(customRolesTable).where(eq(customRolesTable.id, id));
+  const did = await actorDistrictOr403(req, res);
+  if (did === null) return;
+  // Same-district scope. A delete that doesn't match still returns 204
+  // (idempotent delete), matching the prior behavior.
+  await db
+    .delete(customRolesTable)
+    .where(
+      and(
+        eq(customRolesTable.id, id),
+        eq(customRolesTable.districtId, did),
+      ),
+    );
   res.status(204).end();
 });
 

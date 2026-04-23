@@ -713,10 +713,42 @@ top of the existing `isSuperUser`. Deferred until there's a real
 caller for it; today every SuperUser belongs to exactly one district
 via their home school.
 
-**Known follow-ups (not in this batch).** (1) Custom-role presets
-(`/custom-roles`) are still instance-global — no `district_id` on
-that schema. If districts need their own role catalogs, that's a
-separate schema migration. (2) `TenancyPanel`'s `createError` /
-`createOk` state is shared across the per-district "Create new
-school" forms, so a click in one district shows the message under
-both. Cosmetic; deferred.
+**D6 follow-up #1 — custom-roles district scope.** The
+`custom_roles` table is the SuperUser-defined role-preset catalog
+(e.g. "Behavior Tech" = `capHallPasses + capHallPassesViewAll +
+capPbisAward`). It was previously instance-global, which meant a
+Hernando SuperUser editing the catalog also rewrote what Pasco saw,
+and the global `UNIQUE(key)` constraint blocked Pasco from creating
+a "behavior_tech" preset that already existed in Hernando.
+
+Schema change: added `district_id INTEGER NOT NULL REFERENCES
+districts(id) ON DELETE CASCADE` and replaced the global
+`UNIQUE(key)` with a composite `UNIQUE(district_id, key)`. Table
+was empty so no backfill was required. Drizzle schema updated to
+match (`uniqueIndex("custom_roles_district_key_uq")`). The migration
+was applied directly because `drizzle-kit push --force` was blocked
+on an unrelated interactive prompt (an existing `districts_slug_unique`
+constraint that was added earlier but not yet pushed); the next
+time someone runs push it'll prompt for that pre-existing drift, not
+this change.
+
+Route change (`routes/customRoles.ts`): all four endpoints
+(`GET/POST/PATCH/DELETE /api/custom-roles`) now resolve the actor's
+district via `getDistrictIdForSchool(actor.schoolId)` through a new
+`actorDistrictOr403` helper (returns 403 if the staff row's school
+can't be mapped to a district — never silently falls back to "all
+districts"). GET filters by `district_id`. POST writes the actor's
+`district_id` into the new row (request body `district_id` is
+ignored — the client never specifies it). PATCH and DELETE add
+`AND district_id = <actor's>` to the WHERE clause; PATCH 404s on
+cross-district to avoid id-enumeration leaks, DELETE silently
+no-ops to preserve idempotent-delete semantics.
+
+Client (`StaffRolesMatrix.tsx`) needed no changes — the response
+shape is unchanged; it just sees a shorter list scoped to the
+viewer's district.
+
+**Known follow-ups (not in this batch).** `TenancyPanel`'s
+`createError` / `createOk` state is shared across the per-district
+"Create new school" forms, so a click in one district shows the
+message under both. Cosmetic; deferred.
