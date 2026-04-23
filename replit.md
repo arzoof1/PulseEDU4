@@ -748,7 +748,28 @@ Client (`StaffRolesMatrix.tsx`) needed no changes — the response
 shape is unchanged; it just sees a shorter list scoped to the
 viewer's district.
 
-**Known follow-ups (not in this batch).** `TenancyPanel`'s
-`createError` / `createOk` state is shared across the per-district
-"Create new school" forms, so a click in one district shows the
-message under both. Cosmetic; deferred.
+**D6 follow-up #2 — TenancyPanel per-district form state.**
+The "Create new school" form previously held a single set of refs
+(`newName`, `newShort`, `newCode`, `creating`, `createError`,
+`createOk`) shared across every rendered district section. With one
+district that was fine; once Pasco landed and the panel rendered two
+forms, two visible bugs appeared: typing in Hernando's input mirrored
+into Pasco's, and submitting against one district painted the
+success/error banner under both.
+
+Replaced with per-`districtId` state: `drafts: Record<number,
+{name, short, code}>` (populated lazily through a `getDraft` /
+`updateDraft` / `clearDraft` trio so an empty district just reads
+the shared `emptyDraft`), `creatingDistrictId: number | null`, and
+`createMessage: { districtId, kind: "ok" | "err", text } | null`.
+The JSX render loop derives `draft`, `isCreating`, and `myMessage`
+per district before rendering inputs/button/banner. Submit handler
+clears only the affected district's draft on success.
+
+Single-valued `creatingDistrictId` means double-clicking Create in
+two districts simultaneously will visually overwrite the "Creating…"
+indicator on the first form, but both POSTs still complete
+independently and the last response wins the banner. Acceptable
+trade-off — onboarding two districts in the same second isn't a real
+workflow. Architect review PASSED with no blockers; no other
+follow-ups documented.

@@ -101,15 +101,40 @@ function TenancyPanelInner() {
   const [loading, setLoading] = useState(true);
   const [reloadKey, setReloadKey] = useState(0);
 
-  // Create-school form state. Kept local to the panel; on success we bump
-  // reloadKey to refetch /tenancy/status so the new school appears in the
-  // table and per-school count grid.
-  const [newName, setNewName] = useState("");
-  const [newShort, setNewShort] = useState("");
-  const [newCode, setNewCode] = useState("");
-  const [creating, setCreating] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [createOk, setCreateOk] = useState<string | null>(null);
+  // Create-school form state. Keyed BY districtId because the panel now
+  // renders one create-form per district (Hernando + Pasco today, more
+  // tomorrow). Sharing a single set of refs across forms caused two
+  // visible bugs: (a) typing in Hernando's input filled Pasco's field
+  // too, and (b) submitting against one district painted the success/
+  // error banner under both. Each per-district form now owns its own
+  // input values, in-flight flag, and result message. On success we
+  // bump reloadKey to refetch /tenancy/status so the new school appears
+  // in the schools table and per-school count grid.
+  type DraftSchool = { name: string; short: string; code: string };
+  const emptyDraft: DraftSchool = { name: "", short: "", code: "" };
+  const [drafts, setDrafts] = useState<Record<number, DraftSchool>>({});
+  const [creatingDistrictId, setCreatingDistrictId] = useState<number | null>(
+    null,
+  );
+  const [createMessage, setCreateMessage] = useState<
+    { districtId: number; kind: "ok" | "err"; text: string } | null
+  >(null);
+
+  const getDraft = (districtId: number): DraftSchool =>
+    drafts[districtId] ?? emptyDraft;
+  const updateDraft = (districtId: number, patch: Partial<DraftSchool>) => {
+    setDrafts((prev) => ({
+      ...prev,
+      [districtId]: { ...(prev[districtId] ?? emptyDraft), ...patch },
+    }));
+  };
+  const clearDraft = (districtId: number) => {
+    setDrafts((prev) => {
+      const next = { ...prev };
+      delete next[districtId];
+      return next;
+    });
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -136,35 +161,39 @@ function TenancyPanelInner() {
   }, [reloadKey]);
 
   const submitCreate = async (districtId: number) => {
-    setCreating(true);
-    setCreateError(null);
-    setCreateOk(null);
+    const draft = getDraft(districtId);
+    setCreatingDistrictId(districtId);
+    setCreateMessage(null);
     try {
       const r = await authFetch("/api/tenancy/schools", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           districtId,
-          name: newName,
-          shortName: newShort || null,
-          stateSchoolCode: newCode || null,
+          name: draft.name,
+          shortName: draft.short || null,
+          stateSchoolCode: draft.code || null,
         }),
       });
       const body = await r.json().catch(() => ({}));
       if (!r.ok) {
         throw new Error(body?.error ?? `HTTP ${r.status}`);
       }
-      setCreateOk(
-        `Created “${body?.school?.name ?? newName}” (id ${body?.school?.id}). Switch to it from the school badge in the top bar — dashboards should be empty.`,
-      );
-      setNewName("");
-      setNewShort("");
-      setNewCode("");
+      setCreateMessage({
+        districtId,
+        kind: "ok",
+        text: `Created “${body?.school?.name ?? draft.name}” (id ${body?.school?.id}). Switch to it from the school badge in the top bar — dashboards should be empty.`,
+      });
+      clearDraft(districtId);
       setReloadKey((k) => k + 1);
     } catch (e) {
-      setCreateError(e instanceof Error ? e.message : "Create failed");
+      setCreateMessage({
+        districtId,
+        kind: "err",
+        text: e instanceof Error ? e.message : "Create failed",
+      });
     } finally {
-      setCreating(false);
+      setCreatingDistrictId(null);
     }
   };
 
@@ -234,6 +263,12 @@ function TenancyPanelInner() {
         const schoolsForDistrict = schools.filter(
           (s) => s.districtId === district.id,
         );
+        const draft = getDraft(district.id);
+        const isCreating = creatingDistrictId === district.id;
+        const myMessage =
+          createMessage && createMessage.districtId === district.id
+            ? createMessage
+            : null;
         return (
         <div key={district.id}>
         <section style={{ marginBottom: "1.25rem" }}>
@@ -322,8 +357,10 @@ function TenancyPanelInner() {
               School name
               <input
                 type="text"
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
+                value={draft.name}
+                onChange={(e) =>
+                  updateDraft(district.id, { name: e.target.value })
+                }
                 placeholder="e.g. Test Middle School"
                 style={{ display: "block", width: "100%", padding: "0.35rem" }}
               />
@@ -332,8 +369,10 @@ function TenancyPanelInner() {
               Short name (optional)
               <input
                 type="text"
-                value={newShort}
-                onChange={(e) => setNewShort(e.target.value)}
+                value={draft.short}
+                onChange={(e) =>
+                  updateDraft(district.id, { short: e.target.value })
+                }
                 placeholder="Test"
                 style={{ display: "block", width: "100%", padding: "0.35rem" }}
               />
@@ -342,15 +381,17 @@ function TenancyPanelInner() {
               State code (optional)
               <input
                 type="text"
-                value={newCode}
-                onChange={(e) => setNewCode(e.target.value)}
+                value={draft.code}
+                onChange={(e) =>
+                  updateDraft(district.id, { code: e.target.value })
+                }
                 placeholder="9999"
                 style={{ display: "block", width: "100%", padding: "0.35rem" }}
               />
             </label>
             <button
               type="button"
-              disabled={creating || !newName.trim()}
+              disabled={isCreating || !draft.name.trim()}
               onClick={() => submitCreate(district.id)}
               style={{
                 padding: "0.5rem 0.9rem",
@@ -358,21 +399,25 @@ function TenancyPanelInner() {
                 color: "white",
                 border: "none",
                 borderRadius: 4,
-                cursor: creating || !newName.trim() ? "not-allowed" : "pointer",
-                opacity: creating || !newName.trim() ? 0.6 : 1,
+                cursor:
+                  isCreating || !draft.name.trim()
+                    ? "not-allowed"
+                    : "pointer",
+                opacity: isCreating || !draft.name.trim() ? 0.6 : 1,
               }}
             >
-              {creating ? "Creating…" : "Create school"}
+              {isCreating ? "Creating…" : "Create school"}
             </button>
           </div>
-          {createError && (
-            <p style={{ color: "#b91c1c", fontSize: 13, marginBottom: 0 }}>
-              {createError}
-            </p>
-          )}
-          {createOk && (
-            <p style={{ color: "#166534", fontSize: 13, marginBottom: 0 }}>
-              {createOk}
+          {myMessage && (
+            <p
+              style={{
+                color: myMessage.kind === "ok" ? "#166534" : "#b91c1c",
+                fontSize: 13,
+                marginBottom: 0,
+              }}
+            >
+              {myMessage.text}
             </p>
           )}
         </section>
