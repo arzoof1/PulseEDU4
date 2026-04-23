@@ -39,16 +39,20 @@ Promise.all([seedIfEmpty(), seedTenancy()])
             expr,
             async () => {
               try {
-                const r = await sendDailyDigestEmail(new Date());
-                logger.info(
-                  {
-                    status: r.status,
-                    emailTo: r.emailTo,
-                    requested: r.totals.requested,
-                    backlog: r.totals.unreviewedClosedBacklog,
-                  },
-                  "Daily digest fired",
-                );
+                const results = await sendDailyDigestEmail(new Date());
+                for (const r of results) {
+                  logger.info(
+                    {
+                      schoolId: r.schoolId,
+                      status: r.status,
+                      emailTo: r.emailTo,
+                      requested: r.totals.requested,
+                      backlog: r.totals.unreviewedClosedBacklog,
+                      errorMsg: r.errorMsg,
+                    },
+                    "Daily digest fired",
+                  );
+                }
               } catch (cronErr) {
                 logger.error({ err: cronErr }, "Daily digest send failed");
               }

@@ -2,12 +2,14 @@ import {
   db,
   pulloutsTable,
   schoolSettingsTable,
+  schoolsTable,
   staffTable,
 } from "@workspace/db";
 import { and, eq, gte, lt, or, isNull } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
 
 export type DailyDigestResult = {
+  schoolId: number;
   status: "sent" | "skipped" | "error";
   emailTo: string | null;
   errorMsg: string | null;
@@ -48,29 +50,40 @@ function tally<T>(rows: T[], pick: (r: T) => string | null | undefined) {
 }
 
 /**
- * Build the daily digest payload for the given calendar day. Pure read —
- * does not send. Useful for previews and tests.
+ * Build the daily digest payload for a single school + calendar day.
+ * Pure read — does not send. Useful for previews and tests.
+ *
+ * D5 follow-up: requires schoolId so school A's digest never includes
+ * school B's pullouts or backlog.
  */
-export async function buildDailyDigest(forDay: Date = new Date()) {
+export async function buildDailyDigest(
+  forDay: Date = new Date(),
+  schoolId: number,
+) {
   const { startIso, endIso } = dayWindow(forDay);
 
-  // Pullouts requested today.
+  // Pullouts requested today, scoped to this school.
   const todays = await db
     .select()
     .from(pulloutsTable)
     .where(
       and(
+        eq(pulloutsTable.schoolId, schoolId),
         gte(pulloutsTable.requestedAt, startIso),
         lt(pulloutsTable.requestedAt, endIso),
       ),
     );
 
-  // Unreviewed-closed backlog (any age).
+  // Unreviewed-closed backlog (any age), scoped to this school.
   const backlog = await db
     .select({ id: pulloutsTable.id })
     .from(pulloutsTable)
     .where(
-      and(eq(pulloutsTable.status, "closed"), isNull(pulloutsTable.reviewedAt)),
+      and(
+        eq(pulloutsTable.schoolId, schoolId),
+        eq(pulloutsTable.status, "closed"),
+        isNull(pulloutsTable.reviewedAt),
+      ),
     );
 
   const totals = {
@@ -97,13 +110,17 @@ export async function buildDailyDigest(forDay: Date = new Date()) {
 }
 
 /**
- * Send the daily pullout digest to all active dispatcher staff
- * (admin / dean / MTSS). Returns an audit record.
+ * Send the daily pullout digest for a single school. Recipients are
+ * active admin / dean / MTSS staff in THAT school. Branding (school
+ * name, from-name) comes from that school's school_settings row.
+ *
+ * Returns one DailyDigestResult.
  */
-export async function sendDailyDigestEmail(
-  forDay: Date = new Date(),
+export async function sendDailyDigestEmailForSchool(
+  forDay: Date,
+  schoolId: number,
 ): Promise<DailyDigestResult> {
-  const digest = await buildDailyDigest(forDay);
+  const digest = await buildDailyDigest(forDay, schoolId);
   const { startIso, endIso, totals, topStudents, topReasons } = digest;
 
   const staffRows = await db
@@ -111,6 +128,7 @@ export async function sendDailyDigestEmail(
     .from(staffTable)
     .where(
       and(
+        eq(staffTable.schoolId, schoolId),
         eq(staffTable.active, true),
         or(
           eq(staffTable.isAdmin, true),
@@ -125,6 +143,7 @@ export async function sendDailyDigestEmail(
 
   if (recipients.length === 0) {
     return {
+      schoolId,
       status: "skipped",
       emailTo: null,
       errorMsg: "No digest recipients configured",
@@ -136,7 +155,10 @@ export async function sendDailyDigestEmail(
     };
   }
 
-  const [settings] = await db.select().from(schoolSettingsTable);
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
 
@@ -219,6 +241,7 @@ export async function sendDailyDigestEmail(
       throw new Error(sendRes.error.message ?? "Resend error");
     }
     return {
+      schoolId,
       status: "sent",
       emailTo: recipientStr,
       errorMsg: null,
@@ -231,6 +254,7 @@ export async function sendDailyDigestEmail(
   } catch (e) {
     const errMsg = e instanceof Error ? e.message : String(e);
     return {
+      schoolId,
       status: "error",
       emailTo: recipientStr,
       errorMsg: errMsg,
@@ -241,4 +265,48 @@ export async function sendDailyDigestEmail(
       topReasons,
     };
   }
+}
+
+/**
+ * Cron entry point: send a per-school digest to every school in the
+ * schools table. Returns one result per school.
+ */
+export async function sendDailyDigestEmail(
+  forDay: Date = new Date(),
+): Promise<DailyDigestResult[]> {
+  const schools = await db
+    .select({ id: schoolsTable.id })
+    .from(schoolsTable)
+    .orderBy(schoolsTable.id);
+  const results: DailyDigestResult[] = [];
+  for (const s of schools) {
+    try {
+      const r = await sendDailyDigestEmailForSchool(forDay, s.id);
+      results.push(r);
+    } catch (e) {
+      const errMsg = e instanceof Error ? e.message : String(e);
+      const { startIso, endIso } = dayWindow(forDay);
+      results.push({
+        schoolId: s.id,
+        status: "error",
+        emailTo: null,
+        errorMsg: errMsg,
+        windowStart: startIso,
+        windowEnd: endIso,
+        totals: {
+          requested: 0,
+          pending: 0,
+          verified: 0,
+          arrived: 0,
+          returned: 0,
+          closed: 0,
+          rejected: 0,
+          unreviewedClosedBacklog: 0,
+        },
+        topStudents: [],
+        topReasons: [],
+      });
+    }
+  }
+  return results;
 }

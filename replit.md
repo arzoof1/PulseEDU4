@@ -334,11 +334,33 @@ oracle:
   pullout's student id, reason, and teacher name are only emailed
   to school A's dispatchers.
 
-**Still deferred (separate task).** `lib/dailyDigest.ts` is
-still district-wide: the pullouts query has no school filter and
-the recipient list is all admins/deans/MTSS across the district.
-Per-school cron loop is a real design change (5 separate emails vs
-one combined), tracked separately.
+**D5 follow-up — daily digest per-school (Apr 23 2026).**
+`lib/dailyDigest.ts` was district-wide: a single email mixed every
+school's pullouts and went to every dispatcher across the district.
+Now refactored to per-school:
+
+- `buildDailyDigest(forDay, schoolId)` — schoolId required; pullouts
+  query and unreviewed-closed backlog query both AND-filter by school.
+- `sendDailyDigestEmailForSchool(forDay, schoolId)` — sends one
+  digest for one school. Recipients are active admin/dean/MTSS
+  staff in THAT school. Branding (school name, from-name) comes
+  from THAT school's `school_settings` row. Returns
+  `DailyDigestResult` with `schoolId` stamped.
+- `sendDailyDigestEmail(forDay)` — cron entry point. Loops over
+  every row in `schools` and calls the per-school sender. Returns
+  `DailyDigestResult[]`. Per-school errors don't kill the loop.
+- `index.ts` cron caller — iterates the result array and logs one
+  line per school with its `schoolId`, status, recipient count, and
+  any error.
+- `routes/digest.ts` admin endpoints — `/digest/today` preview and
+  `/digest/send-now` both now use the calling admin's
+  `staff.schoolId`, so an admin can only preview or fire their own
+  school's digest.
+
+Today only school 1 has active dispatchers, so cron will fire once
+for school 1 and skip schools 2/3/4/5/36 with "No digest recipients
+configured" — exactly the right behavior, and adding a dispatcher
+to any other school turns its digest on automatically.
 
 **Verification.** SQL spot-checks confirmed:
 - Two schools can each hold an active hall-pass limit, an ISS

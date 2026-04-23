@@ -9,7 +9,7 @@ import { db, staffTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 import {
   buildDailyDigest,
-  sendDailyDigestEmail,
+  sendDailyDigestEmailForSchool,
 } from "../lib/dailyDigest";
 
 const router: IRouter = Router();
@@ -34,26 +34,33 @@ function requireAdmin() {
       res.status(403).json({ error: "Admin only" });
       return;
     }
+    (req as Request & { staff: StaffRow }).staff = staff;
     next();
   };
 }
 
-// Preview today's digest without sending. Admin only.
+// Preview today's digest for the admin's own school. Admin only.
 router.get(
   "/digest/today",
   requireAdmin(),
-  async (_req: Request, res: Response) => {
-    const d = await buildDailyDigest(new Date());
+  async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const d = await buildDailyDigest(new Date(), staff.schoolId);
     res.json(d);
   },
 );
 
-// Send the digest now. Admin only. Used for manual fire and testing.
+// Send today's digest for the admin's own school now. Admin only.
+// Used for manual fire and testing.
 router.post(
   "/digest/send-now",
   requireAdmin(),
-  async (_req: Request, res: Response) => {
-    const result = await sendDailyDigestEmail(new Date());
+  async (req: Request, res: Response) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const result = await sendDailyDigestEmailForSchool(
+      new Date(),
+      staff.schoolId,
+    );
     res.json(result);
   },
 );
