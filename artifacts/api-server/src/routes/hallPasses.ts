@@ -67,7 +67,7 @@ router.post("/hall-passes", async (req, res) => {
 
   // Polarity / keep-apart enforcement: refuse to issue a pass if any of this
   // student's paired partners is currently out on a pass.
-  const conflict = await findPolarityConflict(studentId);
+  const conflict = await findPolarityConflict(studentId, schoolId);
   if (conflict) {
     res.status(409).json({ error: polarityConflictMessage(conflict) });
     return;
@@ -232,6 +232,7 @@ router.patch("/hall-passes/:id", async (req, res) => {
   const edits: Array<typeof recordEditsTable.$inferInsert> = [];
   if (endedAtProvided && (existing.endedAt ?? null) !== (newEndedAt ?? null)) {
     edits.push({
+      schoolId,
       recordType: "hall_pass",
       recordId: String(id),
       fieldName: "endedAt",
@@ -243,6 +244,7 @@ router.patch("/hall-passes/:id", async (req, res) => {
   }
   if (endedAtProvided && existing.status !== newStatus) {
     edits.push({
+      schoolId,
       recordType: "hall_pass",
       recordId: String(id),
       fieldName: "status",
@@ -257,6 +259,7 @@ router.patch("/hall-passes/:id", async (req, res) => {
     existing.createdAt !== (createdAt as string)
   ) {
     edits.push({
+      schoolId,
       recordType: "hall_pass",
       recordId: String(id),
       fieldName: "createdAt",
@@ -273,7 +276,17 @@ router.patch("/hall-passes/:id", async (req, res) => {
   res.json(updated);
 });
 
+// Audit-trail viewer. Anyone with a valid session at the school can read
+// their school's edit log. School isolation is enforced server-side: a
+// staff member at school A cannot see edits made on school B's records,
+// even with a known recordType/recordId pair.
 router.get("/record-edits", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  if (!req.staffId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
   const { recordType, recordId } = req.query;
   let rows;
   if (
@@ -285,10 +298,18 @@ router.get("/record-edits", async (req, res) => {
     rows = await db
       .select()
       .from(recordEditsTable)
-      .where(eq(recordEditsTable.recordType, recordType));
+      .where(
+        and(
+          eq(recordEditsTable.schoolId, schoolId),
+          eq(recordEditsTable.recordType, recordType),
+        ),
+      );
     rows = rows.filter((r) => r.recordId === recordId);
   } else {
-    rows = await db.select().from(recordEditsTable);
+    rows = await db
+      .select()
+      .from(recordEditsTable)
+      .where(eq(recordEditsTable.schoolId, schoolId));
   }
   res.json(rows);
 });

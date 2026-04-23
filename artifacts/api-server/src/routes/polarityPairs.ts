@@ -19,6 +19,7 @@ import {
   hallPassesTable,
 } from "@workspace/db";
 import { and, eq, or, ne } from "drizzle-orm";
+import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
@@ -71,7 +72,10 @@ function normalizePair(a: string, b: string): [string, string] {
  * null if none. A conflict exists when the student has at least one polarity
  * partner who currently has an active hall pass.
  */
-export async function findPolarityConflict(studentId: string): Promise<{
+export async function findPolarityConflict(
+  studentId: string,
+  schoolId: number,
+): Promise<{
   partnerStudentId: string;
   partnerFirstName: string | null;
   partnerLastName: string | null;
@@ -80,14 +84,20 @@ export async function findPolarityConflict(studentId: string): Promise<{
   const trimmed = studentId.trim();
   if (!trimmed) return null;
 
-  // Find every partner of this student.
+  // Find every partner of this student WITHIN the same school. Polarity
+  // pairs are managed per-school (a fight at Springstead doesn't follow
+  // a kid to Powell), and an active pass at school A must not block an
+  // unrelated student with the same id at school B.
   const pairs = await db
     .select()
     .from(polarityPairsTable)
     .where(
-      or(
-        eq(polarityPairsTable.studentIdA, trimmed),
-        eq(polarityPairsTable.studentIdB, trimmed),
+      and(
+        eq(polarityPairsTable.schoolId, schoolId),
+        or(
+          eq(polarityPairsTable.studentIdA, trimmed),
+          eq(polarityPairsTable.studentIdB, trimmed),
+        ),
       ),
     );
   if (pairs.length === 0) return null;
@@ -96,13 +106,14 @@ export async function findPolarityConflict(studentId: string): Promise<{
     p.studentIdA === trimmed ? p.studentIdB : p.studentIdA,
   );
 
-  // Check if any partner has an active pass right now.
+  // Check if any partner has an active pass right now (same school).
   for (const pid of partnerIds) {
     const [openPass] = await db
       .select({ destination: hallPassesTable.destination })
       .from(hallPassesTable)
       .where(
         and(
+          eq(hallPassesTable.schoolId, schoolId),
           eq(hallPassesTable.studentId, pid),
           eq(hallPassesTable.status, "active"),
         ),
@@ -114,7 +125,12 @@ export async function findPolarityConflict(studentId: string): Promise<{
         lastName: studentsTable.lastName,
       })
       .from(studentsTable)
-      .where(eq(studentsTable.studentId, pid));
+      .where(
+        and(
+          eq(studentsTable.studentId, pid),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
     return {
       partnerStudentId: pid,
       partnerFirstName: partner?.firstName ?? null,
@@ -147,15 +163,18 @@ export function polarityConflictMessage(c: {
 router.get("/polarity-pairs", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select()
     .from(polarityPairsTable)
+    .where(eq(polarityPairsTable.schoolId, schoolId))
     .orderBy(polarityPairsTable.createdAt);
   if (rows.length === 0) {
     res.json([]);
     return;
   }
-  // Hydrate names for both sides in a single students fetch.
+  // Hydrate names for both sides in a single students fetch (same school).
   const ids = Array.from(
     new Set(rows.flatMap((r) => [r.studentIdA, r.studentIdB])),
   );
@@ -165,7 +184,8 @@ router.get("/polarity-pairs", async (req, res) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
     })
-    .from(studentsTable);
+    .from(studentsTable)
+    .where(eq(studentsTable.schoolId, schoolId));
   const byId = new Map(
     students
       .filter((s) => ids.includes(s.studentId))
@@ -192,6 +212,8 @@ router.get("/polarity-pairs", async (req, res) => {
 
 // ---- create ----
 router.post("/polarity-pairs", requirePolarityAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const { studentIdA, studentIdB, note } = req.body ?? {};
   const sa = typeof studentIdA === "string" ? studentIdA.trim() : "";
   const sb = typeof studentIdB === "string" ? studentIdB.trim() : "";
@@ -206,11 +228,20 @@ router.post("/polarity-pairs", requirePolarityAdmin, async (req, res) => {
     return;
   }
 
-  // Validate both students exist.
+  // Validate both students exist AT THIS SCHOOL. A school A admin must
+  // not be able to confirm the existence of a school B student id.
   const found = await db
     .select({ studentId: studentsTable.studentId })
     .from(studentsTable)
-    .where(or(eq(studentsTable.studentId, sa), eq(studentsTable.studentId, sb)));
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        or(
+          eq(studentsTable.studentId, sa),
+          eq(studentsTable.studentId, sb),
+        ),
+      ),
+    );
   const foundIds = new Set(found.map((f) => f.studentId));
   const missing = [sa, sb].filter((id) => !foundIds.has(id));
   if (missing.length > 0) {
@@ -227,6 +258,7 @@ router.post("/polarity-pairs", requirePolarityAdmin, async (req, res) => {
     .from(polarityPairsTable)
     .where(
       and(
+        eq(polarityPairsTable.schoolId, schoolId),
         eq(polarityPairsTable.studentIdA, a),
         eq(polarityPairsTable.studentIdB, b),
       ),
@@ -244,6 +276,7 @@ router.post("/polarity-pairs", requirePolarityAdmin, async (req, res) => {
   const [row] = await db
     .insert(polarityPairsTable)
     .values({
+      schoolId,
       studentIdA: a,
       studentIdB: b,
       note: cleanNote,
@@ -255,6 +288,8 @@ router.post("/polarity-pairs", requirePolarityAdmin, async (req, res) => {
 
 // ---- delete ----
 router.delete("/polarity-pairs/:id", requirePolarityAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "Invalid id" });
@@ -262,7 +297,12 @@ router.delete("/polarity-pairs/:id", requirePolarityAdmin, async (req, res) => {
   }
   const [row] = await db
     .delete(polarityPairsTable)
-    .where(eq(polarityPairsTable.id, id))
+    .where(
+      and(
+        eq(polarityPairsTable.id, id),
+        eq(polarityPairsTable.schoolId, schoolId),
+      ),
+    )
     .returning();
   if (!row) {
     res.status(404).json({ error: "Not found" });

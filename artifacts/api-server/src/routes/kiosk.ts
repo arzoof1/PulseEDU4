@@ -149,6 +149,7 @@ router.post("/kiosk/activate", async (req, res) => {
 
   if (usedFallbackPicker) {
     await db.insert(adminNotificationsTable).values({
+      schoolId: staff.schoolId,
       type: "kiosk_default_room_missing",
       payload: {
         staffId: staff.id,
@@ -323,11 +324,18 @@ router.post(
   },
 );
 
-router.get("/admin/notifications", requireAdmin, async (_req, res) => {
+router.get("/admin/notifications", requireAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const rows = await db
     .select()
     .from(adminNotificationsTable)
-    .where(isNull(adminNotificationsTable.resolvedAt))
+    .where(
+      and(
+        eq(adminNotificationsTable.schoolId, schoolId),
+        isNull(adminNotificationsTable.resolvedAt),
+      ),
+    )
     .orderBy(adminNotificationsTable.createdAt);
   res.json(rows);
 });
@@ -336,6 +344,8 @@ router.post(
   "/admin/notifications/:id/resolve",
   requireAdmin,
   async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
     const id = Number(req.params.id);
@@ -349,6 +359,7 @@ router.post(
       .where(
         and(
           eq(adminNotificationsTable.id, id),
+          eq(adminNotificationsTable.schoolId, schoolId),
           isNull(adminNotificationsTable.resolvedAt),
         ),
       )
@@ -477,6 +488,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     .from(hallPassesTable)
     .where(
       and(
+        eq(hallPassesTable.schoolId, act.schoolId),
         eq(hallPassesTable.studentId, normalizedStudentId),
         eq(hallPassesTable.status, "active"),
       ),
@@ -500,7 +512,10 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;
   }
-  const conflict = await findPolarityConflict(normalizedStudentId);
+  const conflict = await findPolarityConflict(
+    normalizedStudentId,
+    act.schoolId,
+  );
   if (conflict) {
     res.status(409).json({ error: polarityConflictMessage(conflict) });
     return;
@@ -509,6 +524,7 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   const [pass] = await db
     .insert(hallPassesTable)
     .values({
+      schoolId: act.schoolId,
       studentId: normalizedStudentId,
       destination,
       originRoom,
@@ -525,7 +541,12 @@ router.post("/kiosk/hall-passes", async (req, res) => {
   const [student] = await db
     .select({ firstName: studentsTable.firstName })
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, normalizedStudentId));
+    .where(
+      and(
+        eq(studentsTable.studentId, normalizedStudentId),
+        eq(studentsTable.schoolId, act.schoolId),
+      ),
+    );
 
   res.status(201).json({
     ...pass,
@@ -579,6 +600,7 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     .from(hallPassesTable)
     .where(
       and(
+        eq(hallPassesTable.schoolId, act.schoolId),
         eq(hallPassesTable.studentId, trimmedId),
         eq(hallPassesTable.status, "active"),
         eq(hallPassesTable.originRoom, act.room),
@@ -610,7 +632,12 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
   const [student] = await db
     .select({ firstName: studentsTable.firstName })
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, trimmedId));
+    .where(
+      and(
+        eq(studentsTable.studentId, trimmedId),
+        eq(studentsTable.schoolId, act.schoolId),
+      ),
+    );
 
   res.json({
     ...updated,

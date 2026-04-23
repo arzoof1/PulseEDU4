@@ -372,6 +372,122 @@ to any other school turns its digest on automatically.
   Key (student_id, school_id)=(D5VERIFY2, 1) already exists`.
 - API restarts clean and serves requests.
 
+**Tenant audit follow-up — kiosk hall passes (Apr 23 2026).**
+After D5, a broader audit found four cross-school holes in
+`routes/kiosk.ts` (the unattended hallway kiosk flow):
+
+- The hall-pass INSERT in `/kiosk/hall-passes` was not stamping
+  `school_id`, so every pass issued by a kiosk bound to school 2-36
+  was silently being written with the column default of 1
+  (mis-tenant write, identical pattern to the parent-email support-
+  notes bug fixed earlier). Now stamps `schoolId: act.schoolId` from
+  the kiosk activation row.
+- The "student already has an active pass" duplicate-check query was
+  district-wide. Two schools could legitimately have the same
+  student id, so a kiosk at school B would 409 on a student whose
+  only open pass lived at school A. Now AND-filtered on
+  `act.schoolId`.
+- The "I'm back" return-tap query (`/kiosk/hall-passes/return`)
+  filtered by `studentId + status='active' + originRoom`. Room labels
+  like "Room 102" repeat across schools, so a kiosk at school B
+  Room 102 could end school A's open pass. Now AND-filtered on
+  `act.schoolId`.
+- Both student-name lookups (issuance + return) were keyed on
+  `studentId` only, leaking first names across schools — same
+  enumeration-oracle pattern. Now AND-filtered on `act.schoolId`.
+
+False positives that were verified safe and left alone:
+`accommodationLogs.ts:307` and `locations.ts:217` already stamp
+`schoolId` via the spread inside `toInsert.push({...})`;
+`kiosk.ts:255` is authenticated by `tokenHash` (not by url id);
+`pbisGoals.ts:134` UPDATE-by-id is preceded by a school-scoped
+existence check on the same row; `lib/pulloutEmail.ts` "load
+pullout by id" calls are internal helpers invoked from already-
+scoped routes.
+
+**Tenant audit follow-up — polarity pairs (Apr 23 2026).**
+Architect review of the kiosk fixes flagged that
+`findPolarityConflict(studentId)` in `routes/polarityPairs.ts` was
+still globally scoped — it ran the keep-apart check across every
+school's `polarity_pairs` and `hall_passes` rows. With the kiosk
+issuance flow now correctly tenant-scoped, this helper became the
+last cross-school oracle in the kiosk path: a kiosk at school B
+could be told "cannot issue pass: STUDENT X is currently out on
+a pass to BATHROOM" purely because some unrelated student id at
+school A was paired and out.
+
+Closed it the same way as the rest of D5:
+
+- Exposed `school_id` on `polarityPairsTable` (Drizzle schema; the
+  column was already in the DB from the D2 backfill, default 1).
+- `findPolarityConflict(studentId, schoolId)` now requires the
+  caller to pass `schoolId` and AND-filters every internal query
+  (`polarity_pairs`, `hall_passes`, partner-name lookup on
+  `students`).
+- Updated both call sites: `routes/hallPasses.ts` POST passes
+  `schoolId` from `requireSchool(req)`, and the kiosk
+  `/kiosk/hall-passes` route passes `act.schoolId` from the
+  activation row.
+- Scoped the polarity-pairs CRUD too: `GET /polarity-pairs` filters
+  pairs and the hydration `students` fetch by school; `POST` stamps
+  `schoolId`, validates both student ids exist *at this school*
+  (was a global oracle), and dedupes per-school; `DELETE /:id`
+  matches by `(id, school_id)`.
+
+**Verification.** SQL spot-check confirmed: a polarity pair inserted
+with `school_id=2` is invisible to a `school_id=1` lookup
+(0 rows) and visible to a `school_id=2` lookup (1 row). API
+restarts clean and serves requests.
+
+**Legacy data.** No remediation needed — all 7,732 historical
+`hall_passes` rows and the 1 existing `polarity_pairs` row are
+already `school_id=1` (the only active school today), and there
+are zero `kiosk_activations` historically, so no kiosk has yet
+written a mis-tenanted row.
+
+**Tenant audit follow-up — record_edits, admin_notifications,
+hall-pass report (Apr 23 2026).** Architect's third pass found three
+more cross-school exposures outside the kiosk surface:
+
+- `GET /api/record-edits` returned the entire global edit log with
+  no auth boundary at all, and the matching writer paths in
+  `routes/pbis.ts` (`logEdit`) and `routes/hallPasses.ts`
+  (PATCH-end edit batch) were not stamping `school_id` on insert.
+- `GET /api/admin/notifications` and the matching resolve POST
+  showed every kiosk default-room-missing alert across the
+  district to any school's admin, and the writer at
+  `routes/kiosk.ts` `/kiosk/activations` was not stamping
+  `school_id` on insert.
+- `GET /api/reports/hall-passes` (Admin/ESE-only daily summary)
+  ran a date-only query against `hall_passes` and a
+  `studentId`-only `IN (...)` against `students` for name
+  hydration, so the admin/ESE report at one school silently
+  aggregated every school's passes and merged student names.
+
+Closed all three with the same pattern as the rest of D5:
+
+- Drizzle schemas now expose `school_id` on `recordEditsTable` and
+  `adminNotificationsTable` (DB columns were already there from
+  D2 backfill, default 1).
+- Every INSERT into `record_edits` (`pbis.ts logEdit` — now takes
+  `schoolId` parameter and passes it from the route's
+  `requireSchool(req)` value at every call site, including void;
+  `hallPasses.ts` PATCH edit-batch — stamps `schoolId`) and
+  `admin_notifications` (`kiosk.ts` `/kiosk/activations` —
+  stamps `staff.schoolId`) now sets `school_id` explicitly.
+- `GET /api/record-edits` now requires a signed-in session AND
+  AND-filters by `requireSchool(req)`. Both query paths
+  (with-recordType-and-id and bare list) are scoped.
+- `GET /api/admin/notifications` and POST `/admin/notifications/
+  :id/resolve` now AND-filter by `requireSchool(req)`.
+- `GET /api/reports/hall-passes` now requires `requireSchool(req)`
+  and AND-filters `hall_passes.schoolId` on the day-of query.
+
+**Verification.** SQL spot-check: rows inserted into
+`record_edits` and `admin_notifications` with `school_id=2` are
+invisible to a `school_id=1` lookup (0 rows) and visible to a
+`school_id=2` lookup (1 row). API restarts clean.
+
 ## Bell Schedule (April 2026)
 
 School Bell Schedule management lives at top-level nav "Bell Schedule" and is

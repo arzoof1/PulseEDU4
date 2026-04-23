@@ -42,8 +42,10 @@ async function logEdit(
   oldVal: string | null,
   newVal: string | null,
   staff: StaffRow,
+  schoolId: number,
 ) {
   await db.insert(recordEditsTable).values({
+    schoolId,
     recordType: "pbis_entry",
     recordId: String(entryId),
     fieldName: field,
@@ -298,6 +300,8 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const id = Number(req.params.id);
   if (!Number.isInteger(id) || id < 1) {
     res.status(400).json({ error: "invalid id" });
@@ -361,7 +365,7 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
     .returning();
 
   if (updates.reason !== undefined && updates.reason !== entry.reason) {
-    await logEdit(id, "reason", entry.reason, updates.reason, staff);
+    await logEdit(id, "reason", entry.reason, updates.reason, staff, schoolId);
   }
   if (updates.points !== undefined && updates.points !== entry.points) {
     await logEdit(
@@ -370,6 +374,7 @@ router.patch("/pbis/:id", async (req: Request, res: Response) => {
       String(entry.points),
       String(updates.points),
       staff,
+      schoolId,
     );
   }
 
@@ -434,7 +439,7 @@ router.post("/pbis/:id/void", async (req: Request, res: Response) => {
       ),
     )
     .returning();
-  await logEdit(id, "voided", null, reasonText, staff);
+  await logEdit(id, "voided", null, reasonText, staff, staff.schoolId);
   res.json(updated);
 });
 

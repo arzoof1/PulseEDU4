@@ -15,6 +15,7 @@ export const polarityPairsTable = pgTable(
   "polarity_pairs",
   {
     id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull().default(1),
     studentIdA: text("student_id_a").notNull(),
     studentIdB: text("student_id_b").notNull(),
     note: text("note"),
@@ -24,7 +25,12 @@ export const polarityPairsTable = pgTable(
     createdByStaffId: integer("created_by_staff_id"),
   },
   (t) => ({
-    pairUnique: uniqueIndex("polarity_pairs_pair_unique").on(
+    // Per-school uniqueness: school A and school B must each be able to
+    // hold the same paired student-id pair without colliding. The old
+    // global unique index `polarity_pairs_pair_unique` was dropped in
+    // April 2026 as part of the post-D5 tenant audit.
+    schoolPairUnique: uniqueIndex("polarity_pairs_school_pair_unique").on(
+      t.schoolId,
       t.studentIdA,
       t.studentIdB,
     ),

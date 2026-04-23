@@ -431,6 +431,8 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
     res.status(403).json({ error: "Admin or ESE coordinator only" });
     return;
   }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
   const dateRaw = req.query.date ? String(req.query.date) : todayIsoDate();
   if (!parseStrictIsoDate(dateRaw)) {
     res
@@ -450,7 +452,10 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
     })
     .from(hallPassesTable)
     .where(
-      sql`substring(${hallPassesTable.createdAt}, 1, 10) = ${dateRaw}`,
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        sql`substring(${hallPassesTable.createdAt}, 1, 10) = ${dateRaw}`,
+      ),
     );
 
   const nowMs = Date.now();
@@ -499,7 +504,12 @@ router.get("/reports/hall-passes", requireStaff, async (req, res) => {
           lastName: studentsTable.lastName,
         })
         .from(studentsTable)
-        .where(inArray(studentsTable.studentId, idsNeeded))
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, idsNeeded),
+          ),
+        )
     : [];
   const nameById = new Map(
     studentRows.map((s) => [

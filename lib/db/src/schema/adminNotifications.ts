@@ -9,6 +9,7 @@ import {
 
 export const adminNotificationsTable = pgTable("admin_notifications", {
   id: serial("id").primaryKey(),
+  schoolId: integer("school_id").notNull().default(1),
   type: text("type").notNull(),
   payload: jsonb("payload").notNull(),
   createdAt: timestamp("created_at", { withTimezone: true })
