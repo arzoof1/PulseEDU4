@@ -2,7 +2,7 @@ import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
 
 export const tardiesTable = pgTable("tardies", {
   id: serial("id").primaryKey(),
-  schoolId: integer("school_id").notNull().default(1),
+  schoolId: integer("school_id").notNull(),
   studentId: text("student_id").notNull(),
   teacherName: text("teacher_name").notNull(),
   period: text("period").notNull(),

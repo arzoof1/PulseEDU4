@@ -540,3 +540,48 @@ editor lets users pick number of periods, period names, and start/end times.
   (`artifacts/api-server/src/routes/bellSchedules.ts`).
 - UI: `artifacts/client/src/components/BellScheduleSection.tsx`,
   rendered from `App.tsx` when `activeSection === "bellSchedule"`.
+
+## Multi-tenancy — DEFAULT 1 safety net dropped (Apr 23 2026)
+
+The DB-level `school_id INTEGER NOT NULL DEFAULT 1` safety net introduced
+during D2 backfill is now removed across all 33 tenant-scoped tables. From
+this point on, any INSERT path that forgets to stamp `schoolId` fails fast
+with a NOT NULL constraint violation instead of silently mis-tenanting
+rows to D. S. Parrott (`school_id = 1`) — exactly the failure mode that
+masked the kiosk hall_passes / kiosk_activations / parent-email
+support_notes / iss_roster bugs we hunted down through D5.
+
+**What changed.**
+- Audited every `.insert()` in `artifacts/api-server/src` (52 call sites
+  across 33 scoped tables). All route paths already stamp `schoolId`
+  correctly (4 architect-validated false positives where `schoolId` is
+  spread/array-mapped onto rows: `accommodationLogs.ts:307`,
+  `locations.ts:217` mesh insert, `hallPasses.ts:273` `record_edits`,
+  `accommodationsAdmin.ts:421`).
+- Real gaps were 9 inserts in `artifacts/api-server/src/seed.ts` (the
+  boot-time `seedIfEmpty` flow). Added `const SEED_SCHOOL_ID = 1` and
+  stamped it on every insert: `staff`, `students`, `classSections`,
+  `sectionRoster`, `schoolAccommodations`, `studentAccommodations`,
+  `locations` (via `.map((l) => ({ schoolId: SEED_SCHOOL_ID, ...l }))`),
+  `locationAllowedDestinations`, `staffDefaults`.
+- Dropped `DEFAULT 1` from `school_id` on all 33 tables in a single
+  transaction. Verified `information_schema.columns` shows 0 rows with
+  a `school_id` default remaining.
+- Removed `.notNull().default(1)` → `.notNull()` from all 32 Drizzle
+  schema files in `lib/db/src/schema/*.ts` (33 occurrences;
+  `pbisMilestones.ts` had two columns) so a future `db:push` cannot
+  silently re-apply the defaults. Restored the unrelated
+  `pbisReasons.defaultPoints.default(1)` that was bystander-stripped by
+  the sed (legitimate non-tenancy default; DB column already has it).
+
+**Smoke test.**
+- `INSERT INTO students (student_id, first_name, last_name, grade) VALUES
+  (...)` without `school_id` → `ERROR: null value in column "school_id"
+  ... violates not-null constraint`. Correct.
+- `INSERT INTO students (school_id, ...) VALUES (2, ...)` → success, row
+  visible at `school_id = 2`. Correct.
+
+**Tables NOT in scope** (no `school_id`, intentional): `districts`,
+`schools`, `custom_roles`, `district_integrations`, `user_sessions`,
+`check_in_with_options`, `bell_schedule_periods` (scoped via parent
+`bell_schedules.school_id`).

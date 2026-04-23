@@ -12,7 +12,7 @@ export const issRosterTable = pgTable(
   "iss_roster",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     studentId: text("student_id").notNull(),
     source: text("source").notNull(),
     pulloutId: integer("pullout_id").references(() => pulloutsTable.id, {

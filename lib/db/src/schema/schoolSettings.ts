@@ -10,7 +10,7 @@ export const schoolSettingsTable = pgTable(
     id: serial("id").primaryKey(),
     // Tenant column. NOT NULL DEFAULT 1 stays as a safety net until every
     // INSERT path is explicit — same pattern as the rest of the D2 work.
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     schoolName: text("school_name").notNull().default("PulseED"),
   fromName: text("from_name").notNull().default("PulseED"),
   emailSignature: text("email_signature").notNull().default("Thank you,\nPulseED"),

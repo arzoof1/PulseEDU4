@@ -15,7 +15,7 @@ export const pbisMilestonesTable = pgTable(
   "pbis_milestones",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     points: integer("points").notNull(),
     active: boolean("active").notNull().default(true),
     createdAt: text("created_at").notNull(),
@@ -33,7 +33,7 @@ export const pbisMilestoneEmailsTable = pgTable(
   "pbis_milestone_emails",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     studentId: text("student_id").notNull(),
     milestonePoints: integer("milestone_points").notNull(),
     sentAt: text("sent_at").notNull(),

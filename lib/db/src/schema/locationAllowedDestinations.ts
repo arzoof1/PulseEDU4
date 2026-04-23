@@ -5,7 +5,7 @@ export const locationAllowedDestinationsTable = pgTable(
   "location_allowed_destinations",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     originLocationId: integer("origin_location_id")
       .notNull()
       .references(() => locationsTable.id, { onDelete: "cascade" }),

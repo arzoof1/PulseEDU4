@@ -4,7 +4,7 @@ export const trustedAdultInterventionsTable = pgTable(
   "trusted_adult_interventions",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     name: text("name").notNull(),
     category: text("category").notNull().default("Trusted Adult"),
     active: boolean("active").notNull().default(true),

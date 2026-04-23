@@ -21,7 +21,7 @@ export const staffTable = pgTable("staff", {
   // The staff member's HOME school. Multi-tenancy: every staff row belongs
   // to one school. SuperUsers can act as any school via session override
   // (req.schoolId), but staff.school_id is still their default landing.
-  schoolId: integer("school_id").notNull().default(1),
+  schoolId: integer("school_id").notNull(),
   // SuperUser-only "act as another school" override. Persisted on the staff
   // row (rather than the express session) so the switch survives across
   // bearer-token requests inside the Replit preview iframe, where session

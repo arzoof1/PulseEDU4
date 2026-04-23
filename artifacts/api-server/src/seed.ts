@@ -94,8 +94,12 @@ export async function seedIfEmpty() {
   const tempHash = await bcrypt.hash(TEMP_PASSWORD, 10);
 
   // ---- Staff: 30 generated teachers + Mr. Davis (admin) + Ms. Garcia (ESE coord)
+  // All seed data lives at school 1 (D. S. Parrott — the primary Hernando school).
+  // Stamped explicitly so this still works after the DB DEFAULT 1 is dropped.
+  const SEED_SCHOOL_ID = 1;
   const staffInsert: (typeof staffTable.$inferInsert)[] = data.teachers.map(
     (t) => ({
+      schoolId: SEED_SCHOOL_ID,
       email: t.email,
       displayName: t.displayName,
       passwordHash: tempHash,
@@ -104,6 +108,7 @@ export async function seedIfEmpty() {
     }),
   );
   staffInsert.push({
+    schoolId: SEED_SCHOOL_ID,
     email: "mr.davis@school.local",
     displayName: "Mr. Davis (Admin)",
     passwordHash: tempHash,
@@ -111,6 +116,7 @@ export async function seedIfEmpty() {
     isEseCoordinator: false,
   });
   staffInsert.push({
+    schoolId: SEED_SCHOOL_ID,
     email: "ms.garcia@school.local",
     displayName: "Ms. Garcia (ESE Coordinator)",
     passwordHash: tempHash,
@@ -135,6 +141,7 @@ export async function seedIfEmpty() {
     .insert(studentsTable)
     .values(
       data.students.map((s) => ({
+        schoolId: SEED_SCHOOL_ID,
         studentId: s.studentId,
         firstName: s.firstName,
         lastName: s.lastName,
@@ -153,6 +160,7 @@ export async function seedIfEmpty() {
     const teacher = data.teachers[t];
     for (let p = 1; p <= 7; p++) {
       sectionInserts.push({
+        schoolId: SEED_SCHOOL_ID,
         teacherStaffId: teacherStaffIds[t],
         period: p,
         courseName:
@@ -187,7 +195,11 @@ export async function seedIfEmpty() {
         `${teacherStaffIds[teacherIdx]}:${period}`,
       );
       if (sectionId) {
-        rosterInserts.push({ sectionId, studentId: student.studentId });
+        rosterInserts.push({
+          schoolId: SEED_SCHOOL_ID,
+          sectionId,
+          studentId: student.studentId,
+        });
       }
     }
   }
@@ -204,6 +216,7 @@ export async function seedIfEmpty() {
     .insert(schoolAccommodationsTable)
     .values(
       data.accommodations.map((a) => ({
+        schoolId: SEED_SCHOOL_ID,
         name: a.name,
         category: a.category,
         active: true,
@@ -216,6 +229,7 @@ export async function seedIfEmpty() {
   for (const student of data.students) {
     for (const idx of student.accommodationIndices) {
       assignInserts.push({
+        schoolId: SEED_SCHOOL_ID,
         studentId: student.studentId,
         accommodationId: insertedAccs[idx].id,
         assignedByStaffId: eseStaffId,
@@ -229,32 +243,41 @@ export async function seedIfEmpty() {
   }
 
   // ---- Locations + allowed destinations + a couple of staff defaults
-  await db.insert(locationsTable).values([
-    { name: "Room 101", kind: "classroom", isOrigin: true, isDestination: false },
-    { name: "Room 102", kind: "classroom", isOrigin: true, isDestination: false },
-    { name: "Room 201", kind: "classroom", isOrigin: true, isDestination: false },
-    { name: "Room 202", kind: "classroom", isOrigin: true, isDestination: false },
-    { name: "Room 204", kind: "classroom", isOrigin: true, isDestination: false },
-    { name: "Room 305", kind: "classroom", isOrigin: true, isDestination: false },
-    { name: "Gym", kind: "common_area", isOrigin: true, isDestination: false },
-    { name: "Cafeteria", kind: "common_area", isOrigin: true, isDestination: true },
-    { name: "Library", kind: "common_area", isOrigin: false, isDestination: true },
-    { name: "Media Center", kind: "common_area", isOrigin: false, isDestination: true },
-    { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
-    { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
-    { name: "Nurse", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
-    { name: "Front Office", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
-    { name: "Guidance", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
-  ]);
+  await db.insert(locationsTable).values(
+    [
+      { name: "Room 101", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 102", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 201", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 202", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 204", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Room 305", kind: "classroom", isOrigin: true, isDestination: false },
+      { name: "Gym", kind: "common_area", isOrigin: true, isDestination: false },
+      { name: "Cafeteria", kind: "common_area", isOrigin: true, isDestination: true },
+      { name: "Library", kind: "common_area", isOrigin: false, isDestination: true },
+      { name: "Media Center", kind: "common_area", isOrigin: false, isDestination: true },
+      { name: "Boys Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Girls Restroom", kind: "restroom", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Nurse", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Front Office", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+      { name: "Guidance", kind: "office", isOrigin: false, isDestination: true, studentVisible: true },
+    ].map((l) => ({ schoolId: SEED_SCHOOL_ID, ...l })),
+  );
 
   const allLocs = await db.select().from(locationsTable);
   const origins = allLocs.filter((l) => l.isOrigin);
   const destinations = allLocs.filter((l) => l.isDestination);
-  const ladRows: { originLocationId: number; destinationLocationId: number }[] =
-    [];
+  const ladRows: {
+    schoolId: number;
+    originLocationId: number;
+    destinationLocationId: number;
+  }[] = [];
   for (const o of origins) {
     for (const d of destinations) {
-      ladRows.push({ originLocationId: o.id, destinationLocationId: d.id });
+      ladRows.push({
+        schoolId: SEED_SCHOOL_ID,
+        originLocationId: o.id,
+        destinationLocationId: d.id,
+      });
     }
   }
   if (ladRows.length > 0) {
@@ -274,7 +297,12 @@ export async function seedIfEmpty() {
       const id = staffByName.get(r.name);
       return id == null
         ? null
-        : { staffId: id, staffName: r.name, defaultLocationName: r.room };
+        : {
+            schoolId: SEED_SCHOOL_ID,
+            staffId: id,
+            staffName: r.name,
+            defaultLocationName: r.room,
+          };
     })
     .filter((r): r is NonNullable<typeof r> => r !== null);
   if (defaultRows.length > 0) {

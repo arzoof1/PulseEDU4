@@ -2,7 +2,7 @@ import { pgTable, serial, text, boolean, integer } from "drizzle-orm/pg-core";
 
 export const locationsTable = pgTable("locations", {
   id: serial("id").primaryKey(),
-  schoolId: integer("school_id").notNull().default(1),
+  schoolId: integer("school_id").notNull(),
   externalId: text("external_id"),
   // NOTE: name has a global unique index; with multi-tenancy two schools could
   // legitimately share a location name (both have a "Library"). The DB unique

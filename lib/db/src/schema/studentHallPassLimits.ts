@@ -17,7 +17,7 @@ export const studentHallPassLimitsTable = pgTable(
   "student_hall_pass_limits",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     studentId: text("student_id").notNull(),
     dailyLimit: integer("daily_limit").notNull(),
     note: text("note"),

@@ -13,7 +13,7 @@ export const issAttendanceDayTable = pgTable(
   "iss_attendance_day",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     studentId: text("student_id").notNull(),
     day: date("day").notNull(),
     source: text("source").notNull(),

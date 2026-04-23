@@ -15,7 +15,7 @@ export const polarityPairsTable = pgTable(
   "polarity_pairs",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     studentIdA: text("student_id_a").notNull(),
     studentIdB: text("student_id_b").notNull(),
     note: text("note"),

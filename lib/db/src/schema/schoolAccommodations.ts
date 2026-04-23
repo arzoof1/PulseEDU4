@@ -4,7 +4,7 @@ export const schoolAccommodationsTable = pgTable(
   "school_accommodations",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     name: text("name").notNull(),
     category: text("category").notNull().default("Strategy"),
     active: boolean("active").notNull().default(true),

@@ -5,7 +5,7 @@ export const teacherDestinationAllowlistTable = pgTable(
   "teacher_destination_allowlist",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     staffName: text("staff_name").notNull(),
     destinationLocationId: integer("destination_location_id")
       .notNull()

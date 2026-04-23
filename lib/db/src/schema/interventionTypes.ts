@@ -4,7 +4,7 @@ export const interventionTypesTable = pgTable(
   "intervention_types",
   {
     id: serial("id").primaryKey(),
-    schoolId: integer("school_id").notNull().default(1),
+    schoolId: integer("school_id").notNull(),
     name: text("name").notNull(),
     category: text("category").notNull().default("Classroom"),
     requiresNote: boolean("requires_note").notNull().default(false),
