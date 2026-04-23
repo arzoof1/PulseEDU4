@@ -7,8 +7,12 @@ import {
 } from "express";
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
-import { and, eq, asc } from "drizzle-orm";
+import { and, eq, asc, inArray, sql } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
+import {
+  getDistrictIdForSchool,
+  getSchoolIdsForDistrict,
+} from "../lib/scope";
 
 const router: IRouter = Router();
 
@@ -144,23 +148,35 @@ const STAFF_SELECT = {
 } as const;
 
 // List staff with full role + capability flags. SuperUsers see every school
-// (the role is intentionally district-wide). Everyone else — including
-// school admins and cap_staff_roles holders — sees only their own school.
+// in their own district (the role is district-wide, not cross-district —
+// before D6 the SuperUser branch was unscoped, which leaked across
+// districts the moment Pasco was added). Everyone else — including school
+// admins and cap_staff_roles holders — sees only their own school.
 router.get(
   "/admin/staff",
   requireAdminOrSuper(),
   async (req: Request, res: Response) => {
     const actor = (req as Request & { staff: StaffRow }).staff;
-    const rows = actor.isSuperUser
-      ? await db
-          .select(STAFF_SELECT)
-          .from(staffTable)
-          .orderBy(asc(staffTable.displayName))
-      : await db
-          .select(STAFF_SELECT)
-          .from(staffTable)
-          .where(eq(staffTable.schoolId, actor.schoolId))
-          .orderBy(asc(staffTable.displayName));
+    if (actor.isSuperUser) {
+      const districtId = await getDistrictIdForSchool(actor.schoolId);
+      const districtSchoolIds =
+        districtId !== null ? await getSchoolIdsForDistrict(districtId) : [];
+      const rows =
+        districtSchoolIds.length === 0
+          ? []
+          : await db
+              .select(STAFF_SELECT)
+              .from(staffTable)
+              .where(inArray(staffTable.schoolId, districtSchoolIds))
+              .orderBy(asc(staffTable.displayName));
+      res.json(rows);
+      return;
+    }
+    const rows = await db
+      .select(STAFF_SELECT)
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, actor.schoolId))
+      .orderBy(asc(staffTable.displayName));
     res.json(rows);
   },
 );
@@ -248,13 +264,26 @@ router.patch(
     }
 
     // Non-SuperUsers can only manage staff in their own school. SuperUsers
-    // intentionally retain district-wide reach.
+    // retain district-wide reach but NOT cross-district reach (since D6 /
+    // Pasco onboarding). The target must be in the actor's district.
+    const actorDistrictSchoolIds = actor.isSuperUser
+      ? await (async () => {
+          const did = await getDistrictIdForSchool(actor.schoolId);
+          return did !== null ? await getSchoolIdsForDistrict(did) : [];
+        })()
+      : null;
+
     const [target] = await db
       .select()
       .from(staffTable)
       .where(
         actor.isSuperUser
-          ? eq(staffTable.id, targetId)
+          ? and(
+              eq(staffTable.id, targetId),
+              actorDistrictSchoolIds && actorDistrictSchoolIds.length > 0
+                ? inArray(staffTable.schoolId, actorDistrictSchoolIds)
+                : sql`false`,
+            )
           : and(
               eq(staffTable.id, targetId),
               eq(staffTable.schoolId, actor.schoolId),
@@ -270,7 +299,12 @@ router.patch(
       .set(updates)
       .where(
         actor.isSuperUser
-          ? eq(staffTable.id, targetId)
+          ? and(
+              eq(staffTable.id, targetId),
+              actorDistrictSchoolIds && actorDistrictSchoolIds.length > 0
+                ? inArray(staffTable.schoolId, actorDistrictSchoolIds)
+                : sql`false`,
+            )
           : and(
               eq(staffTable.id, targetId),
               eq(staffTable.schoolId, actor.schoolId),
@@ -330,15 +364,33 @@ router.post(
     }
 
     // School assignment for the new row:
-    //   * SuperUser may target any school via body.schoolId (defaults to
-    //     their own if not supplied).
+    //   * SuperUser may target any school via body.schoolId IN THEIR OWN
+    //     DISTRICT (defaults to their own school if not supplied). Cross-
+    //     district seeding is rejected — that would be a Hernando admin
+    //     creating staff inside a Pasco school.
     //   * Everyone else creates strictly into their own school — body
     //     overrides are ignored to prevent cross-school staff seeding.
     const bodySchoolId = Number((req.body as { schoolId?: unknown })?.schoolId);
-    const targetSchoolId =
-      actor.isSuperUser && Number.isInteger(bodySchoolId) && bodySchoolId > 0
-        ? bodySchoolId
-        : actor.schoolId;
+    let targetSchoolId = actor.schoolId;
+    if (
+      actor.isSuperUser &&
+      Number.isInteger(bodySchoolId) &&
+      bodySchoolId > 0
+    ) {
+      const actorDistrictId = await getDistrictIdForSchool(actor.schoolId);
+      const targetDistrictId = await getDistrictIdForSchool(bodySchoolId);
+      if (
+        actorDistrictId === null ||
+        targetDistrictId === null ||
+        actorDistrictId !== targetDistrictId
+      ) {
+        res
+          .status(403)
+          .json({ error: "Cannot create staff in a school outside your district." });
+        return;
+      }
+      targetSchoolId = bodySchoolId;
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
     const [row] = await db
@@ -399,13 +451,26 @@ router.post(
 
     // Same scoping as PATCH: non-SuperUser admins may only reset passwords
     // for staff in their own school. Without this, a school A admin who
-    // knew a school B staff id could take over that account.
+    // knew a school B staff id could take over that account. SuperUser is
+    // district-scoped (since D6) — no cross-district password resets.
+    const actorDistrictSchoolIdsPwd = actor.isSuperUser
+      ? await (async () => {
+          const did = await getDistrictIdForSchool(actor.schoolId);
+          return did !== null ? await getSchoolIdsForDistrict(did) : [];
+        })()
+      : null;
+
     const [target] = await db
       .select()
       .from(staffTable)
       .where(
         actor.isSuperUser
-          ? eq(staffTable.id, targetId)
+          ? and(
+              eq(staffTable.id, targetId),
+              actorDistrictSchoolIdsPwd && actorDistrictSchoolIdsPwd.length > 0
+                ? inArray(staffTable.schoolId, actorDistrictSchoolIdsPwd)
+                : sql`false`,
+            )
           : and(
               eq(staffTable.id, targetId),
               eq(staffTable.schoolId, actor.schoolId),

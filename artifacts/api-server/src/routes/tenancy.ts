@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, staffTable, districtsTable, schoolsTable } from "@workspace/db";
 import { eq, asc, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import { getDistrictIdForSchool } from "../lib/scope";
 
 const router: IRouter = Router();
 
@@ -36,18 +37,32 @@ async function requireSuperUser(req: any, res: any) {
 
 // ---------------------------------------------------------------------------
 // GET /api/tenancy/schools
-//   Lists schools the caller can pick from. SuperUsers see all active schools.
-//   Regular staff see exactly their home school. Used to populate the top-bar
-//   switcher (SuperUser) and the read-only badge (everyone else).
+//   Lists schools the caller can pick from. SuperUsers see every active
+//   school **in their own district** (the role is district-wide, not
+//   cross-district). Regular staff see exactly their home school. Used to
+//   populate the top-bar switcher (SuperUser) and the read-only badge
+//   (everyone else).
 // ---------------------------------------------------------------------------
 router.get("/tenancy/schools", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
 
+  const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+
   const all = await db
     .select()
     .from(schoolsTable)
-    .where(eq(schoolsTable.active, true))
+    .where(
+      and(
+        eq(schoolsTable.active, true),
+        // For SuperUsers, restrict to their own district. For everyone else
+        // we still pull the row so the badge can render their home school's
+        // name; the .filter below narrows to exactly that one row.
+        actorDistrictId !== null
+          ? eq(schoolsTable.districtId, actorDistrictId)
+          : sql`false`,
+      ),
+    )
     .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
 
   const visible = staff.isSuperUser
@@ -115,6 +130,20 @@ router.post("/tenancy/switch-school", async (req, res) => {
     return;
   }
 
+  // Cross-district switching is rejected. A Hernando SuperUser switching
+  // into a Pasco school would resolve req.schoolId to a Pasco school for
+  // the rest of the session — the scope sweeps from D3-D5 only enforced
+  // *school* scoping, so cross-district reach via the switcher would
+  // expose Pasco data to Hernando. If we ever want a true cross-district
+  // SuperUser, that's a separate flag (e.g. `isCrossDistrictSuperUser`).
+  const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+  if (actorDistrictId === null || school.districtId !== actorDistrictId) {
+    res
+      .status(403)
+      .json({ error: "Cannot switch into a school in another district" });
+    return;
+  }
+
   // schoolId === staff.schoolId means the SuperUser picked their own home
   // school explicitly. Treat that as "clear the override" so the badge
   // returns to its non-switched state.
@@ -154,6 +183,19 @@ router.post("/tenancy/schools", async (req, res) => {
     res.status(400).json({ error: "districtId must be a positive integer" });
     return;
   }
+
+  // SuperUser must be creating a school IN THEIR OWN DISTRICT. Without this
+  // a Hernando SuperUser could POST { districtId: 37, name: "..." } and
+  // mint a school inside the Pasco silo. Cross-district write was the
+  // matching write-side hole alongside the switch-school read-side one.
+  const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+  if (actorDistrictId === null || actorDistrictId !== districtId) {
+    res
+      .status(403)
+      .json({ error: "Cannot create a school in another district" });
+    return;
+  }
+
   const [district] = await db
     .select()
     .from(districtsTable)
@@ -249,15 +291,38 @@ router.get("/tenancy/status", async (req, res) => {
   const staff = await requireSuperUser(req, res);
   if (!staff) return;
 
-  const districts = await db
-    .select()
-    .from(districtsTable)
-    .orderBy(asc(districtsTable.id));
+  // District-scope every read in this endpoint. Pre-D6 the Tenancy panel
+  // was the canonical "see all districts and all schools" view, which is
+  // exactly the cross-district leak we're closing now. A Hernando
+  // SuperUser must not see Pasco's name, school list, or per-school row
+  // counts — that's tenant-metadata exposure even though the row data
+  // itself isn't dumped here.
+  const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
 
-  const schools = await db
-    .select()
-    .from(schoolsTable)
-    .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
+  const districts =
+    actorDistrictId === null
+      ? []
+      : await db
+          .select()
+          .from(districtsTable)
+          .where(eq(districtsTable.id, actorDistrictId))
+          .orderBy(asc(districtsTable.id));
+
+  const schools =
+    actorDistrictId === null
+      ? []
+      : await db
+          .select()
+          .from(schoolsTable)
+          .where(eq(schoolsTable.districtId, actorDistrictId))
+          .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
+
+  // Build the IN-list of school ids to scope per-table count queries.
+  // Orphan rows (school_id IS NULL) stay in scope: they're a system-
+  // integrity signal that any district admin should see flagged.
+  const districtSchoolIds = schools.map((s) => s.id);
+  const inList =
+    districtSchoolIds.length > 0 ? districtSchoolIds.join(",") : "NULL";
 
   const counts: Record<string, number> = {};
   const perSchool: Record<string, Record<number, number>> = {};
@@ -266,7 +331,9 @@ router.get("/tenancy/status", async (req, res) => {
     perSchool[t] = {};
     const result = await db.execute(
       sql.raw(
-        `SELECT school_id, COUNT(*)::int AS n FROM ${t} GROUP BY school_id`,
+        `SELECT school_id, COUNT(*)::int AS n FROM ${t}
+         WHERE school_id IN (${inList}) OR school_id IS NULL
+         GROUP BY school_id`,
       ),
     );
     const rows = (result as any).rows ?? (result as any);

@@ -268,18 +268,40 @@ export async function sendDailyDigestEmailForSchool(
 }
 
 /**
- * Cron entry point: send a per-school digest to every school in the
- * schools table. Returns one result per school.
+ * Cron entry point: send a per-school digest to every school that has at
+ * least one configured digest recipient. Schools with no admin/dean/MTSS
+ * staff are skipped silently (was: iterated and returned "skipped" for
+ * every empty school, which created 96 wasted iterations once Pasco was
+ * onboarded with no staff). Returns one result per school iterated.
  */
 export async function sendDailyDigestEmail(
   forDay: Date = new Date(),
 ): Promise<DailyDigestResult[]> {
-  const schools = await db
-    .select({ id: schoolsTable.id })
-    .from(schoolsTable)
-    .orderBy(schoolsTable.id);
+  // Distinct schoolIds that have at least one active admin/dean/MTSS
+  // staff with a non-empty email. Anything else can't receive a digest.
+  const recipientSchoolRows = await db
+    .selectDistinct({ id: staffTable.schoolId })
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.active, true),
+        or(
+          eq(staffTable.isAdmin, true),
+          eq(staffTable.isDean, true),
+          eq(staffTable.isMtssCoordinator, true),
+        ),
+      ),
+    );
+  const schoolIds = recipientSchoolRows
+    .map((r) => r.id)
+    .filter((id): id is number => typeof id === "number");
+  // Order matches the prior behavior (ascending school id) for log
+  // readability.
+  schoolIds.sort((a, b) => a - b);
+
   const results: DailyDigestResult[] = [];
-  for (const s of schools) {
+  for (const sid of schoolIds) {
+    const s = { id: sid };
     try {
       const r = await sendDailyDigestEmailForSchool(forDay, s.id);
       results.push(r);

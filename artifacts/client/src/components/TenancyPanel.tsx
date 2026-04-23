@@ -198,11 +198,22 @@ function TenancyPanelInner() {
   const orphans = (status.orphans ?? {}) as Record<string, number>;
   const totalOrphans = Number(status.totalOrphans ?? 0);
 
-  const district = districts[0] ?? null;
-  const schoolsForDistrict = district
-    ? schools.filter((s) => s.districtId === district.id)
-    : [];
+  // D6 (Pasco onboarding): the panel now iterates every district instead
+  // of locking onto districts[0]. Per-district sections (header, "create
+  // school" form, schools table) render once per district. Global sections
+  // (data integrity, per-school counts) span all districts. Schools with
+  // zero rows across every counted table are hidden from the count grid so
+  // it doesn't blow out to 100+ columns the moment Pasco is loaded.
   const orphansClean = totalOrphans === 0;
+  const schoolsWithAnyRows = new Set<number>();
+  for (const tableCounts of Object.values(perSchool)) {
+    for (const [sidStr, n] of Object.entries(tableCounts)) {
+      if (Number(n) > 0) schoolsWithAnyRows.add(Number(sidStr));
+    }
+  }
+  const visibleSchoolsForCounts = schools.filter((s) =>
+    schoolsWithAnyRows.has(s.id),
+  );
 
   const cellStyle = { padding: "0.4rem", textAlign: "right" as const };
   const headStyle = {
@@ -219,7 +230,12 @@ function TenancyPanelInner() {
         Districts and schools registered in this PulseEDU instance.
       </p>
 
-      {district && (
+      {districts.map((district) => {
+        const schoolsForDistrict = schools.filter(
+          (s) => s.districtId === district.id,
+        );
+        return (
+        <div key={district.id}>
         <section style={{ marginBottom: "1.25rem" }}>
           <div
             style={{
@@ -270,9 +286,7 @@ function TenancyPanelInner() {
             </span>
           </div>
         </section>
-      )}
 
-      {district && (
         <section
           style={{
             marginBottom: "1.25rem",
@@ -362,7 +376,6 @@ function TenancyPanelInner() {
             </p>
           )}
         </section>
-      )}
 
       <section style={{ marginBottom: "1.25rem" }}>
         <h3 style={{ marginBottom: "0.5rem" }}>
@@ -425,6 +438,9 @@ function TenancyPanelInner() {
           </tbody>
         </table>
       </section>
+      </div>
+        );
+      })}
 
       <section style={{ marginBottom: "1.25rem" }}>
         <div
@@ -466,9 +482,9 @@ function TenancyPanelInner() {
       <section style={{ marginBottom: "0.5rem" }}>
         <h3 style={{ marginBottom: "0.5rem" }}>Per-school row counts</h3>
         <p style={{ color: "var(--text-subtle)", marginTop: 0, fontSize: 13 }}>
-          Day 2 has assigned every existing record to{" "}
-          <strong>D. S. Parrott Middle School</strong>. New schools start with
-          zero rows.
+          Showing only schools with at least one row across the counted
+          tables. Empty schools (incl. brand-new silos) are hidden so the
+          grid stays readable when a district has many schools.
         </p>
         <div style={{ overflowX: "auto" }}>
           <table
@@ -487,7 +503,7 @@ function TenancyPanelInner() {
                 <th style={{ textAlign: "left", padding: "0.4rem" }}>
                   Table
                 </th>
-                {schoolsForDistrict.map((s) => (
+                {visibleSchoolsForCounts.map((s) => (
                   <th key={s.id} style={headStyle}>
                     {s.shortName ?? s.name}
                     {s.isPrimary ? " ★" : ""}
@@ -507,7 +523,7 @@ function TenancyPanelInner() {
                   <td style={{ padding: "0.4rem", fontWeight: 600 }}>
                     {tableLabels[key] ?? key}
                   </td>
-                  {schoolsForDistrict.map((s) => {
+                  {visibleSchoolsForCounts.map((s) => {
                     const n = perSchool[key]?.[String(s.id)] ?? 0;
                     return (
                       <td

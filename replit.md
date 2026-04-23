@@ -626,3 +626,97 @@ SuperUser).
 settings. SuperUser can switch into any Pasco school via the Tenancy
 panel to validate that empty-silo views render cleanly and to start
 populating data if needed.
+
+### District-scoping sweep — closing the latent holes (D6, Apr 23 2026)
+
+The cross-school sweeps (D3-D5) only enforced *school* scoping. With
+Pasco landed, several SuperUser surfaces were still treating "SuperUser"
+as "every school in the database" instead of "every school in the
+actor's district". Closed in this batch:
+
+- **`artifacts/api-server/src/lib/scope.ts`** — added two helpers used
+  by every district-scoped surface: `getDistrictIdForSchool(schoolId)`
+  resolves the actor's district via a single-row lookup on
+  `schools.district_id`; `getSchoolIdsForDistrict(districtId)`
+  materializes the (small) school-id list for `inArray` filtering.
+  Staff has no `district_id` column — district is always derived
+  through their `school_id`.
+
+- **`artifacts/api-server/src/routes/tenancy.ts`** —
+  `GET /api/tenancy/schools` now district-filters at the SQL level so
+  the SuperUser switcher only lists schools in the actor's district.
+  `POST /api/tenancy/switch-school` rejects cross-district switches
+  with 403 ("Cannot switch into a school in another district") so a
+  Hernando SuperUser can't resolve `req.schoolId` to a Pasco school
+  for the rest of the session.
+
+- **`artifacts/api-server/src/routes/adminStaff.ts`** — four SuperUser
+  surfaces tightened: `GET /admin/staff` (list), `PATCH /admin/staff/:id`
+  (target lookup + update WHERE), `POST /admin/staff` (validates the
+  target school is in the actor's district), and
+  `POST /admin/staff/:id/password`. SuperUser still has district-wide
+  reach (the original design intent per old comments), just no longer
+  cross-district reach.
+
+- **`artifacts/client/src/components/TenancyPanel.tsx`** — the panel
+  was hard-coded to `districts[0]` and would have hidden Pasco from
+  the UI entirely. Now iterates every district and renders the
+  per-district sections (header, "create school" form, schools table)
+  once each. The per-school row-count grid is also filtered to only
+  schools that have at least one row — otherwise it would explode to
+  100+ columns the moment Pasco was loaded.
+
+- **`artifacts/api-server/src/lib/dailyDigest.ts`** —
+  `sendDailyDigestEmail` cron used to iterate every row in `schools`
+  and return a "skipped" result for each one with no recipients.
+  After Pasco loaded, that meant 96 wasted iterations per weekday
+  cron run. Now SQL-pre-filters to schools that have at least one
+  active admin/dean/MTSS-coordinator staff and iterates only those.
+
+**Three additional holes caught by post-build review** (same batch):
+
+- **`GET /api/tenancy/status`** was returning every district, every
+  school, and per-school row counts unfiltered. That's tenant-metadata
+  exposure (not row-level data, but a Hernando SuperUser shouldn't see
+  Pasco's name, school list, or counts). Now derives `actorDistrictId`
+  and filters districts/schools to that district. Per-table count SQL
+  adds `WHERE school_id IN (<district school ids>) OR school_id IS
+  NULL`. Orphan rows stay in scope as a system-integrity signal —
+  every district admin should see them flagged. Numeric school ids
+  come from a trusted DB query, not user input, so the `sql.raw`
+  interpolation is safe.
+
+- **`POST /api/tenancy/schools`** accepted any `districtId` in the
+  request body and created the school there. A Hernando SuperUser
+  could mint a school inside the Pasco silo by submitting
+  `{ districtId: 37, ... }`. Now rejects with 403 if `body.districtId`
+  doesn't match the actor's home district.
+
+- **`app.ts` request middleware** was honoring
+  `staff.activeSchoolOverride` without checking same-district. If a
+  pre-D6 cross-district override existed in the DB, it kept resolving
+  `req.schoolId` to the wrong-district school until next login.
+  Defense-in-depth fix: when an override is present AND the user is
+  a SuperUser, look up both the override school's `district_id` and
+  the home school's `district_id`, only honor the override if they
+  match. Falls back to home school otherwise. Extra DB hops only run
+  when an override is actually set (most requests skip them entirely).
+
+**Cleanup:** the `eq(staffTable.id, -1)` no-match fallback used in
+`adminStaff.ts` for empty-district-school-list cases was replaced
+with `sql\`false\`` for clarity.
+
+**Future escape hatch.** If we ever need a true cross-district
+SuperUser (e.g. for Replit-side support), the right shape is a
+separate flag — `isCrossDistrictSuperUser` or similar — checked on
+top of the existing `isSuperUser`. Deferred until there's a real
+caller for it; today every SuperUser belongs to exactly one district
+via their home school.
+
+**Known follow-ups (not in this batch).** (1) Custom-role presets
+(`/custom-roles`) are still instance-global — no `district_id` on
+that schema. If districts need their own role catalogs, that's a
+separate schema migration. (2) `TenancyPanel`'s `createError` /
+`createOk` state is shared across the per-district "Create new
+school" forms, so a click in one district shows the message under
+both. Cosmetic; deferred.

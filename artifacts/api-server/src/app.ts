@@ -6,7 +6,7 @@ import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { verifyAuthToken } from "./lib/authToken";
-import { db, staffTable } from "@workspace/db";
+import { db, staffTable, schoolsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 declare global {
@@ -141,8 +141,33 @@ app.use(async (req, _res, next) => {
         // are blocked — keep the SuperUser's switch active across reloads.
         const override = staff.activeSchoolOverride ?? null;
         if (staff.isSuperUser && override && override !== staff.schoolId) {
-          req.schoolId = override;
-          req.isSchoolSwitched = true;
+          // D6 defense-in-depth: even if a stale pre-D6 override points
+          // at a school in another district, refuse to honor it. Only
+          // requires an extra DB hop on the rare requests where an
+          // override is actually present, and prevents a Hernando
+          // SuperUser whose row already has activeSchoolOverride = some
+          // Pasco school from quietly reading Pasco data on the next
+          // request. switch-school now refuses to *set* such an
+          // override, but old data may still exist.
+          const [overrideSchool] = await db
+            .select({ districtId: schoolsTable.districtId })
+            .from(schoolsTable)
+            .where(eq(schoolsTable.id, override));
+          const [homeSchool] = await db
+            .select({ districtId: schoolsTable.districtId })
+            .from(schoolsTable)
+            .where(eq(schoolsTable.id, staff.schoolId));
+          if (
+            overrideSchool &&
+            homeSchool &&
+            overrideSchool.districtId === homeSchool.districtId
+          ) {
+            req.schoolId = override;
+            req.isSchoolSwitched = true;
+          } else {
+            // Stale or cross-district override — fall back to home school.
+            req.schoolId = staff.schoolId;
+          }
         } else {
           req.schoolId = staff.schoolId;
         }
