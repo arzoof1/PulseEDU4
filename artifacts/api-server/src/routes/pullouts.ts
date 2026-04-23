@@ -80,7 +80,12 @@ function daysAgoIso(days: number): string {
 }
 
 // Has the student had any logged classroom intervention recently?
-async function hasRecentIntervention(studentId: string): Promise<boolean> {
+// School-scoped so school A can't probe school B's intervention history
+// via the preflight endpoint.
+async function hasRecentIntervention(
+  studentId: string,
+  schoolId: number,
+): Promise<boolean> {
   const since = daysAgoIso(INTERVENTION_WINDOW_DAYS);
   const rows = await db
     .select({ id: interventionEntriesTable.id })
@@ -88,6 +93,7 @@ async function hasRecentIntervention(studentId: string): Promise<boolean> {
     .where(
       and(
         eq(interventionEntriesTable.studentId, studentId),
+        eq(interventionEntriesTable.schoolId, schoolId),
         gte(interventionEntriesTable.createdAt, since),
       ),
     )
@@ -106,7 +112,7 @@ router.get(
       res.status(400).json({ error: "studentId required" });
       return;
     }
-    const has = await hasRecentIntervention(studentId);
+    const has = await hasRecentIntervention(studentId, req.schoolId!);
     res.json({
       studentId,
       hasRecentIntervention: has,
@@ -216,7 +222,7 @@ router.post(
       periodNum = p;
     }
 
-    const has = await hasRecentIntervention(studentId.trim());
+    const has = await hasRecentIntervention(studentId.trim(), staff.schoolId);
     if (!has && acknowledgeNoIntervention !== true) {
       res.status(409).json({
         error: `Pullouts require a logged classroom intervention in the past ${INTERVENTION_WINDOW_DAYS} days. If you have tried interventions but not logged them, set acknowledgeNoIntervention=true.`,

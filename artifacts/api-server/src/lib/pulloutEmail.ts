@@ -5,7 +5,7 @@ import {
   schoolSettingsTable,
   staffTable,
 } from "@workspace/db";
-import { eq, or } from "drizzle-orm";
+import { and, eq, or } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
 
 export type PulloutEmailResult = {
@@ -41,8 +41,16 @@ export async function sendPulloutArrivalEmail(
   const [student] = await db
     .select()
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, p.studentId));
-  const [settings] = await db.select().from(schoolSettingsTable);
+    .where(
+      and(
+        eq(studentsTable.studentId, p.studentId),
+        eq(studentsTable.schoolId, p.schoolId),
+      ),
+    );
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, p.schoolId));
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
   const signature = settings?.emailSignature ?? `Thank you,\n${schoolName}`;
@@ -164,7 +172,12 @@ export async function sendPulloutReturnEmail(
   const [student] = await db
     .select()
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, p.studentId));
+    .where(
+      and(
+        eq(studentsTable.studentId, p.studentId),
+        eq(studentsTable.schoolId, p.schoolId),
+      ),
+    );
   if (!student) {
     return {
       status: "skipped",
@@ -180,7 +193,10 @@ export async function sendPulloutReturnEmail(
       errorMsg: "No parent email on file",
     };
   }
-  const [settings] = await db.select().from(schoolSettingsTable);
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, p.schoolId));
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
   const signature = settings?.emailSignature ?? `Thank you,\n${schoolName}`;
@@ -247,16 +263,22 @@ export async function sendPulloutDispatchEmail(
 
   const nowIso = new Date().toISOString();
 
-  // Recipients: any active staff with admin / dean / MTSS / ISS role.
+  // Recipients: any active staff in THIS pullout's school with
+  // admin / dean / MTSS / ISS role. School-scoped so pullout details
+  // (student id, reason, teacher) don't leak to dispatchers in other
+  // schools.
   const dispatchers = await db
     .select()
     .from(staffTable)
     .where(
-      or(
-        eq(staffTable.isAdmin, true),
-        eq(staffTable.isDean, true),
-        eq(staffTable.isMtssCoordinator, true),
-        eq(staffTable.isIssTeacher, true),
+      and(
+        eq(staffTable.schoolId, p.schoolId),
+        or(
+          eq(staffTable.isAdmin, true),
+          eq(staffTable.isDean, true),
+          eq(staffTable.isMtssCoordinator, true),
+          eq(staffTable.isIssTeacher, true),
+        ),
       ),
     );
   const recipients = dispatchers
@@ -283,8 +305,16 @@ export async function sendPulloutDispatchEmail(
   const [student] = await db
     .select()
     .from(studentsTable)
-    .where(eq(studentsTable.studentId, p.studentId));
-  const [settings] = await db.select().from(schoolSettingsTable);
+    .where(
+      and(
+        eq(studentsTable.studentId, p.studentId),
+        eq(studentsTable.schoolId, p.schoolId),
+      ),
+    );
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, p.schoolId));
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
 

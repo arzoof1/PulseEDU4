@@ -103,7 +103,10 @@ export async function processMilestonesForStudent(
         eq(studentsTable.schoolId, schoolId),
       ),
     );
-  const [settings] = await db.select().from(schoolSettingsTable);
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
   const schoolName = settings?.schoolName ?? "PulseED";
   const fromName = settings?.fromName ?? schoolName;
   const signature = settings?.emailSignature ?? `Thank you,\n${schoolName}`;

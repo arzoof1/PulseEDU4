@@ -12,7 +12,7 @@ import {
   supportNotesTable,
   studentsTable,
 } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { getUncachableResendClient } from "../lib/resendClient";
 
 const router: IRouter = Router();
@@ -79,7 +79,12 @@ router.post(
     const [student] = await db
       .select()
       .from(studentsTable)
-      .where(eq(studentsTable.studentId, sId));
+      .where(
+        and(
+          eq(studentsTable.studentId, sId),
+          eq(studentsTable.schoolId, staff.schoolId),
+        ),
+      );
     if (!student) {
       res.status(404).json({ error: "Student not found." });
       return;
@@ -92,7 +97,7 @@ router.post(
       const [settings] = await db
         .select()
         .from(schoolSettingsTable)
-        .limit(1);
+        .where(eq(schoolSettingsTable.schoolId, staff.schoolId));
       const fromName = settings?.fromName?.trim() || "";
       const result = await client.emails.send({
         from: formatFromHeader(fromName, fromEmail),
@@ -123,6 +128,7 @@ router.post(
 
     try {
       await db.insert(supportNotesTable).values({
+        schoolId: staff.schoolId,
         studentId: sId,
         noteType: "parent_email",
         noteText,

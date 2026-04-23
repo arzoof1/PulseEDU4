@@ -1,12 +1,17 @@
 import { Router, type IRouter } from "express";
 import { getUncachableResendClient } from "../lib/resendClient";
 import { db, schoolSettingsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
 
 const router: IRouter = Router();
 
-async function getFromName(): Promise<string> {
+async function getFromName(schoolId: number | undefined): Promise<string> {
+  if (!schoolId) return "";
   try {
-    const [row] = await db.select().from(schoolSettingsTable).limit(1);
+    const [row] = await db
+      .select()
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
     return row?.fromName?.trim() || "";
   } catch {
     return "";
@@ -41,7 +46,7 @@ router.post("/send-test-parent-email", async (req, res) => {
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromName = await getFromName();
+    const fromName = await getFromName(req.schoolId);
     const fromHeader = formatFromHeader(fromName, fromEmail);
     const result = await client.emails.send({
       from: fromHeader,

@@ -304,13 +304,41 @@ that previously enforced "one row per student id" globally are now
 now stamps `existing.schoolId` on the auto-inserted `iss_roster` row
 (was relying on DB DEFAULT 1, mis-tenanting non-Parrott arrivals).
 
-**Still deferred to a future pass.** Display-only readers in
-`lib/dailyDigest.ts`, `lib/pulloutEmail.ts`, `routes/email.ts`,
-`routes/parentEmail.ts` still read `schoolSettings...limit(1)` for
-fromName/signature/schoolName. They run from cron / send-email paths
-without a `req` and would need a `schoolId` parameter threaded in
-from each callsite. Degrades gracefully (Parrott branding on emails)
-but should be cleaned up before a second district goes live.
+**D5 follow-up (Apr 23 2026).** Closed the deferred display-only
+`schoolSettings...limit(1)` readers and the unscoped intervention
+oracle:
+
+- `routes/pullouts.ts` `hasRecentIntervention(studentId, schoolId)`
+  now AND-filters by school. Both callers (preflight GET uses
+  `req.schoolId`; POST uses `staff.schoolId`) updated. Same
+  enumeration-oracle pattern that D5 closed on hall-pass limits.
+- `lib/pulloutEmail.ts` (3 functions: `sendPulloutArrivalEmail`,
+  `sendPulloutReturnEmail`, `sendPulloutDispatchEmail`) — each loads
+  the parent pullout first, then uses `p.schoolId` to scope both the
+  student lookup and the schoolSettings fetch. Branding/from-name
+  now matches the school the pullout belongs to, not whichever
+  school sorts first.
+- `lib/pbisMilestones.ts` settings read (line 109) — now scoped by
+  `schoolId` (already a parameter on `processMilestonesForStudent`).
+- `routes/email.ts` `getFromName(schoolId)` — now takes the
+  caller's `req.schoolId`.
+- `routes/parentEmail.ts` POST `/parent-email/send` — student lookup
+  and settings fetch both AND-filter on `staff.schoolId`. The
+  audit-log insert into `support_notes` now also stamps
+  `schoolId: staff.schoolId` (was relying on DB DEFAULT 1, which
+  mis-tenanted every non-Parrott parent-email log). Closes the
+  same student-id enumeration oracle pattern on this surface.
+- `lib/pulloutEmail.ts` `sendPulloutDispatchEmail` recipient query —
+  was selecting all admins/deans/MTSS/ISS staff district-wide;
+  now AND-filters `staffTable.schoolId = p.schoolId` so a school A
+  pullout's student id, reason, and teacher name are only emailed
+  to school A's dispatchers.
+
+**Still deferred (separate task).** `lib/dailyDigest.ts` is
+still district-wide: the pullouts query has no school filter and
+the recipient list is all admins/deans/MTSS across the district.
+Per-school cron loop is a real design change (5 separate emails vs
+one combined), tracked separately.
 
 **Verification.** SQL spot-checks confirmed:
 - Two schools can each hold an active hall-pass limit, an ISS
