@@ -585,3 +585,44 @@ support_notes / iss_roster bugs we hunted down through D5.
 `schools`, `custom_roles`, `district_integrations`, `user_sessions`,
 `check_in_with_options`, `bell_schedule_periods` (scoped via parent
 `bell_schedules.school_id`).
+
+## Multi-tenancy — Pasco County added as 2nd district (Apr 23 2026)
+
+Stood up the second district to actually exercise the silo machinery
+end-to-end. Until now Hernando was the only district, so the
+silo-per-district + silo-per-school plumbing had never been stressed
+against a real second tenant.
+
+**District added.**
+- `Pasco County School District` — `id = 37`, `slug = "pasco"`,
+  `state_district_code = "51"`, `timezone = America/New_York`.
+- 96 schools loaded from the Florida DOE roster (codes ranging from
+  `0021` Rodney B. Cox Elementary through `7023` Pasco Virtual
+  Instruction Program), all stamped `district_id = 37`, `is_primary
+  = false`. Names title-cased from the source spreadsheet (preserving
+  `K-8`, `Jr.`, `Dr.`, `O'`, `eSchool`).
+
+**Hernando left untouched.** Still 6 schools at `district_id = 1`
+(Parrott=1, Springstead=2, NCT=3, Weeki=4, Powell=5, Test Middle=36).
+
+**Silo smoke test (Apr 23).**
+- Inserted a student against a Pasco school_id (`Pasco High School`,
+  state code `0031`). Insert succeeded; row's `school_id` resolved to a
+  Pasco school via FK join, `district_id = 37`. Rolled back.
+- Confirmed: zero rows in `students` where `school_id = 1` (Parrott)
+  also belong to a Pasco school. Silo boundary holds.
+
+**What this exposes (intentionally).** Any code path that still assumes
+`district_id = 1` will now show wrong-district behavior the first time a
+SuperUser switches into a Pasco school. The cross-school sweeps from
+D3–D5 only enforced *school* scoping, not *district* scoping. Latent
+bugs to expect: any admin/list endpoint that joins through `schools`
+without filtering on the actor's `districtId`, any place a SuperUser's
+school-switch UI lists *all* schools across districts (it should list
+only their district's schools unless they're the one true cross-district
+SuperUser).
+
+**Pasco silo is currently empty.** No staff, students, sections, or
+settings. SuperUser can switch into any Pasco school via the Tenancy
+panel to validate that empty-silo views render cleanly and to start
+populating data if needed.
