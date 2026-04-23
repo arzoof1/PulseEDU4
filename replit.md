@@ -828,6 +828,107 @@ be the natural cap once a real caller appears for these tests).
 
 ---
 
+## Multi-school dev seed (2026-04-23, late session)
+
+The dev DB is now seeded with realistic multi-school data so the
+contracted AWS engineer (who is sizing the AWS backend wiring + CIO
+review documentation, not taking over the project) can evaluate the
+end-to-end flow.
+
+**Totals:** 396 staff, 9,750 students, 2,730 class sections, 68,250
+roster rows, 98 master accommodations (14 per school), 8,112 student
+accommodation assignments, 105 locations, 7 bell schedules with 49
+periods, 7 school_settings rows.
+
+**Per school:**
+
+| id  | school                              | teachers | students | sections | admin (besides SuperUsers) |
+|-----|-------------------------------------|---------:|---------:|---------:|----------------------------|
+| 1   | D. S. Parrott Middle School         | 35       | 875      | 245      | Chris Clifford (also Super) |
+| 2   | F. W. Springstead High School       | 80       | 2,000    | 560      | Brandon Wright (also Super) |
+| 3   | Nature Coast Technical High School  | 60       | 1,500    | 420      | Brad Merschbach            |
+| 4   | Weeki Wachee High School            | 65       | 1,625    | 455      | Ed LaRose                  |
+| 5   | Powell Middle School                | 55       | 1,375    | 385      | Alex Rastatter             |
+| 36  | Test Middle School                  | 35       | 875      | 245      | Luke Skywalker             |
+| 220 | Cypress Creek High School (Pasco)   | 60       | 1,500    | 420      | (none — SuperUser only)    |
+
+**Email convention.** All seeded staff use `@hcsb.k12.fl.us`.
+Chris and Brandon were renamed from `@school.local` to
+`chris.clifford@hcsb.k12.fl.us` and `brandon.wright@hcsb.k12.fl.us`
+(IDs 83 and 84 preserved, passwords unchanged: `@Leopards` and
+`@GoEagles`). All other generated staff (teachers + 4 named admins)
+share the temporary password `PulseDemo!` (bcrypt cost 10) — they
+should rotate via Profile on first login.
+
+**Schedule.** Every school has the same 7-period bell schedule,
+07:30–14:00, ~47 min periods with 5 min passing and a 35 min lunch
+between P5 (ends 11:45) and P6 (starts 12:20). Each teacher has 1
+planning period; planning periods are evenly distributed across the
+7 periods so each non-planning period has roughly equal teaching
+capacity. Students are round-robin assigned so each non-planning
+section holds ~25 students.
+
+**Accommodations rule.** 25 % of students are accommodated. Each
+accommodated student is assigned EITHER an IEP base OR a 504 base
+(never both), drawing 2–4 items from the 7 IEP / 4 504 master
+strategies. There is then a 30 % chance to add 1–2 ELL items on top,
+capped at 4 total. The "Strategy" category is intentionally not used
+at the per-student level (it stays as a school-level master list
+only).
+
+**Globally-unique field workarounds.** Three columns still have a
+global unique constraint that pre-dates the silo migration; the
+seed prefixes values to avoid cross-school collisions, and these
+prefixes are the canonical convention until those columns are
+relaxed to per-school uniqueness:
+
+- `students.student_id` — prefixed `S{schoolId}-{n}`, e.g. `S1-2000`,
+  `S220-2000`.
+- `locations.name` — prefixed with the school short name, e.g.
+  `Parrott Room 101`, `CCHS Library`. (The schema comment on
+  `locations.name` flags this as a known item.)
+- `staff.email` — generated emails embed a global teacher sequence
+  number (`sarah.rivera117@hcsb.k12.fl.us`) so two schools that
+  happen to pick the same first/last pair never collide.
+
+**Schema fix during seeding.** The DB had a stale global partial
+unique index `bell_schedules_one_default_idx` from before the silo
+migration that allowed only ONE `is_default = true` row in the
+entire table — it would have blocked any second school from having
+a default bell schedule and was not declared in `bellSchedules.ts`.
+Dev was patched in place with:
+
+```sql
+DROP INDEX IF EXISTS bell_schedules_one_default_idx;
+CREATE UNIQUE INDEX bell_schedules_school_default_idx
+  ON bell_schedules (school_id) WHERE is_default = true;
+```
+
+The matching `uniqueIndex` declaration is now in
+`lib/db/src/schema/bellSchedules.ts` so future `db push` runs do not
+re-add the global index.
+
+**⚠ Prod still has the old index** — it was created by the earlier
+`db push` runs that built the prod tables, and `drizzle-kit push`
+cannot be relied on to drop a legacy index that is no longer
+declared. Before the next prod deploy uses bell schedules at all,
+run the same two statements above against the prod DB (psql via the
+deployed Postgres connection string). Verify after with
+`SELECT indexname FROM pg_indexes WHERE tablename='bell_schedules';`
+— only `bell_schedules_pkey`, `bell_schedules_school_id_idx`, and
+`bell_schedules_school_default_idx` should remain.
+
+**How the seed was applied.** Ad-hoc Node.js script in the code
+sandbox (no committed file) using the workspace's `pg` install at
+`node_modules/.pnpm/pg@8.20.0/...` and `bcryptjs@3.0.3`. Connection
+string `postgresql://postgres:password@helium/heliumdb?sslmode=disable`
+(env shows `PGPASSWORD=password`, not `postgres`). The same script
+can be re-run safely — it wipes everything except `staff` IDs 83/84
+and the static config tables (`schools`, `districts`, `custom_roles`,
+`pbis_reasons`, `pullout_reasons`, `intervention_types`,
+`polarity_pairs`, `trusted_adult_interventions`,
+`district_integrations`) before re-inserting.
+
 ## Where we paused (end of session, 2026-04-23)
 
 Migration is done, app is published, but production is unusable

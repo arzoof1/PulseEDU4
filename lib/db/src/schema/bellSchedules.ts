@@ -7,19 +7,32 @@ import {
   timestamp,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
-export const bellSchedulesTable = pgTable("bell_schedules", {
-  id: serial("id").primaryKey(),
-  schoolId: integer("school_id").notNull(),
-  name: text("name").notNull(),
-  kind: text("kind").notNull().default("regular"),
-  isDefault: boolean("is_default").notNull().default(false),
-  active: boolean("active").notNull().default(true),
-  sortOrder: integer("sort_order").notNull().default(0),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const bellSchedulesTable = pgTable(
+  "bell_schedules",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    name: text("name").notNull(),
+    kind: text("kind").notNull().default("regular"),
+    isDefault: boolean("is_default").notNull().default(false),
+    active: boolean("active").notNull().default(true),
+    sortOrder: integer("sort_order").notNull().default(0),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // At most one default bell schedule per school (silo-scoped). Pre-silo,
+    // there was a global `bell_schedules_one_default_idx` that allowed only
+    // one default row in the entire DB; the silo migration replaces it with
+    // this per-school partial unique index.
+    schoolDefaultIdx: uniqueIndex("bell_schedules_school_default_idx")
+      .on(t.schoolId)
+      .where(sql`${t.isDefault} = true`),
+  }),
+);
 
 export type BellScheduleRow = typeof bellSchedulesTable.$inferSelect;
 
