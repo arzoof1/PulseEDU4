@@ -824,6 +824,77 @@ silo-per-district with no documented follow-ups remaining. Two
 deferred items, only build them when a real caller appears: a
 test harness for the api-server (the architect suggested regression
 coverage for tenancy routes; no test framework exists yet — would
+be the natural cap once a real caller appears for these tests).
+
+---
+
+## Where we paused (end of session, 2026-04-23)
+
+Migration is done, app is published, but production is unusable
+until the prod database is seeded. Picking up tomorrow needs all of
+the following context.
+
+**What's deployed.** The publish flow ran twice tonight — both
+succeeded. The production environment is live at the user's
+`.replit.app` URL (the user can find it in the Deployments pane;
+not recorded here on purpose). The build copies code only, not data;
+the production database is a brand-new, empty Postgres with all
+tables created by `db push` but zero rows in `staff`, `schools`,
+`districts`, etc. Logging into the live site fails not because of a
+bug but because there is literally nothing to log into. The user
+hit this and was confused — explanation in chat history.
+
+**Dev DB state, end of session.** Two SuperUser accounts, both with
+known passwords (set this session, in chat history; both should be
+rotated by the user via the Profile page on next login):
+
+| id | email                          | display_name    | school_id | is_admin | is_super_user | password   |
+|----|--------------------------------|-----------------|-----------|----------|---------------|------------|
+| 83 | chris.clifford@school.local    | Chris Clifford  | 1 (Parrott)     | t  | **t** | `@Leopards` |
+| 84 | brandon.wright@school.local    | Brandon Wright  | 2 (Springstead) | t  | **t** | `@GoEagles` |
+
+Bcrypt cost 10 (matches `auth.ts` and `change-password.ts`); reset
+via direct UPDATE using bcryptjs from
+`node_modules/.pnpm/bcryptjs@3.0.3/...` (the workspace package is
+`bcryptjs`, not `bcrypt` — `import('bcrypt')` from the code
+sandbox throws ERR_MODULE_NOT_FOUND).
+
+**Two open decisions waiting on the user.** Do not act on these
+without confirmation — both were explicitly raised at end of
+session and the user replied "let's rest":
+
+1. **Drop Brandon's `is_super_user` flag.** The user's stated mental
+   model is "Brandon will be the *admin* on Springstead, I'll be the
+   sole Hernando SuperUser." Brandon currently still has
+   `is_super_user = true` (carried over from before this session;
+   only his school_id, is_admin, password, and active_school_override
+   were touched). If the user confirms, run
+   `UPDATE staff SET is_super_user = false WHERE id = 84;` That
+   leaves him as a school-scoped admin at Springstead.
+2. **Seed production.** Prod has none of: districts (Hernando=1,
+   Pasco=37), Hernando schools (Parrott=1, Springstead=2, NCT=3,
+   Weeki=4, Powell=5, Test Middle=36), or staff. Decide with the
+   user: (a) mirror dev exactly (same emails, same school IDs,
+   same passwords — fastest, but `@school.local` emails are obvious
+   placeholders); (b) seed with real `@hernandoschools.org`-style
+   emails and a fresh starter password; (c) seed Hernando only and
+   defer Pasco's 96 schools until ready to onboard them with real
+   data. The user has not chosen. Pasco's school list isn't in dev
+   either — D6 set up the *district* row but no schools were ever
+   imported, so seeding Pasco for prod still requires their actual
+   school roster (CSV / SIS export / Florida DOE list).
+
+**Next session, start by asking:**
+
+1. "Do you want me to drop Brandon's SuperUser flag so he's the
+   Springstead admin only and you're the sole Hernando SuperUser?"
+2. "How do you want me to seed production — same setup as dev, or
+   do you want to use real district email domains and start with a
+   fresh password? And do you have Pasco's school list yet, or
+   should we seed Hernando only for now?"
+
+Then act on the answers and the production deploy is actually
+useful. Until then, the live URL exists but no one can log in.
 require setting up vitest + supertest + a test database strategy),
 and an `isCrossDistrictSuperUser` flag for a Replit-side support
 persona that needs to move between districts.
