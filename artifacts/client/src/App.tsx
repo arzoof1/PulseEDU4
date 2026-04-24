@@ -6,7 +6,7 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
-import PbisPointsHub from "./components/PbisPointsHub";
+import PbisPointsHub, { SchoolWidePbisAdminView } from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
@@ -13059,7 +13059,8 @@ function App() {
           | "trustedAdultInterventions"
           | "hallPassMgmt"
           | "logIntervention"
-          | "verifyPullouts";
+          | "verifyPullouts"
+          | "schoolWidePbis";
         type HubTool = {
           key: HubKey;
           label: string;
@@ -13126,6 +13127,13 @@ function App() {
             color: "#b45309",
             show: canVerifyPullouts,
             badge: pendingPulloutCount,
+          },
+          {
+            key: "schoolWidePbis",
+            label: "School-wide PBIS",
+            desc: "Manage the rubric and note templates every teacher uses.",
+            color: "#1e3a8a",
+            show: true,
           },
         ];
         return (
@@ -13731,7 +13739,7 @@ function App() {
       )}
 
       {activeSection === "mtssCoordinator" && canAccessMtssHub && (() => {
-        type MtssHubKey = "mtssTemplates";
+        type MtssHubKey = "mtssTemplates" | "schoolWidePbis";
         type MtssTool = {
           key: MtssHubKey;
           label: string;
@@ -13744,6 +13752,12 @@ function App() {
             label: "Templates",
             desc: "Create, edit, and save parent communication templates.",
             color: "#7c3aed",
+          },
+          {
+            key: "schoolWidePbis",
+            label: "School-wide PBIS",
+            desc: "Manage the rubric and note templates every teacher uses.",
+            color: "#1e3a8a",
           },
         ];
         return (
@@ -15452,6 +15466,25 @@ function App() {
               </tbody>
             </table>
           )}
+        </section>
+      )}
+
+      {activeSection === "schoolWidePbis" && (isBehaviorSpec || canAccessMtssHub || isAdmin) && (
+        <section>
+          <div style={{ marginBottom: "0.75rem" }}>
+            <button
+              type="button"
+              className="back-button-purple"
+              onClick={() =>
+                setActiveSection(
+                  isBehaviorSpec ? "behaviorSpecialist" : "mtssCoordinator",
+                )
+              }
+            >
+              ← Back
+            </button>
+          </div>
+          <SchoolWidePbisAdminView />
         </section>
       )}
 

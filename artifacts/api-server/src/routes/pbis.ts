@@ -158,7 +158,8 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
 router.post("/pbis", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const { studentId, reason, points, staffName, note } = req.body ?? {};
+  const { studentId, reason, reasonId, points, staffName, note } =
+    req.body ?? {};
   const sessionStaffId = req.staffId;
   let resolvedStaffId: number | null = null;
   let resolvedStaffName =
@@ -206,17 +207,39 @@ router.post("/pbis", async (req, res) => {
 
   // Resolve polarity for this entry from the configured rubric (server is
   // authoritative — clients cannot mark an entry "positive" when the rubric
-  // says it's negative). Fallback for ad-hoc reasons: sign of `points`.
+  // says it's negative). Now that names can collide across owner scopes
+  // (school's "Participation" vs a teacher's "Participation"), prefer the
+  // client-supplied reasonId. Fall back to name+school for backwards compat,
+  // then to the sign of `points` for ad-hoc reasons.
   let polarity: "positive" | "negative" = "positive";
-  const [matched] = await db
-    .select()
-    .from(pbisReasonsTable)
-    .where(
-      and(
-        eq(pbisReasonsTable.schoolId, schoolId),
-        eq(pbisReasonsTable.name, reason),
-      ),
-    );
+  let matched: typeof pbisReasonsTable.$inferSelect | undefined;
+  if (reasonId !== undefined && reasonId !== null) {
+    const idNum = Number(reasonId);
+    if (Number.isInteger(idNum) && idNum > 0) {
+      const [byId] = await db
+        .select()
+        .from(pbisReasonsTable)
+        .where(
+          and(
+            eq(pbisReasonsTable.id, idNum),
+            eq(pbisReasonsTable.schoolId, schoolId),
+          ),
+        );
+      matched = byId;
+    }
+  }
+  if (!matched) {
+    const [byName] = await db
+      .select()
+      .from(pbisReasonsTable)
+      .where(
+        and(
+          eq(pbisReasonsTable.schoolId, schoolId),
+          eq(pbisReasonsTable.name, reason),
+        ),
+      );
+    matched = byName;
+  }
   if (matched) {
     polarity = matched.polarity === "negative" ? "negative" : "positive";
   } else if (pts < 0) {
@@ -274,7 +297,7 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
-  const { studentIds, reason, points, note } = req.body ?? {};
+  const { studentIds, reason, reasonId, points, note } = req.body ?? {};
   if (!Array.isArray(studentIds) || studentIds.length === 0) {
     res
       .status(400)
@@ -334,15 +357,37 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
   // single-award endpoint so a bulk "Disruption" can't slip past the school's
   // log-only policy.
   const trimmedReason = reason.trim();
-  const [matched] = await db
-    .select()
-    .from(pbisReasonsTable)
-    .where(
-      and(
-        eq(pbisReasonsTable.schoolId, req.schoolId!),
-        eq(pbisReasonsTable.name, trimmedReason),
-      ),
-    );
+  // Prefer client-supplied reasonId so we pick the right row when school and
+  // teacher rubrics share a name (e.g. both have "Participation"). Fall back
+  // to name+school for old clients, then to sign of points.
+  let matched: typeof pbisReasonsTable.$inferSelect | undefined;
+  if (reasonId !== undefined && reasonId !== null) {
+    const idNum = Number(reasonId);
+    if (Number.isInteger(idNum) && idNum > 0) {
+      const [byId] = await db
+        .select()
+        .from(pbisReasonsTable)
+        .where(
+          and(
+            eq(pbisReasonsTable.id, idNum),
+            eq(pbisReasonsTable.schoolId, req.schoolId!),
+          ),
+        );
+      matched = byId;
+    }
+  }
+  if (!matched) {
+    const [byName] = await db
+      .select()
+      .from(pbisReasonsTable)
+      .where(
+        and(
+          eq(pbisReasonsTable.schoolId, req.schoolId!),
+          eq(pbisReasonsTable.name, trimmedReason),
+        ),
+      );
+    matched = byName;
+  }
   let polarity: "positive" | "negative" = "positive";
   if (matched) {
     polarity = matched.polarity === "negative" ? "negative" : "positive";

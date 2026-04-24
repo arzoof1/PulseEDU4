@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, index } from "drizzle-orm/pg-core";
 
 export const pbisReasonsTable = pgTable(
   "pbis_reasons",
@@ -11,9 +11,15 @@ export const pbisReasonsTable = pgTable(
     active: boolean("active").notNull().default(true),
     polarity: text("polarity").notNull().default("positive"),
     sortOrder: integer("sort_order").notNull().default(0),
+    ownerScope: text("owner_scope").notNull().default("school"),
+    ownerStaffId: integer("owner_staff_id"),
   },
   (t) => ({
-    nameUnique: uniqueIndex("pbis_reasons_name_unique").on(t.name),
+    schoolOwnerIdx: index("pbis_reasons_school_owner_idx").on(
+      t.schoolId,
+      t.ownerScope,
+      t.ownerStaffId,
+    ),
   }),
 );
 

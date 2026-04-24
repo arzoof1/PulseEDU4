@@ -31,6 +31,9 @@ type Student = {
   grade?: number | null;
 };
 
+// ownerScope='school'  — visible to all staff, editable by admin/BS/MTSS only.
+// ownerScope='teacher' — owned by a single teacher, editable by them or admin.
+// The merged award picker shows BOTH and tags the school-wide ones.
 type Reason = {
   id: number;
   name: string;
@@ -39,6 +42,8 @@ type Reason = {
   active: boolean;
   polarity: "positive" | "negative";
   sortOrder: number;
+  ownerScope: "school" | "teacher";
+  ownerStaffId: number | null;
 };
 
 type SchoolSettings = {
@@ -50,6 +55,8 @@ type NoteTemplate = {
   title: string;
   body: string;
   sortOrder: number;
+  ownerScope: "school" | "teacher";
+  ownerStaffId: number | null;
 };
 
 type PbisEntry = {
@@ -245,6 +252,7 @@ export default function PbisPointsHub() {
       body: JSON.stringify({
         studentId: student.studentId,
         reason: reason.name,
+        reasonId: reason.id,
         points,
       }),
     });
@@ -278,6 +286,7 @@ export default function PbisPointsHub() {
       body: JSON.stringify({
         studentIds,
         reason: reason.name,
+        reasonId: reason.id,
         points,
         note,
       }),
@@ -1122,6 +1131,9 @@ function AwardModal({
                           >
                             +{r.defaultPoints}
                           </span>
+                          {r.ownerScope === "school" && (
+                            <SchoolTag />
+                          )}
                         </button>
                       );
                     })}
@@ -1463,6 +1475,9 @@ function BulkAwardModal({
                             {isNeg ? "−" : "+"}
                             {r.defaultPoints}
                           </span>
+                          {r.ownerScope === "school" && (
+                            <SchoolTag />
+                          )}
                         </button>
                       );
                     })}
@@ -1666,16 +1681,30 @@ function BulkAwardModal({
 // =============================================================================
 
 function NoteTemplatesSection({
+  me,
   canEdit,
   templates,
   onTemplatesChanged,
   onError,
+  scope,
 }: {
+  me: Me | null;
   canEdit: boolean;
   templates: NoteTemplate[];
   onTemplatesChanged: (next: NoteTemplate[]) => void;
   onError: (msg: string | null) => void;
+  scope: "school" | "teacher";
 }) {
+  // Filter to the same scope the rubric is showing so a teacher in
+  // "My classroom" view doesn't accidentally edit/delete a school-wide row.
+  const visibleTemplates = useMemo(() => {
+    if (scope === "school") {
+      return templates.filter((t) => t.ownerScope === "school");
+    }
+    return templates.filter(
+      (t) => t.ownerScope === "teacher" && (!me || t.ownerStaffId === me.id),
+    );
+  }, [templates, scope, me]);
   const [editing, setEditing] = useState<NoteTemplate | "new" | null>(null);
   const [draftTitle, setDraftTitle] = useState("");
   const [draftBody, setDraftBody] = useState("");
@@ -1718,6 +1747,7 @@ function NoteTemplatesSection({
           body: JSON.stringify({
             title: draftTitle.trim(),
             body: draftBody.trim(),
+            scope,
           }),
         });
         if (!res.ok) throw new Error("Save failed");
@@ -1812,7 +1842,7 @@ function NoteTemplatesSection({
         )}
       </div>
 
-      {templates.length === 0 ? (
+      {visibleTemplates.length === 0 ? (
         <div
           style={{
             padding: "1rem",
@@ -1828,7 +1858,7 @@ function NoteTemplatesSection({
         </div>
       ) : (
         <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
-          {templates.map((t) => (
+          {visibleTemplates.map((t) => (
             <li
               key={t.id}
               style={{
@@ -2057,24 +2087,35 @@ function NoteTemplatesSection({
 // whether they also subtract from the running point total.
 // =============================================================================
 
-function SettingsView({
+export function SettingsView({
   me,
   reasons,
   onReasonsChanged,
   templates,
   onTemplatesChanged,
+  lockedScope,
 }: {
   me: Me | null;
   reasons: Reason[];
   onReasonsChanged: (next: Reason[]) => void;
   templates: NoteTemplate[];
   onTemplatesChanged: (next: NoteTemplate[]) => void;
+  // When set, hides the Classroom|School-wide toggle and forces that scope.
+  // Used by the BS Hub and MTSS Coordinator Hub to expose a school-wide-only
+  // editor without bringing the entire teacher workflow with it.
+  lockedScope?: "school" | "teacher";
 }) {
-  const canEdit = !!(
-    me?.isAdmin ||
-    (me as Me & { isPbisCoordinator?: boolean })?.isPbisCoordinator ||
-    me?.isBehaviorSpecialist
+  const [viewScope, setViewScope] = useState<"school" | "teacher">(
+    lockedScope ?? "teacher",
   );
+  // Edit permission depends on which scope we're currently viewing:
+  //   school view  → admin / behavior specialist / MTSS coordinator only
+  //   teacher view → any signed-in staff (managing their own classroom rows)
+  // PBIS coordinator is intentionally NOT in the school-edit allow-list.
+  const canEdit =
+    viewScope === "school"
+      ? !!(me?.isAdmin || me?.isBehaviorSpecialist || me?.isMtssCoordinator)
+      : !!me; // any signed-in staff can manage their own teacher-scope rows
 
   // Local working copy so drag-reorders feel instant; we PATCH on drop.
   const [local, setLocal] = useState<Reason[]>(() =>
@@ -2137,17 +2178,25 @@ function SettingsView({
     }
   }
 
-  // Apply search + polarity + archive filter, group by category preserving
-  // category order = first-seen order in the underlying list.
+  // Apply scope + search + polarity + archive filter, group by category
+  // preserving category order = first-seen order in the underlying list.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return local.filter((r) => {
+      // Scope filter: in 'school' view only show school-wide rows; in
+      // 'teacher' view only show rows the viewer owns.
+      if (viewScope === "school") {
+        if (r.ownerScope !== "school") return false;
+      } else {
+        if (r.ownerScope !== "teacher") return false;
+        if (me && r.ownerStaffId !== me.id) return false;
+      }
       if (!showArchived && !r.active) return false;
       if (filter !== "all" && r.polarity !== filter) return false;
       if (q && !r.name.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [local, search, filter, showArchived]);
+  }, [local, search, filter, showArchived, viewScope, me]);
 
   const groups = useMemo(() => {
     const out: { category: string; items: Reason[] }[] = [];
@@ -2171,9 +2220,21 @@ function SettingsView({
     // Snapshot prior state so we can roll back the optimistic update if the
     // server rejects the reorder.
     const prevSnapshot = local;
-    // Recompute sortOrder per category from the new local order.
+    // Only reorder rows in the currently-visible scope. The local array can
+    // hold rows from BOTH scopes (e.g. a teacher loads ?scope=all and sees
+    // their own rows while school rows are filtered out of the UI). Including
+    // hidden-scope rows in the reorder payload would (a) trigger 403s in
+    // teacher scope because they can't write school rows, and (b) silently
+    // renumber hidden rows in admin school-scope view. Filter strictly.
+    const isInScope = (r: Reason) =>
+      viewScope === "school"
+        ? r.ownerScope === "school"
+        : r.ownerScope === "teacher" && r.ownerStaffId === me?.id;
+    // Recompute sortOrder per category from the new local order, but only for
+    // rows in the visible scope.
     const byCat = new Map<string, Reason[]>();
     for (const r of newLocal) {
+      if (!isInScope(r)) continue;
       const arr = byCat.get(r.category) ?? [];
       arr.push(r);
       byCat.set(r.category, arr);
@@ -2184,10 +2245,14 @@ function SettingsView({
         items.push({ id: r.id, sortOrder: i, category: cat });
       });
     }
-    // Update local with the canonical sortOrders.
+    // Update local with the canonical sortOrders. Hidden-scope rows are NOT
+    // in `items` (we filtered them out above), so leave those rows unchanged
+    // — using a non-null assertion here would crash when the visible list is
+    // a strict subset of `local`.
+    const itemsById = new Map(items.map((it) => [it.id, it]));
     const updated = newLocal.map((r) => {
-      const m = items.find((x) => x.id === r.id)!;
-      return { ...r, sortOrder: m.sortOrder, category: m.category };
+      const m = itemsById.get(r.id);
+      return m ? { ...r, sortOrder: m.sortOrder, category: m.category } : r;
     });
     setLocal(updated);
     onReasonsChanged(updated);
@@ -2267,6 +2332,8 @@ function SettingsView({
           defaultPoints: payload.defaultPoints,
           polarity: payload.polarity,
           ...(payload.active !== undefined ? { active: payload.active } : {}),
+          // Only POST cares about scope; PATCH ignores it server-side.
+          ...(isNew ? { scope: viewScope } : {}),
         }),
       });
       if (!res.ok) {
@@ -2296,6 +2363,32 @@ function SettingsView({
 
   return (
     <div>
+      {/* Scope toggle — hidden when locked from a parent (e.g. BS Hub) */}
+      {!lockedScope && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            marginBottom: "0.85rem",
+          }}
+        >
+          <Segmented
+            value={viewScope}
+            onChange={(v) => setViewScope(v as "school" | "teacher")}
+            options={[
+              { value: "teacher", label: "My classroom" },
+              { value: "school", label: "School-wide" },
+            ]}
+          />
+          <span style={{ fontSize: "0.78rem", color: "#64748b" }}>
+            {viewScope === "school"
+              ? "Used by every teacher in the school."
+              : "Only you see and edit these."}
+          </span>
+        </div>
+      )}
+
       {/* Header bar */}
       <div
         style={{
@@ -2495,12 +2588,14 @@ function SettingsView({
         }}
       />
 
-      {/* Note Templates */}
+      {/* Note Templates — share the same scope as the rubric above */}
       <NoteTemplatesSection
+        me={me}
         canEdit={canEdit}
         templates={templates}
         onTemplatesChanged={onTemplatesChanged}
         onError={setErr}
+        scope={viewScope}
       />
 
       {editing && canEdit && (
@@ -2576,6 +2671,25 @@ function BehaviorTile({
       >
         {isNeg ? "−" : "+"}
       </div>
+      {reason.ownerScope === "school" && (
+        <div
+          style={{
+            position: "absolute",
+            top: "0.4rem",
+            left: "0.45rem",
+            background: "#1e3a8a",
+            color: "white",
+            fontSize: "0.6rem",
+            fontWeight: 700,
+            letterSpacing: "0.04em",
+            padding: "1px 5px",
+            borderRadius: "3px",
+            textTransform: "uppercase",
+          }}
+        >
+          School
+        </div>
+      )}
       <div
         style={{
           fontWeight: 600,
@@ -2954,6 +3068,130 @@ const inputStyle: React.CSSProperties = {
   fontSize: "0.95rem",
   boxSizing: "border-box",
 };
+
+// Small visual tag used in the merged award picker so a teacher can tell
+// at a glance which behaviors come from the school-wide rubric vs. their own.
+function SchoolTag() {
+  return (
+    <span
+      style={{
+        marginLeft: "0.4rem",
+        background: "#1e3a8a",
+        color: "white",
+        fontSize: "0.6rem",
+        fontWeight: 700,
+        letterSpacing: "0.04em",
+        padding: "1px 5px",
+        borderRadius: "3px",
+        textTransform: "uppercase",
+        verticalAlign: "middle",
+      }}
+    >
+      School
+    </span>
+  );
+}
+
+// =============================================================================
+// SchoolWidePbisAdminView
+// =============================================================================
+// Standalone editor for the school-wide rubric and note templates. Used by
+// the BS Hub and MTSS Coordinator Hub so those roles get the same editor
+// without having to navigate into PBIS Points → Settings.
+// =============================================================================
+export function SchoolWidePbisAdminView() {
+  const [me, setMe] = useState<Me | null>(null);
+  const [reasons, setReasons] = useState<Reason[]>([]);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setErrorMsg(null);
+      try {
+        const [meRes, reasonsRes, tplRes] = await Promise.all([
+          authFetch("/api/auth/me"),
+          authFetch("/api/pbis-reasons?scope=school"),
+          authFetch("/api/pbis-note-templates?scope=school"),
+        ]);
+        if (!meRes.ok) throw new Error("Failed to load your account");
+        if (!reasonsRes.ok) throw new Error("Failed to load PBIS reasons");
+        if (cancelled) return;
+        setMe((await meRes.json()) as Me);
+        setReasons((await reasonsRes.json()) as Reason[]);
+        if (tplRes.ok) {
+          setTemplates((await tplRes.json()) as NoteTemplate[]);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setErrorMsg(err instanceof Error ? err.message : "Failed to load");
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return (
+    <section className="card">
+      <div className="section-header-bar-teal" />
+      <div className="section-header-band-hub">
+        <h2
+          style={{
+            margin: 0,
+            color: "white",
+            fontSize: "1.5rem",
+            fontWeight: 700,
+          }}
+        >
+          School-wide PBIS
+        </h2>
+        <div
+          style={{
+            color: "rgba(255,255,255,0.85)",
+            fontSize: "0.85rem",
+            marginTop: "0.15rem",
+          }}
+        >
+          Behaviors and note templates available to every teacher in the school.
+        </div>
+      </div>
+      <div style={{ padding: "1rem" }}>
+        {loading ? (
+          <div style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}>
+            Loading…
+          </div>
+        ) : errorMsg ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "#fee2e2",
+              color: "#991b1b",
+              borderRadius: "0.4rem",
+            }}
+          >
+            {errorMsg}
+          </div>
+        ) : (
+          <SettingsView
+            me={me}
+            reasons={reasons}
+            onReasonsChanged={setReasons}
+            templates={templates}
+            onTemplatesChanged={setTemplates}
+            lockedScope="school"
+          />
+        )}
+      </div>
+    </section>
+  );
+}
 
 function ComingSoon({ tab }: { tab: Tab }) {
   const labels: Record<Tab, { title: string; body: string }> = {

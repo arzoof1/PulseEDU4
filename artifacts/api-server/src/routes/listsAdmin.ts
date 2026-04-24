@@ -58,10 +58,33 @@ function requireRole(check: (s: typeof staffTable.$inferSelect) => boolean, labe
   };
 }
 
-const requirePbisAdmin = requireRole(
-  (s) => s.isAdmin || s.isPbisCoordinator || s.isBehaviorSpecialist,
-  "Admin, PBIS coordinator, or behavior specialist",
+// School-wide PBIS rows (rubric + templates) can only be edited by admins,
+// behavior specialists, and MTSS coordinators. PBIS coordinator and rank-and-
+// file teachers can manage their OWN classroom-scope rows (see per-row checks
+// further down in this file).
+const requireSchoolPbisAdmin = requireRole(
+  (s) => s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator,
+  "Admin, behavior specialist, or MTSS coordinator",
 );
+
+// Helper used in per-row write paths: can the caller edit this row?
+//   - school-scope row → admin / BS / MTSS
+//   - teacher-scope row → admin OR the owning teacher
+function canWriteRow(
+  staff: typeof staffTable.$inferSelect,
+  row: { ownerScope: string; ownerStaffId: number | null },
+) {
+  if (row.ownerScope === "school") {
+    return !!(staff.isAdmin || staff.isBehaviorSpecialist || staff.isMtssCoordinator);
+  }
+  // teacher-scope
+  return !!staff.isAdmin || row.ownerStaffId === staff.id;
+}
+
+function normalizeScope(v: unknown): "school" | "teacher" | null {
+  if (v === "school" || v === "teacher") return v;
+  return null;
+}
 const requireInterventionAdmin = requireRole(
   (s) =>
     s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator || s.isDean,
@@ -70,15 +93,28 @@ const requireInterventionAdmin = requireRole(
 
 // ---- PBIS Reasons ----
 
+// GET /pbis-reasons[?scope=school|mine|all]
+//   school → only school-wide rows
+//   mine   → only the caller's own teacher-scope rows
+//   all    → school-wide rows + caller's own teacher-scope rows (default)
 router.get("/pbis-reasons", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  const scope = (req.query.scope as string | undefined) ?? "all";
+  const wantSchool = scope === "school" || scope === "all";
+  const wantMine = scope === "mine" || scope === "all";
+  const ownerOr =
+    wantSchool && wantMine
+      ? sql`(${pbisReasonsTable.ownerScope} = 'school' OR (${pbisReasonsTable.ownerScope} = 'teacher' AND ${pbisReasonsTable.ownerStaffId} = ${staff.id}))`
+      : wantSchool
+        ? sql`${pbisReasonsTable.ownerScope} = 'school'`
+        : sql`${pbisReasonsTable.ownerScope} = 'teacher' AND ${pbisReasonsTable.ownerStaffId} = ${staff.id}`;
   const rows = await db
     .select()
     .from(pbisReasonsTable)
-    .where(eq(pbisReasonsTable.schoolId, schoolId))
+    .where(and(eq(pbisReasonsTable.schoolId, schoolId), ownerOr))
     .orderBy(
       pbisReasonsTable.category,
       pbisReasonsTable.sortOrder,
@@ -93,9 +129,24 @@ function normalizePolarity(v: unknown): "positive" | "negative" | null {
   return null;
 }
 
-router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
+// POST /pbis-reasons
+//   body: { name, category?, defaultPoints?, polarity?, sortOrder?, scope? }
+//   scope='school'  → admin/BS/MTSS; ownerStaffId=null
+//   scope='teacher' → any signed-in staff; ownerStaffId=<caller>
+router.post("/pbis-reasons", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  const scope = normalizeScope(req.body?.scope) ?? "school";
+  if (scope === "school") {
+    if (!(staff.isAdmin || staff.isBehaviorSpecialist || staff.isMtssCoordinator)) {
+      res
+        .status(403)
+        .json({ error: "Admin, behavior specialist, or MTSS coordinator only" });
+      return;
+    }
+  }
   const { name, category, defaultPoints, polarity, sortOrder } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
@@ -119,13 +170,20 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
     res.status(400).json({ error: "polarity must be 'positive' or 'negative'" });
     return;
   }
-  // Duplicate-name check is per-school only.
+  // Duplicate-name check is scoped to the same owner so two teachers can have
+  // a "Participation" behavior without colliding, but a single owner can't
+  // have two with the same name.
+  const ownerEq =
+    scope === "school"
+      ? sql`${pbisReasonsTable.ownerScope} = 'school'`
+      : sql`${pbisReasonsTable.ownerScope} = 'teacher' AND ${pbisReasonsTable.ownerStaffId} = ${staff.id}`;
   const existing = await db
     .select()
     .from(pbisReasonsTable)
     .where(
       and(
         eq(pbisReasonsTable.schoolId, schoolId),
+        ownerEq,
         sql`lower(${pbisReasonsTable.name}) = lower(${name.trim()})`,
       ),
     );
@@ -133,8 +191,8 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
     res.status(409).json({ error: "Behavior name already exists" });
     return;
   }
-  // Default sort_order = max(existing in same category) + 1, so new tiles
-  // land at the end of their category instead of jumping to position 0.
+  // Default sort_order = max(existing in same owner+category) + 1, so new
+  // tiles land at the end of their category instead of jumping to position 0.
   let order = 0;
   if (typeof sortOrder === "number" && Number.isInteger(sortOrder)) {
     order = sortOrder;
@@ -145,6 +203,7 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
       .where(
         and(
           eq(pbisReasonsTable.schoolId, schoolId),
+          ownerEq,
           eq(pbisReasonsTable.category, cat),
         ),
       );
@@ -160,12 +219,16 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
       polarity: pol,
       sortOrder: order,
       active: true,
+      ownerScope: scope,
+      ownerStaffId: scope === "teacher" ? staff.id : null,
     })
     .returning();
   res.status(201).json(row);
 });
 
-router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
+router.patch("/pbis-reasons/:id", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const id = Number(req.params.id);
@@ -210,6 +273,24 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
     res.status(400).json({ error: "No updates" });
     return;
   }
+  // Per-row scope check: load existing row, then verify the caller can edit it.
+  const [existing] = await db
+    .select()
+    .from(pbisReasonsTable)
+    .where(
+      and(
+        eq(pbisReasonsTable.id, id),
+        eq(pbisReasonsTable.schoolId, schoolId),
+      ),
+    );
+  if (!existing) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  if (!canWriteRow(staff, existing)) {
+    res.status(403).json({ error: "Not allowed to edit this behavior" });
+    return;
+  }
   const [row] = await db
     .update(pbisReasonsTable)
     .set(updates)
@@ -220,17 +301,16 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
       ),
     )
     .returning();
-  if (!row) {
-    res.status(404).json({ error: "Not found" });
-    return;
-  }
   res.json(row);
 });
 
-// Batch reorder. Body: { items: [{id, sortOrder, category?}] }. All ids must
-// belong to the caller's school — any cross-school id is rejected before any
-// write happens.
-router.post("/pbis-reasons/reorder", requirePbisAdmin, async (req, res) => {
+// Batch reorder. Body: { items: [{id, sortOrder, category?}] }.
+// Every targeted row must belong to the caller's school AND be writable by
+// the caller (per-row scope check) — any disallowed id rejects the whole batch
+// before any writes happen.
+router.post("/pbis-reasons/reorder", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const items = req.body?.items;
@@ -258,7 +338,11 @@ router.post("/pbis-reasons/reorder", requirePbisAdmin, async (req, res) => {
   }
   const ids = items.map((i: { id: number }) => i.id);
   const owned = await db
-    .select({ id: pbisReasonsTable.id })
+    .select({
+      id: pbisReasonsTable.id,
+      ownerScope: pbisReasonsTable.ownerScope,
+      ownerStaffId: pbisReasonsTable.ownerStaffId,
+    })
     .from(pbisReasonsTable)
     .where(
       and(
@@ -269,6 +353,14 @@ router.post("/pbis-reasons/reorder", requirePbisAdmin, async (req, res) => {
   if (owned.length !== ids.length) {
     res.status(403).json({ error: "Some behaviors are not in your school" });
     return;
+  }
+  for (const row of owned) {
+    if (!canWriteRow(staff, row)) {
+      res
+        .status(403)
+        .json({ error: "Not allowed to reorder one of these behaviors" });
+      return;
+    }
   }
   // Wrap in a transaction so a partial failure can't leave the rubric in a
   // half-reordered state across two concurrent drag operations.
@@ -303,17 +395,37 @@ router.get("/pbis-note-templates", async (req, res) => {
   if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  const scope = (req.query.scope as string | undefined) ?? "all";
+  const wantSchool = scope === "school" || scope === "all";
+  const wantMine = scope === "mine" || scope === "all";
+  const ownerOr =
+    wantSchool && wantMine
+      ? sql`(${pbisNoteTemplatesTable.ownerScope} = 'school' OR (${pbisNoteTemplatesTable.ownerScope} = 'teacher' AND ${pbisNoteTemplatesTable.ownerStaffId} = ${staff.id}))`
+      : wantSchool
+        ? sql`${pbisNoteTemplatesTable.ownerScope} = 'school'`
+        : sql`${pbisNoteTemplatesTable.ownerScope} = 'teacher' AND ${pbisNoteTemplatesTable.ownerStaffId} = ${staff.id}`;
   const rows = await db
     .select()
     .from(pbisNoteTemplatesTable)
-    .where(eq(pbisNoteTemplatesTable.schoolId, schoolId))
+    .where(and(eq(pbisNoteTemplatesTable.schoolId, schoolId), ownerOr))
     .orderBy(pbisNoteTemplatesTable.sortOrder, pbisNoteTemplatesTable.title);
   res.json(rows);
 });
 
-router.post("/pbis-note-templates", requirePbisAdmin, async (req, res) => {
+router.post("/pbis-note-templates", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
+  const tplScope = normalizeScope(req.body?.scope) ?? "school";
+  if (tplScope === "school") {
+    if (!(staff.isAdmin || staff.isBehaviorSpecialist || staff.isMtssCoordinator)) {
+      res
+        .status(403)
+        .json({ error: "Admin, behavior specialist, or MTSS coordinator only" });
+      return;
+    }
+  }
   const { title, body } = req.body ?? {};
   if (typeof title !== "string" || !title.trim()) {
     res.status(400).json({ error: "title is required" });
@@ -325,13 +437,16 @@ router.post("/pbis-note-templates", requirePbisAdmin, async (req, res) => {
   }
   const cleanTitle = title.trim().slice(0, 80);
   const cleanBody = body.trim().slice(0, 500);
-  // Append to the end of the list by default — pick max(sortOrder)+1.
+  // Append to the end of the same-owner list by default — pick max(sortOrder)+1.
+  const ownerEqTpl =
+    tplScope === "school"
+      ? sql`${pbisNoteTemplatesTable.ownerScope} = 'school'`
+      : sql`${pbisNoteTemplatesTable.ownerScope} = 'teacher' AND ${pbisNoteTemplatesTable.ownerStaffId} = ${staff.id}`;
   const [maxRow] = await db
     .select({ max: sql<number>`COALESCE(MAX(${pbisNoteTemplatesTable.sortOrder}), -1)` })
     .from(pbisNoteTemplatesTable)
-    .where(eq(pbisNoteTemplatesTable.schoolId, schoolId));
+    .where(and(eq(pbisNoteTemplatesTable.schoolId, schoolId), ownerEqTpl));
   const nextOrder = (maxRow?.max ?? -1) + 1;
-  const staffId = (req as Request & { staff?: typeof staffTable.$inferSelect }).staff?.id ?? null;
   const [row] = await db
     .insert(pbisNoteTemplatesTable)
     .values({
@@ -340,13 +455,17 @@ router.post("/pbis-note-templates", requirePbisAdmin, async (req, res) => {
       body: cleanBody,
       sortOrder: nextOrder,
       createdAt: new Date().toISOString(),
-      createdById: staffId,
+      createdById: staff.id,
+      ownerScope: tplScope,
+      ownerStaffId: tplScope === "teacher" ? staff.id : null,
     })
     .returning();
   res.status(201).json(row);
 });
 
-router.patch("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => {
+router.patch("/pbis-note-templates/:id", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const id = Number(req.params.id);
@@ -382,7 +501,24 @@ router.patch("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => {
     res.status(400).json({ error: "Nothing to update" });
     return;
   }
-  // AND-filter by school so admin in school A can't edit school B's row.
+  // Per-row scope check: load existing row first.
+  const [existingTpl] = await db
+    .select()
+    .from(pbisNoteTemplatesTable)
+    .where(
+      and(
+        eq(pbisNoteTemplatesTable.id, id),
+        eq(pbisNoteTemplatesTable.schoolId, schoolId),
+      ),
+    );
+  if (!existingTpl) {
+    res.status(404).json({ error: "Template not found" });
+    return;
+  }
+  if (!canWriteRow(staff, existingTpl)) {
+    res.status(403).json({ error: "Not allowed to edit this template" });
+    return;
+  }
   const [updated] = await db
     .update(pbisNoteTemplatesTable)
     .set(updates)
@@ -393,14 +529,12 @@ router.patch("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => {
       ),
     )
     .returning();
-  if (!updated) {
-    res.status(404).json({ error: "Template not found" });
-    return;
-  }
   res.json(updated);
 });
 
-router.delete("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => {
+router.delete("/pbis-note-templates/:id", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const id = Number(req.params.id);
@@ -408,19 +542,31 @@ router.delete("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => 
     res.status(400).json({ error: "invalid id" });
     return;
   }
-  const [deleted] = await db
+  const [existingDel] = await db
+    .select()
+    .from(pbisNoteTemplatesTable)
+    .where(
+      and(
+        eq(pbisNoteTemplatesTable.id, id),
+        eq(pbisNoteTemplatesTable.schoolId, schoolId),
+      ),
+    );
+  if (!existingDel) {
+    res.status(404).json({ error: "Template not found" });
+    return;
+  }
+  if (!canWriteRow(staff, existingDel)) {
+    res.status(403).json({ error: "Not allowed to delete this template" });
+    return;
+  }
+  await db
     .delete(pbisNoteTemplatesTable)
     .where(
       and(
         eq(pbisNoteTemplatesTable.id, id),
         eq(pbisNoteTemplatesTable.schoolId, schoolId),
       ),
-    )
-    .returning();
-  if (!deleted) {
-    res.status(404).json({ error: "Template not found" });
-    return;
-  }
+    );
   res.json({ ok: true });
 });
 
