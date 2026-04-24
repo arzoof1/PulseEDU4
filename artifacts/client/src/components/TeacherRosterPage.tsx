@@ -13,7 +13,7 @@
 // Bucket is intentionally suppressed for grade 3 and for any subject
 // without a chart (Algebra 1 / Geometry — not in v1).
 
-import { useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 interface TeacherOpt {
@@ -375,15 +375,26 @@ function SubjectCells({
   block,
   subjectLabel,
   showLg,
+  showPm3,
+  showPm1,
+  showPm2,
 }: {
   block: SubjectBlock;
   subjectLabel: string;
   showLg: boolean;
+  showPm3: boolean;
+  showPm1: boolean;
+  showPm2: boolean;
 }) {
-  // colspan shrinks by 1 when LG is hidden so the "n/a" row still
-  // exactly fills the subject group.
-  const groupCols = showLg ? 4 : 3;
+  // colspan shrinks to match the actually-rendered cells so the "n/a"
+  // row still exactly fills the subject group.
+  const groupCols =
+    (showPm3 ? 1 : 0) +
+    (showPm1 ? 1 : 0) +
+    (showPm2 ? 1 : 0) +
+    (showLg ? 1 : 0);
   if (block.noChart) {
+    if (groupCols === 0) return null;
     return (
       <td
         colSpan={groupCols}
@@ -405,32 +416,44 @@ function SubjectCells({
   };
   // Per product preference, PM3 is the most-recent / most important
   // score and renders first, followed by the older PM1 and PM2, then
-  // the LG bucket.
+  // the LG bucket. The first visible cell carries the group divider.
+  let dividerUsed = false;
+  const dividerStyle = (): React.CSSProperties => {
+    if (dividerUsed) return cell;
+    dividerUsed = true;
+    return { ...cell, ...GROUP_DIVIDER };
+  };
   return (
     <>
-      <td style={{ ...cell, ...GROUP_DIVIDER }}>
-        <ScorePill
-          score={block.pm3}
-          placement={block.pm3Placement}
-          pmLabel={`${subjectLabel} PM3`}
-        />
-      </td>
-      <td style={cell}>
-        <ScorePill
-          score={block.pm1}
-          placement={block.pm1Placement}
-          pmLabel={`${subjectLabel} PM1`}
-        />
-      </td>
-      <td style={cell}>
-        <ScorePill
-          score={block.pm2}
-          placement={block.pm2Placement}
-          pmLabel={`${subjectLabel} PM2`}
-        />
-      </td>
+      {showPm3 && (
+        <td style={dividerStyle()}>
+          <ScorePill
+            score={block.pm3}
+            placement={block.pm3Placement}
+            pmLabel={`${subjectLabel} PM3`}
+          />
+        </td>
+      )}
+      {showPm1 && (
+        <td style={dividerStyle()}>
+          <ScorePill
+            score={block.pm1}
+            placement={block.pm1Placement}
+            pmLabel={`${subjectLabel} PM1`}
+          />
+        </td>
+      )}
+      {showPm2 && (
+        <td style={dividerStyle()}>
+          <ScorePill
+            score={block.pm2}
+            placement={block.pm2Placement}
+            pmLabel={`${subjectLabel} PM2`}
+          />
+        </td>
+      )}
       {showLg && (
-        <td style={cell}>
+        <td style={dividerStyle()}>
           <BucketCell bucket={block.bucket} />
         </td>
       )}
@@ -490,24 +513,40 @@ export default function TeacherRosterPage({
 
   // Per-user view toggles. Each maps to one optional column. Defaults
   // to all-on; persisted to localStorage so the teacher's preference
-  // survives reloads.
-  type Visibility = { lg: boolean; bq: boolean; invisible: boolean };
-  const VIS_KEY = "teacherRoster.visibility.v1";
+  // survives reloads. Bumped key to v2 since we added pm-level toggles.
+  type Visibility = {
+    lg: boolean;
+    bq: boolean;
+    invisible: boolean;
+    pm3: boolean;
+    pm1: boolean;
+    pm2: boolean;
+  };
+  const VIS_DEFAULT: Visibility = {
+    lg: true,
+    bq: true,
+    invisible: true,
+    pm3: true,
+    pm1: true,
+    pm2: true,
+  };
+  const VIS_KEY = "teacherRoster.visibility.v2";
   const [visibility, setVisibility] = useState<Visibility>(() => {
-    if (typeof window === "undefined") {
-      return { lg: true, bq: true, invisible: true };
-    }
+    if (typeof window === "undefined") return VIS_DEFAULT;
     try {
       const raw = window.localStorage.getItem(VIS_KEY);
-      if (!raw) return { lg: true, bq: true, invisible: true };
+      if (!raw) return VIS_DEFAULT;
       const parsed = JSON.parse(raw) as Partial<Visibility>;
       return {
         lg: parsed.lg ?? true,
         bq: parsed.bq ?? true,
         invisible: parsed.invisible ?? true,
+        pm3: parsed.pm3 ?? true,
+        pm1: parsed.pm1 ?? true,
+        pm2: parsed.pm2 ?? true,
       };
     } catch {
-      return { lg: true, bq: true, invisible: true };
+      return VIS_DEFAULT;
     }
   });
   useEffect(() => {
@@ -750,6 +789,39 @@ export default function TeacherRosterPage({
         <span style={{ fontWeight: 600 }}>Show:</span>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the PM3 column for both ELA and Math"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.pm3}
+            onChange={() => toggleVis("pm3")}
+          />
+          PM3
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the PM1 column for both ELA and Math"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.pm1}
+            onChange={() => toggleVis("pm1")}
+          />
+          PM1
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the PM2 column for both ELA and Math"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.pm2}
+            onChange={() => toggleVis("pm2")}
+          />
+          PM2
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the LG (learning-gain bucket) column for both ELA and Math"
         >
           <input
@@ -844,26 +916,38 @@ export default function TeacherRosterPage({
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Grade
                 </th>
-                <th
-                  colSpan={visibility.lg ? 4 : 3}
-                  style={{
-                    padding: "8px 10px",
-                    textAlign: "center",
-                    ...GROUP_DIVIDER,
-                  }}
-                >
-                  ELA
-                </th>
-                <th
-                  colSpan={visibility.lg ? 4 : 3}
-                  style={{
-                    padding: "8px 10px",
-                    textAlign: "center",
-                    ...GROUP_DIVIDER,
-                  }}
-                >
-                  Math
-                </th>
+                {(() => {
+                  const groupCols =
+                    (visibility.pm3 ? 1 : 0) +
+                    (visibility.pm1 ? 1 : 0) +
+                    (visibility.pm2 ? 1 : 0) +
+                    (visibility.lg ? 1 : 0);
+                  if (groupCols === 0) return null;
+                  return (
+                    <>
+                      <th
+                        colSpan={groupCols}
+                        style={{
+                          padding: "8px 10px",
+                          textAlign: "center",
+                          ...GROUP_DIVIDER,
+                        }}
+                      >
+                        ELA
+                      </th>
+                      <th
+                        colSpan={groupCols}
+                        style={{
+                          padding: "8px 10px",
+                          textAlign: "center",
+                          ...GROUP_DIVIDER,
+                        }}
+                      >
+                        Math
+                      </th>
+                    </>
+                  );
+                })()}
                 {visibility.bq && (
                   <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                     BQ
@@ -880,22 +964,27 @@ export default function TeacherRosterPage({
                   letterSpacing: 0.4,
                 }}
               >
-                <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
-                  PM3
-                </th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
-                {visibility.lg && (
-                  <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
-                )}
-                <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
-                  PM3
-                </th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
-                {visibility.lg && (
-                  <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
-                )}
+                {(["ELA", "Math"] as const).map((group) => {
+                  // First visible cell in each group carries the divider.
+                  let divUsed = false;
+                  const div = (): React.CSSProperties => {
+                    const base: React.CSSProperties = {
+                      padding: "4px 6px",
+                      fontWeight: 600,
+                    };
+                    if (divUsed) return base;
+                    divUsed = true;
+                    return { ...base, ...GROUP_DIVIDER };
+                  };
+                  return (
+                    <Fragment key={group}>
+                      {visibility.pm3 && <th style={div()}>PM3</th>}
+                      {visibility.pm1 && <th style={div()}>PM1</th>}
+                      {visibility.pm2 && <th style={div()}>PM2</th>}
+                      {visibility.lg && <th style={div()}>LG</th>}
+                    </Fragment>
+                  );
+                })}
               </tr>
             </thead>
             <tbody>
@@ -933,11 +1022,17 @@ export default function TeacherRosterPage({
                     block={row.ela}
                     subjectLabel="ELA"
                     showLg={visibility.lg}
+                    showPm3={visibility.pm3}
+                    showPm1={visibility.pm1}
+                    showPm2={visibility.pm2}
                   />
                   <SubjectCells
                     block={row.math}
                     subjectLabel="Math"
                     showLg={visibility.lg}
+                    showPm3={visibility.pm3}
+                    showPm1={visibility.pm1}
+                    showPm2={visibility.pm2}
                   />
                   {visibility.bq && (
                     <td style={{ padding: "6px 10px" }}>
