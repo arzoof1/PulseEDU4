@@ -45,6 +45,13 @@ type SchoolSettings = {
   pbisNegativeAffectsTotal: boolean;
 };
 
+type NoteTemplate = {
+  id: number;
+  title: string;
+  body: string;
+  sortOrder: number;
+};
+
 type PbisEntry = {
   id: number;
   studentId: string;
@@ -80,6 +87,7 @@ export default function PbisPointsHub() {
   const [sections, setSections] = useState<Section[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [reasons, setReasons] = useState<Reason[]>([]);
+  const [noteTemplates, setNoteTemplates] = useState<NoteTemplate[]>([]);
   // studentId -> total active points (sum of non-voided entries)
   const [totals, setTotals] = useState<Map<string, number>>(new Map());
 
@@ -127,21 +135,27 @@ export default function PbisPointsHub() {
 
         const adminScope = !!(meJson.isAdmin || meJson.isEseCoordinator);
 
-        const [schedRes, studRes, reasonsRes, pbisRes] = await Promise.all([
-          authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
-          authFetch("/api/students"),
-          authFetch("/api/pbis-reasons"),
-          authFetch("/api/pbis"),
-        ]);
+        const [schedRes, studRes, reasonsRes, pbisRes, tplRes] =
+          await Promise.all([
+            authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
+            authFetch("/api/students"),
+            authFetch("/api/pbis-reasons"),
+            authFetch("/api/pbis"),
+            authFetch("/api/pbis-note-templates"),
+          ]);
         if (!schedRes.ok) throw new Error("Failed to load class schedule");
         if (!studRes.ok) throw new Error("Failed to load students");
         if (!reasonsRes.ok) throw new Error("Failed to load PBIS reasons");
         if (!pbisRes.ok) throw new Error("Failed to load PBIS entries");
+        // Note templates are non-critical — if they fail, fall back to empty.
 
         const schedJson = (await schedRes.json()) as { sections: Section[] };
         const studJson = (await studRes.json()) as Student[];
         const reasonsJson = (await reasonsRes.json()) as Reason[];
         const pbisJson = (await pbisRes.json()) as PbisEntry[];
+        const tplJson = tplRes.ok
+          ? ((await tplRes.json()) as NoteTemplate[])
+          : [];
 
         if (cancelled) return;
 
@@ -152,6 +166,7 @@ export default function PbisPointsHub() {
         setSections(filteredSections);
         setStudents(studJson);
         setReasons(reasonsJson.filter((r) => r.active));
+        setNoteTemplates(tplJson);
 
         // Default the teacher picker to the viewer when they have any
         // sections; otherwise pick the first teacher alphabetically so the
@@ -375,6 +390,8 @@ export default function PbisPointsHub() {
           me={me}
           reasons={reasons}
           onReasonsChanged={setReasons}
+          templates={noteTemplates}
+          onTemplatesChanged={setNoteTemplates}
         />
       ) : (
         <ComingSoon tab={tab} />
@@ -397,6 +414,7 @@ export default function PbisPointsHub() {
           studentIds={Array.from(selectedIds)}
           students={students}
           reasons={reasons}
+          templates={noteTemplates}
           onClose={() => setBulkOpen(false)}
           onSubmit={async (reason, points, note) => {
             await bulkAward(Array.from(selectedIds), reason, points, note);
@@ -1219,12 +1237,14 @@ function BulkAwardModal({
   studentIds,
   students,
   reasons,
+  templates,
   onClose,
   onSubmit,
 }: {
   studentIds: string[];
   students: Student[];
   reasons: Reason[];
+  templates: NoteTemplate[];
   onClose: () => void;
   onSubmit: (reason: Reason, points: number, note: string) => Promise<void>;
 }) {
@@ -1502,6 +1522,34 @@ function BulkAwardModal({
                   Note (optional)
                 </span>
                 <div style={{ flex: 1 }} />
+                {templates.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = Number(e.target.value);
+                      const t = templates.find((x) => x.id === id);
+                      if (t) setNote(t.body);
+                    }}
+                    style={{
+                      marginRight: "0.5rem",
+                      padding: "0.2rem 0.4rem",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "0.3rem",
+                      fontSize: "0.78rem",
+                      background: "white",
+                      color: "#0e7490",
+                      cursor: "pointer",
+                    }}
+                    aria-label="Insert note template"
+                  >
+                    <option value="">Use template…</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.title}
+                      </option>
+                    ))}
+                  </select>
+                )}
                 <span
                   style={{
                     fontSize: "0.75rem",
@@ -1613,6 +1661,395 @@ function BulkAwardModal({
 }
 
 // =============================================================================
+// NoteTemplatesSection — per-school library of reusable note text shown above
+// the rubric in Settings. Any staff sees the picker; only PBIS admins edit.
+// =============================================================================
+
+function NoteTemplatesSection({
+  canEdit,
+  templates,
+  onTemplatesChanged,
+  onError,
+}: {
+  canEdit: boolean;
+  templates: NoteTemplate[];
+  onTemplatesChanged: (next: NoteTemplate[]) => void;
+  onError: (msg: string | null) => void;
+}) {
+  const [editing, setEditing] = useState<NoteTemplate | "new" | null>(null);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftBody, setDraftBody] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  function openNew() {
+    setDraftTitle("");
+    setDraftBody("");
+    setEditing("new");
+  }
+  function openEdit(t: NoteTemplate) {
+    setDraftTitle(t.title);
+    setDraftBody(t.body);
+    setEditing(t);
+  }
+  function closeEditor() {
+    setEditing(null);
+    setDraftTitle("");
+    setDraftBody("");
+  }
+
+  const titleOver = draftTitle.length > 80;
+  const bodyOver = draftBody.length > 500;
+  const canSave =
+    !saving &&
+    draftTitle.trim().length > 0 &&
+    draftBody.trim().length > 0 &&
+    !titleOver &&
+    !bodyOver;
+
+  async function save() {
+    if (!editing || !canSave) return;
+    setSaving(true);
+    onError(null);
+    try {
+      if (editing === "new") {
+        const res = await authFetch("/api/pbis-note-templates", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            title: draftTitle.trim(),
+            body: draftBody.trim(),
+          }),
+        });
+        if (!res.ok) throw new Error("Save failed");
+        const created = (await res.json()) as NoteTemplate;
+        onTemplatesChanged([...templates, created]);
+      } else {
+        const res = await authFetch(
+          `/api/pbis-note-templates/${editing.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              title: draftTitle.trim(),
+              body: draftBody.trim(),
+            }),
+          },
+        );
+        if (!res.ok) throw new Error("Save failed");
+        const updated = (await res.json()) as NoteTemplate;
+        onTemplatesChanged(
+          templates.map((t) => (t.id === updated.id ? updated : t)),
+        );
+      }
+      closeEditor();
+    } catch {
+      onError("Could not save note template. Try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(t: NoteTemplate) {
+    if (!window.confirm(`Delete the "${t.title}" template?`)) return;
+    onError(null);
+    try {
+      const res = await authFetch(`/api/pbis-note-templates/${t.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Delete failed");
+      onTemplatesChanged(templates.filter((x) => x.id !== t.id));
+    } catch {
+      onError("Could not delete that template. Try again.");
+    }
+  }
+
+  return (
+    <div
+      style={{
+        border: "1px solid #e2e8f0",
+        borderRadius: "0.6rem",
+        padding: "1rem",
+        marginBottom: "1rem",
+        background: "white",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "0.6rem",
+        }}
+      >
+        <div>
+          <div
+            style={{ fontSize: "1.05rem", fontWeight: 700, color: "#0f172a" }}
+          >
+            Note templates
+          </div>
+          <div style={{ fontSize: "0.82rem", color: "#64748b" }}>
+            Reusable note text teachers can pick from when awarding points to a
+            group.
+          </div>
+        </div>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={openNew}
+            style={{
+              background: "#0e7490",
+              color: "white",
+              border: "none",
+              padding: "0.45rem 0.85rem",
+              borderRadius: "0.4rem",
+              fontWeight: 600,
+              cursor: "pointer",
+              fontSize: "0.85rem",
+            }}
+          >
+            + New template
+          </button>
+        )}
+      </div>
+
+      {templates.length === 0 ? (
+        <div
+          style={{
+            padding: "1rem",
+            textAlign: "center",
+            color: "#64748b",
+            border: "1px dashed #cbd5e1",
+            borderRadius: "0.5rem",
+            fontSize: "0.88rem",
+          }}
+        >
+          No note templates yet.
+          {canEdit ? " Add one to get started." : ""}
+        </div>
+      ) : (
+        <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
+          {templates.map((t) => (
+            <li
+              key={t.id}
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.75rem",
+                padding: "0.55rem 0.5rem",
+                borderTop: "1px solid #f1f5f9",
+              }}
+            >
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontWeight: 600, color: "#0f172a" }}>
+                  {t.title}
+                </div>
+                <div
+                  style={{
+                    fontSize: "0.85rem",
+                    color: "#475569",
+                    whiteSpace: "pre-wrap",
+                    overflowWrap: "anywhere",
+                  }}
+                >
+                  {t.body}
+                </div>
+              </div>
+              {canEdit && (
+                <div style={{ display: "flex", gap: "0.4rem" }}>
+                  <button
+                    type="button"
+                    onClick={() => openEdit(t)}
+                    style={{
+                      background: "white",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "0.35rem",
+                      padding: "0.3rem 0.65rem",
+                      fontSize: "0.8rem",
+                      cursor: "pointer",
+                      color: "#0f172a",
+                    }}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => remove(t)}
+                    style={{
+                      background: "white",
+                      border: "1px solid #fecaca",
+                      borderRadius: "0.35rem",
+                      padding: "0.3rem 0.65rem",
+                      fontSize: "0.8rem",
+                      cursor: "pointer",
+                      color: "#991b1b",
+                    }}
+                  >
+                    Delete
+                  </button>
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {editing && (
+        <div
+          onClick={closeEditor}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.55)",
+            zIndex: 50,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1rem",
+          }}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label={
+              editing === "new" ? "New note template" : "Edit note template"
+            }
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              borderRadius: "0.6rem",
+              width: "100%",
+              maxWidth: "32rem",
+              padding: "1.25rem",
+              boxShadow: "0 20px 40px rgba(15,23,42,0.25)",
+            }}
+          >
+            <h3 style={{ marginTop: 0, fontSize: "1.1rem" }}>
+              {editing === "new" ? "New note template" : "Edit note template"}
+            </h3>
+            <label style={{ display: "block", marginBottom: "0.85rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                <span style={{ fontSize: "0.88rem", color: "#475569" }}>
+                  Title
+                </span>
+                <div style={{ flex: 1 }} />
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    color: titleOver ? "#dc2626" : "#94a3b8",
+                  }}
+                >
+                  {draftTitle.length}/80
+                </span>
+              </div>
+              <input
+                type="text"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                placeholder="e.g. Great group effort"
+                style={{
+                  width: "100%",
+                  padding: "0.45rem 0.6rem",
+                  border: titleOver
+                    ? "1px solid #dc2626"
+                    : "1px solid #cbd5e1",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.95rem",
+                  boxSizing: "border-box",
+                }}
+              />
+            </label>
+            <label style={{ display: "block", marginBottom: "0.85rem" }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  marginBottom: "0.25rem",
+                }}
+              >
+                <span style={{ fontSize: "0.88rem", color: "#475569" }}>
+                  Note text
+                </span>
+                <div style={{ flex: 1 }} />
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    color: bodyOver ? "#dc2626" : "#94a3b8",
+                  }}
+                >
+                  {draftBody.length}/500
+                </span>
+              </div>
+              <textarea
+                value={draftBody}
+                onChange={(e) => setDraftBody(e.target.value)}
+                rows={5}
+                placeholder="The note that will be saved on each student's record."
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.6rem",
+                  border: bodyOver
+                    ? "1px solid #dc2626"
+                    : "1px solid #cbd5e1",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.9rem",
+                  fontFamily: "inherit",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            </label>
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={closeEditor}
+                style={{
+                  padding: "0.5rem 1rem",
+                  background: "white",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "0.4rem",
+                  color: "#475569",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={!canSave}
+                onClick={save}
+                style={{
+                  padding: "0.5rem 1rem",
+                  background: canSave ? "#0e7490" : "#94a3b8",
+                  color: "white",
+                  border: "none",
+                  borderRadius: "0.4rem",
+                  fontWeight: 600,
+                  cursor: canSave ? "pointer" : "not-allowed",
+                }}
+              >
+                {saving ? "Saving…" : "Save"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
 // SettingsView — "Edit Behavior Rubric"
 // Authorized staff (admin/PBIS coordinator/behavior specialist) can add, edit,
 // reorder, archive, and toggle polarity of behaviors. Negative behaviors are
@@ -1624,10 +2061,14 @@ function SettingsView({
   me,
   reasons,
   onReasonsChanged,
+  templates,
+  onTemplatesChanged,
 }: {
   me: Me | null;
   reasons: Reason[];
   onReasonsChanged: (next: Reason[]) => void;
+  templates: NoteTemplate[];
+  onTemplatesChanged: (next: NoteTemplate[]) => void;
 }) {
   const canEdit = !!(
     me?.isAdmin ||
@@ -1921,6 +2362,14 @@ function SettingsView({
           </button>
         )}
       </div>
+
+      {/* Note Templates */}
+      <NoteTemplatesSection
+        canEdit={canEdit}
+        templates={templates}
+        onTemplatesChanged={onTemplatesChanged}
+        onError={setErr}
+      />
 
       {/* Negative-points policy toggle */}
       {settings && (

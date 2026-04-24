@@ -19,6 +19,7 @@ export * from "./staff";
 export * from "./kioskActivations";
 export * from "./adminNotifications";
 export * from "./pbisReasons";
+export * from "./pbisNoteTemplates";
 export * from "./interventionTypes";
 export * from "./interventionEntries";
 export * from "./trustedAdultInterventions";

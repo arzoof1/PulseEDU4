@@ -18,6 +18,7 @@ import {
 import {
   db,
   pbisReasonsTable,
+  pbisNoteTemplatesTable,
   interventionTypesTable,
   trustedAdultInterventionsTable,
   staffTable,
@@ -291,6 +292,136 @@ router.post("/pbis-reasons/reorder", requirePbisAdmin, async (req, res) => {
     }
   });
   res.json({ ok: true, count: items.length });
+});
+
+// ---- PBIS Note Templates ----
+// Per-school library of reusable note text. Any signed-in staff can READ
+// (so they show up in the bulk-award picker), but only PBIS admins can write.
+
+router.get("/pbis-note-templates", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(pbisNoteTemplatesTable)
+    .where(eq(pbisNoteTemplatesTable.schoolId, schoolId))
+    .orderBy(pbisNoteTemplatesTable.sortOrder, pbisNoteTemplatesTable.title);
+  res.json(rows);
+});
+
+router.post("/pbis-note-templates", requirePbisAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const { title, body } = req.body ?? {};
+  if (typeof title !== "string" || !title.trim()) {
+    res.status(400).json({ error: "title is required" });
+    return;
+  }
+  if (typeof body !== "string" || !body.trim()) {
+    res.status(400).json({ error: "body is required" });
+    return;
+  }
+  const cleanTitle = title.trim().slice(0, 80);
+  const cleanBody = body.trim().slice(0, 500);
+  // Append to the end of the list by default — pick max(sortOrder)+1.
+  const [maxRow] = await db
+    .select({ max: sql<number>`COALESCE(MAX(${pbisNoteTemplatesTable.sortOrder}), -1)` })
+    .from(pbisNoteTemplatesTable)
+    .where(eq(pbisNoteTemplatesTable.schoolId, schoolId));
+  const nextOrder = (maxRow?.max ?? -1) + 1;
+  const staffId = (req as Request & { staff?: typeof staffTable.$inferSelect }).staff?.id ?? null;
+  const [row] = await db
+    .insert(pbisNoteTemplatesTable)
+    .values({
+      schoolId,
+      title: cleanTitle,
+      body: cleanBody,
+      sortOrder: nextOrder,
+      createdAt: new Date().toISOString(),
+      createdById: staffId,
+    })
+    .returning();
+  res.status(201).json(row);
+});
+
+router.patch("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const updates: { title?: string; body?: string; sortOrder?: number } = {};
+  const { title, body, sortOrder } = req.body ?? {};
+  if (title !== undefined) {
+    if (typeof title !== "string" || !title.trim()) {
+      res.status(400).json({ error: "title must be non-empty" });
+      return;
+    }
+    updates.title = title.trim().slice(0, 80);
+  }
+  if (body !== undefined) {
+    if (typeof body !== "string" || !body.trim()) {
+      res.status(400).json({ error: "body must be non-empty" });
+      return;
+    }
+    updates.body = body.trim().slice(0, 500);
+  }
+  if (sortOrder !== undefined) {
+    const n = Number(sortOrder);
+    if (!Number.isInteger(n)) {
+      res.status(400).json({ error: "sortOrder must be an integer" });
+      return;
+    }
+    updates.sortOrder = n;
+  }
+  if (!Object.keys(updates).length) {
+    res.status(400).json({ error: "Nothing to update" });
+    return;
+  }
+  // AND-filter by school so admin in school A can't edit school B's row.
+  const [updated] = await db
+    .update(pbisNoteTemplatesTable)
+    .set(updates)
+    .where(
+      and(
+        eq(pbisNoteTemplatesTable.id, id),
+        eq(pbisNoteTemplatesTable.schoolId, schoolId),
+      ),
+    )
+    .returning();
+  if (!updated) {
+    res.status(404).json({ error: "Template not found" });
+    return;
+  }
+  res.json(updated);
+});
+
+router.delete("/pbis-note-templates/:id", requirePbisAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) {
+    res.status(400).json({ error: "invalid id" });
+    return;
+  }
+  const [deleted] = await db
+    .delete(pbisNoteTemplatesTable)
+    .where(
+      and(
+        eq(pbisNoteTemplatesTable.id, id),
+        eq(pbisNoteTemplatesTable.schoolId, schoolId),
+      ),
+    )
+    .returning();
+  if (!deleted) {
+    res.status(404).json({ error: "Template not found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 // ---- Intervention Types ----
