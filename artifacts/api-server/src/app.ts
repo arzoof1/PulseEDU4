@@ -13,6 +13,10 @@ declare global {
   namespace Express {
     interface Request {
       staffId?: number | null;
+      // Parent identity for HeartBEAT parent-portal routes. Resolved by a
+      // router-level middleware inside parentAuth.ts (NOT by the global
+      // staff middleware below) so the two identity systems stay isolated.
+      parentId?: number | null;
       // The active school for this request. For most staff this is their
       // home school (staff.school_id). SuperUsers can override per-session
       // via POST /api/tenancy/switch-school. null when unauthenticated.

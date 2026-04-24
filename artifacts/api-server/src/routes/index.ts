@@ -39,6 +39,9 @@ import classroomStoreRouter from "./classroomStore";
 import schoolStoreRouter from "./schoolStore";
 import mtssPlansRouter from "./mtssPlans";
 import teacherRosterRouter from "./teacherRoster";
+import parentAuthRouter from "./parentAuth";
+import parentInvitesRouter from "./parentInvites";
+import parentSnapshotRouter from "./parentSnapshot";
 
 const router: IRouter = Router();
 
@@ -82,5 +85,8 @@ router.use(classroomStoreRouter);
 router.use(schoolStoreRouter);
 router.use(mtssPlansRouter);
 router.use(teacherRosterRouter);
+router.use(parentAuthRouter);
+router.use(parentInvitesRouter);
+router.use(parentSnapshotRouter);
 
 export default router;

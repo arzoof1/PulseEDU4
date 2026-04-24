@@ -48,8 +48,58 @@ export function verifyAuthToken(token: string): number | null {
     const json = JSON.parse(fromB64url(body).toString("utf8")) as {
       sid?: unknown;
       exp?: unknown;
+      // `kind` is set on parent tokens so a parent bearer cannot be
+      // mistaken for a staff bearer (and vice versa). Older staff tokens
+      // do not carry a `kind` and must be treated as staff.
+      kind?: unknown;
     };
     if (typeof json.sid !== "number" || typeof json.exp !== "number") {
+      return null;
+    }
+    if (json.exp < Date.now()) return null;
+    // Reject parent-kind tokens here; verifyParentAuthToken handles those.
+    if (json.kind && json.kind !== "staff") return null;
+    return json.sid;
+  } catch {
+    return null;
+  }
+}
+
+// Parent tokens carry an explicit `kind: "parent"` so they can't be confused
+// with staff tokens at the middleware layer, even though both are signed with
+// the same SESSION_SECRET.
+export function issueParentAuthToken(
+  parentId: number,
+  ttlMs = DEFAULT_TTL_MS,
+): string {
+  const payload = JSON.stringify({
+    sid: parentId,
+    kind: "parent",
+    exp: Date.now() + ttlMs,
+  });
+  const body = b64url(payload);
+  return `${body}.${sign(body)}`;
+}
+
+export function verifyParentAuthToken(token: string): number | null {
+  if (typeof token !== "string" || !token.includes(".")) return null;
+  const [body, sig] = token.split(".");
+  if (!body || !sig) return null;
+  const expected = sign(body);
+  const a = Buffer.from(sig);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) return null;
+  try {
+    const json = JSON.parse(fromB64url(body).toString("utf8")) as {
+      sid?: unknown;
+      exp?: unknown;
+      kind?: unknown;
+    };
+    if (
+      typeof json.sid !== "number" ||
+      typeof json.exp !== "number" ||
+      json.kind !== "parent"
+    ) {
       return null;
     }
     if (json.exp < Date.now()) return null;

@@ -39,3 +39,4 @@ export * from "./classroomStoreItems";
 export * from "./schoolStoreItems";
 export * from "./studentMtssPlans";
 export * from "./studentFastScores";
+export * from "./parents";
