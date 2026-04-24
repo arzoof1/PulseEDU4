@@ -80,7 +80,7 @@ type Teacher = { id: number; name: string };
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
   { key: "rubric", label: "School Store" },
-  { key: "rewards", label: "Rewards" },
+  { key: "rewards", label: "Classroom Store" },
   { key: "reports", label: "Reports" },
   { key: "settings", label: "Settings" },
 ];
@@ -3590,7 +3590,7 @@ function ComingSoon({ tab }: { tab: Tab }) {
       body: "Build the point-awarding rubric your classroom uses — categories, point values, and color-coded buttons your team can tap fast.",
     },
     rewards: {
-      title: "Rewards",
+      title: "Classroom Store",
       body: "Set up your classroom store. Students spend earned points on rewards you define, and you'll track inventory and redemptions here.",
     },
     reports: {
