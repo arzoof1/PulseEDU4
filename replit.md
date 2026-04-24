@@ -945,6 +945,60 @@ tables created by `db push` but zero rows in `staff`, `schools`,
 bug but because there is literally nothing to log into. The user
 hit this and was confused — explanation in chat history.
 
+## Production seed wired into boot (2026-04-24)
+
+**`artifacts/api-server/src/seed.ts` was rewritten** so the same
+multi-school dataset that lives in dev gets produced automatically
+on the first prod boot. The two boot-time hooks are unchanged in
+shape (`seedTenancy()` + `seedIfEmpty()` from `index.ts` →
+`Promise.all`) but their bodies now do:
+
+- `seedTenancy()`: idempotent. Inserts Hernando + Pasco districts
+  and all 7 schools (Parrott, Springstead, Nature Coast, Weeki
+  Wachee, Powell, Test Middle, Cypress Creek). Safe to re-run.
+- `seedIfEmpty()`: marker-guarded on `school_accommodations`. Only
+  runs when that table is empty (so dev — which already has 98
+  rows — is unaffected). When it does run it:
+  1. Drops the legacy `bell_schedules_one_default_idx` and creates
+     the per-school `bell_schedules_school_default_idx`. This is the
+     same DDL fix dev got patched with manually — baking it into the
+     seed makes prod self-correcting.
+  2. Wipes every per-school table (in dependency order, including
+     bell schedules, school settings, hall pass limits, pullouts,
+     ISS, interventions).
+  3. For each of the 7 schools, generates: 55 teachers + optional
+     SuperUser + optional named admin, 1390 students, 7 sections per
+     teacher (one is planning), full roster, 14 master accommodations
+     (IEP/504/ELL only — Strategy was excluded), per-student
+     accommodation assignments (25% accommodated, IEP-OR-504 base of
+     2-4, 30% chance to add 1-2 ELL on top, capped at 4), 15
+     locations (school-prefixed names so they're globally unique),
+     a 7-period bell schedule (7:30am-2:00pm with lunch between P5
+     and P6), and a `school_settings` row.
+  4. Resets the `students` and `staff` sequences.
+
+Logins it produces in prod (same as dev):
+- `chris.clifford@hcsb.k12.fl.us` / `@Leopards` (SuperUser, Parrott)
+- `brandon.wright@hcsb.k12.fl.us` / `@GoEagles` (SuperUser, Springstead)
+- `brad.merschbach@hcsb.k12.fl.us` / `PulseDemo!` (Admin, Nature Coast)
+- `ed.larose@hcsb.k12.fl.us` / `PulseDemo!` (Admin, Weeki Wachee)
+- `alex.rastatter@hcsb.k12.fl.us` / `PulseDemo!` (Admin, Powell)
+- `luke.skywalker@hcsb.k12.fl.us` / `PulseDemo!` (Admin, Test Middle)
+- All 385 generated teachers: `<first>.<last><N>@hcsb.k12.fl.us` /
+  `PulseDemo!` (N is a global counter so emails are unique)
+
+**Prod IDs will differ from dev.** Dev has school IDs 1-5, 36, 220
+(historical accidents). Prod will assign 1-7 in `SCHOOL_SPECS`
+order. The UI never exposes school IDs to principals so this is
+cosmetic, but is worth knowing if you debug by ID in prod.
+
+**Re-seeding prod.** The marker is "is `school_accommodations`
+empty?" — so to force a reseed in prod, run
+`TRUNCATE school_accommodations` against the prod DB (read-only
+query tool can't do this; you'd need direct psql access via the
+deployment's connection string). On the next app restart the seed
+fires again. Don't truncate while principals are mid-session.
+
 **Dev DB state, end of session.** Two SuperUser accounts, both with
 known passwords (set this session, in chat history; both should be
 rotated by the user via the Profile page on next login):

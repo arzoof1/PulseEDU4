@@ -18,7 +18,14 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-Promise.all([seedIfEmpty(), seedTenancy()])
+// IMPORTANT: sequential, not Promise.all. seedIfEmpty() reads the
+// schools table that seedTenancy() populates, so on a fresh prod
+// database the order matters — running them in parallel can race
+// and leave the seed with zero schools to attach data to.
+(async () => {
+  await seedTenancy();
+  await seedIfEmpty();
+})()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {
     app.listen(port, (err) => {
