@@ -28,6 +28,7 @@ import {
   issRosterTable,
   interventionEntriesTable,
   studentMtssPlansTable,
+  studentFastScoresTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql } from "drizzle-orm";
@@ -353,6 +354,169 @@ export async function seedMtssPlansIfEmpty() {
     logger.info(
       { schoolId: school.id, count: plans.length },
       "[seed] MTSS plans seeded (20% of students)",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// FAST scores seeding — placeholder PM1/PM2/PM3 + prior-year score per
+// student per subject (ELA + Math). Real ingestion will come via the
+// Settings → CSV import (planned). v1 just makes the Teacher Roster
+// page render with realistic-looking data.
+//
+// Same pattern as MTSS plans: idempotent CREATE TABLE IF NOT EXISTS at
+// boot, then a per-school skip-if-non-empty seed.
+// -----------------------------------------------------------------------------
+export async function ensureFastScoresSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_fast_scores (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      pm1 INTEGER,
+      pm2 INTEGER,
+      pm3 INTEGER,
+      prior_year_score INTEGER,
+      prior_year_bq BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_scores_school_idx ON student_fast_scores (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_fast_scores_student_subject_unique ON student_fast_scores (school_id, student_id, subject)`,
+  );
+}
+
+// Per-grade plausible score range for seeding. Values are the absolute
+// chart floor (L1 Low min) and ceiling (L5 max) for ELA and Math grades
+// 3–10. We pick a "true level" 1..5 with weighted distribution, then
+// generate scores within that level's band so PM placements look
+// realistic. PM2 and PM3 drift slightly upward from PM1 to mimic
+// learning gains over the year.
+const ELA_BANDS: Record<
+  number,
+  { L1: [number, number]; L2: [number, number]; L3: [number, number]; L4: [number, number]; L5: [number, number] }
+> = {
+  3: { L1: [140, 185], L2: [186, 200], L3: [201, 212], L4: [213, 224], L5: [225, 260] },
+  4: { L1: [154, 198], L2: [199, 212], L3: [213, 223], L4: [224, 236], L5: [237, 270] },
+  5: { L1: [160, 205], L2: [206, 221], L3: [222, 231], L4: [232, 245], L5: [246, 279] },
+  6: { L1: [161, 208], L2: [209, 224], L3: [225, 236], L4: [237, 249], L5: [250, 284] },
+  7: { L1: [165, 214], L2: [215, 231], L3: [232, 241], L4: [242, 256], L5: [257, 292] },
+  8: { L1: [169, 219], L2: [220, 237], L3: [238, 250], L4: [251, 261], L5: [262, 300] },
+  9: { L1: [174, 223], L2: [224, 241], L3: [242, 253], L4: [254, 266], L5: [267, 303] },
+  10: { L1: [179, 229], L2: [230, 246], L3: [247, 257], L4: [258, 270], L5: [271, 308] },
+};
+const MATH_BANDS: Record<
+  number,
+  { L1: [number, number]; L2: [number, number]; L3: [number, number]; L4: [number, number]; L5: [number, number] }
+> = {
+  3: { L1: [140, 182], L2: [183, 197], L3: [198, 208], L4: [209, 224], L5: [225, 260] },
+  4: { L1: [155, 199], L2: [200, 210], L3: [211, 220], L4: [221, 237], L5: [238, 273] },
+  5: { L1: [158, 206], L2: [207, 221], L3: [222, 233], L4: [234, 245], L5: [246, 285] },
+  6: { L1: [168, 212], L2: [213, 228], L3: [229, 238], L4: [239, 253], L5: [254, 287] },
+  7: { L1: [175, 222], L2: [223, 234], L3: [235, 246], L4: [247, 257], L5: [258, 288] },
+  // L1 spans full L1Low+L1Mid+L1High (chart MATH[8] L1High ends at 226).
+  // Earlier rev had L1: [183, 222] which left a 223-226 hole.
+  8: { L1: [183, 226], L2: [227, 243], L3: [244, 253], L4: [254, 262], L5: [263, 291] },
+};
+
+// Weighted level pick — middle-skewed (most students cluster around L2/L3).
+function pickLevel(rng: () => number): 1 | 2 | 3 | 4 | 5 {
+  const r = rng();
+  if (r < 0.2) return 1;
+  if (r < 0.55) return 2;
+  if (r < 0.8) return 3;
+  if (r < 0.95) return 4;
+  return 5;
+}
+
+function randInRange(rng: () => number, lo: number, hi: number): number {
+  return Math.round(lo + rng() * (hi - lo));
+}
+
+function clamp(n: number, lo: number, hi: number): number {
+  return Math.max(lo, Math.min(hi, n));
+}
+
+export async function seedFastScoresIfEmpty() {
+  await ensureFastScoresSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c }] = (await db.execute(
+      sql`SELECT COUNT(*)::int AS c FROM student_fast_scores WHERE school_id = ${school.id}`,
+    )).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId, grade: studentsTable.grade })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+
+    const rng = makeRng(0xfa57 + school.id * 1009);
+    const inserts: (typeof studentFastScoresTable.$inferInsert)[] = [];
+
+    for (const stu of studentRows) {
+      const grade = Number(stu.grade);
+      if (!Number.isInteger(grade) || grade < 3 || grade > 10) continue;
+
+      for (const subject of ["ela", "math"] as const) {
+        const bands = subject === "ela" ? ELA_BANDS : MATH_BANDS;
+        const band = bands[grade];
+        if (!band) continue; // Math only goes G3-G8 for now
+
+        const trueLevel = pickLevel(rng);
+        const range = band[`L${trueLevel}` as `L${1 | 2 | 3 | 4 | 5}`];
+        const fullLo = band.L1[0];
+        const fullHi = band.L5[1];
+
+        // PM1: in band, with mild noise
+        const pm1Base = randInRange(rng, range[0], range[1]);
+        // PM2: PM1 + small positive drift (-3..+10)
+        const pm2Base = pm1Base + randInRange(rng, -3, 10);
+        // PM3: PM2 + small positive drift (-2..+12)
+        const pm3Base = pm2Base + randInRange(rng, -2, 12);
+        const pm1 = clamp(pm1Base, fullLo, fullHi);
+        const pm2 = clamp(pm2Base, fullLo, fullHi);
+        const pm3 = clamp(pm3Base, fullLo, fullHi);
+
+        // Prior-year final: pick on the prior-grade chart if available;
+        // otherwise reuse the current grade band (3rd graders).
+        const priorGrade = grade - 1;
+        const priorBand = bands[priorGrade] ?? bands[grade];
+        const priorRange =
+          priorBand[`L${trueLevel}` as `L${1 | 2 | 3 | 4 | 5}`];
+        const priorYearScore = randInRange(rng, priorRange[0], priorRange[1]);
+        // BQ ~ 25% overall: heavily skew to L1/L2 (low achievers).
+        let bqProb = 0.05;
+        if (trueLevel === 1) bqProb = 0.85;
+        else if (trueLevel === 2) bqProb = 0.45;
+        const priorYearBq = rng() < bqProb;
+
+        inserts.push({
+          schoolId: school.id,
+          studentId: stu.studentId,
+          subject,
+          pm1,
+          pm2,
+          pm3,
+          priorYearScore,
+          priorYearBq,
+        });
+      }
+    }
+
+    if (inserts.length === 0) continue;
+    for (let i = 0; i < inserts.length; i += 500) {
+      await db.insert(studentFastScoresTable).values(inserts.slice(i, i + 500));
+    }
+    logger.info(
+      { schoolId: school.id, count: inserts.length },
+      "[seed] FAST scores seeded (placeholder PM1/PM2/PM3 + prior year)",
     );
   }
 }

@@ -5,6 +5,7 @@ import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
+import TeacherRosterPage from "./components/TeacherRosterPage";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
 import PbisPointsHub, {
@@ -3090,6 +3091,7 @@ function App() {
     | "mtssCoordinator"
     | "mtssTemplates"
     | "mtssPlans"
+    | "teacherRoster"
     | "settings"
     | "staffRoles"
     | "bellSchedule"
@@ -6201,6 +6203,13 @@ function App() {
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
   ];
+  // Teacher Roster — every signed-in staff member can see their own
+  // roster; the API filters cross-teacher views to the core team.
+  // Surfacing the link to everyone is intentional so plain teachers
+  // don't have to hunt for it.
+  const teacherRosterNavSections: NavSection[] = [
+    { key: "teacherRoster", label: "Teacher Roster", icon: IconUser },
+  ];
   const canAccessMtssHub =
     Boolean(authUser?.isSuperUser) ||
     isAdmin ||
@@ -6565,6 +6574,7 @@ function App() {
                 {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
                 {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
                 {canAccessMtssHub && mtssCoordNavSections.map(renderNavItem)}
+                {teacherRosterNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
@@ -13215,6 +13225,13 @@ function App() {
             color: "#0d9488",
             show: canManageMtssPlans,
           },
+          {
+            key: "teacherRoster",
+            label: "Teacher Roster",
+            desc: "Browse any teacher's roster with FAST PM scores and BQ flags.",
+            color: "#1e40af",
+            show: true,
+          },
         ];
         return (
           <>
@@ -13829,12 +13846,27 @@ function App() {
         />
       )}
 
+      {activeSection === "teacherRoster" && (
+        <TeacherRosterPage
+          isCoreTeam={
+            Boolean(authUser?.isSuperUser) ||
+            isAdmin ||
+            Boolean(authUser?.isEseCoordinator) ||
+            isBehaviorSpec ||
+            isMtss
+          }
+          defaultTeacherId={authUser?.id ?? null}
+          onBack={() => setActiveSection("hallPasses")}
+        />
+      )}
+
       {activeSection === "mtssCoordinator" && canAccessMtssHub && (() => {
         type MtssHubKey =
           | "mtssTemplates"
           | "schoolWidePbis"
           | "schoolStoreManage"
-          | "mtssPlans";
+          | "mtssPlans"
+          | "teacherRoster";
         type MtssTool = {
           key: MtssHubKey;
           label: string;
@@ -13868,6 +13900,12 @@ function App() {
             label: "School Store",
             desc: "Add, edit, and remove school-wide rewards students can redeem.",
             color: "#6d28d9",
+          },
+          {
+            key: "teacherRoster",
+            label: "Teacher Roster",
+            desc: "Browse any teacher's roster with FAST PM scores and BQ flags.",
+            color: "#1e40af",
           },
         ];
         return (

@@ -1190,3 +1190,102 @@ useful. Until then, the live URL exists but no one can log in.
 require setting up vitest + supertest + a test database strategy),
 and an `isCrossDistrictSuperUser` flag for a Replit-side support
 persona that needs to move between districts.
+
+## Teacher Roster v1 (2026-04-24)
+
+**What shipped.** A new "Teacher Roster" page that lists each teacher's
+students with their FAST PM1/PM2/PM3 scores rendered as colored
+sub-level pills, a bucket icon showing how many points away the
+student is from the next achievement level, and a Bottom Quartile (BQ)
+flag based on the student's prior-year final scale score.
+
+**Schema.** New `student_fast_scores` table (`lib/db/src/schema/
+studentFastScores.ts`):
+
+- `(id, schoolId, studentId text, subject 'ela'|'math', pm1, pm2, pm3,
+  priorYearScore, priorYearBq, timestamps)`
+- `UNIQUE(schoolId, studentId, subject)` — CSV import (deferred) will
+  upsert on this key.
+- Boot-time `ensureFastScoresSchema()` self-creates the table with
+  `CREATE TABLE IF NOT EXISTS` (same workaround as MTSS plans — drizzle
+  push is non-interactive and gets confused by legacy renames).
+- Re-exported from `lib/db/src/schema/index.ts`.
+
+**Cut-score chart + helpers.** `artifacts/api-server/src/lib/
+fastCutScores.ts` encodes:
+
+- ELA Table 6 grades 3-10 (full L1/L2 sub-bands + L3/L4/L5).
+- Math Table 8 grades 3-8 only. Algebra 1 / Geometry are deliberately
+  NOT in v1 — students taking those courses just won't have a Math
+  chart, and the bucket icon is suppressed.
+- `placeOnChart(score, subject, grade)` → `{level, subLevel}`.
+- `placePm3(score, subject, currentGrade)` → uses the **prior-grade**
+  chart (so PM3 represents end-of-prior-year mastery). Falls back to
+  current grade for 3rd graders (no prior).
+- `bucketTarget(subject, currentGrade, level)` → next-level min on the
+  current-grade chart, or `null` for L5 / grade 3 / no-chart subjects.
+- `bucketColor(gap)` → green ≤ 0, orange 1-5, red > 5.
+- `bucketFor(pm3, subject, grade)` → one-shot `{targetScore, gap, color}`
+  used by the API.
+
+**Placeholder seed.** `seedFastScoresIfEmpty()` in `seed.ts`:
+
+- Per student per subject, picks a "true level" with a middle-skewed
+  weighted distribution (20% L1 / 35% L2 / 25% L3 / 15% L4 / 5% L5),
+  then generates PM1/PM2/PM3 with mild positive drift to mimic
+  learning gains. Prior-year score is generated on the prior-grade
+  chart at the same level. BQ flag probability is 85% at L1, 45% at
+  L2, 5% otherwise (yields ~25% BQ overall).
+- Idempotent per school (same skip-if-non-empty pattern as MTSS plans).
+- Math rows skipped for grades 9-10 (no chart).
+- First boot seeded ~9,600 rows across 7 schools.
+
+**API.** `routes/teacherRoster.ts`:
+
+- `GET /api/teacher-roster?teacherId=&period=` — returns enriched
+  rows with placement + bucket computed server-side.
+  - No `teacherId` → caller's own roster.
+  - `teacherId` ≠ caller → core-team gate (admin / superuser / ESE /
+    behavior specialist / MTSS coordinator). Mirrors the
+    schedule.ts `?all=1` gate.
+  - Optional `period` filter; response always includes
+    `availablePeriods` so the client can render the period chip row
+    even when the current filter is empty.
+- `GET /api/teacher-roster/teachers` — picker source. Plain teachers
+  get a single-entry list (themselves); core-team members get every
+  staff in their school who teaches at least one section.
+- Mounted in `routes/index.ts` after `mtssPlansRouter`.
+
+**Client.** `artifacts/client/src/components/TeacherRosterPage.tsx`:
+
+- Mirrors the MtssPlansAdmin pattern (component file under `components/`,
+  authFetch, local state, no global store).
+- Teacher picker (core team only) + period chip row + legend +
+  summary line + table (Student | Grade | ELA | Math | BQ).
+- Each subject cell renders 3 PM pills (PM1/PM2/PM3) with the
+  sub-level shown on the pill, color-coded by level (red/orange/yellow/
+  green/blue), plus a circular bucket icon (green ✓ at-or-above target,
+  otherwise the gap value in orange or red).
+- Hover tooltips on every pill explain "PM• Level x.y • Scale score N".
+- BQ column shows red `BQ ELA` / `BQ Math` chips (only when the
+  prior-year flag is set).
+- Wired into App.tsx in three places: sidebar nav (visible to everyone),
+  BS hub tile, MTSS hub tile. `activeSection: "teacherRoster"`.
+
+**Scope rules (the four rules the user confirmed at the start of the
+session).**
+
+1. Seed placeholder FAST scores now; CSV import in Settings is a
+   deliberate follow-on (deferred).
+2. Teachers see their own roster; core team (Admin / SuperUser / ESE /
+   BS / MTSS) can pick any teacher.
+3. BQ is the Bottom Quartile based on prior-year final scale score
+   (not a current-year computation).
+4. For 3rd graders and for Algebra 1 / Geometry students, the bucket
+   icon is hidden and only the level pill renders. (3rd graders have
+   no prior-grade chart; Algebra/Geometry have no chart at all.)
+
+**Deferred follow-on: CSV import.** Settings → "FAST Scores" with a
+file picker that upserts `student_fast_scores` on
+`(schoolId, studentId, subject)`. CSV columns expected to be at least
+`student_id, subject, pm1, pm2, pm3, prior_year_score`. Not built yet.

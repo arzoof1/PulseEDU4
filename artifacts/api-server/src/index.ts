@@ -1,6 +1,11 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { seedIfEmpty, seedTenancy, seedMtssPlansIfEmpty } from "./seed";
+import {
+  seedIfEmpty,
+  seedTenancy,
+  seedMtssPlansIfEmpty,
+  seedFastScoresIfEmpty,
+} from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 
@@ -28,6 +33,9 @@ if (Number.isNaN(port) || port <= 0) {
   // Runs after the main seed so studentsTable is populated. Idempotent
   // per-school: skipped for any school that already has at least one plan.
   await seedMtssPlansIfEmpty();
+  // Same pattern: ensure schema + skip-if-non-empty per school. Required
+  // before the Teacher Roster API has anything to render.
+  await seedFastScoresIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {
