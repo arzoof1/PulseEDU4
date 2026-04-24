@@ -240,6 +240,36 @@ export default function PbisPointsHub() {
     setActivePeriod("all");
   }, [selectedTeacherId]);
 
+  // ---- Save the current note text as a personal note template. Scoped to
+  // 'teacher' so it lands in the staffer's own template list rather than the
+  // school-wide library. Used by both AwardModal and BulkAwardModal.
+  async function saveNoteTemplate(
+    title: string,
+    body: string,
+  ): Promise<void> {
+    const res = await authFetch("/api/pbis-note-templates", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: title.trim(),
+        body: body.trim(),
+        scope: "teacher",
+      }),
+    });
+    if (!res.ok) {
+      let msg = "Failed to save template";
+      try {
+        const j = (await res.json()) as { error?: string };
+        if (j?.error) msg = j.error;
+      } catch {
+        // ignore
+      }
+      throw new Error(msg);
+    }
+    const created = (await res.json()) as NoteTemplate;
+    setNoteTemplates((prev) => [...prev, created]);
+  }
+
   // ---- Award points (used by AwardModal)
   async function awardPoints(
     student: Student,
@@ -413,6 +443,7 @@ export default function PbisPointsHub() {
           student={awardingFor}
           reasons={reasons}
           templates={noteTemplates}
+          onSaveTemplate={saveNoteTemplate}
           onClose={() => setAwardingFor(null)}
           onSubmit={async (picks, note) => {
             // Award each picked behavior in sequence so totals & milestones
@@ -432,6 +463,7 @@ export default function PbisPointsHub() {
           students={students}
           reasons={reasons}
           templates={noteTemplates}
+          onSaveTemplate={saveNoteTemplate}
           onClose={() => setBulkOpen(false)}
           onSubmit={async (picks, note) => {
             // One bulk call per selected behavior so polarity & negative
@@ -982,12 +1014,14 @@ function AwardModal({
   student,
   reasons,
   templates,
+  onSaveTemplate,
   onClose,
   onSubmit,
 }: {
   student: Student;
   reasons: Reason[];
   templates: NoteTemplate[];
+  onSaveTemplate: (title: string, body: string) => Promise<void>;
   onClose: () => void;
   onSubmit: (
     picks: { reason: Reason; points: number }[],
@@ -1191,77 +1225,14 @@ function AwardModal({
               onRemove={removePick}
             />
 
-            <label
-              style={{
-                display: "block",
-                marginBottom: "1rem",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  marginBottom: "0.3rem",
-                }}
-              >
-                <span style={{ fontSize: "0.9rem", color: "#475569" }}>
-                  Note (optional)
-                </span>
-                <div style={{ flex: 1 }} />
-                {templates.length > 0 && (
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const id = Number(e.target.value);
-                      const t = templates.find((x) => x.id === id);
-                      if (t) setNote(t.body);
-                    }}
-                    style={{
-                      marginRight: "0.5rem",
-                      padding: "0.2rem 0.4rem",
-                      border: "1px solid #cbd5e1",
-                      borderRadius: "0.3rem",
-                      fontSize: "0.78rem",
-                      background: "white",
-                      color: "#0e7490",
-                      cursor: "pointer",
-                    }}
-                    aria-label="Insert note template"
-                  >
-                    <option value="">Use template…</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.title}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <span
-                  style={{
-                    fontSize: "0.75rem",
-                    color: noteOver ? "#dc2626" : "#94a3b8",
-                  }}
-                >
-                  {note.length}/500
-                </span>
-              </div>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                rows={3}
-                placeholder={`Why is ${student.firstName} earning these points? (Saved on the student's record.)`}
-                style={{
-                  width: "100%",
-                  padding: "0.5rem 0.6rem",
-                  border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
-                  borderRadius: "0.35rem",
-                  fontSize: "0.9rem",
-                  fontFamily: "inherit",
-                  resize: "vertical",
-                  boxSizing: "border-box",
-                }}
-              />
-            </label>
+            <NoteSection
+              note={note}
+              setNote={setNote}
+              templates={templates}
+              onSaveTemplate={onSaveTemplate}
+              noteOver={noteOver}
+              placeholder={`Why is ${student.firstName} earning these points? (Saved on the student's record.)`}
+            />
 
             {err && (
               <div
@@ -1471,6 +1442,256 @@ function PicksEditor({
 }
 
 // -----------------------------------------------------------------------------
+// NoteSection — optional note textarea with template picker AND a
+// "Save as template" inline action that lets a teacher persist the current
+// note text as a personal template (scope='teacher') without leaving the
+// award modal. Shared between AwardModal and BulkAwardModal so the UX stays
+// consistent.
+// -----------------------------------------------------------------------------
+function NoteSection({
+  note,
+  setNote,
+  templates,
+  onSaveTemplate,
+  placeholder,
+  noteOver,
+}: {
+  note: string;
+  setNote: (v: string) => void;
+  templates: NoteTemplate[];
+  onSaveTemplate: (title: string, body: string) => Promise<void>;
+  placeholder: string;
+  noteOver: boolean;
+}) {
+  const [tplOpen, setTplOpen] = useState(false);
+  const [tplName, setTplName] = useState("");
+  const [savingTpl, setSavingTpl] = useState(false);
+  const [tplErr, setTplErr] = useState<string | null>(null);
+
+  // The save action only makes sense once the teacher has typed something.
+  const canOpenSave = note.trim().length > 0 && !noteOver;
+  const canSubmitTpl =
+    tplName.trim().length > 0 && note.trim().length > 0 && !noteOver;
+
+  async function handleSaveTpl() {
+    if (!canSubmitTpl) return;
+    setSavingTpl(true);
+    setTplErr(null);
+    try {
+      await onSaveTemplate(tplName, note);
+      setTplOpen(false);
+      setTplName("");
+    } catch (e) {
+      setTplErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSavingTpl(false);
+    }
+  }
+
+  return (
+    <label
+      style={{
+        display: "block",
+        marginBottom: "1rem",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          marginBottom: "0.3rem",
+          flexWrap: "wrap",
+          gap: "0.4rem",
+        }}
+      >
+        <span style={{ fontSize: "0.9rem", color: "#475569" }}>
+          Note (optional)
+        </span>
+        <div style={{ flex: 1 }} />
+        {templates.length > 0 && (
+          <select
+            value=""
+            onChange={(e) => {
+              const id = Number(e.target.value);
+              const t = templates.find((x) => x.id === id);
+              if (t) setNote(t.body);
+            }}
+            style={{
+              padding: "0.2rem 0.4rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.3rem",
+              fontSize: "0.78rem",
+              background: "white",
+              color: "#0e7490",
+              cursor: "pointer",
+            }}
+            aria-label="Insert note template"
+          >
+            <option value="">Use template…</option>
+            {templates.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.title}
+              </option>
+            ))}
+          </select>
+        )}
+        {!tplOpen && (
+          <button
+            type="button"
+            disabled={!canOpenSave}
+            onClick={() => {
+              setTplErr(null);
+              setTplName("");
+              setTplOpen(true);
+            }}
+            title={
+              canOpenSave
+                ? "Save this note to your template list"
+                : "Type a note first"
+            }
+            style={{
+              padding: "0.2rem 0.55rem",
+              border: "1px solid #0e7490",
+              borderRadius: "0.3rem",
+              fontSize: "0.78rem",
+              background: "white",
+              color: "#0e7490",
+              fontWeight: 600,
+              cursor: canOpenSave ? "pointer" : "not-allowed",
+              opacity: canOpenSave ? 1 : 0.5,
+            }}
+          >
+            Save as template
+          </button>
+        )}
+        <span
+          style={{
+            fontSize: "0.75rem",
+            color: noteOver ? "#dc2626" : "#94a3b8",
+          }}
+        >
+          {note.length}/500
+        </span>
+      </div>
+
+      {tplOpen && (
+        <div
+          // Stop the click here from bubbling to the parent <label>, which
+          // would otherwise refocus the textarea and steal focus from the
+          // template-name input.
+          onClick={(e) => e.preventDefault()}
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            marginBottom: "0.45rem",
+            padding: "0.4rem 0.5rem",
+            background: "#ecfeff",
+            border: "1px solid #a5f3fc",
+            borderRadius: "0.35rem",
+          }}
+        >
+          <input
+            value={tplName}
+            onChange={(e) => setTplName(e.target.value)}
+            placeholder="Template name"
+            autoFocus
+            maxLength={80}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.preventDefault();
+                void handleSaveTpl();
+              } else if (e.key === "Escape") {
+                // Stop propagation so the modal-level Escape listener does
+                // not also fire and close the entire award dialog.
+                e.preventDefault();
+                e.stopPropagation();
+                setTplOpen(false);
+                setTplName("");
+                setTplErr(null);
+              }
+            }}
+            style={{
+              flex: 1,
+              padding: "0.3rem 0.5rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.3rem",
+              fontSize: "0.85rem",
+              background: "white",
+            }}
+          />
+          <button
+            type="button"
+            disabled={!canSubmitTpl || savingTpl}
+            onClick={handleSaveTpl}
+            style={{
+              padding: "0.3rem 0.7rem",
+              border: "1px solid #0e7490",
+              borderRadius: "0.3rem",
+              background: "#0e7490",
+              color: "white",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              cursor: !canSubmitTpl || savingTpl ? "not-allowed" : "pointer",
+              opacity: !canSubmitTpl || savingTpl ? 0.6 : 1,
+            }}
+          >
+            {savingTpl ? "Saving…" : "Save"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setTplOpen(false);
+              setTplName("");
+              setTplErr(null);
+            }}
+            style={{
+              padding: "0.3rem 0.6rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.3rem",
+              background: "white",
+              color: "#475569",
+              fontSize: "0.8rem",
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {tplErr && (
+        <div
+          style={{
+            marginBottom: "0.45rem",
+            fontSize: "0.78rem",
+            color: "#991b1b",
+          }}
+        >
+          {tplErr}
+        </div>
+      )}
+
+      <textarea
+        value={note}
+        onChange={(e) => setNote(e.target.value)}
+        rows={3}
+        placeholder={placeholder}
+        style={{
+          width: "100%",
+          padding: "0.5rem 0.6rem",
+          border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
+          borderRadius: "0.35rem",
+          fontSize: "0.9rem",
+          fontFamily: "inherit",
+          resize: "vertical",
+          boxSizing: "border-box",
+        }}
+      />
+    </label>
+  );
+}
+
+// -----------------------------------------------------------------------------
 // BulkAwardModal — same look as AwardModal but for many students + a note.
 // -----------------------------------------------------------------------------
 function BulkAwardModal({
@@ -1478,6 +1699,7 @@ function BulkAwardModal({
   students,
   reasons,
   templates,
+  onSaveTemplate,
   onClose,
   onSubmit,
 }: {
@@ -1485,6 +1707,7 @@ function BulkAwardModal({
   students: Student[];
   reasons: Reason[];
   templates: NoteTemplate[];
+  onSaveTemplate: (title: string, body: string) => Promise<void>;
   onClose: () => void;
   onSubmit: (
     picks: { reason: Reason; points: number }[],
@@ -1747,77 +1970,14 @@ function BulkAwardModal({
               perStudent
             />
 
-            <label
-              style={{
-                display: "block",
-                marginBottom: "1rem",
-              }}
-            >
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "baseline",
-                  marginBottom: "0.3rem",
-                }}
-              >
-                <span style={{ fontSize: "0.9rem", color: "#475569" }}>
-                  Note (optional)
-                </span>
-                <div style={{ flex: 1 }} />
-                {templates.length > 0 && (
-                  <select
-                    value=""
-                    onChange={(e) => {
-                      const id = Number(e.target.value);
-                      const t = templates.find((x) => x.id === id);
-                      if (t) setNote(t.body);
-                    }}
-                    style={{
-                      marginRight: "0.5rem",
-                      padding: "0.2rem 0.4rem",
-                      border: "1px solid #cbd5e1",
-                      borderRadius: "0.3rem",
-                      fontSize: "0.78rem",
-                      background: "white",
-                      color: "#0e7490",
-                      cursor: "pointer",
-                    }}
-                    aria-label="Insert note template"
-                  >
-                    <option value="">Use template…</option>
-                    {templates.map((t) => (
-                      <option key={t.id} value={t.id}>
-                        {t.title}
-                      </option>
-                    ))}
-                  </select>
-                )}
-                <span
-                  style={{
-                    fontSize: "0.75rem",
-                    color: noteOver ? "#dc2626" : "#94a3b8",
-                  }}
-                >
-                  {note.length}/500
-                </span>
-              </div>
-              <textarea
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                rows={3}
-                placeholder="Why is the whole group earning these points? (Saved on each student's record.)"
-                style={{
-                  width: "100%",
-                  padding: "0.5rem 0.6rem",
-                  border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
-                  borderRadius: "0.35rem",
-                  fontSize: "0.9rem",
-                  fontFamily: "inherit",
-                  resize: "vertical",
-                  boxSizing: "border-box",
-                }}
-              />
-            </label>
+            <NoteSection
+              note={note}
+              setNote={setNote}
+              templates={templates}
+              onSaveTemplate={onSaveTemplate}
+              noteOver={noteOver}
+              placeholder="Why is the whole group earning these points? (Saved on each student's record.)"
+            />
 
             {err && (
               <div
