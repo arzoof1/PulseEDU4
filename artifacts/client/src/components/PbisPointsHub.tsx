@@ -4002,6 +4002,10 @@ function StoreItemModal({
   const [imageUrl, setImageUrl] = useState<string | null>(
     existing?.imageUrl ?? null,
   );
+  // Local preview URL (a `blob:` URL) for the file the user just picked,
+  // shown immediately while we upload to storage in the background. Avoids
+  // a server round-trip (and any GCS eventual-consistency lag) for preview.
+  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -4015,6 +4019,14 @@ function StoreItemModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
+  // Revoke any blob URL when it's replaced or when the modal unmounts so we
+  // don't leak browser memory.
+  useEffect(() => {
+    return () => {
+      if (localPreviewUrl) URL.revokeObjectURL(localPreviewUrl);
+    };
+  }, [localPreviewUrl]);
+
   async function handleFile(file: File) {
     if (!file.type.startsWith("image/")) {
       setErr("Please choose an image file.");
@@ -4025,6 +4037,9 @@ function StoreItemModal({
       return;
     }
     setErr(null);
+    // Show the picked file immediately as a blob preview. The setter's
+    // cleanup effect will revoke the previous URL automatically.
+    setLocalPreviewUrl(URL.createObjectURL(file));
     setUploading(true);
     try {
       // Step 1: ask the server for a presigned PUT URL.
@@ -4053,6 +4068,8 @@ function StoreItemModal({
       if (!putRes.ok) throw new Error("Upload failed");
       setImageUrl(objectPath);
     } catch (e) {
+      // Upload failed — drop the local preview so we don't mislead the user.
+      setLocalPreviewUrl(null);
       setErr(e instanceof Error ? e.message : "Upload failed");
     } finally {
       setUploading(false);
@@ -4183,7 +4200,17 @@ function StoreItemModal({
               flexShrink: 0,
             }}
           >
-            {imageUrl ? (
+            {localPreviewUrl ? (
+              <img
+                src={localPreviewUrl}
+                alt=""
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+            ) : imageUrl ? (
               <AuthImage
                 src={`/api/storage${imageUrl}`}
                 alt=""
