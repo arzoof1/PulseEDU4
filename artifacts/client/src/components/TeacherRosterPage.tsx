@@ -238,6 +238,13 @@ function BucketCell({ bucket }: { bucket: Bucket }) {
 // headers in the table header line up cleanly above each pill. When the
 // subject has no chart for the student's grade (e.g. Math for a 9th
 // grader), spans the whole subject group with an "n/a" placeholder.
+// Vertical divider drawn on the FIRST sub-cell of each subject group
+// (and on the no-chart placeholder). Pairs with the matching divider in
+// the table header so the column boundary runs cleanly top-to-bottom.
+const GROUP_DIVIDER: React.CSSProperties = {
+  borderLeft: "1px solid #e5e7eb",
+};
+
 function SubjectCells({
   block,
   subjectLabel,
@@ -249,7 +256,13 @@ function SubjectCells({
     return (
       <td
         colSpan={4}
-        style={{ padding: "6px 10px", color: "#9ca3af", fontSize: 12 }}
+        style={{
+          padding: "6px 10px",
+          color: "#9ca3af",
+          fontSize: 12,
+          textAlign: "center",
+          ...GROUP_DIVIDER,
+        }}
       >
         n/a
       </td>
@@ -261,7 +274,7 @@ function SubjectCells({
   };
   return (
     <>
-      <td style={cell}>
+      <td style={{ ...cell, ...GROUP_DIVIDER }}>
         <ScorePill
           score={block.pm1}
           placement={block.pm1Placement}
@@ -577,8 +590,10 @@ export default function TeacherRosterPage({
           >
             <thead>
               {/* Top row groups the four PM/LG sub-columns under their
-                  subject label. The right vertical border on ELA's
-                  group separates it from Math visually. */}
+                  subject label. Vertical dividers run between
+                  Grade↔ELA and ELA↔Math; the matching borderLeft on the
+                  first cell of each subject group in the body extends
+                  the divider down through every row. */}
               <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Student
@@ -591,14 +606,18 @@ export default function TeacherRosterPage({
                   style={{
                     padding: "8px 10px",
                     textAlign: "center",
-                    borderRight: "1px solid #e5e7eb",
+                    ...GROUP_DIVIDER,
                   }}
                 >
                   ELA
                 </th>
                 <th
                   colSpan={4}
-                  style={{ padding: "8px 10px", textAlign: "center" }}
+                  style={{
+                    padding: "8px 10px",
+                    textAlign: "center",
+                    ...GROUP_DIVIDER,
+                  }}
                 >
                   Math
                 </th>
@@ -616,19 +635,15 @@ export default function TeacherRosterPage({
                   letterSpacing: 0.4,
                 }}
               >
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
+                  PM1
+                </th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM3</th>
-                <th
-                  style={{
-                    padding: "4px 6px",
-                    fontWeight: 600,
-                    borderRight: "1px solid #e5e7eb",
-                  }}
-                >
-                  LG
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
+                  PM1
                 </th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM3</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
