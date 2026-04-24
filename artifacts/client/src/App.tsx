@@ -1580,7 +1580,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               marginBottom: "0.6rem",
               padding: "0.6rem 0.95rem",
               background:
-                "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                "var(--brand-header-bg)",
               color: "#ffffff",
               fontSize: "1.05rem",
               fontWeight: 700,
@@ -1614,7 +1614,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               marginBottom: "0.6rem",
               padding: "0.6rem 0.95rem",
               background:
-                "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                "var(--brand-header-bg)",
               color: "#ffffff",
               fontSize: "1.05rem",
               fontWeight: 700,
@@ -1958,7 +1958,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               marginBottom: "0.6rem",
               padding: "0.6rem 0.95rem",
               background:
-                "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                "var(--brand-header-bg)",
               color: "#ffffff",
               fontSize: "1.05rem",
               fontWeight: 700,
@@ -2057,7 +2057,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                     marginBottom: "0.6rem",
                     padding: "0.6rem 0.95rem",
                     background:
-                      "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                      "var(--brand-header-bg)",
                     color: "#ffffff",
                     fontSize: "1.05rem",
                     fontWeight: 700,
@@ -12973,7 +12973,7 @@ function App() {
             className="no-print"
             style={{
               background:
-                "linear-gradient(135deg, #7c3aed 0%, #0e7490 60%, #0d9488 100%)",
+                "var(--brand-header-bg)",
               color: "white",
               padding: "1.25rem 1.5rem",
               borderRadius: 8,
@@ -13484,7 +13484,7 @@ function App() {
               className="card no-print"
               style={{
                 background:
-                  "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                  "var(--brand-header-bg)",
                 color: "white",
                 padding: "1.25rem 1.5rem",
               }}
@@ -13822,7 +13822,7 @@ function App() {
               className="card no-print"
               style={{
                 background:
-                  "linear-gradient(135deg, #7c3aed 0%, #0e7490 60%, #0d9488 100%)",
+                  "var(--brand-header-bg)",
                 color: "white",
                 padding: "1.25rem 1.5rem",
               }}
@@ -14148,7 +14148,7 @@ function App() {
               className="card no-print"
               style={{
                 background:
-                  "linear-gradient(135deg, #0f766e 0%, #0e7490 60%, #7c3aed 100%)",
+                  "var(--brand-header-bg)",
                 color: "white",
                 padding: "1.25rem 1.5rem",
               }}

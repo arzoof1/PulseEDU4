@@ -3872,7 +3872,7 @@ function ClassroomStoreView() {
         headerSubtitle:
           "Build a list of rewards your students can redeem with their PBIS points.",
         headerGradient:
-          "linear-gradient(135deg, #0e7490 0%, #6366f1 50%, #a855f7 100%)",
+          "var(--brand-header-bg)",
         headerShadow: "rgba(14, 116, 144, 0.18)",
         emptyTitle: "Your store is empty",
         emptyHint: 'Click "+ Add item" to add your first reward.',
@@ -3898,7 +3898,7 @@ export function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
           ? "Set up rewards available school-wide that any student can redeem."
           : "Browse the school-wide rewards catalog. Only admins can edit items.",
         headerGradient:
-          "linear-gradient(135deg, #1e3a8a 0%, #6d28d9 50%, #be185d 100%)",
+          "var(--brand-header-bg)",
         headerShadow: "rgba(30, 58, 138, 0.22)",
         emptyTitle: canEdit
           ? "The school store is empty"
