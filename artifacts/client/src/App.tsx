@@ -6,6 +6,7 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
+import PbisPointsHub from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
@@ -11889,9 +11890,15 @@ function App() {
         </section>
       </>)}
 
-      {(activeSection === "pbis" || activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
+      {activeSection === "pbis" && <PbisPointsHub />}
+
+      {(activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
         <section className="card">
-          {activeSection === "pbis" && (<>
+          {/* Legacy "PBIS Points" awarding form. Replaced by <PbisPointsHub />
+              above. Kept here (dead-coded) so we can quickly cherry-pick any
+              behavior that needs to be migrated into the new hub — remove
+              once the hub's Settings + Reports tabs are live. */}
+          {false && (<>
           <h2>PBIS Points</h2>
           {recentMilestoneToasts.length > 0 && (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.25rem", marginBottom: "0.75rem" }}>
