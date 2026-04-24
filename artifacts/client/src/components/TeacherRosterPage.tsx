@@ -667,10 +667,15 @@ export default function TeacherRosterPage({
               </tr>
             </thead>
             <tbody>
-              {data.students.map((row) => (
+              {data.students.map((row, idx) => (
                 <tr
                   key={row.studentId}
-                  style={{ borderTop: "1px solid #e5e7eb" }}
+                  style={{
+                    borderTop: "1px solid #e5e7eb",
+                    // Subtle zebra striping for easier row tracking
+                    // across the wide PM/LG columns.
+                    background: idx % 2 === 1 ? "#f9fafb" : "transparent",
+                  }}
                 >
                   <td style={{ padding: "6px 10px" }}>
                     {row.lastName}, {row.firstName}
