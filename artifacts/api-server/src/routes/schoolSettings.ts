@@ -1,5 +1,5 @@
 import { Router, type IRouter } from "express";
-import { db, schoolSettingsTable } from "@workspace/db";
+import { db, schoolSettingsTable, staffTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 
@@ -53,6 +53,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisInvisibleStudentDays,
     pbisReasonImbalancePct,
     pbisColdPeriodMultiple,
+    pbisNegativeAffectsTotal,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -181,6 +182,40 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       res.status(400).json({ error: err });
       return;
     }
+  }
+
+  if (pbisNegativeAffectsTotal !== undefined) {
+    if (typeof pbisNegativeAffectsTotal !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "pbisNegativeAffectsTotal must be a boolean" });
+      return;
+    }
+    // School-wide PBIS policy — only admins / PBIS coordinators / behavior
+    // specialists may flip this. Other authenticated staff get rejected
+    // before any write happens.
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isAdmin || s.isPbisCoordinator || s.isBehaviorSpecialist)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res
+        .status(403)
+        .json({ error: "Only admin, PBIS coordinator, or behavior specialist may change this" });
+      return;
+    }
+    updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
   }
 
   if (Object.keys(updates).length === 0) {

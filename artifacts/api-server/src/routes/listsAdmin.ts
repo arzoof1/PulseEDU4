@@ -58,8 +58,8 @@ function requireRole(check: (s: typeof staffTable.$inferSelect) => boolean, labe
 }
 
 const requirePbisAdmin = requireRole(
-  (s) => s.isAdmin || s.isPbisCoordinator,
-  "PBIS coordinator or admin",
+  (s) => s.isAdmin || s.isPbisCoordinator || s.isBehaviorSpecialist,
+  "Admin, PBIS coordinator, or behavior specialist",
 );
 const requireInterventionAdmin = requireRole(
   (s) =>
@@ -78,14 +78,24 @@ router.get("/pbis-reasons", async (req, res) => {
     .select()
     .from(pbisReasonsTable)
     .where(eq(pbisReasonsTable.schoolId, schoolId))
-    .orderBy(pbisReasonsTable.category, pbisReasonsTable.name);
+    .orderBy(
+      pbisReasonsTable.category,
+      pbisReasonsTable.sortOrder,
+      pbisReasonsTable.name,
+    );
   res.json(rows);
 });
+
+function normalizePolarity(v: unknown): "positive" | "negative" | null {
+  if (v === undefined) return "positive"; // default for new rows
+  if (v === "positive" || v === "negative") return v;
+  return null;
+}
 
 router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const { name, category, defaultPoints } = req.body ?? {};
+  const { name, category, defaultPoints, polarity, sortOrder } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
     return;
@@ -95,11 +105,18 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
   let pts = 1;
   if (defaultPoints !== undefined && defaultPoints !== null) {
     const n = Number(defaultPoints);
-    if (!Number.isFinite(n) || !Number.isInteger(n)) {
-      res.status(400).json({ error: "defaultPoints must be an integer" });
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      res
+        .status(400)
+        .json({ error: "defaultPoints must be a positive integer" });
       return;
     }
     pts = n;
+  }
+  const pol = normalizePolarity(polarity);
+  if (!pol) {
+    res.status(400).json({ error: "polarity must be 'positive' or 'negative'" });
+    return;
   }
   // Duplicate-name check is per-school only.
   const existing = await db
@@ -112,8 +129,25 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
       ),
     );
   if (existing.length > 0) {
-    res.status(409).json({ error: "Reason name already exists" });
+    res.status(409).json({ error: "Behavior name already exists" });
     return;
+  }
+  // Default sort_order = max(existing in same category) + 1, so new tiles
+  // land at the end of their category instead of jumping to position 0.
+  let order = 0;
+  if (typeof sortOrder === "number" && Number.isInteger(sortOrder)) {
+    order = sortOrder;
+  } else {
+    const [{ maxOrder }] = await db
+      .select({ maxOrder: sql<number>`coalesce(max(${pbisReasonsTable.sortOrder}), -1)` })
+      .from(pbisReasonsTable)
+      .where(
+        and(
+          eq(pbisReasonsTable.schoolId, schoolId),
+          eq(pbisReasonsTable.category, cat),
+        ),
+      );
+    order = (maxOrder ?? -1) + 1;
   }
   const [row] = await db
     .insert(pbisReasonsTable)
@@ -122,6 +156,8 @@ router.post("/pbis-reasons", requirePbisAdmin, async (req, res) => {
       name: name.trim(),
       category: cat,
       defaultPoints: pts,
+      polarity: pol,
+      sortOrder: order,
       active: true,
     })
     .returning();
@@ -136,20 +172,39 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
     res.status(400).json({ error: "Invalid id" });
     return;
   }
-  const { name, category, defaultPoints, active } = req.body ?? {};
+  const { name, category, defaultPoints, active, polarity, sortOrder } =
+    req.body ?? {};
   const updates: Partial<typeof pbisReasonsTable.$inferInsert> = {};
   if (typeof name === "string" && name.trim()) updates.name = name.trim();
   if (typeof category === "string" && category.trim())
     updates.category = category.trim();
   if (defaultPoints !== undefined && defaultPoints !== null) {
     const n = Number(defaultPoints);
-    if (!Number.isFinite(n) || !Number.isInteger(n)) {
-      res.status(400).json({ error: "defaultPoints must be an integer" });
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < 1) {
+      res
+        .status(400)
+        .json({ error: "defaultPoints must be a positive integer" });
       return;
     }
     updates.defaultPoints = n;
   }
   if (typeof active === "boolean") updates.active = active;
+  if (polarity !== undefined) {
+    if (polarity !== "positive" && polarity !== "negative") {
+      res
+        .status(400)
+        .json({ error: "polarity must be 'positive' or 'negative'" });
+      return;
+    }
+    updates.polarity = polarity;
+  }
+  if (sortOrder !== undefined) {
+    if (typeof sortOrder !== "number" || !Number.isInteger(sortOrder)) {
+      res.status(400).json({ error: "sortOrder must be an integer" });
+      return;
+    }
+    updates.sortOrder = sortOrder;
+  }
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ error: "No updates" });
     return;
@@ -169,6 +224,73 @@ router.patch("/pbis-reasons/:id", requirePbisAdmin, async (req, res) => {
     return;
   }
   res.json(row);
+});
+
+// Batch reorder. Body: { items: [{id, sortOrder, category?}] }. All ids must
+// belong to the caller's school — any cross-school id is rejected before any
+// write happens.
+router.post("/pbis-reasons/reorder", requirePbisAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const items = req.body?.items;
+  if (!Array.isArray(items) || items.length === 0) {
+    res.status(400).json({ error: "items array required" });
+    return;
+  }
+  for (const it of items) {
+    if (
+      !it ||
+      typeof it.id !== "number" ||
+      !Number.isInteger(it.id) ||
+      typeof it.sortOrder !== "number" ||
+      !Number.isInteger(it.sortOrder)
+    ) {
+      res
+        .status(400)
+        .json({ error: "each item needs integer id and sortOrder" });
+      return;
+    }
+    if (it.category !== undefined && typeof it.category !== "string") {
+      res.status(400).json({ error: "category must be a string" });
+      return;
+    }
+  }
+  const ids = items.map((i: { id: number }) => i.id);
+  const owned = await db
+    .select({ id: pbisReasonsTable.id })
+    .from(pbisReasonsTable)
+    .where(
+      and(
+        eq(pbisReasonsTable.schoolId, schoolId),
+        sql`${pbisReasonsTable.id} = ANY(${ids})`,
+      ),
+    );
+  if (owned.length !== ids.length) {
+    res.status(403).json({ error: "Some behaviors are not in your school" });
+    return;
+  }
+  // Wrap in a transaction so a partial failure can't leave the rubric in a
+  // half-reordered state across two concurrent drag operations.
+  await db.transaction(async (tx) => {
+    for (const it of items) {
+      const upd: Partial<typeof pbisReasonsTable.$inferInsert> = {
+        sortOrder: it.sortOrder,
+      };
+      if (typeof it.category === "string" && it.category.trim()) {
+        upd.category = it.category.trim();
+      }
+      await tx
+        .update(pbisReasonsTable)
+        .set(upd)
+        .where(
+          and(
+            eq(pbisReasonsTable.id, it.id),
+            eq(pbisReasonsTable.schoolId, schoolId),
+          ),
+        );
+    }
+  });
+  res.json({ ok: true, count: items.length });
 });
 
 // ---- Intervention Types ----

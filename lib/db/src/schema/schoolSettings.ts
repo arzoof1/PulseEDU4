@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, uniqueIndex } from "drizzle-orm/pg-core";
 
 // Per-school operational settings. As of D4 there is exactly one row per
 // school (enforced by `school_settings_school_id_unique`). Routes
@@ -33,6 +33,12 @@ export const schoolSettingsTable = pgTable(
   pbisColdPeriodMultiple: integer("pbis_cold_period_multiple")
     .notNull()
     .default(5),
+  // When true, awarding a negative behavior subtracts its point value from
+  // the student's running total. When false (default), the entry is logged
+  // on the student's record as a red entry but does not affect the total.
+  pbisNegativeAffectsTotal: boolean("pbis_negative_affects_total")
+    .notNull()
+    .default(false),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

@@ -9,6 +9,8 @@ export const pbisReasonsTable = pgTable(
     category: text("category").notNull().default("General"),
     defaultPoints: integer("default_points").notNull().default(1),
     active: boolean("active").notNull().default(true),
+    polarity: text("polarity").notNull().default("positive"),
+    sortOrder: integer("sort_order").notNull().default(0),
   },
   (t) => ({
     nameUnique: uniqueIndex("pbis_reasons_name_unique").on(t.name),

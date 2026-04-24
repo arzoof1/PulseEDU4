@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 // =============================================================================
@@ -37,6 +37,12 @@ type Reason = {
   category: string;
   defaultPoints: number;
   active: boolean;
+  polarity: "positive" | "negative";
+  sortOrder: number;
+};
+
+type SchoolSettings = {
+  pbisNegativeAffectsTotal: boolean;
 };
 
 type PbisEntry = {
@@ -217,10 +223,16 @@ export default function PbisPointsHub() {
       }),
     });
     if (!res.ok) throw new Error("Failed to award points");
-    // Optimistically bump the local total so the card updates immediately.
+    // Use the SERVER-stored points value, not the submitted value — the
+    // server may zero or negate it for negative behaviors based on the
+    // school's pbisNegativeAffectsTotal policy.
+    const stored = (await res.json().catch(() => null)) as
+      | { points?: number }
+      | null;
+    const delta = typeof stored?.points === "number" ? stored.points : points;
     setTotals((prev) => {
       const next = new Map(prev);
-      next.set(student.studentId, (next.get(student.studentId) ?? 0) + points);
+      next.set(student.studentId, (next.get(student.studentId) ?? 0) + delta);
       return next;
     });
   }
@@ -280,6 +292,12 @@ export default function PbisPointsHub() {
           teachers={canViewAllTeachers ? teachers : null}
           selectedTeacherId={selectedTeacherId}
           onChangeTeacher={setSelectedTeacherId}
+        />
+      ) : tab === "settings" ? (
+        <SettingsView
+          me={me}
+          reasons={reasons}
+          onReasonsChanged={setReasons}
         />
       ) : (
         <ComingSoon tab={tab} />
@@ -955,6 +973,891 @@ function AwardModal({
     </div>
   );
 }
+
+// =============================================================================
+// SettingsView — "Edit Behavior Rubric"
+// Authorized staff (admin/PBIS coordinator/behavior specialist) can add, edit,
+// reorder, archive, and toggle polarity of behaviors. Negative behaviors are
+// always logged as red entries on a student's record; the school chooses
+// whether they also subtract from the running point total.
+// =============================================================================
+
+function SettingsView({
+  me,
+  reasons,
+  onReasonsChanged,
+}: {
+  me: Me | null;
+  reasons: Reason[];
+  onReasonsChanged: (next: Reason[]) => void;
+}) {
+  const canEdit = !!(
+    me?.isAdmin ||
+    (me as Me & { isPbisCoordinator?: boolean })?.isPbisCoordinator ||
+    me?.isBehaviorSpecialist
+  );
+
+  // Local working copy so drag-reorders feel instant; we PATCH on drop.
+  const [local, setLocal] = useState<Reason[]>(() =>
+    [...reasons].sort(
+      (a, b) =>
+        a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder,
+    ),
+  );
+  useEffect(() => {
+    setLocal(
+      [...reasons].sort(
+        (a, b) =>
+          a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder,
+      ),
+    );
+  }, [reasons]);
+
+  const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState<"all" | "positive" | "negative">("all");
+  const [showArchived, setShowArchived] = useState(false);
+  const [editing, setEditing] = useState<Reason | "new" | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // School setting toggle — fetched on mount, saved on change.
+  const [settings, setSettings] = useState<SchoolSettings | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/school-settings");
+        if (!res.ok) return;
+        const json = (await res.json()) as SchoolSettings;
+        if (!cancelled) setSettings(json);
+      } catch {
+        /* ignore — non-fatal for the editor */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function toggleNegativeAffectsTotal(next: boolean) {
+    setSettings((s) => (s ? { ...s, pbisNegativeAffectsTotal: next } : s));
+    try {
+      const res = await authFetch("/api/school-settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pbisNegativeAffectsTotal: next }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      const json = (await res.json()) as SchoolSettings;
+      setSettings(json);
+    } catch {
+      setSettings((s) =>
+        s ? { ...s, pbisNegativeAffectsTotal: !next } : s,
+      );
+      setErr("Could not save setting. Try again.");
+    }
+  }
+
+  // Apply search + polarity + archive filter, group by category preserving
+  // category order = first-seen order in the underlying list.
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return local.filter((r) => {
+      if (!showArchived && !r.active) return false;
+      if (filter !== "all" && r.polarity !== filter) return false;
+      if (q && !r.name.toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [local, search, filter, showArchived]);
+
+  const groups = useMemo(() => {
+    const out: { category: string; items: Reason[] }[] = [];
+    const idx = new Map<string, number>();
+    for (const r of filtered) {
+      let i = idx.get(r.category);
+      if (i === undefined) {
+        i = out.length;
+        idx.set(r.category, i);
+        out.push({ category: r.category, items: [] });
+      }
+      out[i].items.push(r);
+    }
+    return out;
+  }, [filtered]);
+
+  // ---- Drag & drop ----
+  const dragRef = useRef<{ id: number; fromCategory: string } | null>(null);
+
+  async function persistReorder(newLocal: Reason[]) {
+    // Snapshot prior state so we can roll back the optimistic update if the
+    // server rejects the reorder.
+    const prevSnapshot = local;
+    // Recompute sortOrder per category from the new local order.
+    const byCat = new Map<string, Reason[]>();
+    for (const r of newLocal) {
+      const arr = byCat.get(r.category) ?? [];
+      arr.push(r);
+      byCat.set(r.category, arr);
+    }
+    const items: { id: number; sortOrder: number; category: string }[] = [];
+    for (const [cat, arr] of byCat) {
+      arr.forEach((r, i) => {
+        items.push({ id: r.id, sortOrder: i, category: cat });
+      });
+    }
+    // Update local with the canonical sortOrders.
+    const updated = newLocal.map((r) => {
+      const m = items.find((x) => x.id === r.id)!;
+      return { ...r, sortOrder: m.sortOrder, category: m.category };
+    });
+    setLocal(updated);
+    onReasonsChanged(updated);
+    try {
+      const res = await authFetch("/api/pbis-reasons/reorder", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ items }),
+      });
+      if (!res.ok) throw new Error("Reorder failed");
+    } catch {
+      // Roll back so the visible order matches what's actually stored.
+      setLocal(prevSnapshot);
+      onReasonsChanged(prevSnapshot);
+      setErr("Reorder didn't save — your previous order has been restored.");
+    }
+  }
+
+  function handleDragStart(r: Reason) {
+    dragRef.current = { id: r.id, fromCategory: r.category };
+  }
+  function handleDragOver(e: React.DragEvent) {
+    if (dragRef.current) e.preventDefault();
+  }
+  function handleDropOnTile(target: Reason) {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag || drag.id === target.id) return;
+    const next = [...local];
+    const fromIdx = next.findIndex((r) => r.id === drag.id);
+    if (fromIdx === -1) return;
+    const [moved] = next.splice(fromIdx, 1);
+    moved.category = target.category; // moving across categories is allowed
+    const toIdx = next.findIndex((r) => r.id === target.id);
+    next.splice(toIdx, 0, moved);
+    persistReorder(next);
+  }
+  function handleDropOnCategory(cat: string) {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag) return;
+    const next = [...local];
+    const fromIdx = next.findIndex((r) => r.id === drag.id);
+    if (fromIdx === -1) return;
+    const [moved] = next.splice(fromIdx, 1);
+    moved.category = cat;
+    // Place at the end of the destination category.
+    let lastIdx = -1;
+    next.forEach((r, i) => {
+      if (r.category === cat) lastIdx = i;
+    });
+    next.splice(lastIdx + 1, 0, moved);
+    persistReorder(next);
+  }
+
+  async function saveBehavior(payload: {
+    id?: number;
+    name: string;
+    category: string;
+    defaultPoints: number;
+    polarity: "positive" | "negative";
+    active?: boolean;
+  }) {
+    setSaving(true);
+    setErr(null);
+    try {
+      const isNew = !payload.id;
+      const url = isNew
+        ? "/api/pbis-reasons"
+        : `/api/pbis-reasons/${payload.id}`;
+      const res = await authFetch(url, {
+        method: isNew ? "POST" : "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: payload.name,
+          category: payload.category,
+          defaultPoints: payload.defaultPoints,
+          polarity: payload.polarity,
+          ...(payload.active !== undefined ? { active: payload.active } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || "Save failed");
+      }
+      const row = (await res.json()) as Reason;
+      let next: Reason[];
+      if (isNew) {
+        next = [...local, row];
+      } else {
+        next = local.map((r) => (r.id === row.id ? row : r));
+      }
+      next.sort(
+        (a, b) =>
+          a.category.localeCompare(b.category) || a.sortOrder - b.sortOrder,
+      );
+      setLocal(next);
+      onReasonsChanged(next);
+      setEditing(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div>
+      {/* Header bar */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          alignItems: "center",
+          gap: "0.6rem",
+          marginBottom: "1rem",
+        }}
+      >
+        <input
+          type="search"
+          placeholder="Search behaviors…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{
+            flex: "1 1 16rem",
+            padding: "0.55rem 0.8rem",
+            border: "1px solid #cbd5e1",
+            borderRadius: "0.4rem",
+            fontSize: "0.95rem",
+          }}
+        />
+        <Segmented
+          value={filter}
+          onChange={(v) => setFilter(v as typeof filter)}
+          options={[
+            { value: "all", label: "All" },
+            { value: "positive", label: "Positive" },
+            { value: "negative", label: "Negative" },
+          ]}
+        />
+        <label
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.4rem",
+            fontSize: "0.85rem",
+            color: "#475569",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={showArchived}
+            onChange={(e) => setShowArchived(e.target.checked)}
+          />
+          Show archived
+        </label>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setEditing("new")}
+            style={{
+              background: "#0e7490",
+              color: "white",
+              border: "none",
+              padding: "0.55rem 1rem",
+              borderRadius: "0.4rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            + New Behavior
+          </button>
+        )}
+      </div>
+
+      {/* Negative-points policy toggle */}
+      {settings && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "1rem",
+            padding: "0.85rem 1rem",
+            background: "#fff7ed",
+            border: "1px solid #fed7aa",
+            borderRadius: "0.5rem",
+            marginBottom: "1rem",
+          }}
+        >
+          <div>
+            <div style={{ fontWeight: 600, color: "#9a3412" }}>
+              Negative behavior policy
+            </div>
+            <div style={{ fontSize: "0.85rem", color: "#9a3412" }}>
+              {settings.pbisNegativeAffectsTotal
+                ? "Awarding a negative behavior subtracts its points from the student's total."
+                : "Negative behaviors are logged on the student's record only — no impact on their point total."}
+            </div>
+          </div>
+          {canEdit && (
+            <ToggleSwitch
+              checked={settings.pbisNegativeAffectsTotal}
+              onChange={toggleNegativeAffectsTotal}
+              label="Subtract from total"
+            />
+          )}
+        </div>
+      )}
+
+      {err && (
+        <div
+          style={{
+            padding: "0.6rem 0.8rem",
+            background: "#fee2e2",
+            color: "#991b1b",
+            borderRadius: "0.4rem",
+            marginBottom: "0.8rem",
+            fontSize: "0.88rem",
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {/* Category groups */}
+      {groups.length === 0 ? (
+        <div
+          style={{
+            padding: "2rem",
+            textAlign: "center",
+            color: "#64748b",
+            border: "1px dashed #cbd5e1",
+            borderRadius: "0.5rem",
+          }}
+        >
+          No behaviors match your filters yet.
+        </div>
+      ) : (
+        groups.map((g, gi) => (
+          <div
+            key={g.category}
+            onDragOver={handleDragOver}
+            onDrop={() => handleDropOnCategory(g.category)}
+            style={{
+              border: "1px solid #e2e8f0",
+              borderRadius: "0.6rem",
+              padding: "1rem",
+              marginBottom: "0.85rem",
+              background: "white",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                marginBottom: "0.7rem",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "1.05rem",
+                  fontWeight: 700,
+                  color: "#0f172a",
+                }}
+              >
+                {gi + 1}. {g.category}
+              </div>
+              <div
+                style={{ fontSize: "0.8rem", color: "#94a3b8" }}
+              >
+                Drag tiles to reorder
+              </div>
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fill, minmax(180px, 1fr))",
+                gap: "0.6rem",
+              }}
+            >
+              {g.items.map((r) => (
+                <BehaviorTile
+                  key={r.id}
+                  reason={r}
+                  canEdit={canEdit}
+                  onEdit={() => setEditing(r)}
+                  onDragStart={() => handleDragStart(r)}
+                  onDrop={() => handleDropOnTile(r)}
+                  onDragOver={handleDragOver}
+                />
+              ))}
+            </div>
+          </div>
+        ))
+      )}
+
+      {editing && canEdit && (
+        <BehaviorEditModal
+          reason={editing === "new" ? null : editing}
+          existingCategories={Array.from(
+            new Set(local.map((r) => r.category)),
+          )}
+          onClose={() => setEditing(null)}
+          onSave={saveBehavior}
+          saving={saving}
+        />
+      )}
+    </div>
+  );
+}
+
+function BehaviorTile({
+  reason,
+  canEdit,
+  onEdit,
+  onDragStart,
+  onDrop,
+  onDragOver,
+}: {
+  reason: Reason;
+  canEdit: boolean;
+  onEdit: () => void;
+  onDragStart: () => void;
+  onDrop: () => void;
+  onDragOver: (e: React.DragEvent) => void;
+}) {
+  const isNeg = reason.polarity === "negative";
+  const accent = isNeg ? "#dc2626" : "#16a34a";
+  const tint = isNeg ? "#fef2f2" : "#f0fdf4";
+  return (
+    <div
+      draggable={canEdit}
+      onDragStart={onDragStart}
+      onDragOver={onDragOver}
+      onDrop={(e) => {
+        e.stopPropagation();
+        onDrop();
+      }}
+      onClick={canEdit ? onEdit : undefined}
+      style={{
+        position: "relative",
+        border: `1px solid ${isNeg ? "#fecaca" : "#bbf7d0"}`,
+        background: tint,
+        borderRadius: "0.5rem",
+        padding: "0.7rem 0.7rem 0.6rem 0.7rem",
+        cursor: canEdit ? "grab" : "default",
+        opacity: reason.active ? 1 : 0.55,
+        textAlign: "center",
+        userSelect: "none",
+      }}
+      title={canEdit ? "Drag to reorder, click to edit" : reason.name}
+    >
+      <div
+        style={{
+          position: "absolute",
+          top: "0.4rem",
+          right: "0.5rem",
+          width: "1.4rem",
+          height: "1.4rem",
+          borderRadius: "999px",
+          background: accent,
+          color: "white",
+          fontWeight: 700,
+          fontSize: "0.95rem",
+          lineHeight: "1.4rem",
+        }}
+      >
+        {isNeg ? "−" : "+"}
+      </div>
+      <div
+        style={{
+          fontWeight: 600,
+          color: "#0f172a",
+          fontSize: "0.92rem",
+          minHeight: "2.4rem",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "0 1.2rem",
+        }}
+      >
+        {reason.name}
+      </div>
+      <div
+        style={{
+          marginTop: "0.4rem",
+          fontSize: "0.8rem",
+          color: accent,
+          fontWeight: 600,
+        }}
+      >
+        {reason.defaultPoints} {reason.defaultPoints === 1 ? "point" : "points"}
+      </div>
+      {!reason.active && (
+        <div
+          style={{
+            marginTop: "0.2rem",
+            fontSize: "0.7rem",
+            color: "#64748b",
+            textTransform: "uppercase",
+            letterSpacing: "0.05em",
+          }}
+        >
+          Archived
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Segmented({
+  value,
+  onChange,
+  options,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  return (
+    <div
+      style={{
+        display: "inline-flex",
+        background: "#f1f5f9",
+        borderRadius: "0.4rem",
+        padding: "2px",
+      }}
+    >
+      {options.map((o) => {
+        const active = o.value === value;
+        return (
+          <button
+            key={o.value}
+            type="button"
+            onClick={() => onChange(o.value)}
+            style={{
+              padding: "0.4rem 0.85rem",
+              border: "none",
+              background: active ? "white" : "transparent",
+              color: active ? "#0f172a" : "#64748b",
+              fontWeight: active ? 600 : 500,
+              fontSize: "0.85rem",
+              borderRadius: "0.3rem",
+              cursor: "pointer",
+              boxShadow: active ? "0 1px 2px rgba(15,23,42,0.08)" : "none",
+            }}
+          >
+            {o.label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function ToggleSwitch({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label?: string;
+}) {
+  return (
+    <label
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: "0.5rem",
+        cursor: "pointer",
+        fontSize: "0.85rem",
+        color: "#9a3412",
+        fontWeight: 600,
+      }}
+    >
+      <span>{label}</span>
+      <span
+        role="switch"
+        aria-checked={checked}
+        onClick={() => onChange(!checked)}
+        style={{
+          width: "2.4rem",
+          height: "1.3rem",
+          background: checked ? "#16a34a" : "#cbd5e1",
+          borderRadius: "999px",
+          position: "relative",
+          transition: "background 0.15s",
+        }}
+      >
+        <span
+          style={{
+            position: "absolute",
+            top: "2px",
+            left: checked ? "calc(100% - 1.1rem - 2px)" : "2px",
+            width: "1.1rem",
+            height: "1.1rem",
+            background: "white",
+            borderRadius: "999px",
+            transition: "left 0.15s",
+            boxShadow: "0 1px 2px rgba(15,23,42,0.2)",
+          }}
+        />
+      </span>
+    </label>
+  );
+}
+
+function BehaviorEditModal({
+  reason,
+  existingCategories,
+  onClose,
+  onSave,
+  saving,
+}: {
+  reason: Reason | null;
+  existingCategories: string[];
+  onClose: () => void;
+  onSave: (p: {
+    id?: number;
+    name: string;
+    category: string;
+    defaultPoints: number;
+    polarity: "positive" | "negative";
+    active?: boolean;
+  }) => void;
+  saving: boolean;
+}) {
+  const [name, setName] = useState(reason?.name ?? "");
+  const [category, setCategory] = useState(
+    reason?.category ?? existingCategories[0] ?? "General",
+  );
+  const [newCat, setNewCat] = useState("");
+  const [points, setPoints] = useState<number>(reason?.defaultPoints ?? 1);
+  const [polarity, setPolarity] = useState<"positive" | "negative">(
+    reason?.polarity ?? "positive",
+  );
+  const [active, setActive] = useState<boolean>(reason?.active ?? true);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  const finalCategory = newCat.trim() || category;
+  const valid =
+    name.trim().length > 0 && Number.isInteger(points) && points >= 1;
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 200,
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: "0.6rem",
+          padding: "1.25rem",
+          maxWidth: "26rem",
+          width: "100%",
+          boxShadow: "0 25px 50px -12px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "1.1rem",
+            fontWeight: 700,
+            color: "#0f172a",
+            marginBottom: "0.9rem",
+          }}
+        >
+          {reason ? "Edit Behavior" : "New Behavior"}
+        </div>
+
+        <Field label="Name">
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            autoFocus
+            style={inputStyle}
+          />
+        </Field>
+
+        <Field label="Category">
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value)}
+            style={inputStyle}
+          >
+            {existingCategories.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+            {existingCategories.length === 0 && (
+              <option value="General">General</option>
+            )}
+          </select>
+          <input
+            value={newCat}
+            onChange={(e) => setNewCat(e.target.value)}
+            placeholder="…or type a new category"
+            style={{ ...inputStyle, marginTop: "0.4rem" }}
+          />
+        </Field>
+
+        <Field label="Points">
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={points}
+            onChange={(e) => setPoints(Math.floor(Number(e.target.value) || 0))}
+            style={{
+              ...inputStyle,
+              borderColor: points >= 1 ? "#cbd5e1" : "#dc2626",
+            }}
+          />
+        </Field>
+
+        <Field label="Type">
+          <Segmented
+            value={polarity}
+            onChange={(v) => setPolarity(v as typeof polarity)}
+            options={[
+              { value: "positive", label: "Positive (+)" },
+              { value: "negative", label: "Negative (−)" },
+            ]}
+          />
+        </Field>
+
+        {reason && (
+          <Field label="Status">
+            <Segmented
+              value={active ? "active" : "archived"}
+              onChange={(v) => setActive(v === "active")}
+              options={[
+                { value: "active", label: "Active" },
+                { value: "archived", label: "Archived" },
+              ]}
+            />
+          </Field>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: "0.5rem",
+            marginTop: "1rem",
+          }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={saving}
+            style={{
+              padding: "0.55rem 1rem",
+              background: "white",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.4rem",
+              fontWeight: 500,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!valid || saving}
+            onClick={() =>
+              onSave({
+                id: reason?.id,
+                name: name.trim(),
+                category: finalCategory,
+                defaultPoints: points,
+                polarity,
+                active: reason ? active : undefined,
+              })
+            }
+            style={{
+              padding: "0.55rem 1.1rem",
+              background: !valid || saving ? "#94a3b8" : "#0e7490",
+              color: "white",
+              border: "none",
+              borderRadius: "0.4rem",
+              fontWeight: 600,
+              cursor: !valid || saving ? "not-allowed" : "pointer",
+            }}
+          >
+            {saving ? "Saving…" : reason ? "Save changes" : "Create"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Field({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ marginBottom: "0.7rem" }}>
+      <div
+        style={{
+          fontSize: "0.78rem",
+          fontWeight: 600,
+          color: "#475569",
+          marginBottom: "0.25rem",
+          textTransform: "uppercase",
+          letterSpacing: "0.05em",
+        }}
+      >
+        {label}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+const inputStyle: React.CSSProperties = {
+  width: "100%",
+  padding: "0.55rem 0.7rem",
+  border: "1px solid #cbd5e1",
+  borderRadius: "0.4rem",
+  fontSize: "0.95rem",
+  boxSizing: "border-box",
+};
 
 function ComingSoon({ tab }: { tab: Tab }) {
   const labels: Record<Tab, { title: string; body: string }> = {

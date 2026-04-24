@@ -2,6 +2,7 @@ import { Router, type IRouter, type Request, type Response } from "express";
 import {
   db,
   pbisEntriesTable,
+  pbisReasonsTable,
   staffTable,
   studentsTable,
   classSectionsTable,
@@ -187,13 +188,46 @@ router.post("/pbis", async (req, res) => {
     return;
   }
 
+  // Resolve polarity for this entry from the configured rubric (server is
+  // authoritative — clients cannot mark an entry "positive" when the rubric
+  // says it's negative). Fallback for ad-hoc reasons: sign of `points`.
+  let polarity: "positive" | "negative" = "positive";
+  const [matched] = await db
+    .select()
+    .from(pbisReasonsTable)
+    .where(
+      and(
+        eq(pbisReasonsTable.schoolId, schoolId),
+        eq(pbisReasonsTable.name, reason),
+      ),
+    );
+  if (matched) {
+    polarity = matched.polarity === "negative" ? "negative" : "positive";
+  } else if (pts < 0) {
+    polarity = "negative";
+  }
+
+  let storedPoints = pts;
+  if (polarity === "negative") {
+    const [settingsRow] = await db
+      .select()
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const subtract = settingsRow?.pbisNegativeAffectsTotal ?? false;
+    const magnitude = Math.abs(pts);
+    storedPoints = subtract ? -magnitude : 0;
+  } else {
+    storedPoints = Math.abs(pts);
+  }
+
   const [entry] = await db
     .insert(pbisEntriesTable)
     .values({
       schoolId,
       studentId,
       reason,
-      points: pts,
+      points: storedPoints,
+      polarity,
       staffId: resolvedStaffId,
       staffName: resolvedStaffName,
       createdAt: new Date().toISOString(),
