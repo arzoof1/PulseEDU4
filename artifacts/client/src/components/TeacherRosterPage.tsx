@@ -139,6 +139,9 @@ function ScorePill({
   );
 }
 
+// Pail-shaped SVG bucket — filled with the gap color, with the gap
+// number (or check) rendered on top in white. Used in place of the old
+// plain circular badge.
 function BucketIcon({ bucket }: { bucket: Bucket }) {
   if (bucket.targetScore == null || bucket.color == null) return null;
   const gap = bucket.gap ?? 0;
@@ -146,30 +149,82 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
     gap <= 0
       ? `At/above target (target ${bucket.targetScore})`
       : `${gap} pt${gap === 1 ? "" : "s"} to next level (target ${bucket.targetScore})`;
+  const fill = BUCKET_COLOR[bucket.color];
+  const overlay = gap <= 0 ? "✓" : String(Math.abs(gap));
   return (
     <span
       title={label}
       aria-label={label}
       style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
+        position: "relative",
+        display: "inline-block",
         width: 22,
         height: 22,
-        marginLeft: 6,
-        borderRadius: "50%",
-        background: BUCKET_COLOR[bucket.color],
-        color: "#fff",
-        fontSize: 10,
-        fontWeight: 700,
+        lineHeight: 0,
       }}
     >
-      {gap <= 0 ? "✓" : Math.abs(gap)}
+      <svg
+        width={22}
+        height={22}
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        focusable="false"
+      >
+        {/* Handle arc above the rim. */}
+        <path
+          d="M7 6 C 8.5 3, 15.5 3, 17 6"
+          fill="none"
+          stroke={fill}
+          strokeWidth={1.6}
+          strokeLinecap="round"
+        />
+        {/* Pail body — wider rim, narrower base. */}
+        <path
+          d="M5.5 7 H 18.5 L 17 20 H 7 Z"
+          fill={fill}
+          stroke={fill}
+          strokeWidth={0.5}
+          strokeLinejoin="round"
+        />
+      </svg>
+      <span
+        aria-hidden="true"
+        style={{
+          position: "absolute",
+          inset: 0,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          // Nudge the label down a touch so it sits in the body of the
+          // pail rather than on top of the handle.
+          paddingTop: 4,
+          color: "#fff",
+          fontSize: 10,
+          fontWeight: 700,
+          lineHeight: 1,
+          textShadow: "0 1px 1px rgba(0,0,0,0.35)",
+        }}
+      >
+        {overlay}
+      </span>
     </span>
   );
 }
 
-function SubjectCell({
+// Empty placeholder cell used when the LG column has nothing to render
+// (grade 3 / Algebra / Geometry / no chart). Keeps column alignment.
+function BucketCell({ bucket }: { bucket: Bucket }) {
+  if (bucket.targetScore == null || bucket.color == null) {
+    return <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>;
+  }
+  return <BucketIcon bucket={bucket} />;
+}
+
+// Renders four <td>s (PM1 / PM2 / PM3 / LG) so the per-pill column
+// headers in the table header line up cleanly above each pill. When the
+// subject has no chart for the student's grade (e.g. Math for a 9th
+// grader), spans the whole subject group with an "n/a" placeholder.
+function SubjectCells({
   block,
   subjectLabel,
 }: {
@@ -178,34 +233,45 @@ function SubjectCell({
 }) {
   if (block.noChart) {
     return (
-      <span style={{ color: "#9ca3af", fontSize: 12 }}>n/a</span>
+      <td
+        colSpan={4}
+        style={{ padding: "6px 10px", color: "#9ca3af", fontSize: 12 }}
+      >
+        n/a
+      </td>
     );
   }
+  const cell: React.CSSProperties = {
+    padding: "6px 6px",
+    textAlign: "center",
+  };
   return (
-    <div
-      style={{
-        display: "flex",
-        alignItems: "center",
-        gap: 4,
-      }}
-    >
-      <ScorePill
-        score={block.pm1}
-        placement={block.pm1Placement}
-        pmLabel={`${subjectLabel} PM1`}
-      />
-      <ScorePill
-        score={block.pm2}
-        placement={block.pm2Placement}
-        pmLabel={`${subjectLabel} PM2`}
-      />
-      <ScorePill
-        score={block.pm3}
-        placement={block.pm3Placement}
-        pmLabel={`${subjectLabel} PM3`}
-      />
-      <BucketIcon bucket={block.bucket} />
-    </div>
+    <>
+      <td style={cell}>
+        <ScorePill
+          score={block.pm1}
+          placement={block.pm1Placement}
+          pmLabel={`${subjectLabel} PM1`}
+        />
+      </td>
+      <td style={cell}>
+        <ScorePill
+          score={block.pm2}
+          placement={block.pm2Placement}
+          pmLabel={`${subjectLabel} PM2`}
+        />
+      </td>
+      <td style={cell}>
+        <ScorePill
+          score={block.pm3}
+          placement={block.pm3Placement}
+          pmLabel={`${subjectLabel} PM3`}
+        />
+      </td>
+      <td style={cell}>
+        <BucketCell bucket={block.bucket} />
+      </td>
+    </>
   );
 }
 
@@ -439,35 +505,17 @@ export default function TeacherRosterPage({
       >
         <span>Pills: PM1 / PM2 / PM3 (sub-level on current chart; PM3 on prior-grade chart)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          Bucket icon =
-          <span
-            style={{
-              width: 14,
-              height: 14,
-              borderRadius: "50%",
-              background: BUCKET_COLOR.green,
-              display: "inline-block",
-            }}
+          LG (learning-gain bucket) =
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 0, color: "green" }}
           />
-          ≤ 0
-          <span
-            style={{
-              width: 14,
-              height: 14,
-              borderRadius: "50%",
-              background: BUCKET_COLOR.orange,
-              display: "inline-block",
-            }}
+          at/above
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 3, color: "orange" }}
           />
           1–5
-          <span
-            style={{
-              width: 14,
-              height: 14,
-              borderRadius: "50%",
-              background: BUCKET_COLOR.red,
-              display: "inline-block",
-            }}
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 9, color: "red" }}
           />
           &gt; 5 pts to next level
         </span>
@@ -514,12 +562,62 @@ export default function TeacherRosterPage({
             }}
           >
             <thead>
+              {/* Top row groups the four PM/LG sub-columns under their
+                  subject label. The right vertical border on ELA's
+                  group separates it from Math visually. */}
               <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
-                <th style={{ padding: "8px 10px" }}>Student</th>
-                <th style={{ padding: "8px 10px" }}>Grade</th>
-                <th style={{ padding: "8px 10px" }}>ELA</th>
-                <th style={{ padding: "8px 10px" }}>Math</th>
-                <th style={{ padding: "8px 10px" }}>BQ</th>
+                <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
+                  Student
+                </th>
+                <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
+                  Grade
+                </th>
+                <th
+                  colSpan={4}
+                  style={{
+                    padding: "8px 10px",
+                    textAlign: "center",
+                    borderRight: "1px solid #e5e7eb",
+                  }}
+                >
+                  ELA
+                </th>
+                <th
+                  colSpan={4}
+                  style={{ padding: "8px 10px", textAlign: "center" }}
+                >
+                  Math
+                </th>
+                <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
+                  BQ
+                </th>
+              </tr>
+              <tr
+                style={{
+                  background: "#f3f4f6",
+                  textAlign: "center",
+                  fontSize: 11,
+                  color: "#4b5563",
+                  textTransform: "uppercase",
+                  letterSpacing: 0.4,
+                }}
+              >
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM3</th>
+                <th
+                  style={{
+                    padding: "4px 6px",
+                    fontWeight: 600,
+                    borderRight: "1px solid #e5e7eb",
+                  }}
+                >
+                  LG
+                </th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM3</th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
               </tr>
             </thead>
             <tbody>
@@ -532,12 +630,8 @@ export default function TeacherRosterPage({
                     {row.lastName}, {row.firstName}
                   </td>
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
-                  <td style={{ padding: "6px 10px" }}>
-                    <SubjectCell block={row.ela} subjectLabel="ELA" />
-                  </td>
-                  <td style={{ padding: "6px 10px" }}>
-                    <SubjectCell block={row.math} subjectLabel="Math" />
-                  </td>
+                  <SubjectCells block={row.ela} subjectLabel="ELA" />
+                  <SubjectCells block={row.math} subjectLabel="Math" />
                   <td style={{ padding: "6px 10px" }}>
                     <BqPills row={row} />
                   </td>
