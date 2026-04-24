@@ -34,6 +34,12 @@ type LoadedBranding = {
   accentColor: string | null;
   logoObjectPath: string | null;
   displayNameOverride: string | null;
+  buttonRestBgColors: string[];
+  buttonRestBgAngle: number;
+  buttonRestText: string | null;
+  buttonHoverBgColors: string[];
+  buttonHoverBgAngle: number;
+  buttonHoverText: string | null;
 };
 
 function isHex(s: string): boolean {
@@ -219,6 +225,20 @@ export default function SchoolBrandingPanel() {
   const [logoObjectPath, setLogoObjectPath] = useState<string | null>(null);
   const [displayName, setDisplayName] = useState("");
 
+  // Branded primary-action button. Empty colors[] = "not customized" — the
+  // app uses its default --primary look. 1 hex = solid; 2-4 = gradient.
+  type ButtonSide = { colors: string[]; angle: number; text: string };
+  const [btnRest, setBtnRest] = useState<ButtonSide>({
+    colors: [],
+    angle: 90,
+    text: "#ffffff",
+  });
+  const [btnHover, setBtnHover] = useState<ButtonSide>({
+    colors: [],
+    angle: 90,
+    text: "#ffffff",
+  });
+
   // Local-only preview state for the cleaned logo (data URL) so admin can
   // see the chroma-keyed result before/after Save.
   const [localLogoUrl, setLocalLogoUrl] = useState<string | null>(null);
@@ -246,6 +266,16 @@ export default function SchoolBrandingPanel() {
         if (data.accentColor) setAccentColor(data.accentColor);
         if (data.logoObjectPath) setLogoObjectPath(data.logoObjectPath);
         if (data.displayNameOverride) setDisplayName(data.displayNameOverride);
+        setBtnRest({
+          colors: data.buttonRestBgColors ?? [],
+          angle: data.buttonRestBgAngle ?? 90,
+          text: data.buttonRestText ?? "#ffffff",
+        });
+        setBtnHover({
+          colors: data.buttonHoverBgColors ?? [],
+          angle: data.buttonHoverBgAngle ?? 90,
+          text: data.buttonHoverText ?? "#ffffff",
+        });
       } catch (e) {
         if (!cancelled)
           setErr(e instanceof Error ? e.message : "Failed to load branding");
@@ -410,6 +440,26 @@ export default function SchoolBrandingPanel() {
       setErr("Accent color must be #RRGGBB.");
       return;
     }
+    // Validate button sides. Empty colors[] is fine (means "not customized").
+    for (const [label, side] of [
+      ["Button rest", btnRest],
+      ["Button hover", btnHover],
+    ] as const) {
+      if (side.colors.length > 4) {
+        setErr(`${label} background supports at most 4 colors.`);
+        return;
+      }
+      for (const c of side.colors) {
+        if (!isHex(c)) {
+          setErr(`${label} color "${c}" is not a valid #RRGGBB hex.`);
+          return;
+        }
+      }
+      if (side.text && !isHex(side.text)) {
+        setErr(`${label} text color must be #RRGGBB.`);
+        return;
+      }
+    }
     setSaving(true);
     setErr(null);
     setInfo(null);
@@ -426,6 +476,12 @@ export default function SchoolBrandingPanel() {
         accentColor,
         logoObjectPath: nextLogoPath,
         displayNameOverride: displayName.trim() || null,
+        buttonRestBgColors: btnRest.colors,
+        buttonRestBgAngle: btnRest.angle,
+        buttonRestText: btnRest.colors.length > 0 ? btnRest.text : null,
+        buttonHoverBgColors: btnHover.colors,
+        buttonHoverBgAngle: btnHover.angle,
+        buttonHoverText: btnHover.colors.length > 0 ? btnHover.text : null,
       };
       const res = await authFetch("/api/school-branding", {
         method: "PUT",
@@ -461,6 +517,8 @@ export default function SchoolBrandingPanel() {
     setPrimaryColor(DEFAULT_BRANDING_PRIMARY);
     setAccentColor(DEFAULT_BRANDING_ACCENT);
     setDisplayName("");
+    setBtnRest({ colors: [], angle: 90, text: "#ffffff" });
+    setBtnHover({ colors: [], angle: 90, text: "#ffffff" });
     setInfo("Defaults restored — click Save to apply.");
   }
 
@@ -729,6 +787,33 @@ export default function SchoolBrandingPanel() {
             </>
           )}
 
+          {/* Buttons (rest + hover) */}
+          <h3 style={sectionStyle}>Buttons</h3>
+          <p
+            style={{
+              color: "var(--text-subtle)",
+              marginTop: 0,
+              marginBottom: 8,
+              fontSize: 13,
+            }}
+          >
+            One color = solid fill. Add a second through fourth to make a
+            gradient. Leave both sides empty to keep the default look.
+          </p>
+          <div style={{ display: "grid", gap: 12 }}>
+            <ButtonSideEditor
+              label="Resting state"
+              side={btnRest}
+              onChange={setBtnRest}
+            />
+            <ButtonSideEditor
+              label="Hover state"
+              side={btnHover}
+              onChange={setBtnHover}
+              hint="If left empty, hover uses the resting style."
+            />
+          </div>
+
           {/* Save / Restore */}
           <div style={{ marginTop: "1.25rem", display: "flex", gap: 8 }}>
             <button
@@ -916,6 +1001,33 @@ export default function SchoolBrandingPanel() {
             </div>
           </div>
 
+          {/* Branded button preview */}
+          <div
+            style={{
+              marginTop: 12,
+              border: "1px solid var(--border)",
+              borderRadius: 8,
+              padding: "0.75rem 0.85rem",
+              background: "#fff",
+              color: "#0f172a",
+            }}
+          >
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "var(--text-subtle)",
+                marginBottom: 8,
+              }}
+            >
+              Primary action button
+            </div>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+              <ButtonPreview label="Resting" side={btnRest} />
+              <ButtonPreview label="On hover" side={btnHover} fallback={btnRest} />
+            </div>
+          </div>
+
           {/* Kiosk masthead */}
           <div
             style={{
@@ -946,6 +1058,231 @@ export default function SchoolBrandingPanel() {
 }
 
 // --- Subcomponents --------------------------------------------------------
+
+// Editor for one button "side" (rest or hover). Mirrors the header gradient
+// editor's UX: 0-4 hex stops + an angle slider, plus a separate text-color
+// picker. 0 stops means "use the default — don't customize this side."
+function ButtonSideEditor({
+  label,
+  side,
+  onChange,
+  hint,
+}: {
+  label: string;
+  side: { colors: string[]; angle: number; text: string };
+  onChange: (next: { colors: string[]; angle: number; text: string }) => void;
+  hint?: string;
+}) {
+  const setColors = (colors: string[]) => onChange({ ...side, colors });
+  const setAngle = (angle: number) => onChange({ ...side, angle });
+  const setText = (text: string) => onChange({ ...side, text });
+
+  const setColorAt = (i: number, hex: string) => {
+    const next = [...side.colors];
+    next[i] = hex;
+    setColors(next);
+  };
+  const addColor = () => {
+    if (side.colors.length >= 4) return;
+    const last = side.colors[side.colors.length - 1] ?? "#0e7490";
+    setColors([...side.colors, last]);
+  };
+  const removeColor = (i: number) =>
+    setColors(side.colors.filter((_, idx) => idx !== i));
+  const useDefault = () => onChange({ colors: [], angle: 90, text: "#ffffff" });
+
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border)",
+        borderRadius: 8,
+        padding: "0.6rem 0.75rem",
+        background: "var(--surface)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 6,
+        }}
+      >
+        <strong style={{ fontSize: 13 }}>{label}</strong>
+        {side.colors.length === 0 ? (
+          <button
+            type="button"
+            onClick={() => setColors(["#0e7490"])}
+            style={smallBtn(false)}
+          >
+            Customize
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={useDefault}
+            style={smallBtn(false)}
+            title="Clear customization for this side"
+          >
+            Use default
+          </button>
+        )}
+      </div>
+      {side.colors.length === 0 ? (
+        <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
+          {hint ?? "Currently using the default app styling."}
+        </div>
+      ) : (
+        <>
+          <div style={{ fontSize: 12, marginBottom: 4, color: "var(--text-subtle)" }}>
+            Background ({side.colors.length}/4 — {side.colors.length === 1 ? "solid" : "gradient"})
+          </div>
+          {side.colors.map((c, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "center",
+                marginBottom: 4,
+              }}
+            >
+              <input
+                type="color"
+                value={isHex(c) ? c : "#888888"}
+                onChange={(e) => setColorAt(i, e.target.value)}
+                style={{ width: 32, height: 28, padding: 0, border: "none" }}
+              />
+              <input
+                type="text"
+                value={c}
+                onChange={(e) => setColorAt(i, e.target.value.trim())}
+                style={{ ...inputStyle, width: 100, marginTop: 0 }}
+                spellCheck={false}
+              />
+              <button
+                type="button"
+                onClick={() => removeColor(i)}
+                disabled={side.colors.length <= 1}
+                style={smallBtn(side.colors.length <= 1)}
+                title={
+                  side.colors.length <= 1
+                    ? "Remove all to clear customization"
+                    : "Remove this color"
+                }
+              >
+                −
+              </button>
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={addColor}
+            disabled={side.colors.length >= 4}
+            style={smallBtn(side.colors.length >= 4)}
+          >
+            + Add color
+          </button>
+          {side.colors.length >= 2 && (
+            <label
+              style={{
+                display: "block",
+                fontSize: 12,
+                marginTop: 8,
+                color: "var(--text-subtle)",
+              }}
+            >
+              Angle: {side.angle}°
+              <input
+                type="range"
+                min={0}
+                max={360}
+                value={side.angle}
+                onChange={(e) => setAngle(Number(e.target.value))}
+                style={{ width: "100%" }}
+              />
+            </label>
+          )}
+          <div
+            style={{
+              marginTop: 8,
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+            }}
+          >
+            <span style={{ fontSize: 12, color: "var(--text-subtle)" }}>
+              Text
+            </span>
+            <input
+              type="color"
+              value={isHex(side.text) ? side.text : "#ffffff"}
+              onChange={(e) => setText(e.target.value)}
+              style={{ width: 32, height: 28, padding: 0, border: "none" }}
+            />
+            <input
+              type="text"
+              value={side.text}
+              onChange={(e) => setText(e.target.value.trim())}
+              style={{ ...inputStyle, width: 100, marginTop: 0 }}
+              spellCheck={false}
+            />
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+// Static preview of a branded button. `fallback` is used when this side
+// has no customization, so the hover preview can mirror the resting style
+// (matching the runtime fallback in applyBrandingToRoot).
+function ButtonPreview({
+  label,
+  side,
+  fallback,
+}: {
+  label: string;
+  side: { colors: string[]; angle: number; text: string };
+  fallback?: { colors: string[]; angle: number; text: string };
+}) {
+  const effective = side.colors.length > 0 ? side : fallback ?? side;
+  const bg =
+    effective.colors.length > 0
+      ? buildHeaderBackground(effective.colors, effective.angle)
+      : "var(--primary)";
+  const text =
+    effective.colors.length > 0 && isHex(effective.text)
+      ? effective.text
+      : "#ffffff";
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 4,
+      }}
+    >
+      <div
+        style={{
+          background: bg,
+          color: text,
+          padding: "0.45rem 0.9rem",
+          borderRadius: 6,
+          fontSize: 13,
+          fontWeight: 600,
+          minWidth: 96,
+          textAlign: "center",
+          border: "1px solid transparent",
+        }}
+      >
+        Save
+      </div>
+      <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>{label}</span>
+    </div>
+  );
+}
 
 function ColorField({
   label,

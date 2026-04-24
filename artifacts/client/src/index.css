@@ -54,6 +54,14 @@
   --brand-primary: #0e7490;
   --brand-accent: #7c3aed;
   --brand-has-logo: 0;
+
+  /* Branded primary-action button. Defaults follow the existing
+     teal "submit" styling so untouched schools look identical. The
+     branding hook overrides these at runtime. */
+  --brand-btn-bg: var(--primary);
+  --brand-btn-text: #ffffff;
+  --brand-btn-hover-bg: var(--primary-hover);
+  --brand-btn-hover-text: #ffffff;
 }
 
 /* Utility class — opt-in branded header banner. Used on printouts, the
@@ -507,20 +515,23 @@ button:disabled {
 }
 
 button[type="submit"] {
-  background: var(--primary);
-  color: white;
-  border-color: var(--primary);
+  background: var(--brand-btn-bg);
+  color: var(--brand-btn-text);
+  /* When --brand-btn-bg is a gradient the border can't share the same
+     paint, so we keep it transparent and let the bg define the shape. */
+  border-color: transparent;
 }
 
 button[type="submit"]:hover:not(:disabled) {
-  background: var(--primary-hover);
-  border-color: var(--primary-hover);
+  background: var(--brand-btn-hover-bg);
+  color: var(--brand-btn-hover-text);
+  border-color: transparent;
 }
 
 button[type="submit"]:disabled {
-  background: var(--primary);
+  background: var(--brand-btn-bg);
   opacity: 0.5;
-  color: white;
+  color: var(--brand-btn-text);
 }
 
 /* ===== Inputs ===== */

@@ -45,6 +45,14 @@ export type BrandingResponse = {
   accentColor: string | null;
   logoObjectPath: string | null;
   displayNameOverride: string | null;
+  // Branded primary-action button. bgColors === [] means "not customized,
+  // fall back to var(--primary)". 1 hex = solid; 2-4 hex = gradient.
+  buttonRestBgColors: string[];
+  buttonRestBgAngle: number;
+  buttonRestText: string | null;
+  buttonHoverBgColors: string[];
+  buttonHoverBgAngle: number;
+  buttonHoverText: string | null;
 };
 
 // Shared loader so other routers (parent portal, kiosk activation) can
@@ -62,10 +70,30 @@ export async function loadBrandingForSchool(
       accentColor: schoolBrandingTable.accentColor,
       logoObjectPath: schoolBrandingTable.logoObjectPath,
       displayNameOverride: schoolBrandingTable.displayNameOverride,
+      buttonRestBgColorsJson: schoolBrandingTable.buttonRestBgColorsJson,
+      buttonRestBgAngle: schoolBrandingTable.buttonRestBgAngle,
+      buttonRestText: schoolBrandingTable.buttonRestText,
+      buttonHoverBgColorsJson: schoolBrandingTable.buttonHoverBgColorsJson,
+      buttonHoverBgAngle: schoolBrandingTable.buttonHoverBgAngle,
+      buttonHoverText: schoolBrandingTable.buttonHoverText,
     })
     .from(schoolBrandingTable)
     .where(eq(schoolBrandingTable.schoolId, schoolId));
   return rowToResponse(row ?? null, schoolId);
+}
+
+// Parse a JSON-string column holding ["#aabbcc", ...] into a clean array
+// of valid 6-digit hex colors (max 4). Tolerates null/garbage by returning
+// an empty array, which the client treats as "not customized".
+function parseColorsJson(s: string | null | undefined): string[] {
+  if (!s) return [];
+  try {
+    const parsed = JSON.parse(s);
+    if (!Array.isArray(parsed)) return [];
+    return (parsed as unknown[]).filter(isHex).slice(0, 4);
+  } catch {
+    return [];
+  }
 }
 
 function rowToResponse(row: {
@@ -76,6 +104,12 @@ function rowToResponse(row: {
   accentColor: string | null;
   logoObjectPath: string | null;
   displayNameOverride: string | null;
+  buttonRestBgColorsJson: string | null;
+  buttonRestBgAngle: number | null;
+  buttonRestText: string | null;
+  buttonHoverBgColorsJson: string | null;
+  buttonHoverBgAngle: number | null;
+  buttonHoverText: string | null;
 } | null,
 schoolId: number): BrandingResponse {
   if (!row) {
@@ -87,25 +121,28 @@ schoolId: number): BrandingResponse {
       accentColor: null,
       logoObjectPath: null,
       displayNameOverride: null,
+      buttonRestBgColors: [],
+      buttonRestBgAngle: 90,
+      buttonRestText: null,
+      buttonHoverBgColors: [],
+      buttonHoverBgAngle: 90,
+      buttonHoverText: null,
     };
-  }
-  let colors: string[] = [];
-  try {
-    const parsed = JSON.parse(row.gradientColorsJson);
-    if (Array.isArray(parsed)) {
-      colors = parsed.filter(isHex).slice(0, 4);
-    }
-  } catch {
-    colors = [];
   }
   return {
     schoolId: row.schoolId,
-    gradientColors: colors,
+    gradientColors: parseColorsJson(row.gradientColorsJson),
     gradientAngle: row.gradientAngle,
     primaryColor: row.primaryColor,
     accentColor: row.accentColor,
     logoObjectPath: row.logoObjectPath,
     displayNameOverride: row.displayNameOverride,
+    buttonRestBgColors: parseColorsJson(row.buttonRestBgColorsJson),
+    buttonRestBgAngle: row.buttonRestBgAngle ?? 90,
+    buttonRestText: row.buttonRestText,
+    buttonHoverBgColors: parseColorsJson(row.buttonHoverBgColorsJson),
+    buttonHoverBgAngle: row.buttonHoverBgAngle ?? 90,
+    buttonHoverText: row.buttonHoverText,
   };
 }
 
@@ -194,6 +231,87 @@ router.put("/school-branding", async (req, res) => {
       ? body.displayNameOverride.trim().slice(0, 200) || null
       : null;
 
+  // Branded buttons. Each side (rest, hover) accepts the same shape as the
+  // header gradient: 0-4 hex colors + an angle. 0 colors means "clear, fall
+  // back to the default styling." 1 color = solid, 2-4 = gradient.
+  // Validation mirrors the gradient: any bad hex or > 4 entries is a 400.
+  // text foreground (if provided) must be #rrggbb.
+  const parseButtonSide = (
+    label: string,
+    bgColorsRaw: unknown,
+    angleRaw: unknown,
+    textRaw: unknown,
+  ): {
+    error?: string;
+    bgColorsJson: string | null;
+    angle: number;
+    text: string | null;
+  } => {
+    let btnColors: string[] = [];
+    if (Array.isArray(bgColorsRaw)) {
+      const arr = bgColorsRaw as unknown[];
+      if (arr.length > 4) {
+        return {
+          error: `${label} background supports at most 4 colors`,
+          bgColorsJson: null,
+          angle: 90,
+          text: null,
+        };
+      }
+      const trimmed = arr.map((c) => (typeof c === "string" ? c.trim() : ""));
+      if (trimmed.length > 0 && !trimmed.every((c) => isHex(c))) {
+        return {
+          error: `${label} background colors must each be #rrggbb`,
+          bgColorsJson: null,
+          angle: 90,
+          text: null,
+        };
+      }
+      btnColors = trimmed;
+    }
+    let btnAngle = 90;
+    if (typeof angleRaw === "number" && Number.isFinite(angleRaw)) {
+      btnAngle = Math.max(0, Math.min(360, Math.round(angleRaw)));
+    }
+    let btnText: string | null = null;
+    if (textRaw !== undefined && textRaw !== null && textRaw !== "") {
+      if (!isHex(textRaw)) {
+        return {
+          error: `${label} text color must be #rrggbb`,
+          bgColorsJson: null,
+          angle: 90,
+          text: null,
+        };
+      }
+      btnText = (textRaw as string).trim();
+    }
+    // Empty arrays serialize to "null" (cleared) so we don't keep a stray
+    // "[]" row that would still satisfy the "is set?" check downstream.
+    const bgColorsJson = btnColors.length > 0 ? JSON.stringify(btnColors) : null;
+    return { bgColorsJson, angle: btnAngle, text: btnText };
+  };
+
+  const rest = parseButtonSide(
+    "Button rest",
+    body.buttonRestBgColors,
+    body.buttonRestBgAngle,
+    body.buttonRestText,
+  );
+  if (rest.error) {
+    res.status(400).json({ error: rest.error });
+    return;
+  }
+  const hover = parseButtonSide(
+    "Button hover",
+    body.buttonHoverBgColors,
+    body.buttonHoverBgAngle,
+    body.buttonHoverText,
+  );
+  if (hover.error) {
+    res.status(400).json({ error: hover.error });
+    return;
+  }
+
   const colorsJson = JSON.stringify(colors);
 
   // Upsert by schoolId (one row per school).
@@ -212,6 +330,12 @@ router.put("/school-branding", async (req, res) => {
         accentColor: accent,
         logoObjectPath: logoPath,
         displayNameOverride,
+        buttonRestBgColorsJson: rest.bgColorsJson,
+        buttonRestBgAngle: rest.angle,
+        buttonRestText: rest.text,
+        buttonHoverBgColorsJson: hover.bgColorsJson,
+        buttonHoverBgAngle: hover.angle,
+        buttonHoverText: hover.text,
         updatedAt: new Date(),
         updatedByStaffId: req.staffId ?? null,
       })
@@ -225,24 +349,18 @@ router.put("/school-branding", async (req, res) => {
       accentColor: accent,
       logoObjectPath: logoPath,
       displayNameOverride,
+      buttonRestBgColorsJson: rest.bgColorsJson,
+      buttonRestBgAngle: rest.angle,
+      buttonRestText: rest.text,
+      buttonHoverBgColorsJson: hover.bgColorsJson,
+      buttonHoverBgAngle: hover.angle,
+      buttonHoverText: hover.text,
       updatedByStaffId: req.staffId ?? null,
     });
   }
 
-  // Return the canonical resolved row.
-  const [row] = await db
-    .select({
-      schoolId: schoolBrandingTable.schoolId,
-      gradientColorsJson: schoolBrandingTable.gradientColorsJson,
-      gradientAngle: schoolBrandingTable.gradientAngle,
-      primaryColor: schoolBrandingTable.primaryColor,
-      accentColor: schoolBrandingTable.accentColor,
-      logoObjectPath: schoolBrandingTable.logoObjectPath,
-      displayNameOverride: schoolBrandingTable.displayNameOverride,
-    })
-    .from(schoolBrandingTable)
-    .where(eq(schoolBrandingTable.schoolId, schoolId));
-  res.json(rowToResponse(row ?? null, schoolId));
+  // Return the canonical resolved row via the shared loader.
+  res.json(await loadBrandingForSchool(schoolId));
 });
 
 export default router;

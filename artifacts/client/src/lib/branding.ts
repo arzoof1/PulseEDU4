@@ -14,6 +14,14 @@ export type BrandingPayload = {
   accentColor: string | null;
   logoObjectPath: string | null;
   displayNameOverride: string | null;
+  // Brandable primary-action button. Empty bgColors[] means "not
+  // customized" — the app keeps its default var(--primary)/white look.
+  buttonRestBgColors: string[];
+  buttonRestBgAngle: number;
+  buttonRestText: string | null;
+  buttonHoverBgColors: string[];
+  buttonHoverBgAngle: number;
+  buttonHoverText: string | null;
 };
 
 // PulseEDU defaults — preserved for any school that hasn't customized.
@@ -75,6 +83,37 @@ export function applyBrandingToRoot(b: BrandingPayload | null): void {
     root.style.removeProperty("--brand-logo-url");
     root.style.setProperty("--brand-has-logo", "0");
   }
+
+  // Branded primary-action button. We only set the CSS vars when the admin
+  // has actually customized that side — otherwise we clear them so the
+  // :root defaults (which point at --primary) take over and the button
+  // keeps its original look. Hover falls back to rest-side values when the
+  // admin has only set one side, so a single solid color "just works".
+  const restBg =
+    (b?.buttonRestBgColors?.length ?? 0) > 0
+      ? buildHeaderBackground(b!.buttonRestBgColors, b!.buttonRestBgAngle)
+      : null;
+  const hoverBg =
+    (b?.buttonHoverBgColors?.length ?? 0) > 0
+      ? buildHeaderBackground(b!.buttonHoverBgColors, b!.buttonHoverBgAngle)
+      : null;
+  const restText = b?.buttonRestText ?? null;
+  const hoverText = b?.buttonHoverText ?? null;
+
+  setOrClear(root, "--brand-btn-bg", restBg);
+  setOrClear(root, "--brand-btn-text", restText);
+  // Hover falls back to rest values when not separately customized.
+  setOrClear(root, "--brand-btn-hover-bg", hoverBg ?? restBg);
+  setOrClear(root, "--brand-btn-hover-text", hoverText ?? restText);
+}
+
+function setOrClear(
+  root: HTMLElement,
+  prop: string,
+  value: string | null,
+): void {
+  if (value) root.style.setProperty(prop, value);
+  else root.style.removeProperty(prop);
 }
 
 // Cross-component change notifier. The Branding settings tile fires this

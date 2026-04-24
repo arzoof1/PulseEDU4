@@ -34,6 +34,17 @@ export const schoolBrandingTable = pgTable(
     // Optional friendlier name to print on the report header (e.g.
     // "Parrott Middle Leopards"). When null, fall back to schools.name.
     displayNameOverride: text("display_name_override"),
+    // Branded primary-action button. Background is stored as the same
+    // colors[]+angle shape as the header (1 hex = solid fill, 2-4 hex = a
+    // linear-gradient at the given angle). Text/foreground is a single hex.
+    // All nullable — when null the app falls back to the existing
+    // var(--primary)/white styling.
+    buttonRestBgColorsJson: text("button_rest_bg_colors_json"),
+    buttonRestBgAngle: integer("button_rest_bg_angle").default(90),
+    buttonRestText: text("button_rest_text"),
+    buttonHoverBgColorsJson: text("button_hover_bg_colors_json"),
+    buttonHoverBgAngle: integer("button_hover_bg_angle").default(90),
+    buttonHoverText: text("button_hover_text"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
