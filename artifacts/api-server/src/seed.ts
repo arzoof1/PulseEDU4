@@ -367,6 +367,35 @@ export async function seedMtssPlansIfEmpty() {
 // Same pattern as MTSS plans: idempotent CREATE TABLE IF NOT EXISTS at
 // boot, then a per-school skip-if-non-empty seed.
 // -----------------------------------------------------------------------------
+// Per-school feature flags (two-tier billing/admin model). These columns
+// were added after school_settings was already in production, so they're
+// applied via ALTER TABLE … ADD COLUMN IF NOT EXISTS at boot. Defaults
+// are TRUE so every existing school keeps every feature live until
+// somebody explicitly turns one off.
+export async function ensureSchoolSettingsFeatureFlagsSchema() {
+  const cols = [
+    "feature_family_comm",
+    "feature_pbis",
+    "feature_school_store",
+    "feature_accommodations",
+    "feature_log_intervention",
+    "feature_request_pullout",
+    "super_feature_family_comm",
+    "super_feature_pbis",
+    "super_feature_school_store",
+    "super_feature_accommodations",
+    "super_feature_log_intervention",
+    "super_feature_request_pullout",
+  ];
+  for (const col of cols) {
+    await db.execute(
+      sql.raw(
+        `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS ${col} BOOLEAN NOT NULL DEFAULT TRUE`,
+      ),
+    );
+  }
+}
+
 export async function ensureFastScoresSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS student_fast_scores (
@@ -444,6 +473,7 @@ function clamp(n: number, lo: number, hi: number): number {
 
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
+  await ensureSchoolSettingsFeatureFlagsSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

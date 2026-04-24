@@ -39,6 +39,29 @@ export const schoolSettingsTable = pgTable(
   pbisNegativeAffectsTotal: boolean("pbis_negative_affects_total")
     .notNull()
     .default(false),
+  // -----------------------------------------------------------------
+  // Per-school feature flags (two-tier model).
+  //
+  //   super_feature_*  → SuperUser-controlled "is this feature available
+  //                       to this school at all?" (the billing tier).
+  //   feature_*        → Admin-controlled "do we want it on right now?"
+  //
+  // A feature is live when BOTH switches are on. Admins cannot enable a
+  // feature whose super_* flag is off. Defaults are TRUE so existing
+  // schools see no change in behavior.
+  // -----------------------------------------------------------------
+  featureFamilyComm: boolean("feature_family_comm").notNull().default(true),
+  featurePbis: boolean("feature_pbis").notNull().default(true),
+  featureSchoolStore: boolean("feature_school_store").notNull().default(true),
+  featureAccommodations: boolean("feature_accommodations").notNull().default(true),
+  featureLogIntervention: boolean("feature_log_intervention").notNull().default(true),
+  featureRequestPullout: boolean("feature_request_pullout").notNull().default(true),
+  superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
+  superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
+  superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),
+  superFeatureAccommodations: boolean("super_feature_accommodations").notNull().default(true),
+  superFeatureLogIntervention: boolean("super_feature_log_intervention").notNull().default(true),
+  superFeatureRequestPullout: boolean("super_feature_request_pullout").notNull().default(true),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(

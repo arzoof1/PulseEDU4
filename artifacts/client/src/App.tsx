@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import LogTardyModal from "./components/LogTardyModal";
@@ -3108,6 +3108,21 @@ function App() {
     pbisInvisibleStudentDays: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
+    // Two-tier feature flags. Defaults are TRUE so the optimistic UI
+    // matches what the server returns for any school that has not yet
+    // flipped anything off.
+    featureFamilyComm: boolean;
+    featurePbis: boolean;
+    featureSchoolStore: boolean;
+    featureAccommodations: boolean;
+    featureLogIntervention: boolean;
+    featureRequestPullout: boolean;
+    superFeatureFamilyComm: boolean;
+    superFeaturePbis: boolean;
+    superFeatureSchoolStore: boolean;
+    superFeatureAccommodations: boolean;
+    superFeatureLogIntervention: boolean;
+    superFeatureRequestPullout: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -3120,6 +3135,18 @@ function App() {
     pbisInvisibleStudentDays: 10,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
+    featureFamilyComm: true,
+    featurePbis: true,
+    featureSchoolStore: true,
+    featureAccommodations: true,
+    featureLogIntervention: true,
+    featureRequestPullout: true,
+    superFeatureFamilyComm: true,
+    superFeaturePbis: true,
+    superFeatureSchoolStore: true,
+    superFeatureAccommodations: true,
+    superFeatureLogIntervention: true,
+    superFeatureRequestPullout: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -4607,6 +4634,11 @@ function App() {
     reportCustomTo,
   ]);
 
+  // Helper: pull a boolean off the wire defaulting to true. New
+  // feature-flag columns default true server-side; legacy schools that
+  // pre-date the columns also see true via the ALTER … DEFAULT TRUE.
+  const boolOrTrue = (v: unknown): boolean => (typeof v === "boolean" ? v : true);
+
   const loadSchoolSettings = () => {
     authFetch("/api/school-settings")
       .then((res) => res.json())
@@ -4645,6 +4677,24 @@ function App() {
             typeof data.pbisColdPeriodMultiple === "number"
               ? data.pbisColdPeriodMultiple
               : 5,
+          featureFamilyComm: boolOrTrue(data.featureFamilyComm),
+          featurePbis: boolOrTrue(data.featurePbis),
+          featureSchoolStore: boolOrTrue(data.featureSchoolStore),
+          featureAccommodations: boolOrTrue(data.featureAccommodations),
+          featureLogIntervention: boolOrTrue(data.featureLogIntervention),
+          featureRequestPullout: boolOrTrue(data.featureRequestPullout),
+          superFeatureFamilyComm: boolOrTrue(data.superFeatureFamilyComm),
+          superFeaturePbis: boolOrTrue(data.superFeaturePbis),
+          superFeatureSchoolStore: boolOrTrue(data.superFeatureSchoolStore),
+          superFeatureAccommodations: boolOrTrue(
+            data.superFeatureAccommodations,
+          ),
+          superFeatureLogIntervention: boolOrTrue(
+            data.superFeatureLogIntervention,
+          ),
+          superFeatureRequestPullout: boolOrTrue(
+            data.superFeatureRequestPullout,
+          ),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -4698,6 +4748,20 @@ function App() {
           typeof data.pbisColdPeriodMultiple === "number"
             ? data.pbisColdPeriodMultiple
             : 5,
+        featureFamilyComm: boolOrTrue(data.featureFamilyComm),
+        featurePbis: boolOrTrue(data.featurePbis),
+        featureSchoolStore: boolOrTrue(data.featureSchoolStore),
+        featureAccommodations: boolOrTrue(data.featureAccommodations),
+        featureLogIntervention: boolOrTrue(data.featureLogIntervention),
+        featureRequestPullout: boolOrTrue(data.featureRequestPullout),
+        superFeatureFamilyComm: boolOrTrue(data.superFeatureFamilyComm),
+        superFeaturePbis: boolOrTrue(data.superFeaturePbis),
+        superFeatureSchoolStore: boolOrTrue(data.superFeatureSchoolStore),
+        superFeatureAccommodations: boolOrTrue(data.superFeatureAccommodations),
+        superFeatureLogIntervention: boolOrTrue(
+          data.superFeatureLogIntervention,
+        ),
+        superFeatureRequestPullout: boolOrTrue(data.superFeatureRequestPullout),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -6175,7 +6239,26 @@ function App() {
     label: string;
     icon: React.ReactNode;
   };
-  const baseNavSections: NavSection[] = [
+  // Effective feature map (super && admin per feature). Used to gate
+  // sidebar entries and hub tiles. Built off `schoolSettings` so it
+  // updates instantly when an admin toggles something.
+  const effectiveFeatures = {
+    FamilyComm:
+      schoolSettings.featureFamilyComm && schoolSettings.superFeatureFamilyComm,
+    Pbis: schoolSettings.featurePbis && schoolSettings.superFeaturePbis,
+    SchoolStore:
+      schoolSettings.featureSchoolStore && schoolSettings.superFeatureSchoolStore,
+    Accommodations:
+      schoolSettings.featureAccommodations &&
+      schoolSettings.superFeatureAccommodations,
+    LogIntervention:
+      schoolSettings.featureLogIntervention &&
+      schoolSettings.superFeatureLogIntervention,
+    RequestPullout:
+      schoolSettings.featureRequestPullout &&
+      schoolSettings.superFeatureRequestPullout,
+  };
+  const allBaseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
     { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Family Communication", icon: IconUser },
@@ -6192,6 +6275,21 @@ function App() {
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
   ];
+  // Sidebar entries that map to a per-school feature flag. Anything not
+  // in this map (Hall Passes, Tardy Pass, Teacher Roster) is always on.
+  const navKeyFeatureMap: Partial<Record<typeof allBaseNavSections[number]["key"], keyof typeof effectiveFeatures>> = {
+    student: "FamilyComm",
+    pbis: "Pbis",
+    schoolStore: "SchoolStore",
+    accommodations: "Accommodations",
+    logIntervention: "LogIntervention",
+    requestPullout: "RequestPullout",
+  };
+  const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
+    const featureKey = navKeyFeatureMap[s.key];
+    if (!featureKey) return true;
+    return effectiveFeatures[featureKey];
+  });
   const eseNavSections: NavSection[] = [
     { key: "ese", label: "ESE Coordinator", icon: IconClipboard },
   ];
@@ -13187,7 +13285,7 @@ function App() {
             label: "Log Intervention",
             desc: "Record an intervention you delivered.",
             color: "#0e7490",
-            show: true,
+            show: effectiveFeatures.LogIntervention,
           },
           {
             key: "verifyPullouts",
@@ -13212,7 +13310,7 @@ function App() {
             label: "School Store",
             desc: "Add, edit, and remove school-wide rewards students can redeem.",
             color: "#6d28d9",
-            show: canEditSchoolStore,
+            show: canEditSchoolStore && effectiveFeatures.SchoolStore,
           },
           {
             key: "mtssPlans",
@@ -13559,7 +13657,7 @@ function App() {
             label: "PBIS Store",
             desc: "Manage rewards students can redeem with PBIS points.",
             color: "#b45309",
-            show: true,
+            show: effectiveFeatures.SchoolStore,
           },
         ];
         return (
@@ -13868,6 +13966,10 @@ function App() {
           label: string;
           desc: string;
           color: string;
+          // Optional visibility gate. Defaults to "show" when omitted so
+          // existing tiles keep working. Used by per-school feature
+          // flags (e.g. SchoolStore) to hide a tile entirely.
+          show?: boolean;
         };
         const tools: MtssTool[] = [
           {
@@ -13891,11 +13993,13 @@ function App() {
           {
             // Same edit-enabled view that the BS hub exposes. Anyone who
             // can reach the MTSS hub also has write access (admins, MTSS
-            // coords, BS), so no extra gating needed here.
+            // coords, BS), so no extra gating needed here apart from the
+            // per-school feature flag.
             key: "schoolStoreManage",
             label: "School Store",
             desc: "Add, edit, and remove school-wide rewards students can redeem.",
             color: "#6d28d9",
+            show: effectiveFeatures.SchoolStore,
           },
           {
             key: "teacherRoster",
@@ -13932,7 +14036,7 @@ function App() {
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
-                  {tools.map((t) => (
+                  {tools.filter((t) => t.show !== false).map((t) => (
                     <button
                       key={t.key}
                       type="button"
@@ -13984,7 +14088,7 @@ function App() {
                 gap: "0.75rem",
               }}
             >
-              {tools.map((t) => (
+              {tools.filter((t) => t.show !== false).map((t) => (
                 <button
                   key={t.key}
                   type="button"
@@ -16351,6 +16455,31 @@ function App() {
                 legacy: true,
               },
             ];
+            // School Features — admin + SuperUser. Lets the admin
+            // turn off features for their school (within whatever the
+            // SuperUser has allowed). Counts how many of the six are
+            // currently effective so the tile shows an at-a-glance
+            // badge.
+            const featureKeys = [
+              "FamilyComm",
+              "Pbis",
+              "SchoolStore",
+              "Accommodations",
+              "LogIntervention",
+              "RequestPullout",
+            ] as const;
+            const liveCount = featureKeys.reduce((n, k) => {
+              const ssRec = schoolSettings as Record<string, unknown>;
+              const adminOn = ssRec[`feature${k}`] !== false;
+              const superOn = ssRec[`superFeature${k}`] !== false;
+              return n + (adminOn && superOn ? 1 : 0);
+            }, 0);
+            tiles.push({
+              id: "schoolFeatures",
+              icon: "🧩",
+              title: "School Features",
+              subtitle: `Turn major features on or off for this school · ${liveCount}/${featureKeys.length} live.`,
+            });
             if (isSuperUser) {
               tiles.push({
                 id: "tenancy",
@@ -16743,6 +16872,183 @@ function App() {
                   <span style={{ color: "#b91c1c" }}>{settingsError}</span>
                 )}
               </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "schoolFeatures" && (() => {
+        // Two-tier feature toggles. Each row has both the SuperUser
+        // gate (super_feature_*) and the admin switch (feature_*).
+        // Effective = both ON. The admin checkbox locks itself when
+        // SuperUser has the feature turned off — and the API enforces
+        // the same rule in case anyone bypasses the UI.
+        const features: ReadonlyArray<{
+          key:
+            | "FamilyComm"
+            | "Pbis"
+            | "SchoolStore"
+            | "Accommodations"
+            | "LogIntervention"
+            | "RequestPullout";
+          label: string;
+          help: string;
+        }> = [
+          {
+            key: "FamilyComm",
+            label: "Family Communication",
+            help: "Parent emails / messaging hub in the sidebar.",
+          },
+          {
+            key: "Pbis",
+            label: "PBIS Points",
+            help: "Award and review PBIS points school-wide.",
+          },
+          {
+            key: "SchoolStore",
+            label: "School Store",
+            help: "Read-only catalog in sidebar plus the admin store-management tile in the BS / MTSS / PBIS hubs.",
+          },
+          {
+            key: "Accommodations",
+            label: "Accommodations",
+            help: "Per-student accommodations workspace.",
+          },
+          {
+            key: "LogIntervention",
+            label: "Log Interventions",
+            help: "Sidebar entry for logging Tier 2/3 interventions, plus the BS-hub tile.",
+          },
+          {
+            key: "RequestPullout",
+            label: "Request Pullouts",
+            help: "Teachers request behavior pullouts from class.",
+          },
+        ];
+        const ssRec = schoolSettings as Record<string, unknown>;
+        const adminVal = (k: string): boolean => ssRec[`feature${k}`] !== false;
+        const superVal = (k: string): boolean =>
+          ssRec[`superFeature${k}`] !== false;
+        return (
+          <div className="card" style={{ marginTop: "1rem" }}>
+            <h2 style={{ marginTop: 0 }}>School Features</h2>
+            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+              Turn major features on or off for this school. A feature is
+              live only when both the district SuperUser allows it and the
+              school admin enables it.
+              {!isSuperUser && (
+                <>
+                  {" "}
+                  Greyed-out rows are disabled by your district SuperUser
+                  and can&rsquo;t be turned back on here.
+                </>
+              )}
+            </p>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: isSuperUser
+                  ? "1.6fr auto auto"
+                  : "1.6fr auto",
+                gap: "0.5rem 1.25rem",
+                alignItems: "center",
+                maxWidth: 720,
+              }}
+            >
+              <div style={{ fontWeight: 600, color: "var(--text-subtle)" }}>
+                Feature
+              </div>
+              {isSuperUser && (
+                <div
+                  style={{
+                    fontWeight: 600,
+                    color: "var(--text-subtle)",
+                    fontSize: 12,
+                  }}
+                  title="Allowed by district / SuperUser. Acts as the billing or availability gate."
+                >
+                  Allowed
+                </div>
+              )}
+              <div
+                style={{
+                  fontWeight: 600,
+                  color: "var(--text-subtle)",
+                  fontSize: 12,
+                }}
+                title="Enabled by the school admin within whatever the SuperUser allowed."
+              >
+                Enabled
+              </div>
+              {features.map((f) => {
+                const sup = superVal(f.key);
+                const adm = adminVal(f.key);
+                const adminLocked = !sup; // SuperUser-off forces the admin checkbox off.
+                return (
+                  <Fragment key={f.key}>
+                    <div>
+                      <div style={{ fontWeight: 500 }}>{f.label}</div>
+                      <div
+                        style={{ fontSize: 12, color: "var(--text-subtle)" }}
+                      >
+                        {f.help}
+                      </div>
+                    </div>
+                    {isSuperUser && (
+                      <input
+                        type="checkbox"
+                        checked={sup}
+                        onChange={(e) =>
+                          setSchoolSettings({
+                            ...schoolSettings,
+                            [`superFeature${f.key}`]: e.target.checked,
+                          } as typeof schoolSettings)
+                        }
+                        title="SuperUser: allow this feature for this school."
+                      />
+                    )}
+                    <input
+                      type="checkbox"
+                      checked={adm && sup}
+                      disabled={adminLocked}
+                      onChange={(e) =>
+                        setSchoolSettings({
+                          ...schoolSettings,
+                          [`feature${f.key}`]: e.target.checked,
+                        } as typeof schoolSettings)
+                      }
+                      title={
+                        adminLocked
+                          ? "Disabled by your district SuperUser."
+                          : "Admin: turn this feature on or off for the school."
+                      }
+                      style={adminLocked ? { opacity: 0.4 } : undefined}
+                    />
+                  </Fragment>
+                );
+              })}
+            </div>
+            <div
+              style={{
+                marginTop: "1rem",
+                display: "flex",
+                gap: "0.5rem",
+                alignItems: "center",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => void saveSchoolSettings()}
+                disabled={settingsStatus === "saving"}
+              >
+                {settingsStatus === "saving" ? "Saving…" : "Save Features"}
+              </button>
+              {settingsStatus === "saved" && (
+                <span style={{ color: "#15803d" }}>Saved.</span>
+              )}
+              {settingsStatus === "error" && (
+                <span style={{ color: "#b91c1c" }}>{settingsError}</span>
+              )}
             </div>
           </div>
         );

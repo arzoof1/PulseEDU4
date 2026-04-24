@@ -1289,3 +1289,72 @@ session).**
 file picker that upserts `student_fast_scores` on
 `(schoolId, studentId, subject)`. CSV columns expected to be at least
 `student_id, subject, pm1, pm2, pm3, prior_year_score`. Not built yet.
+
+---
+
+## Per-school feature toggles (two-tier model)
+
+Six top-level features have per-school on/off switches behind a
+two-tier model: a SuperUser-level "allowed" flag (the billing /
+availability gate) and an admin-level "enabled" flag (the school's
+day-to-day on/off). A feature is **effective** when both are ON.
+
+**Schema (`school_settings`).** Twelve booleans, all
+`NOT NULL DEFAULT TRUE` so existing schools keep current behavior:
+
+- `feature_family_comm` / `super_feature_family_comm`
+- `feature_pbis` / `super_feature_pbis`
+- `feature_school_store` / `super_feature_school_store`
+- `feature_accommodations` / `super_feature_accommodations`
+- `feature_log_intervention` / `super_feature_log_intervention`
+- `feature_request_pullout` / `super_feature_request_pullout`
+
+Added at boot via `ensureSchoolSettingsFeatureFlagsSchema()` in
+`seed.ts` using `ALTER TABLE … ADD COLUMN IF NOT EXISTS … DEFAULT TRUE`,
+wired into the existing `seedFastScoresIfEmpty` boot chain. Idempotent —
+safe on every restart, and back-fills existing rows to TRUE.
+
+**API (`routes/schoolSettings.ts`).**
+
+- `FEATURE_KEYS` central list keeps GET, PUT, and the derived map in
+  sync.
+- GET `/api/school-settings` returns the row plus
+  `effectiveFeatures: { FamilyComm, Pbis, SchoolStore, Accommodations,
+  LogIntervention, RequestPullout }` where each value is
+  `super_* && feature_*`.
+- PUT `/api/school-settings` accepts `featureX` (admin or SuperUser)
+  and `superFeatureX` (SuperUser only). Returns 403 if a non-SuperUser
+  tries to flip a `super_*` flag, or if an admin tries to enable a
+  `feature_*` whose `super_*` counterpart is currently false (and not
+  also being flipped on in the same payload). Server-side teeth behind
+  the locked-checkbox UX.
+
+**Client.**
+
+- `schoolSettings` state (App.tsx) carries all 12 fields; load + save
+  round-trip them. Defaults to true so the first paint matches the
+  server for every existing school.
+- New `effectiveFeatures` computed near `baseNavSections` and used to:
+  - filter the six gated sidebar entries (`student`,
+    `pbis`, `schoolStore`, `accommodations`, `logIntervention`,
+    `requestPullout`); Hall Passes / Tardy Pass / Teacher Roster are
+    never gated.
+  - hide the `pbisStore` tile in the PBIS hub when SchoolStore is off.
+  - hide the `schoolStoreManage` tile in both the BS and MTSS hubs
+    when SchoolStore is off.
+  - hide the `logIntervention` tile in the BS hub when LogIntervention
+    is off.
+- New "School Features" tile in `SettingsHub` (admin + SuperUser),
+  `SettingsTileId = "schoolFeatures"`. Panel renders one row per
+  feature: admin sees a single checkbox (locked + greyed when
+  `super_* = false`, with a "Disabled by your district SuperUser"
+  tooltip); SuperUser sees both Allowed and Enabled checkboxes.
+  Subtitle on the tile shows `<live>/6 live` at a glance.
+
+**Out of scope (intentional).** Verify Pullouts has **no** dependency
+on Request Pullouts here. The user explicitly kept them separate: a
+school could turn off teacher-driven pullout requests while still
+verifying pullouts created by other paths. If we ever want to gate
+Verify Pullouts too, add a 7th `feature_verify_pullout` /
+`super_feature_verify_pullout` pair and another `effectiveFeatures`
+entry — do not piggy-back on `RequestPullout`.

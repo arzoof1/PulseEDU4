@@ -5,6 +5,45 @@ import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
 
+// Six per-school feature flags. The two-tier model means each feature has
+// both an admin-controlled `feature_*` column and a SuperUser-controlled
+// `super_feature_*` column. A feature is "effective" only when both are
+// true. Centralizing the list here keeps the GET enrichment, the PUT
+// validation, and the response-side `effectiveFeatures` map in sync.
+const FEATURE_KEYS = [
+  "FamilyComm",
+  "Pbis",
+  "SchoolStore",
+  "Accommodations",
+  "LogIntervention",
+  "RequestPullout",
+] as const;
+type FeatureKey = (typeof FEATURE_KEYS)[number];
+type SettingsRow = typeof schoolSettingsTable.$inferSelect;
+
+function adminCol(k: FeatureKey): keyof SettingsRow {
+  return (`feature${k}` as unknown) as keyof SettingsRow;
+}
+function superCol(k: FeatureKey): keyof SettingsRow {
+  return (`superFeature${k}` as unknown) as keyof SettingsRow;
+}
+
+// Build the derived `effectiveFeatures` map from a settings row. Each
+// entry is `super && admin` — the value any feature-gated UI should
+// actually consult.
+function effectiveFeatures(row: SettingsRow): Record<FeatureKey, boolean> {
+  const out = {} as Record<FeatureKey, boolean>;
+  for (const k of FEATURE_KEYS) {
+    out[k] =
+      Boolean(row[superCol(k)]) && Boolean(row[adminCol(k)]);
+  }
+  return out;
+}
+
+function withEffective(row: SettingsRow) {
+  return { ...row, effectiveFeatures: effectiveFeatures(row) };
+}
+
 // Read or lazily create the settings row for a given school. The
 // `school_settings_school_id_unique` index guarantees one row per school,
 // so the second concurrent request just hits the existing row.
@@ -34,7 +73,7 @@ router.get("/school-settings", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const row = await getOrCreate(schoolId);
-  res.json(row);
+  res.json(withEffective(row));
 });
 
 router.put("/school-settings", async (req, res): Promise<void> => {
@@ -218,8 +257,117 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
   }
 
+  // -----------------------------------------------------------------
+  // Feature-flag updates. Loaded staff row is reused so we only hit the
+  // DB once even when several flags arrive in the same payload.
+  // -----------------------------------------------------------------
+  const incomingFeatureFields: Array<{
+    key: FeatureKey;
+    isSuper: boolean;
+    value: unknown;
+    bodyKey: string;
+  }> = [];
+  for (const k of FEATURE_KEYS) {
+    const adminKey = `feature${k}`;
+    const superKey = `superFeature${k}`;
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, adminKey)) {
+      incomingFeatureFields.push({
+        key: k,
+        isSuper: false,
+        value: (req.body as Record<string, unknown>)[adminKey],
+        bodyKey: adminKey,
+      });
+    }
+    if (Object.prototype.hasOwnProperty.call(req.body ?? {}, superKey)) {
+      incomingFeatureFields.push({
+        key: k,
+        isSuper: true,
+        value: (req.body as Record<string, unknown>)[superKey],
+        bodyKey: superKey,
+      });
+    }
+  }
+
+  if (incomingFeatureFields.length > 0) {
+    const staffId = req.staffId;
+    let me: typeof staffTable.$inferSelect | undefined;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      me = s;
+    }
+    const isAdminUser = Boolean(me?.active && (me?.isAdmin || me?.isSuperUser));
+    const isSuperUser = Boolean(me?.active && me?.isSuperUser);
+
+    for (const f of incomingFeatureFields) {
+      if (typeof f.value !== "boolean") {
+        res
+          .status(400)
+          .json({ error: `${f.bodyKey} must be a boolean` });
+        return;
+      }
+      if (f.isSuper) {
+        // Same unchanged-value escape hatch the admin branch uses: the
+        // client always sends the full settings object, so an admin
+        // submitting plain settings would otherwise 403 just for
+        // round-tripping the SuperUser-only fields untouched.
+        const currentSuper = Boolean(current[superCol(f.key)]);
+        if (f.value === currentSuper) {
+          continue;
+        }
+        if (!isSuperUser) {
+          res.status(403).json({
+            error: `Only a SuperUser may change ${f.bodyKey}`,
+          });
+          return;
+        }
+        (updates as Record<string, unknown>)[
+          superCol(f.key) as string
+        ] = f.value;
+      } else {
+        if (!isAdminUser) {
+          res.status(403).json({
+            error: `Only an admin or SuperUser may change ${f.bodyKey}`,
+          });
+          return;
+        }
+        // Admin enable is only permitted when the SuperUser flag is on.
+        // Important: skip this check when the admin field's value is
+        // *unchanged* from the current DB row. The client sends the
+        // whole settings object on every save, so a SuperUser flipping
+        // super_X off while the admin checkbox stays at its existing
+        // (true) value would otherwise be 403-rejected for what is
+        // effectively a no-op on the admin column.
+        const currentAdmin = Boolean(current[adminCol(f.key)]);
+        const adminChanged = f.value !== currentAdmin;
+        if (adminChanged && f.value === true) {
+          const incomingSuperVal = incomingFeatureFields.find(
+            (x) => x.isSuper && x.key === f.key,
+          )?.value;
+          const supersededBy =
+            typeof incomingSuperVal === "boolean"
+              ? incomingSuperVal
+              : Boolean(current[superCol(f.key)]);
+          if (!supersededBy) {
+            res.status(403).json({
+              error: `Cannot enable ${f.bodyKey}: feature is disabled by SuperUser for this school`,
+            });
+            return;
+          }
+        }
+        if (adminChanged) {
+          (updates as Record<string, unknown>)[
+            adminCol(f.key) as string
+          ] = f.value;
+        }
+      }
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
-    res.json(current);
+    res.json(withEffective(current));
     return;
   }
 
@@ -235,7 +383,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       ),
     )
     .returning();
-  res.json(updated);
+  res.json(withEffective(updated));
 });
 
 export default router;
