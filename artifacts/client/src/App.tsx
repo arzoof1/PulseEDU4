@@ -10974,14 +10974,18 @@ function App() {
                         seen.has(c as SchoolAccommodation["category"]),
                       ) as SchoolAccommodation["category"][];
                     };
-                    const allInPeriodStudents = allInPeriod
+                    const rosterStudents = allInPeriod
                       .map((id) =>
                         students.find((st) => st.studentId === id),
                       )
                       .filter(
                         (s): s is (typeof students)[number] => s !== undefined,
-                      )
-                      .filter((st) => studentTrackedCats(st).length > 0);
+                      );
+                    const allInPeriodStudents = rosterStudents.filter(
+                      (st) => studentTrackedCats(st).length > 0,
+                    );
+                    const rosterTotal = allInPeriod.length;
+                    const rosterMatched = rosterStudents.length;
                     const presentEligibleCount = allInPeriodStudents.filter(
                       (st) => !dailyAbsent.has(st.studentId),
                     ).length;
@@ -11189,9 +11193,88 @@ function App() {
                                 </label>
                               </div>
                               {allInPeriodStudents.length === 0 ? (
-                                <div>
-                                  No students in this period have an IEP, 504,
-                                  or ELL accommodation on file.
+                                <div
+                                  style={{
+                                    padding: "0.75rem",
+                                    border: "1px solid #f0c36d",
+                                    background: "#fff8e1",
+                                    borderRadius: 6,
+                                    fontSize: 14,
+                                  }}
+                                >
+                                  {rosterTotal === 0 ? (
+                                    <>
+                                      <strong>This period has no roster.</strong>
+                                      <div style={{ marginTop: 4 }}>
+                                        Confirm the teacher and period above —
+                                        or check that this school's schedule
+                                        was imported.
+                                      </div>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <strong>
+                                        Roster has {rosterTotal} student
+                                        {rosterTotal === 1 ? "" : "s"}, but
+                                        none have an IEP, 504, or ELL on file
+                                        for this school.
+                                      </strong>
+                                      <div style={{ marginTop: 4 }}>
+                                        Add accommodations in{" "}
+                                        <em>ESE Coordinator → Assign</em>, then
+                                        return here.
+                                      </div>
+                                      {rosterMatched > 0 && (
+                                        <details style={{ marginTop: 8 }}>
+                                          <summary
+                                            style={{
+                                              cursor: "pointer",
+                                              fontWeight: 600,
+                                            }}
+                                          >
+                                            Show roster ({rosterMatched})
+                                          </summary>
+                                          <ul
+                                            style={{
+                                              listStyle: "none",
+                                              padding: 0,
+                                              margin: "0.5rem 0 0",
+                                              maxHeight: "12rem",
+                                              overflowY: "auto",
+                                              border: "1px solid #ddd",
+                                              background: "#fff",
+                                            }}
+                                          >
+                                            {rosterStudents
+                                              .slice()
+                                              .sort((a, b) =>
+                                                a.lastName.localeCompare(
+                                                  b.lastName,
+                                                ),
+                                              )
+                                              .map((st) => (
+                                                <li
+                                                  key={st.studentId}
+                                                  style={{
+                                                    padding: "0.2rem 0.5rem",
+                                                    borderBottom:
+                                                      "1px solid #eee",
+                                                    fontSize: 13,
+                                                  }}
+                                                >
+                                                  {st.lastName}, {st.firstName}{" "}
+                                                  <span
+                                                    style={{ color: "#888" }}
+                                                  >
+                                                    ({st.studentId})
+                                                  </span>
+                                                </li>
+                                              ))}
+                                          </ul>
+                                        </details>
+                                      )}
+                                    </>
+                                  )}
                                 </div>
                               ) : (
                                 <ul
