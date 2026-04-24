@@ -411,8 +411,13 @@ export default function PbisPointsHub() {
           student={awardingFor}
           reasons={reasons}
           onClose={() => setAwardingFor(null)}
-          onSubmit={async (reason, points) => {
-            await awardPoints(awardingFor, reason, points);
+          onSubmit={async (picks) => {
+            // Award each picked behavior in sequence so totals & milestones
+            // update once per row. If any one fails the modal surfaces the
+            // error and stops; previously-awarded picks remain on the record.
+            for (const p of picks) {
+              await awardPoints(awardingFor, p.reason, p.points);
+            }
             setAwardingFor(null);
           }}
         />
@@ -425,8 +430,13 @@ export default function PbisPointsHub() {
           reasons={reasons}
           templates={noteTemplates}
           onClose={() => setBulkOpen(false)}
-          onSubmit={async (reason, points, note) => {
-            await bulkAward(Array.from(selectedIds), reason, points, note);
+          onSubmit={async (picks, note) => {
+            // One bulk call per selected behavior so polarity & negative
+            // policy resolve independently for each rubric row.
+            const ids = Array.from(selectedIds);
+            for (const p of picks) {
+              await bulkAward(ids, p.reason, p.points, note);
+            }
             setBulkOpen(false);
             setSelectedIds(new Set());
           }}
@@ -974,24 +984,46 @@ function AwardModal({
   student: Student;
   reasons: Reason[];
   onClose: () => void;
-  onSubmit: (reason: Reason, points: number) => Promise<void>;
+  onSubmit: (picks: { reason: Reason; points: number }[]) => Promise<void>;
 }) {
-  const [selectedReasonId, setSelectedReasonId] = useState<number | null>(
-    reasons[0]?.id ?? null,
-  );
-  const [points, setPoints] = useState<number>(reasons[0]?.defaultPoints ?? 1);
+  // Multi-select: map of reasonId -> points (per-pick, editable). Tiles toggle
+  // on/off; the strip below shows each pick with its own points input.
+  const [picks, setPicks] = useState<Record<number, number>>({});
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const selected = reasons.find((r) => r.id === selectedReasonId) ?? null;
-  // Award flow only supports awarding (not removing/deducting). Points must
-  // be a positive integer to avoid bad data from typos like "-1" or "0".
-  const pointsValid = Number.isInteger(points) && points >= 1;
+  const pickEntries = Object.entries(picks).map(([id, pts]) => ({
+    id: Number(id),
+    points: pts,
+    reason: reasons.find((r) => r.id === Number(id)) ?? null,
+  }));
+  // All picks must have a positive whole-number points value.
+  const allValid =
+    pickEntries.length > 0 &&
+    pickEntries.every(
+      (p) => p.reason !== null && Number.isInteger(p.points) && p.points >= 1,
+    );
 
-  // When the selected reason changes, snap the points input to its default.
-  useEffect(() => {
-    if (selected) setPoints(selected.defaultPoints);
-  }, [selectedReasonId]); // eslint-disable-line react-hooks/exhaustive-deps
+  function togglePick(r: Reason) {
+    setPicks((prev) => {
+      if (prev[r.id] !== undefined) {
+        const next = { ...prev };
+        delete next[r.id];
+        return next;
+      }
+      return { ...prev, [r.id]: r.defaultPoints };
+    });
+  }
+  function setPickPoints(id: number, pts: number) {
+    setPicks((prev) => ({ ...prev, [id]: pts }));
+  }
+  function removePick(id: number) {
+    setPicks((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
 
   // Close on ESC for keyboard users.
   useEffect(() => {
@@ -1102,12 +1134,12 @@ function AwardModal({
                     }}
                   >
                     {list.map((r) => {
-                      const active = r.id === selectedReasonId;
+                      const active = picks[r.id] !== undefined;
                       return (
                         <button
                           key={r.id}
                           type="button"
-                          onClick={() => setSelectedReasonId(r.id)}
+                          onClick={() => togglePick(r)}
                           style={{
                             padding: "0.4rem 0.7rem",
                             borderRadius: "0.4rem",
@@ -1121,7 +1153,7 @@ function AwardModal({
                             cursor: "pointer",
                           }}
                         >
-                          {r.name}{" "}
+                          {active ? "✓ " : ""}{r.name}{" "}
                           <span
                             style={{
                               opacity: 0.65,
@@ -1142,39 +1174,11 @@ function AwardModal({
               ))}
             </div>
 
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                marginBottom: "1rem",
-              }}
-            >
-              <span style={{ fontSize: "0.9rem", color: "#475569" }}>
-                Points:
-              </span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={points}
-                onChange={(e) => setPoints(Number(e.target.value))}
-                style={{
-                  width: "5rem",
-                  padding: "0.35rem 0.5rem",
-                  border: pointsValid
-                    ? "1px solid #cbd5e1"
-                    : "1px solid #dc2626",
-                  borderRadius: "0.35rem",
-                  fontSize: "0.95rem",
-                }}
-              />
-              {!pointsValid && (
-                <span style={{ fontSize: "0.8rem", color: "#dc2626" }}>
-                  Must be a whole number, 1 or more.
-                </span>
-              )}
-            </label>
+            <PicksEditor
+              picks={pickEntries}
+              onChangePoints={setPickPoints}
+              onRemove={removePick}
+            />
 
             {err && (
               <div
@@ -1208,13 +1212,18 @@ function AwardModal({
               </button>
               <button
                 type="button"
-                disabled={!selected || submitting || !pointsValid}
+                disabled={!allValid || submitting}
                 onClick={async () => {
-                  if (!selected) return;
+                  if (!allValid) return;
                   setSubmitting(true);
                   setErr(null);
                   try {
-                    await onSubmit(selected, points);
+                    const valid = pickEntries
+                      .filter((p): p is typeof p & { reason: Reason } =>
+                        p.reason !== null,
+                      )
+                      .map((p) => ({ reason: p.reason, points: p.points }));
+                    await onSubmit(valid);
                   } catch (e) {
                     setErr(e instanceof Error ? e.message : "Failed");
                   } finally {
@@ -1229,14 +1238,150 @@ function AwardModal({
                   color: "white",
                   fontWeight: 600,
                   cursor: submitting ? "wait" : "pointer",
-                  opacity: !selected || submitting ? 0.6 : 1,
+                  opacity: !allValid || submitting ? 0.6 : 1,
                 }}
               >
-                {submitting ? "Awarding…" : "Award Points"}
+                {submitting
+                  ? "Awarding…"
+                  : pickEntries.length > 1
+                    ? `Award ${pickEntries.length} items`
+                    : "Award Points"}
               </button>
             </div>
           </>
         )}
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// PicksEditor — strip of selected behaviors, each with its own editable points
+// input and a remove button. Used by both AwardModal and BulkAwardModal so the
+// UX is identical between single-student and multi-student award flows.
+// -----------------------------------------------------------------------------
+function PicksEditor({
+  picks,
+  onChangePoints,
+  onRemove,
+  perStudent,
+}: {
+  picks: { id: number; points: number; reason: Reason | null }[];
+  onChangePoints: (id: number, pts: number) => void;
+  onRemove: (id: number) => void;
+  perStudent?: boolean;
+}) {
+  if (picks.length === 0) {
+    return (
+      <div
+        style={{
+          padding: "0.6rem 0.75rem",
+          background: "#f8fafc",
+          color: "#64748b",
+          border: "1px dashed #cbd5e1",
+          borderRadius: "0.4rem",
+          fontSize: "0.85rem",
+          marginBottom: "1rem",
+        }}
+      >
+        Pick one or more behaviors above to award.
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        marginBottom: "1rem",
+        padding: "0.6rem",
+        background: "#f8fafc",
+        border: "1px solid #e2e8f0",
+        borderRadius: "0.4rem",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "0.75rem",
+          fontWeight: 700,
+          color: "#475569",
+          textTransform: "uppercase",
+          letterSpacing: "0.04em",
+          marginBottom: "0.4rem",
+        }}
+      >
+        Selected ({picks.length}) — points {perStudent ? "each per student" : "each"}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: "0.35rem" }}>
+        {picks.map((p) => {
+          if (!p.reason) return null;
+          const isNeg = p.reason.polarity === "negative";
+          const valid = Number.isInteger(p.points) && p.points >= 1;
+          return (
+            <div
+              key={p.id}
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                background: "white",
+                border: "1px solid #e2e8f0",
+                borderRadius: "0.35rem",
+                padding: "0.3rem 0.5rem",
+              }}
+            >
+              <span
+                style={{
+                  flex: 1,
+                  fontSize: "0.88rem",
+                  color: "#0f172a",
+                  fontWeight: 500,
+                }}
+              >
+                {p.reason.name}
+                {p.reason.ownerScope === "school" && <SchoolTag />}
+              </span>
+              <span
+                style={{
+                  fontSize: "0.85rem",
+                  color: isNeg ? "#dc2626" : "#16a34a",
+                  fontWeight: 600,
+                }}
+              >
+                {isNeg ? "−" : "+"}
+              </span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={p.points}
+                onChange={(e) => onChangePoints(p.id, Number(e.target.value))}
+                aria-label={`Points for ${p.reason.name}`}
+                style={{
+                  width: "4.5rem",
+                  padding: "0.25rem 0.4rem",
+                  border: valid ? "1px solid #cbd5e1" : "1px solid #dc2626",
+                  borderRadius: "0.3rem",
+                  fontSize: "0.88rem",
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => onRemove(p.id)}
+                aria-label={`Remove ${p.reason.name}`}
+                style={{
+                  background: "none",
+                  border: "none",
+                  color: "#94a3b8",
+                  cursor: "pointer",
+                  fontSize: "1.1rem",
+                  lineHeight: 1,
+                  padding: "0 0.2rem",
+                }}
+              >
+                ×
+              </button>
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -1258,24 +1403,50 @@ function BulkAwardModal({
   reasons: Reason[];
   templates: NoteTemplate[];
   onClose: () => void;
-  onSubmit: (reason: Reason, points: number, note: string) => Promise<void>;
+  onSubmit: (
+    picks: { reason: Reason; points: number }[],
+    note: string,
+  ) => Promise<void>;
 }) {
-  const [selectedReasonId, setSelectedReasonId] = useState<number | null>(
-    reasons[0]?.id ?? null,
-  );
-  const [points, setPoints] = useState<number>(reasons[0]?.defaultPoints ?? 1);
+  // Multi-select picks: reasonId -> points each (per-student).
+  const [picks, setPicks] = useState<Record<number, number>>({});
   const [note, setNote] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const selected = reasons.find((r) => r.id === selectedReasonId) ?? null;
-  const pointsValid = Number.isInteger(points) && points >= 1;
+  const pickEntries = Object.entries(picks).map(([id, pts]) => ({
+    id: Number(id),
+    points: pts,
+    reason: reasons.find((r) => r.id === Number(id)) ?? null,
+  }));
+  const allValid =
+    pickEntries.length > 0 &&
+    pickEntries.every(
+      (p) => p.reason !== null && Number.isInteger(p.points) && p.points >= 1,
+    );
   // Cap the note client-side at the same 500-char limit the server enforces.
   const noteOver = note.length > 500;
 
-  useEffect(() => {
-    if (selected) setPoints(selected.defaultPoints);
-  }, [selectedReasonId]); // eslint-disable-line react-hooks/exhaustive-deps
+  function togglePick(r: Reason) {
+    setPicks((prev) => {
+      if (prev[r.id] !== undefined) {
+        const next = { ...prev };
+        delete next[r.id];
+        return next;
+      }
+      return { ...prev, [r.id]: r.defaultPoints };
+    });
+  }
+  function setPickPoints(id: number, pts: number) {
+    setPicks((prev) => ({ ...prev, [id]: pts }));
+  }
+  function removePick(id: number) {
+    setPicks((prev) => {
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  }
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1436,13 +1607,13 @@ function BulkAwardModal({
                     }}
                   >
                     {list.map((r) => {
-                      const active = r.id === selectedReasonId;
+                      const active = picks[r.id] !== undefined;
                       const isNeg = r.polarity === "negative";
                       return (
                         <button
                           key={r.id}
                           type="button"
-                          onClick={() => setSelectedReasonId(r.id)}
+                          onClick={() => togglePick(r)}
                           style={{
                             padding: "0.4rem 0.7rem",
                             borderRadius: "0.4rem",
@@ -1464,7 +1635,7 @@ function BulkAwardModal({
                             cursor: "pointer",
                           }}
                         >
-                          {r.name}{" "}
+                          {active ? "✓ " : ""}{r.name}{" "}
                           <span
                             style={{
                               opacity: 0.65,
@@ -1486,39 +1657,12 @@ function BulkAwardModal({
               ))}
             </div>
 
-            <label
-              style={{
-                display: "flex",
-                alignItems: "center",
-                gap: "0.5rem",
-                marginBottom: "1rem",
-              }}
-            >
-              <span style={{ fontSize: "0.9rem", color: "#475569" }}>
-                Points each:
-              </span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={points}
-                onChange={(e) => setPoints(Number(e.target.value))}
-                style={{
-                  width: "5rem",
-                  padding: "0.35rem 0.5rem",
-                  border: pointsValid
-                    ? "1px solid #cbd5e1"
-                    : "1px solid #dc2626",
-                  borderRadius: "0.35rem",
-                  fontSize: "0.95rem",
-                }}
-              />
-              {!pointsValid && (
-                <span style={{ fontSize: "0.8rem", color: "#dc2626" }}>
-                  Must be a whole number, 1 or more.
-                </span>
-              )}
-            </label>
+            <PicksEditor
+              picks={pickEntries}
+              onChangePoints={setPickPoints}
+              onRemove={removePick}
+              perStudent
+            />
 
             <label
               style={{
@@ -1631,18 +1775,22 @@ function BulkAwardModal({
               <button
                 type="button"
                 disabled={
-                  !selected ||
+                  !allValid ||
                   submitting ||
-                  !pointsValid ||
                   noteOver ||
                   studentIds.length === 0
                 }
                 onClick={async () => {
-                  if (!selected) return;
+                  if (!allValid) return;
                   setSubmitting(true);
                   setErr(null);
                   try {
-                    await onSubmit(selected, points, note.trim());
+                    const valid = pickEntries
+                      .filter((p): p is typeof p & { reason: Reason } =>
+                        p.reason !== null,
+                      )
+                      .map((p) => ({ reason: p.reason, points: p.points }));
+                    await onSubmit(valid, note.trim());
                   } catch (e) {
                     setErr(e instanceof Error ? e.message : "Failed");
                   } finally {
@@ -1658,14 +1806,12 @@ function BulkAwardModal({
                   fontWeight: 600,
                   cursor: submitting ? "wait" : "pointer",
                   opacity:
-                    !selected || submitting || !pointsValid || noteOver
-                      ? 0.6
-                      : 1,
+                    !allValid || submitting || noteOver ? 0.6 : 1,
                 }}
               >
                 {submitting
                   ? "Awarding…"
-                  : `Award ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`}
+                  : `Award ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}${pickEntries.length > 1 ? ` × ${pickEntries.length}` : ""}`}
               </button>
             </div>
           </>
