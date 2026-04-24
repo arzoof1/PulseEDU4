@@ -6179,6 +6179,10 @@ function App() {
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
     { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Family Communication", icon: IconUser },
+    // Teacher Roster lives in the always-visible Workspace section so
+    // every teacher sees their own roster without hunting under Tools.
+    // Cross-teacher access is still gated on the server.
+    { key: "teacherRoster", label: "Teacher Roster", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     // Read-only school-wide rewards catalog. Visible to every signed-in
     // staffer so teachers can browse what students can redeem. The
@@ -6202,13 +6206,6 @@ function App() {
   ];
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
-  ];
-  // Teacher Roster — every signed-in staff member can see their own
-  // roster; the API filters cross-teacher views to the core team.
-  // Surfacing the link to everyone is intentional so plain teachers
-  // don't have to hunt for it.
-  const teacherRosterNavSections: NavSection[] = [
-    { key: "teacherRoster", label: "Teacher Roster", icon: IconUser },
   ];
   const canAccessMtssHub =
     Boolean(authUser?.isSuperUser) ||
@@ -6574,7 +6571,6 @@ function App() {
                 {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
                 {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
                 {canAccessMtssHub && mtssCoordNavSections.map(renderNavItem)}
-                {teacherRosterNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
