@@ -3596,6 +3596,62 @@ export function SchoolWidePbisAdminView() {
   );
 }
 
+// AuthImage — fetches a private object via authFetch (so it can attach the
+// bearer token), then renders the bytes via a blob: object URL. Plain
+// `<img src="/api/...">` won't work for our private endpoints because
+// browsers can't attach Authorization headers to image requests.
+function AuthImage({
+  src,
+  alt,
+  style,
+}: {
+  src: string;
+  alt: string;
+  style?: React.CSSProperties;
+}) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let createdUrl: string | null = null;
+    setFailed(false);
+    setUrl(null);
+    (async () => {
+      try {
+        const res = await authFetch(src);
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const blob = await res.blob();
+        if (cancelled) return;
+        createdUrl = URL.createObjectURL(blob);
+        setUrl(createdUrl);
+      } catch {
+        if (!cancelled) setFailed(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      if (createdUrl) URL.revokeObjectURL(createdUrl);
+    };
+  }, [src]);
+
+  if (failed) {
+    return (
+      <span aria-hidden="true" style={{ fontSize: "2.5rem" }}>
+        🎁
+      </span>
+    );
+  }
+  if (!url) {
+    return (
+      <span aria-hidden="true" style={{ fontSize: "1rem", color: "#94a3b8" }}>
+        …
+      </span>
+    );
+  }
+  return <img src={url} alt={alt} style={style} />;
+}
+
 // =============================================================================
 // ClassroomStoreView — per-teacher catalog of redeemable items.
 // Gradient header up top, "+ Add item" button, and a responsive grid of cards.
@@ -3809,7 +3865,7 @@ function StoreItemCard({
         }}
       >
         {item.imageUrl ? (
-          <img
+          <AuthImage
             src={`/api/storage${item.imageUrl}`}
             alt={item.name}
             style={{
@@ -4128,7 +4184,7 @@ function StoreItemModal({
             }}
           >
             {imageUrl ? (
-              <img
+              <AuthImage
                 src={`/api/storage${imageUrl}`}
                 alt=""
                 style={{
