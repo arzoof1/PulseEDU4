@@ -1360,3 +1360,54 @@ verifying pullouts created by other paths. If we ever want to gate
 Verify Pullouts too, add a 7th `feature_verify_pullout` /
 `super_feature_verify_pullout` pair and another `effectiveFeatures`
 entry — do not piggy-back on `RequestPullout`.
+
+---
+
+## Parked: HeartBEAT Snapshot — Parent / Student Portal
+
+User asked for a parent/student-facing dashboard ("snapshot of everything
+their student has in the form of school interactions") with a toggle
+system for what's included in a printable/emailable HeartBEAT Report.
+
+**Status (Apr 24, 2026):** Two canvas mockups built and approved-pending
+review; user paused this work to build the Bathroom Queue feature first
+and asked to resume after.
+
+- Mockup files (do not delete):
+  - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
+  - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/ReportToggle.tsx`
+- Canvas shape IDs: `heartbeat-snapshot`, `heartbeat-report-toggle`
+- Full proposal (data inventory, section order, 3-layer toggle system,
+  auth open questions) is in the chat history of the same session.
+
+**Open decisions blocking the real build (revisit when resuming):**
+1. Who logs in: parents only, or parents + students?
+2. Login method: email+password, magic link, or school-issued code?
+3. How parent ↔ student linking is established (registration vs admin-approved).
+4. Sibling switcher prominence in the identity strip.
+5. Parent vs student visibility differences per section.
+
+**Build sequence to follow when un-parking:**
+1. Parent auth + parent↔student linking
+2. Read-only dashboard (most data already exposed via existing routes)
+3. School-level "available sections" admin toggles (Settings → HeartBEAT)
+4. Per-parent saved toggle preferences
+5. PDF export of the HeartBEAT report
+6. Optional weekly emailed PDF (Resend already wired)
+
+## Next Up: Bathroom Queue (kiosk station)
+
+User wants a kiosk-style "bathroom queue" where students on a hall
+pass walk up to a shared computer, type their student ID, and join a
+queue shown on the side of the screen. When the active pass-holder
+returns, the next student is auto-promoted to "Up Next"; that student
+presses spacebar at the kiosk to start their pass.
+
+**Design questions still open** (asked in chat, awaiting answers):
+- Single bathroom station per school or per location/destination?
+- Does joining the queue require a teacher-issued pass first, or is
+  the queue itself the entry point (queue → spacebar = pass starts)?
+- One global queue or split (e.g., boys/girls)?
+- Where the live queue panel lives: the kiosk screen, or also visible
+  on teacher dashboards?
+- Timeout behavior if "Up Next" never spacebars in.
