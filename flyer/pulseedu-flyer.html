@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PulseEDU — School Operations &amp; Culture, In One Place</title>
+    <style>
+      :root {
+        --purple: #7c3aed;
+        --teal: #0d9488;
+        --green: #16a34a;
+        --ink: #0f172a;
+        --slate: #334155;
+        --muted: #64748b;
+        --line: #e2e8f0;
+        --soft: #f8fafc;
+        --accent: #ef4444;
+        --paper: #ffffff;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #eef2f7;
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        font-size: 13.5px;
+        line-height: 1.5;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .page {
+        width: 8.5in;
+        min-height: 11in;
+        margin: 24px auto;
+        background: var(--paper);
+        box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08);
+        padding: 0.55in 0.6in 0.55in 0.6in;
+        position: relative;
+        page-break-after: always;
+      }
+      .page:last-child { page-break-after: auto; }
+
+      /* ==== Hero ==== */
+      .hero {
+        background: linear-gradient(120deg, #7c3aed 0%, #0d9488 55%, #16a34a 100%);
+        color: white;
+        border-radius: 14px;
+        padding: 22px 26px;
+        position: relative;
+        overflow: hidden;
+        margin-bottom: 18px;
+      }
+      .hero::after {
+        content: "";
+        position: absolute;
+        right: -40px;
+        bottom: -40px;
+        width: 220px;
+        height: 220px;
+        background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 70%);
+        pointer-events: none;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        margin-bottom: 10px;
+      }
+      .brand-mark {
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        background: rgba(255,255,255,0.18);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        backdrop-filter: blur(4px);
+      }
+      .brand-mark svg { width: 22px; height: 22px; }
+      .brand-name {
+        font-size: 22px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+      }
+      .brand-tag {
+        margin-left: auto;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        opacity: 0.85;
+        background: rgba(255,255,255,0.16);
+        padding: 5px 10px;
+        border-radius: 999px;
+      }
+      .hero h1 {
+        margin: 6px 0 8px 0;
+        font-size: 26px;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+        font-weight: 800;
+      }
+      .hero p {
+        margin: 0;
+        font-size: 14px;
+        max-width: 95%;
+        opacity: 0.95;
+      }
+
+      /* ==== Section heading ==== */
+      .section-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 18px 0 10px 0;
+      }
+      .section-title h2 {
+        margin: 0;
+        font-size: 15px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+        color: var(--ink);
+      }
+      .section-title .bar {
+        flex: 1;
+        height: 2px;
+        background: linear-gradient(90deg, var(--purple), var(--teal), var(--green));
+        border-radius: 2px;
+        opacity: 0.8;
+      }
+
+      /* ==== Feature grid ==== */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 11px 12px;
+        background: var(--paper);
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+      }
+      .card .icon {
+        flex: 0 0 28px;
+        width: 28px;
+        height: 28px;
+        border-radius: 8px;
+        background: linear-gradient(135deg, var(--purple), var(--teal));
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card .icon svg { width: 16px; height: 16px; stroke: white; fill: none; stroke-width: 2; }
+      .card .body { flex: 1; min-width: 0; }
+      .card h3 {
+        margin: 0 0 2px 0;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .card p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--slate);
+        line-height: 1.45;
+      }
+
+      .card.teal .icon  { background: linear-gradient(135deg, #0d9488, #16a34a); }
+      .card.green .icon { background: linear-gradient(135deg, #16a34a, #65a30d); }
+      .card.purple .icon { background: linear-gradient(135deg, #7c3aed, #ec4899); }
+      .card.amber .icon { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+      .card.blue .icon { background: linear-gradient(135deg, #2563eb, #0d9488); }
+      .card.rose .icon { background: linear-gradient(135deg, #e11d48, #7c3aed); }
+
+      /* ==== Why we win ==== */
+      .why-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 10px;
+      }
+      .why {
+        border-radius: 10px;
+        padding: 12px 14px;
+        background: var(--soft);
+        border-left: 4px solid var(--teal);
+        position: relative;
+      }
+      .why .num {
+        position: absolute;
+        top: -8px;
+        right: 10px;
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        background: var(--ink);
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 700;
+      }
+      .why h3 {
+        margin: 0 0 4px 0;
+        font-size: 13px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .why p {
+        margin: 0;
+        font-size: 12px;
+        color: var(--slate);
+      }
+      .why:nth-child(1) { border-left-color: var(--purple); }
+      .why:nth-child(2) { border-left-color: var(--teal); }
+      .why:nth-child(3) { border-left-color: var(--green); }
+      .why:nth-child(4) { border-left-color: var(--accent); }
+      .why:nth-child(5) { border-left-color: #f59e0b; }
+      .why:nth-child(6) { border-left-color: #2563eb; }
+      .why:nth-child(7) { border-left-color: #ec4899; }
+      .why:nth-child(8) { border-left-color: #0ea5e9; }
+
+      /* ==== Bottom line / CTA ==== */
+      .bottom-line {
+        margin-top: 16px;
+        background: linear-gradient(120deg, #0f172a, #1e293b);
+        color: white;
+        border-radius: 12px;
+        padding: 18px 22px;
+        position: relative;
+        overflow: hidden;
+      }
+      .bottom-line::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 0% 0%, rgba(124,58,237,0.35), transparent 40%),
+          radial-gradient(circle at 100% 100%, rgba(22,163,74,0.30), transparent 40%);
+        pointer-events: none;
+      }
+      .bottom-line h2 {
+        margin: 0 0 6px 0;
+        font-size: 14px;
+        text-transform: uppercase;
+        letter-spacing: 0.16em;
+        opacity: 0.85;
+        position: relative;
+      }
+      .bottom-line p {
+        margin: 0;
+        font-size: 15px;
+        line-height: 1.5;
+        position: relative;
+      }
+
+      /* ==== Footer ==== */
+      .foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 18px;
+        padding-top: 10px;
+        border-top: 1px solid var(--line);
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .foot .pulse {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .foot .pulse svg { width: 14px; height: 14px; color: var(--accent); }
+
+      /* ==== Tagline ribbons across page two ==== */
+      .pillars {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        gap: 10px;
+        margin-bottom: 16px;
+      }
+      .pillar {
+        border-radius: 10px;
+        padding: 12px;
+        color: white;
+        text-align: center;
+        font-weight: 700;
+        font-size: 13px;
+        line-height: 1.3;
+      }
+      .pillar small {
+        display: block;
+        font-size: 10.5px;
+        font-weight: 500;
+        opacity: 0.92;
+        margin-top: 4px;
+        text-transform: none;
+        letter-spacing: 0;
+      }
+      .pillar.p1 { background: linear-gradient(135deg, #7c3aed, #ec4899); }
+      .pillar.p2 { background: linear-gradient(135deg, #0d9488, #2563eb); }
+      .pillar.p3 { background: linear-gradient(135deg, #16a34a, #65a30d); }
+
+      /* ==== Print rules ==== */
+      @page {
+        size: letter;
+        margin: 0.35in;
+      }
+      @media print {
+        html, body { background: white; }
+        .page {
+          margin: 0;
+          box-shadow: none;
+          padding: 0.25in 0.35in;
+          width: 100%;
+          min-height: auto;
+        }
+        .card, .why, .hero, .bottom-line, .pillar {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <!-- ============= PAGE 1 ============= -->
+    <section class="page">
+      <header class="hero">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12 H7 L9 6 L13 18 L15 9 L17 14 H21" />
+            </svg>
+          </div>
+          <div class="brand-name">PulseEDU</div>
+          <div class="brand-tag">School Culture &amp; Operations</div>
+        </div>
+        <h1>One platform for hallways, recognition, support, and family communication.</h1>
+        <p>PulseEDU collapses hall passes, tardies, PBIS, ISS, MTSS, pullouts, accommodations, and parent emails into a single fast system designed for the way teachers and admins actually work.</p>
+      </header>
+
+      <div class="section-title"><h2>Daily Classroom Operations</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M3 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16"/><path d="M3 21h18"/><path d="M14 12h.01"/></svg></div>
+          <div class="body"><h3>Digital Hall Passes</h3><p>Replace paper passes with a tap. Track who's out, where, and for how long. Tablet kiosk mode included.</p></div>
+        </div>
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <div class="body"><h3>Tardy Pass</h3><p>Log late arrivals in seconds. Patterns surface automatically across students and periods.</p></div>
+        </div>
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18"/><path d="M8 3v4"/><path d="M16 3v4"/></svg></div>
+          <div class="body"><h3>Bell Schedules</h3><p>Regular days, activity days, early release, and custom schedules — editable per school, applied live.</p></div>
+        </div>
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 22s-8-4-8-12a8 8 0 0 1 16 0c0 8-8 12-8 12z"/><circle cx="12" cy="10" r="3"/></svg></div>
+          <div class="body"><h3>Hall Pass Management</h3><p>Per-student pass limits with parent-approval workflow when limits need to be tightened.</p></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Positive Behavior Recognition (PBIS)</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7 7 .5-5 4.5 1.5 7L12 17l-6.5 4L7 14l-5-4.5L9 9z"/></svg></div>
+          <div class="body"><h3>PBIS Points</h3><p>Recognize the behaviors that matter, with reasons your school controls — fast enough that teachers actually use it.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div>
+          <div class="body"><h3>School Store</h3><p>A live rewards catalog students browse and earn toward — managed by PBIS, BS, or MTSS leads.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/><path d="M9 21V9"/></svg></div>
+          <div class="body"><h3>Classroom Store</h3><p>Per-teacher mini-store for in-room incentives that complement the school-wide catalog.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v12H5l-1 4z"/><path d="M8 9h8"/><path d="M8 13h5"/></svg></div>
+          <div class="body"><h3>Milestone Parent Emails</h3><p>Auto-celebrate when a student hits a points milestone. The first call home shouldn't be the bad one.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 16l4-4 3 3 5-7"/></svg></div>
+          <div class="body"><h3>PBIS Reports &amp; Dashboards</h3><p>Trends across staff, students, reasons, and time — with built-in alerts for invisible students, quiet teachers, reason imbalance, and cold periods.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 8v8"/><path d="M8 12h8"/><circle cx="12" cy="12" r="9"/></svg></div>
+          <div class="body"><h3>Configurable PBIS Reasons</h3><p>Your school's recognition vocabulary, not someone else's. Edit reasons, weight, and visibility.</p></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Multi-Tier Student Support (MTSS)</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card rose">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 7-7"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+          <div class="body"><h3>Log Intervention</h3><p>Trusted-adult check-ins logged in seconds and tied to the student record.</p></div>
+        </div>
+        <div class="card rose">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V6a2 2 0 0 1 2-2h2"/><path d="M9 4h6v4H9z"/></svg></div>
+          <div class="body"><h3>Request Pullout</h3><p>Teachers request a student be pulled for counseling, behavior, or academic support — no more sticky notes.</p></div>
+        </div>
+        <div class="card rose">
+          <div class="icon"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div>
+          <div class="body"><h3>Verify Pullouts</h3><p>Specialists verify, schedule, and close the loop so requests don't fall into a void.</p></div>
+        </div>
+        <div class="card rose">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></div>
+          <div class="body"><h3>MTSS Plans &amp; Templates</h3><p>Build, assign, and track formal student support plans using your school's own templates.</p></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span class="pulse">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 H7 L9 6 L13 18 L15 9 L17 14 H21"/></svg>
+          PulseEDU
+        </span>
+        <span>Page 1 of 2 — School Operations &amp; Culture, in one place.</span>
+      </div>
+    </section>
+
+    <!-- ============= PAGE 2 ============= -->
+    <section class="page">
+      <div class="pillars">
+        <div class="pillar p1">Run the Building<small>Passes • Tardies • ISS • Bell Schedules</small></div>
+        <div class="pillar p2">Build the Culture<small>PBIS • School Store • Milestone Emails</small></div>
+        <div class="pillar p3">Support the Student<small>MTSS • Pullouts • Accommodations • Family Comm</small></div>
+      </div>
+
+      <div class="section-title"><h2>ISS &amp; In-School Suspension Operations</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card amber">
+          <div class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <div class="body"><h3>Live ISS Dashboard</h3><p>See who's on the way, who's arrived, and who's still missing — in real time. No more radio chatter.</p></div>
+        </div>
+        <div class="card amber">
+          <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></svg></div>
+          <div class="body"><h3>Daily Roster &amp; Attendance</h3><p>One screen for the day's roster, with arrival timestamps and cancellation handling.</p></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Academic Insights for Teachers</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card blue">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-2-2"/></svg></div>
+          <div class="body"><h3>Teacher Roster + FAST Scores</h3><p>Per-class roster with PM1/PM2/PM3 score pills, color-coded by performance. Click to flip between proficiency level and scale score.</p></div>
+        </div>
+        <div class="card blue">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 14l3-3 4 4 5-6"/></svg></div>
+          <div class="body"><h3>Hide-What-You-Don't-Need</h3><p>Toggle optional columns so each teacher sees the data that matters for their students.</p></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Family Communication</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card green">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M22 6l-10 7L2 6"/></svg></div>
+          <div class="body"><h3>Family Communication Center</h3><p>Send parent emails with smart tokens — student name, hall pass count, PBIS points, lost minutes — so personalization is automatic.</p></div>
+        </div>
+        <div class="card green">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg></div>
+          <div class="body"><h3>Daily Digest Emails</h3><p>Optional summaries that keep stakeholders informed without flooding inboxes.</p></div>
+        </div>
+        <div class="card green">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+          <div class="body"><h3>Positive-First Auto-Emails</h3><p>Milestone celebrations send themselves, making good news the default contact home.</p></div>
+        </div>
+        <div class="card green">
+          <div class="icon"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M9 9h6v6H9z"/></svg></div>
+          <div class="body"><h3>Editable Templates</h3><p>Templates are yours to tune — your tone, your branding, your variables.</p></div>
+        </div>
+      </div>
+
+      <div class="section-title"><h2>Accommodations, ESE &amp; Configuration</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></div>
+          <div class="body"><h3>Accommodations Catalog &amp; Logs</h3><p>School-wide accommodations every teacher can reference, with structured logging of what was provided and when.</p></div>
+        </div>
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15 1.65 1.65 0 0 0 3.09 14H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.6 1.65 1.65 0 0 0 10 3.09V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c0 .66.39 1.25 1 1.51H21a2 2 0 0 1 0 4h-.09c-.61.26-1 .85-1 1.51z"/></svg></div>
+          <div class="body"><h3>Per-School Feature Toggles</h3><p>Each building turns on only the modules it uses. Hall Passes, Tardy Pass, and Teacher Roster are always on; everything else is opt-in.</p></div>
+        </div>
+      </div>
+
+      <!-- ============ Why we win ============ -->
+      <div class="section-title"><h2>Why PulseEDU Is the Best Solution</h2><div class="bar"></div></div>
+      <div class="why-grid">
+        <div class="why"><div class="num">1</div><h3>One platform instead of seven</h3><p>Replaces hall passes, PBIS, ISS, parent email, pullout forms, and the FAST spreadsheet — with one login your staff already knows.</p></div>
+        <div class="why"><div class="num">2</div><h3>Culture data your principal can act on</h3><p>Auto-flags invisible students, quiet teachers, reason imbalance, and cold periods. Stop having PBIS data — start using it.</p></div>
+        <div class="why"><div class="num">3</div><h3>Designed by-the-screen for teachers</h3><p>A pass takes one tap. A PBIS recognition takes two. Teachers actually use it because it's faster than paper.</p></div>
+        <div class="why"><div class="num">4</div><h3>The first call home isn't the bad one</h3><p>Milestone emails and templated family comms make positive contact the default — changing parent relationships at the building level.</p></div>
+        <div class="why"><div class="num">5</div><h3>MTSS without the binder</h3><p>Trusted-adult checks, pullouts, behavior reviews, and formal MTSS plans live on the same student record.</p></div>
+        <div class="why"><div class="num">6</div><h3>Real-time ISS &amp; pullout visibility</h3><p>The dashboard tells you who's on the way, arrived, or still in transit — no more "where is so-and-so?"</p></div>
+        <div class="why"><div class="num">7</div><h3>Recognition tied to rewards, automatically</h3><p>PBIS Points and the School Store share one ledger. No tickets to lose, no spreadsheets to reconcile.</p></div>
+        <div class="why"><div class="num">8</div><h3>Built to bend to your school</h3><p>Per-school feature toggles, custom PBIS reasons, custom pullout reasons, custom bell schedules, custom email templates.</p></div>
+      </div>
+
+      <div class="bottom-line">
+        <h2>Bottom Line</h2>
+        <p>PulseEDU turns the daily chaos of running a school — passes, tardies, pullouts, ISS, PBIS, parent contacts, MTSS plans, and academic data — into a single, fast, teacher-friendly system that makes positive school culture the path of least resistance.</p>
+      </div>
+
+      <div class="foot">
+        <span class="pulse">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 H7 L9 6 L13 18 L15 9 L17 14 H21"/></svg>
+          PulseEDU
+        </span>
+        <span>Page 2 of 2 — Ready to deploy. Ready to scale.</span>
+      </div>
+    </section>
+  </body>
+</html>

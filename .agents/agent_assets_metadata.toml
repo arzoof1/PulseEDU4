@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "1lPm8bprrCMyNB45a9ZrH"
+uri = "file://flyer/pulseedu-flyer.pdf"
+type = "pdf"
+title = "PulseEDU — Two-Page Flyer (PDF)"
