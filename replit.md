@@ -1363,15 +1363,15 @@ entry — do not piggy-back on `RequestPullout`.
 
 ---
 
-## Parked: HeartBEAT Snapshot — Parent / Student Portal
+## Active: HeartBEAT Snapshot — Parent / Student Portal
 
 User asked for a parent/student-facing dashboard ("snapshot of everything
 their student has in the form of school interactions") with a toggle
 system for what's included in a printable/emailable HeartBEAT Report.
 
-**Status (Apr 24, 2026):** Two canvas mockups built and approved-pending
-review; user paused this work to build the Bathroom Queue feature first
-and asked to resume after.
+**Status (Apr 24, 2026):** Mockups approved ("that look amazing"). User
+wants to build it for real next. Bathroom Queue feature has been moved
+to the parked list below.
 
 - Mockup files (do not delete):
   - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
@@ -1395,19 +1395,32 @@ and asked to resume after.
 5. PDF export of the HeartBEAT report
 6. Optional weekly emailed PDF (Resend already wired)
 
-## Next Up: Bathroom Queue (kiosk station)
+## Parked: Bathroom Queue (kiosk station)
 
-User wants a kiosk-style "bathroom queue" where students on a hall
-pass walk up to a shared computer, type their student ID, and join a
-queue shown on the side of the screen. When the active pass-holder
-returns, the next student is auto-promoted to "Up Next"; that student
-presses spacebar at the kiosk to start their pass.
+User wants a kiosk-style "bathroom queue" tied to the existing kiosk
+system. While a pass is active, the green countdown screen also accepts
+keyboard input — pressing spacebar pops a small field for a student ID,
+which adds them to a queue shown on the side. When the current pass
+ends, the next queued student is auto-promoted to "Up Next" and they
+press spacebar to start their own pass.
 
-**Design questions still open** (asked in chat, awaiting answers):
-- Single bathroom station per school or per location/destination?
-- Does joining the queue require a teacher-issued pass first, or is
-  the queue itself the entry point (queue → spacebar = pass starts)?
-- One global queue or split (e.g., boys/girls)?
-- Where the live queue panel lives: the kiosk screen, or also visible
-  on teacher dashboards?
-- Timeout behavior if "Up Next" never spacebars in.
+**Status (Apr 24, 2026):** Idea captured, parked. User wants to keep
+working on HeartBEAT first.
+
+**Decisions already made (don't re-ask):**
+1. Kiosk is the pass issuer — no teacher step. Walk up → queue →
+   spacebar → pass starts.
+2. One shared queue per kiosk (no boys/girls split).
+3. Auto-skip "Up Next" after 60 seconds with no spacebar; promote next.
+4. Queue resets at the end of each period. **No new passes can be
+   created during the last 10 minutes of any period.**
+5. Must preserve the existing big green countdown screen — the queue
+   lives alongside it, not in place of it.
+
+**Still open (ask when un-parking):**
+- Where the queue panel lives visually on the green screen (right
+  rail? bottom strip?).
+- Whether teachers/admins see the queue from their dashboards too.
+- What "end of period" means when the school's bell schedule isn't
+  fully wired (does it use existing bell schedule, or a per-kiosk
+  timer?).
