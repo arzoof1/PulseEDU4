@@ -1163,11 +1163,10 @@ function ButtonSideEditor({
               <button
                 type="button"
                 onClick={() => removeColor(i)}
-                disabled={side.colors.length <= 1}
-                style={smallBtn(side.colors.length <= 1)}
+                style={smallBtn(false)}
                 title={
                   side.colors.length <= 1
-                    ? "Remove all to clear customization"
+                    ? "Remove — restores the default app styling"
                     : "Remove this color"
                 }
               >
