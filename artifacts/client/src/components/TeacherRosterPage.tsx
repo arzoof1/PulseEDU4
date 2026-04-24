@@ -120,18 +120,24 @@ function ScorePill({
   pmLabel: string;
 }) {
   const [flipped, setFlipped] = useState(false);
+  // Pills sized to roughly match the 44px bucket icon for a consistent
+  // visual rhythm across the row. Raw scale scores can be 3 digits, so
+  // minWidth needs to accommodate that without wrapping.
   if (score == null || placement == null) {
     return (
       <span
         title={`${pmLabel}: no score`}
         style={{
-          display: "inline-block",
-          minWidth: 28,
-          padding: "2px 6px",
-          borderRadius: 6,
+          display: "inline-flex",
+          alignItems: "center",
+          justifyContent: "center",
+          minWidth: 44,
+          height: 36,
+          padding: "0 10px",
+          borderRadius: 8,
           background: "#e5e7eb",
           color: "#6b7280",
-          fontSize: 11,
+          fontSize: 14,
           textAlign: "center",
         }}
       >
@@ -148,19 +154,22 @@ function ScorePill({
       aria-pressed={flipped}
       onClick={() => setFlipped((f) => !f)}
       style={{
-        display: "inline-block",
-        minWidth: 36,
-        padding: "2px 8px",
-        borderRadius: 6,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        minWidth: 44,
+        height: 36,
+        padding: "0 10px",
+        borderRadius: 8,
         border: "none",
         background: LEVEL_BG[placement.level],
         color: LEVEL_FG[placement.level],
-        fontSize: 11,
-        fontWeight: 600,
+        fontSize: 16,
+        fontWeight: 700,
         textAlign: "center",
         cursor: "pointer",
         fontFamily: "inherit",
-        lineHeight: "16px",
+        lineHeight: 1,
       }}
     >
       {flipped ? score : placement.subLevel}
