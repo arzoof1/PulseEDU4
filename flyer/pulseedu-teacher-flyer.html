@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>PulseEDU for Teachers — Less Paperwork, More Teaching</title>
+    <style>
+      :root {
+        --purple: #7c3aed;
+        --teal: #0d9488;
+        --green: #16a34a;
+        --ink: #0f172a;
+        --slate: #334155;
+        --muted: #64748b;
+        --line: #e2e8f0;
+        --soft: #f8fafc;
+        --accent: #ef4444;
+        --paper: #ffffff;
+      }
+
+      * { box-sizing: border-box; }
+
+      html, body {
+        margin: 0;
+        padding: 0;
+        background: #eef2f7;
+        color: var(--ink);
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, sans-serif;
+        font-size: 12.5px;
+        line-height: 1.4;
+        -webkit-font-smoothing: antialiased;
+      }
+
+      .page {
+        width: 8.5in;
+        min-height: 11in;
+        margin: 24px auto;
+        background: var(--paper);
+        box-shadow: 0 8px 32px rgba(15, 23, 42, 0.08);
+        padding: 0.4in 0.5in;
+        position: relative;
+      }
+
+      /* ==== Hero ==== */
+      .hero {
+        background: linear-gradient(120deg, #7c3aed 0%, #0d9488 55%, #16a34a 100%);
+        color: white;
+        border-radius: 12px;
+        padding: 18px 22px;
+        position: relative;
+        overflow: hidden;
+        margin-bottom: 14px;
+      }
+      .hero::after {
+        content: "";
+        position: absolute;
+        right: -40px;
+        bottom: -40px;
+        width: 200px;
+        height: 200px;
+        background: radial-gradient(circle, rgba(255,255,255,0.18), transparent 70%);
+        pointer-events: none;
+      }
+      .brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 6px;
+      }
+      .brand-mark {
+        width: 32px;
+        height: 32px;
+        border-radius: 8px;
+        background: rgba(255,255,255,0.18);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .brand-mark svg { width: 18px; height: 18px; }
+      .brand-name {
+        font-size: 18px;
+        font-weight: 800;
+        letter-spacing: 0.5px;
+      }
+      .brand-tag {
+        margin-left: auto;
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.18em;
+        opacity: 0.9;
+        background: rgba(255,255,255,0.16);
+        padding: 4px 9px;
+        border-radius: 999px;
+      }
+      .hero h1 {
+        margin: 4px 0 6px 0;
+        font-size: 22px;
+        line-height: 1.2;
+        letter-spacing: -0.01em;
+        font-weight: 800;
+      }
+      .hero p {
+        margin: 0;
+        font-size: 12.5px;
+        max-width: 95%;
+        opacity: 0.95;
+      }
+
+      /* ==== Quick stats / promise strip ==== */
+      .promise {
+        display: grid;
+        grid-template-columns: repeat(4, 1fr);
+        gap: 8px;
+        margin: 0 0 14px 0;
+      }
+      .promise .item {
+        background: var(--soft);
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 9px 11px;
+        text-align: center;
+      }
+      .promise .num {
+        font-size: 18px;
+        font-weight: 800;
+        background: linear-gradient(135deg, var(--purple), var(--teal));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        line-height: 1;
+      }
+      .promise .lbl {
+        margin-top: 3px;
+        font-size: 10.5px;
+        color: var(--slate);
+        font-weight: 600;
+        line-height: 1.25;
+      }
+
+      /* ==== Section heading ==== */
+      .section-title {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        margin: 12px 0 8px 0;
+      }
+      .section-title h2 {
+        margin: 0;
+        font-size: 13px;
+        font-weight: 800;
+        letter-spacing: 0.05em;
+        text-transform: uppercase;
+        color: var(--ink);
+      }
+      .section-title .bar {
+        flex: 1;
+        height: 2px;
+        background: linear-gradient(90deg, var(--purple), var(--teal), var(--green));
+        border-radius: 2px;
+        opacity: 0.8;
+      }
+
+      /* ==== Feature grid ==== */
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px;
+      }
+      .card {
+        border: 1px solid var(--line);
+        border-radius: 9px;
+        padding: 9px 11px;
+        background: var(--paper);
+        display: flex;
+        gap: 9px;
+        align-items: flex-start;
+      }
+      .card .icon {
+        flex: 0 0 26px;
+        width: 26px;
+        height: 26px;
+        border-radius: 7px;
+        background: linear-gradient(135deg, var(--purple), var(--teal));
+        color: white;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+      .card .icon svg { width: 15px; height: 15px; stroke: white; fill: none; stroke-width: 2; }
+      .card .body { flex: 1; min-width: 0; }
+      .card h3 {
+        margin: 0 0 1px 0;
+        font-size: 12px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .card p {
+        margin: 0;
+        font-size: 11px;
+        color: var(--slate);
+        line-height: 1.4;
+      }
+
+      .card.teal .icon  { background: linear-gradient(135deg, #0d9488, #16a34a); }
+      .card.green .icon { background: linear-gradient(135deg, #16a34a, #65a30d); }
+      .card.purple .icon { background: linear-gradient(135deg, #7c3aed, #ec4899); }
+      .card.amber .icon { background: linear-gradient(135deg, #f59e0b, #ef4444); }
+      .card.blue .icon { background: linear-gradient(135deg, #2563eb, #0d9488); }
+
+      /* ==== Why teachers love it ==== */
+      .why-strip {
+        margin-top: 14px;
+        background: linear-gradient(120deg, #0f172a, #1e293b);
+        color: white;
+        border-radius: 12px;
+        padding: 14px 18px;
+        position: relative;
+        overflow: hidden;
+      }
+      .why-strip::before {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(circle at 0% 0%, rgba(124,58,237,0.32), transparent 40%),
+          radial-gradient(circle at 100% 100%, rgba(22,163,74,0.28), transparent 40%);
+        pointer-events: none;
+      }
+      .why-strip h2 {
+        position: relative;
+        margin: 0 0 8px 0;
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.14em;
+        opacity: 0.9;
+      }
+      .why-grid {
+        position: relative;
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 8px 16px;
+      }
+      .why-grid .row {
+        display: flex;
+        gap: 8px;
+        align-items: flex-start;
+        font-size: 12px;
+        line-height: 1.4;
+      }
+      .why-grid .check {
+        flex: 0 0 18px;
+        width: 18px;
+        height: 18px;
+        border-radius: 50%;
+        background: linear-gradient(135deg, #16a34a, #0d9488);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        margin-top: 1px;
+      }
+      .why-grid .check svg { width: 11px; height: 11px; stroke: white; fill: none; stroke-width: 3; }
+      .why-grid b { color: white; }
+
+      /* ==== Footer ==== */
+      .foot {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 14px;
+        padding-top: 9px;
+        border-top: 1px solid var(--line);
+        font-size: 10.5px;
+        color: var(--muted);
+      }
+      .foot .pulse {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-weight: 700;
+        color: var(--ink);
+      }
+      .foot .pulse svg { width: 13px; height: 13px; color: var(--accent); }
+
+      /* ==== Print rules ==== */
+      @page {
+        size: letter;
+        margin: 0.3in;
+      }
+      @media print {
+        html, body { background: white; }
+        .page {
+          margin: 0;
+          box-shadow: none;
+          padding: 0.2in 0.3in;
+          width: 100%;
+          min-height: auto;
+        }
+        .card, .hero, .why-strip, .promise .item {
+          break-inside: avoid;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <section class="page">
+      <header class="hero">
+        <div class="brand">
+          <div class="brand-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M3 12 H7 L9 6 L13 18 L15 9 L17 14 H21" />
+            </svg>
+          </div>
+          <div class="brand-name">PulseEDU</div>
+          <div class="brand-tag">For Teachers</div>
+        </div>
+        <h1>Less paperwork. More teaching.</h1>
+        <p>Hall passes, tardies, parent emails, PBIS, interventions, accommodations, and your class roster — one fast app, one login, and almost everything is two taps or fewer.</p>
+      </header>
+
+      <div class="promise">
+        <div class="item"><div class="num">1 tap</div><div class="lbl">to issue a hall pass</div></div>
+        <div class="item"><div class="num">2 taps</div><div class="lbl">to recognize a student</div></div>
+        <div class="item"><div class="num">0 forms</div><div class="lbl">to request a pullout</div></div>
+        <div class="item"><div class="num">Auto</div><div class="lbl">positive parent emails</div></div>
+      </div>
+
+      <div class="section-title"><h2>Your Daily Toolkit</h2><div class="bar"></div></div>
+      <div class="grid">
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M3 21V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16"/><path d="M3 21h18"/><path d="M14 12h.01"/></svg></div>
+          <div class="body"><h3>Hall Passes</h3><p>Issue a digital pass in one tap. See who's out, where, and how long. No paper, no clipboard.</p></div>
+        </div>
+        <div class="card teal">
+          <div class="icon"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+          <div class="body"><h3>Tardy Pass</h3><p>Log a late arrival in seconds. Patterns build automatically — no spreadsheet to maintain.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M12 2l3 7 7 .5-5 4.5 1.5 7L12 17l-6.5 4L7 14l-5-4.5L9 9z"/></svg></div>
+          <div class="body"><h3>PBIS Points</h3><p>Recognize the behaviors you want to see. Two taps and you're done — fast enough to actually use it.</p></div>
+        </div>
+        <div class="card purple">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg></div>
+          <div class="body"><h3>School &amp; Classroom Store</h3><p>Students see exactly what they're earning toward. Optional in-room store for your own incentives.</p></div>
+        </div>
+        <div class="card green">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M4 4h16v16H4z"/><path d="M22 6l-10 7L2 6"/></svg></div>
+          <div class="body"><h3>Family Communication</h3><p>Send parent emails with student data auto-filled — name, points, pass count, lost minutes. No typing the same thing 20 times.</p></div>
+        </div>
+        <div class="card green">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+          <div class="body"><h3>Positive-First Auto-Emails</h3><p>Milestone celebrations send themselves, so the first call home isn't the bad one.</p></div>
+        </div>
+        <div class="card blue">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11l-3 3-2-2"/></svg></div>
+          <div class="body"><h3>Your Teacher Roster</h3><p>Your class on one screen with FAST PM1/PM2/PM3 score pills, color-coded by level. Click a pill to flip between proficiency and scale score.</p></div>
+        </div>
+        <div class="card blue">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13h6"/><path d="M9 17h6"/></svg></div>
+          <div class="body"><h3>Accommodations at a Glance</h3><p>School-wide accommodations list right in the app. Log what you provided, when, in seconds.</p></div>
+        </div>
+        <div class="card amber">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M9 11l3 3 7-7"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg></div>
+          <div class="body"><h3>Log Intervention</h3><p>Trusted-adult check-ins logged to the student record in a few taps — no separate form, no email chain.</p></div>
+        </div>
+        <div class="card amber">
+          <div class="icon"><svg viewBox="0 0 24 24"><path d="M16 4h2a2 2 0 0 1 2 2v14l-4-2-4 2-4-2-4 2V6a2 2 0 0 1 2-2h2"/><path d="M9 4h6v4H9z"/></svg></div>
+          <div class="body"><h3>Request a Pullout</h3><p>Need a counselor or specialist to pull a student? Tap, pick a reason, send. Specialists see it instantly.</p></div>
+        </div>
+      </div>
+
+      <div class="why-strip">
+        <h2>Why Teachers Love PulseEDU</h2>
+        <div class="why-grid">
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>Faster than paper.</b> Most actions are 1–2 taps. Built for the hallway, not the desk.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>One login for everything.</b> Stop juggling tabs, sticky notes, and group texts.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>Personalized parent emails in seconds.</b> Smart tokens fill in student data automatically.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>Recognition that actually counts.</b> PBIS points connect straight to the school store — no tickets to lose.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>Your roster, your view.</b> See FAST scores at a glance. Hide the columns you don't need.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>Support is one tap away.</b> Pullouts and interventions go straight to the right person — no chasing.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>The good news goes out automatically.</b> Milestone emails change parent relationships before you say a word.</div></div>
+          <div class="row"><div class="check"><svg viewBox="0 0 24 24"><polyline points="20 6 9 17 4 12"/></svg></div><div><b>Works on the device you already carry.</b> Phone, tablet, or laptop — same app, same speed.</div></div>
+        </div>
+      </div>
+
+      <div class="foot">
+        <span class="pulse">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12 H7 L9 6 L13 18 L15 9 L17 14 H21"/></svg>
+          PulseEDU
+        </span>
+        <span>Designed for teachers. Built for classrooms. Live every period of every day.</span>
+      </div>
+    </section>
+  </body>
+</html>

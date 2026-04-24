@@ -6,3 +6,9 @@ id = "1lPm8bprrCMyNB45a9ZrH"
 uri = "file://flyer/pulseedu-flyer.pdf"
 type = "pdf"
 title = "PulseEDU — Two-Page Flyer (PDF)"
+
+[[outputs]]
+id = "VgWabmnkj8MIq2e-eFLXT"
+uri = "file://flyer/pulseedu-teacher-flyer.pdf"
+type = "pdf"
+title = "PulseEDU for Teachers — One-Page Flyer (PDF)"
