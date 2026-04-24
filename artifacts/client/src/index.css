@@ -817,6 +817,13 @@ ul[style*="listStyle: none"] li button:hover {
   .sidebar .section-label {
     display: none;
   }
+  /* The Workspace / Tools EKG separator only makes sense as a horizontal
+     divider inside the vertical desktop sidebar. In the mobile horizontal
+     swipe strip it has no labels above/below it (those are hidden) and its
+     `width: 100%` SVG would float oddly between nav buttons, so hide it. */
+  .sidebar .nav-admin-divider {
+    display: none;
+  }
   .nav-item {
     white-space: nowrap;
   }
