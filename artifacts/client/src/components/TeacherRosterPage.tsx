@@ -550,7 +550,7 @@ export default function TeacherRosterPage({
           color: "#374151",
         }}
       >
-        <span>Pills: PM1 / PM2 / PM3 (sub-level on current chart; PM3 on prior-grade chart)</span>
+        <span>Pills: PM3 / PM1 / PM2 (sub-level on current chart; PM3 on prior-grade chart)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
           LG (learning-gain bucket) =
           <BucketIcon
