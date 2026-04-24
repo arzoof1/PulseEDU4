@@ -325,9 +325,14 @@ export default function SchoolBrandingPanel() {
   }
 
   function removeGradientStop(idx: number) {
-    setGradientColors((prev) =>
-      prev.length <= 1 ? prev : prev.filter((_, i) => i !== idx),
-    );
+    setGradientColors((prev) => {
+      // Removing the last remaining color would leave an invalid empty
+      // gradient (the schema requires 1-4), so instead we restore the
+      // PulseEDU default. This gives admins a way to "undo" without
+      // hunting for the Restore Defaults button.
+      if (prev.length <= 1) return DEFAULT_GRADIENT;
+      return prev.filter((_, i) => i !== idx);
+    });
   }
 
   // Reads a File into an HTMLImageElement, cleans it, and updates state.
@@ -604,11 +609,10 @@ export default function SchoolBrandingPanel() {
               <button
                 type="button"
                 onClick={() => removeGradientStop(i)}
-                disabled={gradientColors.length <= 1}
-                style={smallBtn(gradientColors.length <= 1)}
+                style={smallBtn(false)}
                 title={
                   gradientColors.length <= 1
-                    ? "Need at least one color"
+                    ? "Remove — restores the default gradient"
                     : "Remove this color"
                 }
               >
