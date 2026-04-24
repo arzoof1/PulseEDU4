@@ -245,6 +245,7 @@ export default function PbisPointsHub() {
     student: Student,
     reason: Reason,
     points: number,
+    note?: string,
   ): Promise<void> {
     const res = await authFetch("/api/pbis", {
       method: "POST",
@@ -254,6 +255,7 @@ export default function PbisPointsHub() {
         reason: reason.name,
         reasonId: reason.id,
         points,
+        ...(note && note.trim() ? { note: note.trim() } : {}),
       }),
     });
     if (!res.ok) throw new Error("Failed to award points");
@@ -410,13 +412,14 @@ export default function PbisPointsHub() {
         <AwardModal
           student={awardingFor}
           reasons={reasons}
+          templates={noteTemplates}
           onClose={() => setAwardingFor(null)}
-          onSubmit={async (picks) => {
+          onSubmit={async (picks, note) => {
             // Award each picked behavior in sequence so totals & milestones
             // update once per row. If any one fails the modal surfaces the
             // error and stops; previously-awarded picks remain on the record.
             for (const p of picks) {
-              await awardPoints(awardingFor, p.reason, p.points);
+              await awardPoints(awardingFor, p.reason, p.points, note);
             }
             setAwardingFor(null);
           }}
@@ -978,19 +981,27 @@ function StudentCard({
 function AwardModal({
   student,
   reasons,
+  templates,
   onClose,
   onSubmit,
 }: {
   student: Student;
   reasons: Reason[];
+  templates: NoteTemplate[];
   onClose: () => void;
-  onSubmit: (picks: { reason: Reason; points: number }[]) => Promise<void>;
+  onSubmit: (
+    picks: { reason: Reason; points: number }[],
+    note: string,
+  ) => Promise<void>;
 }) {
   // Multi-select: map of reasonId -> points (per-pick, editable). Tiles toggle
   // on/off; the strip below shows each pick with its own points input.
   const [picks, setPicks] = useState<Record<number, number>>({});
+  const [note, setNote] = useState<string>("");
   const [submitting, setSubmitting] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  // Cap the note client-side at the same 500-char limit the server enforces.
+  const noteOver = note.length > 500;
 
   const pickEntries = Object.entries(picks).map(([id, pts]) => ({
     id: Number(id),
@@ -1180,6 +1191,78 @@ function AwardModal({
               onRemove={removePick}
             />
 
+            <label
+              style={{
+                display: "block",
+                marginBottom: "1rem",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  marginBottom: "0.3rem",
+                }}
+              >
+                <span style={{ fontSize: "0.9rem", color: "#475569" }}>
+                  Note (optional)
+                </span>
+                <div style={{ flex: 1 }} />
+                {templates.length > 0 && (
+                  <select
+                    value=""
+                    onChange={(e) => {
+                      const id = Number(e.target.value);
+                      const t = templates.find((x) => x.id === id);
+                      if (t) setNote(t.body);
+                    }}
+                    style={{
+                      marginRight: "0.5rem",
+                      padding: "0.2rem 0.4rem",
+                      border: "1px solid #cbd5e1",
+                      borderRadius: "0.3rem",
+                      fontSize: "0.78rem",
+                      background: "white",
+                      color: "#0e7490",
+                      cursor: "pointer",
+                    }}
+                    aria-label="Insert note template"
+                  >
+                    <option value="">Use template…</option>
+                    {templates.map((t) => (
+                      <option key={t.id} value={t.id}>
+                        {t.title}
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    color: noteOver ? "#dc2626" : "#94a3b8",
+                  }}
+                >
+                  {note.length}/500
+                </span>
+              </div>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={3}
+                placeholder={`Why is ${student.firstName} earning these points? (Saved on the student's record.)`}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.6rem",
+                  border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.9rem",
+                  fontFamily: "inherit",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            </label>
+
             {err && (
               <div
                 style={{
@@ -1212,7 +1295,7 @@ function AwardModal({
               </button>
               <button
                 type="button"
-                disabled={!allValid || submitting}
+                disabled={!allValid || submitting || noteOver}
                 onClick={async () => {
                   if (!allValid) return;
                   setSubmitting(true);
@@ -1223,7 +1306,7 @@ function AwardModal({
                         p.reason !== null,
                       )
                       .map((p) => ({ reason: p.reason, points: p.points }));
-                    await onSubmit(valid);
+                    await onSubmit(valid, note.trim());
                   } catch (e) {
                     setErr(e instanceof Error ? e.message : "Failed");
                   } finally {
@@ -1238,7 +1321,7 @@ function AwardModal({
                   color: "white",
                   fontWeight: 600,
                   cursor: submitting ? "wait" : "pointer",
-                  opacity: !allValid || submitting ? 0.6 : 1,
+                  opacity: !allValid || submitting || noteOver ? 0.6 : 1,
                 }}
               >
                 {submitting
