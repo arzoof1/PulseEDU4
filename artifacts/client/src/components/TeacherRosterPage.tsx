@@ -91,6 +91,21 @@ const BUCKET_COLOR: Record<"green" | "orange" | "red", string> = {
   red: "#dc2626",
 };
 
+// Pastel fill + dark text/stroke for the bucket icon. The earlier
+// solid-color fill with white text didn't have enough contrast for the
+// gap number to be readable at any size, so the icon now uses a tinted
+// pail with the matching dark color for the stroke and number.
+const BUCKET_FILL: Record<"green" | "orange" | "red", string> = {
+  green: "#dcfce7",
+  orange: "#fef3c7",
+  red: "#fee2e2",
+};
+const BUCKET_INK: Record<"green" | "orange" | "red", string> = {
+  green: "#14532d",
+  orange: "#78350f",
+  red: "#7f1d1d",
+};
+
 // Click-to-flip pill. Default face shows the FAST sub-level; clicking
 // (or focusing + pressing Enter/Space) flips it to show the raw scale
 // score. Each pill manages its own flipped state so users can pop open
@@ -153,9 +168,11 @@ function ScorePill({
   );
 }
 
-// Pail-shaped SVG bucket — filled with the gap color, with the gap
-// number (or check) rendered on top in white. Used in place of the old
-// plain circular badge.
+// Pail-shaped SVG bucket. Pastel fill + dark stroke + dark number for
+// readability — solid backgrounds with white text read poorly,
+// especially at the previous 22px size. Now sized at 44px (≈ 2× the
+// original) so the gap number is comfortably legible.
+const BUCKET_PX = 44;
 function BucketIcon({ bucket }: { bucket: Bucket }) {
   if (bucket.targetScore == null || bucket.color == null) return null;
   const gap = bucket.gap ?? 0;
@@ -163,7 +180,8 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
     gap <= 0
       ? `At/above target (target ${bucket.targetScore})`
       : `${gap} pt${gap === 1 ? "" : "s"} to next level (target ${bucket.targetScore})`;
-  const fill = BUCKET_COLOR[bucket.color];
+  const fill = BUCKET_FILL[bucket.color];
+  const ink = BUCKET_INK[bucket.color];
   const overlay = gap <= 0 ? "✓" : String(Math.abs(gap));
   return (
     <span
@@ -172,14 +190,14 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
       style={{
         position: "relative",
         display: "inline-block",
-        width: 22,
-        height: 22,
+        width: BUCKET_PX,
+        height: BUCKET_PX,
         lineHeight: 0,
       }}
     >
       <svg
-        width={22}
-        height={22}
+        width={BUCKET_PX}
+        height={BUCKET_PX}
         viewBox="0 0 24 24"
         aria-hidden="true"
         focusable="false"
@@ -188,16 +206,16 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
         <path
           d="M7 6 C 8.5 3, 15.5 3, 17 6"
           fill="none"
-          stroke={fill}
-          strokeWidth={1.6}
+          stroke={ink}
+          strokeWidth={1.4}
           strokeLinecap="round"
         />
-        {/* Pail body — wider rim, narrower base. */}
+        {/* Pail body — wider rim, narrower base, dark outline. */}
         <path
           d="M5.5 7 H 18.5 L 17 20 H 7 Z"
           fill={fill}
-          stroke={fill}
-          strokeWidth={0.5}
+          stroke={ink}
+          strokeWidth={1.2}
           strokeLinejoin="round"
         />
       </svg>
@@ -209,14 +227,13 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
           display: "flex",
           alignItems: "center",
           justifyContent: "center",
-          // Nudge the label down a touch so it sits in the body of the
-          // pail rather than on top of the handle.
-          paddingTop: 4,
-          color: "#fff",
-          fontSize: 10,
-          fontWeight: 700,
+          // Nudge the label down so it sits in the body of the pail
+          // rather than on top of the handle. Scales with icon size.
+          paddingTop: BUCKET_PX * 0.18,
+          color: ink,
+          fontSize: Math.round(BUCKET_PX * 0.45),
+          fontWeight: 800,
           lineHeight: 1,
-          textShadow: "0 1px 1px rgba(0,0,0,0.35)",
         }}
       >
         {overlay}
