@@ -59,6 +59,18 @@ type NoteTemplate = {
   ownerStaffId: number | null;
 };
 
+type StoreItem = {
+  id: number;
+  schoolId: number;
+  ownerStaffId: number;
+  name: string;
+  description: string;
+  pointsCost: number;
+  imageUrl: string | null;
+  sortOrder: number;
+  archived: boolean;
+};
+
 type PbisEntry = {
   id: number;
   studentId: string;
@@ -434,6 +446,8 @@ export default function PbisPointsHub() {
           templates={noteTemplates}
           onTemplatesChanged={setNoteTemplates}
         />
+      ) : tab === "rewards" ? (
+        <ClassroomStoreView />
       ) : (
         <ComingSoon tab={tab} />
       )}
@@ -3579,6 +3593,789 @@ export function SchoolWidePbisAdminView() {
         )}
       </div>
     </section>
+  );
+}
+
+// =============================================================================
+// ClassroomStoreView — per-teacher catalog of redeemable items.
+// Gradient header up top, "+ Add item" button, and a responsive grid of cards.
+// Each card shows the item's thumbnail (or a generic gift placeholder if none),
+// its name, point cost, and a short description, with edit + delete buttons.
+// The add/edit modal supports uploading a thumbnail image to object storage.
+// =============================================================================
+
+function ClassroomStoreView() {
+  const [items, setItems] = useState<StoreItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const [editing, setEditing] = useState<StoreItem | "new" | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await authFetch("/api/classroom-store");
+        if (!res.ok) throw new Error("Failed to load store");
+        const data = (await res.json()) as StoreItem[];
+        if (!cancelled) setItems(data);
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "Load failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  async function handleDelete(item: StoreItem) {
+    if (
+      !confirm(
+        `Delete "${item.name}"? Students will no longer be able to redeem this item.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const res = await authFetch(`/api/classroom-store/${item.id}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) throw new Error("Delete failed");
+      setItems((prev) => prev.filter((x) => x.id !== item.id));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Delete failed");
+    }
+  }
+
+  return (
+    <div>
+      {/* Gradient header */}
+      <div
+        style={{
+          background:
+            "linear-gradient(135deg, #0e7490 0%, #6366f1 50%, #a855f7 100%)",
+          color: "white",
+          padding: "1.4rem 1.6rem",
+          borderRadius: "0.7rem",
+          marginBottom: "1.25rem",
+          display: "flex",
+          alignItems: "center",
+          gap: "1rem",
+          boxShadow: "0 4px 14px rgba(14, 116, 144, 0.18)",
+        }}
+      >
+        <div style={{ fontSize: "2.1rem", lineHeight: 1 }}>🎁</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: "1.55rem", fontWeight: 700 }}>
+            Classroom Store
+          </div>
+          <div style={{ fontSize: "0.92rem", opacity: 0.92, marginTop: 2 }}>
+            Build a list of rewards your students can redeem with their PBIS
+            points.
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setEditing("new")}
+          style={{
+            padding: "0.55rem 1rem",
+            background: "white",
+            color: "#0e7490",
+            border: "none",
+            borderRadius: "0.4rem",
+            fontWeight: 700,
+            cursor: "pointer",
+            whiteSpace: "nowrap",
+            boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+          }}
+        >
+          + Add item
+        </button>
+      </div>
+
+      {err && (
+        <div
+          style={{
+            marginBottom: "1rem",
+            padding: "0.6rem 0.8rem",
+            background: "#fee2e2",
+            color: "#991b1b",
+            borderRadius: "0.4rem",
+            fontSize: "0.9rem",
+          }}
+        >
+          {err}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ color: "#64748b", padding: "1.5rem 0" }}>
+          Loading store…
+        </div>
+      ) : items.length === 0 ? (
+        <div
+          style={{
+            padding: "2.5rem 1rem",
+            textAlign: "center",
+            background: "#f8fafc",
+            border: "1px dashed #cbd5e1",
+            borderRadius: "0.6rem",
+            color: "#64748b",
+          }}
+        >
+          <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>🎁</div>
+          <div
+            style={{
+              fontSize: "1.05rem",
+              color: "#334155",
+              fontWeight: 600,
+              marginBottom: "0.25rem",
+            }}
+          >
+            Your store is empty
+          </div>
+          <div style={{ fontSize: "0.9rem" }}>
+            Click <strong>“+ Add item”</strong> to add your first reward.
+          </div>
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+            gap: "1rem",
+          }}
+        >
+          {items.map((item) => (
+            <StoreItemCard
+              key={item.id}
+              item={item}
+              onEdit={() => setEditing(item)}
+              onDelete={() => handleDelete(item)}
+            />
+          ))}
+        </div>
+      )}
+
+      {editing && (
+        <StoreItemModal
+          existing={editing === "new" ? null : editing}
+          onClose={() => setEditing(null)}
+          onSaved={(saved, mode) => {
+            setItems((prev) => {
+              if (mode === "create") return [...prev, saved];
+              return prev.map((x) => (x.id === saved.id ? saved : x));
+            });
+            setEditing(null);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function StoreItemCard({
+  item,
+  onEdit,
+  onDelete,
+}: {
+  item: StoreItem;
+  onEdit: () => void;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      style={{
+        border: "1px solid #e2e8f0",
+        borderRadius: "0.55rem",
+        background: "white",
+        overflow: "hidden",
+        display: "flex",
+        flexDirection: "column",
+        boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
+      }}
+    >
+      <div
+        style={{
+          aspectRatio: "1 / 1",
+          background:
+            "linear-gradient(135deg, #ecfeff 0%, #ede9fe 50%, #fdf4ff 100%)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          fontSize: "3.5rem",
+          color: "#0e7490",
+        }}
+      >
+        {item.imageUrl ? (
+          <img
+            src={`/api/storage${item.imageUrl}`}
+            alt={item.name}
+            style={{
+              width: "100%",
+              height: "100%",
+              objectFit: "cover",
+              display: "block",
+            }}
+          />
+        ) : (
+          <span aria-hidden="true">🎁</span>
+        )}
+      </div>
+      <div
+        style={{
+          padding: "0.7rem 0.85rem",
+          display: "flex",
+          flexDirection: "column",
+          flex: 1,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.4rem",
+          }}
+        >
+          <div
+            style={{
+              fontWeight: 600,
+              color: "#0f172a",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+            }}
+            title={item.name}
+          >
+            {item.name}
+          </div>
+          <div
+            style={{
+              padding: "0.15rem 0.5rem",
+              background: "#0e7490",
+              color: "white",
+              borderRadius: "9999px",
+              fontSize: "0.78rem",
+              fontWeight: 700,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {item.pointsCost} pt{item.pointsCost === 1 ? "" : "s"}
+          </div>
+        </div>
+        {item.description && (
+          <div
+            style={{
+              fontSize: "0.83rem",
+              color: "#475569",
+              marginTop: "0.35rem",
+              display: "-webkit-box",
+              WebkitLineClamp: 3,
+              WebkitBoxOrient: "vertical",
+              overflow: "hidden",
+            }}
+            title={item.description}
+          >
+            {item.description}
+          </div>
+        )}
+        <div
+          style={{
+            display: "flex",
+            gap: "0.4rem",
+            marginTop: "auto",
+            paddingTop: "0.65rem",
+          }}
+        >
+          <button
+            type="button"
+            onClick={onEdit}
+            style={{
+              flex: 1,
+              padding: "0.35rem 0.5rem",
+              border: "1px solid #cbd5e1",
+              background: "white",
+              color: "#0e7490",
+              borderRadius: "0.3rem",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Edit
+          </button>
+          <button
+            type="button"
+            onClick={onDelete}
+            style={{
+              padding: "0.35rem 0.55rem",
+              border: "1px solid #fecaca",
+              background: "white",
+              color: "#dc2626",
+              borderRadius: "0.3rem",
+              fontSize: "0.8rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+            aria-label={`Delete ${item.name}`}
+          >
+            Delete
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StoreItemModal({
+  existing,
+  onClose,
+  onSaved,
+}: {
+  existing: StoreItem | null;
+  onClose: () => void;
+  onSaved: (saved: StoreItem, mode: "create" | "update") => void;
+}) {
+  const [name, setName] = useState(existing?.name ?? "");
+  const [description, setDescription] = useState(existing?.description ?? "");
+  const [pointsCost, setPointsCost] = useState<number>(
+    existing?.pointsCost ?? 5,
+  );
+  const [imageUrl, setImageUrl] = useState<string | null>(
+    existing?.imageUrl ?? null,
+  );
+  const [uploading, setUploading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement | null>(null);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function handleFile(file: File) {
+    if (!file.type.startsWith("image/")) {
+      setErr("Please choose an image file.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setErr("Image must be under 8 MB.");
+      return;
+    }
+    setErr(null);
+    setUploading(true);
+    try {
+      // Step 1: ask the server for a presigned PUT URL.
+      const reqRes = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: file.name,
+          size: file.size,
+          contentType: file.type,
+        }),
+      });
+      if (!reqRes.ok) throw new Error("Could not start upload");
+      const { uploadURL, objectPath } = (await reqRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      // Step 2: PUT the file bytes directly to GCS — bypass authFetch so we
+      // don't accidentally attach the session cookie / auth header to a
+      // third-party origin.
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error("Upload failed");
+      setImageUrl(objectPath);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  }
+
+  async function handleSave() {
+    if (!name.trim()) {
+      setErr("Name is required");
+      return;
+    }
+    if (!Number.isInteger(pointsCost) || pointsCost < 0) {
+      setErr("Point cost must be a whole number ≥ 0");
+      return;
+    }
+    setSaving(true);
+    setErr(null);
+    try {
+      const body = {
+        name: name.trim(),
+        description: description.trim(),
+        pointsCost,
+        imageUrl: imageUrl ?? null,
+      };
+      const res = await authFetch(
+        existing ? `/api/classroom-store/${existing.id}` : "/api/classroom-store",
+        {
+          method: existing ? "PATCH" : "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        },
+      );
+      if (!res.ok) {
+        let msg = "Save failed";
+        try {
+          const j = (await res.json()) as { error?: string };
+          if (j?.error) msg = j.error;
+        } catch {
+          // ignore
+        }
+        throw new Error(msg);
+      }
+      const saved = (await res.json()) as StoreItem;
+      onSaved(saved, existing ? "update" : "create");
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15, 23, 42, 0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 1000,
+        padding: "1rem",
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: "0.7rem",
+          width: "min(540px, 100%)",
+          maxHeight: "92vh",
+          overflowY: "auto",
+          padding: "1.25rem 1.4rem",
+          boxShadow: "0 14px 40px rgba(15, 23, 42, 0.25)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginBottom: "1rem",
+          }}
+        >
+          <h3 style={{ margin: 0, color: "#0f172a" }}>
+            {existing ? "Edit item" : "Add item"}
+          </h3>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: "none",
+              background: "transparent",
+              fontSize: "1.4rem",
+              color: "#64748b",
+              cursor: "pointer",
+              lineHeight: 1,
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        <div
+          style={{
+            display: "flex",
+            gap: "1rem",
+            marginBottom: "1rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <div
+            style={{
+              width: 130,
+              height: 130,
+              borderRadius: "0.5rem",
+              border: "1px solid #e2e8f0",
+              background:
+                "linear-gradient(135deg, #ecfeff 0%, #ede9fe 50%, #fdf4ff 100%)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              fontSize: "2.5rem",
+              color: "#0e7490",
+              overflow: "hidden",
+              flexShrink: 0,
+            }}
+          >
+            {imageUrl ? (
+              <img
+                src={`/api/storage${imageUrl}`}
+                alt=""
+                style={{
+                  width: "100%",
+                  height: "100%",
+                  objectFit: "cover",
+                }}
+              />
+            ) : (
+              <span aria-hidden="true">🎁</span>
+            )}
+          </div>
+          <div
+            style={{
+              flex: 1,
+              minWidth: 180,
+              display: "flex",
+              flexDirection: "column",
+              justifyContent: "center",
+              gap: "0.4rem",
+            }}
+          >
+            <input
+              ref={fileRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.target.files?.[0];
+                if (f) void handleFile(f);
+                e.target.value = "";
+              }}
+            />
+            <button
+              type="button"
+              disabled={uploading}
+              onClick={() => fileRef.current?.click()}
+              style={{
+                padding: "0.4rem 0.7rem",
+                border: "1px solid #0e7490",
+                background: "white",
+                color: "#0e7490",
+                borderRadius: "0.35rem",
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                cursor: uploading ? "wait" : "pointer",
+                opacity: uploading ? 0.6 : 1,
+              }}
+            >
+              {uploading
+                ? "Uploading…"
+                : imageUrl
+                  ? "Replace image"
+                  : "Upload image"}
+            </button>
+            {imageUrl && (
+              <button
+                type="button"
+                onClick={() => setImageUrl(null)}
+                style={{
+                  padding: "0.3rem 0.5rem",
+                  border: "1px solid #cbd5e1",
+                  background: "white",
+                  color: "#475569",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.78rem",
+                  cursor: "pointer",
+                }}
+              >
+                Remove image
+              </button>
+            )}
+            <div
+              style={{ fontSize: "0.72rem", color: "#94a3b8", marginTop: 2 }}
+            >
+              PNG, JPG, or GIF · up to 8 MB
+            </div>
+          </div>
+        </div>
+
+        <label style={{ display: "block", marginBottom: "0.85rem" }}>
+          <div
+            style={{
+              fontSize: "0.85rem",
+              color: "#475569",
+              marginBottom: "0.25rem",
+            }}
+          >
+            Name
+          </div>
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            maxLength={80}
+            placeholder="e.g. Pizza party invite"
+            style={{
+              width: "100%",
+              padding: "0.5rem 0.6rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.35rem",
+              fontSize: "0.95rem",
+              boxSizing: "border-box",
+            }}
+          />
+        </label>
+
+        <label style={{ display: "block", marginBottom: "0.85rem" }}>
+          <div
+            style={{
+              fontSize: "0.85rem",
+              color: "#475569",
+              marginBottom: "0.25rem",
+            }}
+          >
+            Point cost
+          </div>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            value={pointsCost}
+            onChange={(e) => setPointsCost(Number(e.target.value))}
+            style={{
+              width: 140,
+              padding: "0.5rem 0.6rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.35rem",
+              fontSize: "0.95rem",
+              boxSizing: "border-box",
+            }}
+          />
+        </label>
+
+        <label style={{ display: "block", marginBottom: "1rem" }}>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              marginBottom: "0.25rem",
+            }}
+          >
+            <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+              Description
+            </span>
+            <div style={{ flex: 1 }} />
+            <span
+              style={{
+                fontSize: "0.72rem",
+                color: description.length > 500 ? "#dc2626" : "#94a3b8",
+              }}
+            >
+              {description.length}/500
+            </span>
+          </div>
+          <textarea
+            value={description}
+            onChange={(e) => setDescription(e.target.value)}
+            rows={3}
+            placeholder="What does the student get?"
+            style={{
+              width: "100%",
+              padding: "0.5rem 0.6rem",
+              border:
+                description.length > 500
+                  ? "1px solid #dc2626"
+                  : "1px solid #cbd5e1",
+              borderRadius: "0.35rem",
+              fontSize: "0.92rem",
+              fontFamily: "inherit",
+              resize: "vertical",
+              boxSizing: "border-box",
+            }}
+          />
+        </label>
+
+        {err && (
+          <div
+            style={{
+              marginBottom: "0.8rem",
+              padding: "0.5rem 0.7rem",
+              background: "#fee2e2",
+              color: "#991b1b",
+              borderRadius: "0.35rem",
+              fontSize: "0.85rem",
+            }}
+          >
+            {err}
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: "0.5rem",
+          }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              padding: "0.5rem 1rem",
+              background: "white",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.4rem",
+              color: "#475569",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={
+              saving ||
+              uploading ||
+              !name.trim() ||
+              description.length > 500 ||
+              !Number.isInteger(pointsCost) ||
+              pointsCost < 0
+            }
+            onClick={handleSave}
+            style={{
+              padding: "0.5rem 1.1rem",
+              background: "#0e7490",
+              border: "1px solid #0e7490",
+              borderRadius: "0.4rem",
+              color: "white",
+              fontWeight: 700,
+              cursor: saving ? "wait" : "pointer",
+              opacity:
+                saving ||
+                uploading ||
+                !name.trim() ||
+                description.length > 500 ||
+                !Number.isInteger(pointsCost) ||
+                pointsCost < 0
+                  ? 0.6
+                  : 1,
+            }}
+          >
+            {saving ? "Saving…" : existing ? "Save changes" : "Add item"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

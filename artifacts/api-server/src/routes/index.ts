@@ -34,6 +34,8 @@ import bellSchedulesRouter from "./bellSchedules";
 import issRosterRouter from "./issRoster";
 import issAttendanceRouter from "./issAttendance";
 import tenancyRouter from "./tenancy";
+import storageRouter from "./storage";
+import classroomStoreRouter from "./classroomStore";
 
 const router: IRouter = Router();
 
@@ -72,5 +74,7 @@ router.use(bellSchedulesRouter);
 router.use(issRosterRouter);
 router.use(issAttendanceRouter);
 router.use(tenancyRouter);
+router.use(storageRouter);
+router.use(classroomStoreRouter);
 
 export default router;

@@ -26,6 +26,43 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Classroom Store + Object-storage thumbnails (April 2026)
+
+PbisPointsHub's "rewards" tab now renders `ClassroomStoreView` (in
+`PbisPointsHub.tsx`): per-teacher catalog of redeemable items with a
+gradient header, "+ Add item" button, card grid (gift placeholder when no
+image), and an add/edit modal that uploads thumbnails through Replit object
+storage.
+
+Backend pieces:
+- Table `classroom_store_items` (`lib/db/src/schema/classroomStoreItems.ts`):
+  per `school_id` + `owner_staff_id`, name/description/points_cost/image_url
+  /sort_order/archived. Hard delete (no redemption history yet).
+- `/api/classroom-store` GET/POST/PATCH/DELETE
+  (`artifacts/api-server/src/routes/classroomStore.ts`): scoped by
+  schoolId+ownerStaffId on read; per-row write gated to admin OR owner.
+- `/api/storage/uploads/request-url`, `/api/storage/objects/*tail`,
+  `/api/storage/public-objects/*tail`
+  (`artifacts/api-server/src/routes/storage.ts`) on top of
+  `lib/objectStorage.ts` + `lib/objectAcl.ts`. Express 5 wildcard syntax is
+  `*name`, not bare `*`.
+
+Storage tenant isolation:
+- Every issued upload URL is logged in an in-memory `pendingUploads` ledger
+  keyed by `/objects/<id>` with the requester's schoolId (24h TTL). This
+  lets the uploader's school preview the object before any domain row saves
+  it (lazy bind doesn't happen until POST/PATCH).
+- `bindObjectToSchool(path, schoolId)` writes ACL metadata
+  `{ owner: 'school:<id>', visibility: 'private' }` only when (a) no policy
+  yet AND a matching pending entry exists, or (b) already owned by the same
+  school. It refuses to rebind another school's object — closes the hijack
+  vector.
+- `GET /storage/objects/*tail` requires `req.staffId` AND `req.schoolId`,
+  then allows iff `policy.owner === school:<reqSchoolId>` OR (no policy yet
+  AND pending entry's schoolId matches). All other cases 404.
+- `classroomStore` POST/PATCH call `bindObjectToSchool` and roll back / 400
+  if the bind is refused, so we never persist an unservable thumbnail.
+
 ## Multi-tenancy / Cross-school Isolation (April 2026)
 
 PulseEDU is multi-tenant by `school_id` (Hernando County: Parrott=1,
