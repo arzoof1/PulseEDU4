@@ -448,6 +448,8 @@ export default function PbisPointsHub() {
         />
       ) : tab === "rewards" ? (
         <ClassroomStoreView />
+      ) : tab === "rubric" ? (
+        <SchoolStoreView canEdit={!!me?.isAdmin} />
       ) : (
         <ComingSoon tab={tab} />
       )}
@@ -3653,14 +3655,33 @@ function AuthImage({
 }
 
 // =============================================================================
-// ClassroomStoreView — per-teacher catalog of redeemable items.
-// Gradient header up top, "+ Add item" button, and a responsive grid of cards.
-// Each card shows the item's thumbnail (or a generic gift placeholder if none),
-// its name, point cost, and a short description, with edit + delete buttons.
-// The add/edit modal supports uploading a thumbnail image to object storage.
+// StoreView — generic catalog UI shared by the per-teacher Classroom Store
+// and the school-wide School Store. The two only differ in:
+//   • API path (/api/classroom-store vs /api/school-store)
+//   • Header label, icon, gradient
+//   • Empty-state copy
+//   • Whether the current user can add/edit/delete items
+// Everything else (card layout, modal flow, image upload) is identical.
 // =============================================================================
 
-function ClassroomStoreView() {
+type StoreConfig = {
+  apiPath: string; // e.g. "/api/classroom-store"
+  headerIcon: string; // emoji
+  headerTitle: string;
+  headerSubtitle: string;
+  headerGradient: string; // CSS gradient
+  headerShadow: string; // CSS box-shadow color
+  emptyTitle: string;
+  emptyHint: string;
+};
+
+function StoreView({
+  config,
+  canEdit,
+}: {
+  config: StoreConfig;
+  canEdit: boolean;
+}) {
   const [items, setItems] = useState<StoreItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
@@ -3670,7 +3691,7 @@ function ClassroomStoreView() {
     let cancelled = false;
     (async () => {
       try {
-        const res = await authFetch("/api/classroom-store");
+        const res = await authFetch(config.apiPath);
         if (!res.ok) throw new Error("Failed to load store");
         const data = (await res.json()) as StoreItem[];
         if (!cancelled) setItems(data);
@@ -3683,7 +3704,7 @@ function ClassroomStoreView() {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [config.apiPath]);
 
   async function handleDelete(item: StoreItem) {
     if (
@@ -3694,7 +3715,7 @@ function ClassroomStoreView() {
       return;
     }
     try {
-      const res = await authFetch(`/api/classroom-store/${item.id}`, {
+      const res = await authFetch(`${config.apiPath}/${item.id}`, {
         method: "DELETE",
       });
       if (!res.ok) throw new Error("Delete failed");
@@ -3709,8 +3730,7 @@ function ClassroomStoreView() {
       {/* Gradient header */}
       <div
         style={{
-          background:
-            "linear-gradient(135deg, #0e7490 0%, #6366f1 50%, #a855f7 100%)",
+          background: config.headerGradient,
           color: "white",
           padding: "1.4rem 1.6rem",
           borderRadius: "0.7rem",
@@ -3718,36 +3738,39 @@ function ClassroomStoreView() {
           display: "flex",
           alignItems: "center",
           gap: "1rem",
-          boxShadow: "0 4px 14px rgba(14, 116, 144, 0.18)",
+          boxShadow: `0 4px 14px ${config.headerShadow}`,
         }}
       >
-        <div style={{ fontSize: "2.1rem", lineHeight: 1 }}>🎁</div>
+        <div style={{ fontSize: "2.1rem", lineHeight: 1 }}>
+          {config.headerIcon}
+        </div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: "1.55rem", fontWeight: 700 }}>
-            Classroom Store
+            {config.headerTitle}
           </div>
           <div style={{ fontSize: "0.92rem", opacity: 0.92, marginTop: 2 }}>
-            Build a list of rewards your students can redeem with their PBIS
-            points.
+            {config.headerSubtitle}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setEditing("new")}
-          style={{
-            padding: "0.55rem 1rem",
-            background: "white",
-            color: "#0e7490",
-            border: "none",
-            borderRadius: "0.4rem",
-            fontWeight: 700,
-            cursor: "pointer",
-            whiteSpace: "nowrap",
-            boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
-          }}
-        >
-          + Add item
-        </button>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={() => setEditing("new")}
+            style={{
+              padding: "0.55rem 1rem",
+              background: "white",
+              color: "#0e7490",
+              border: "none",
+              borderRadius: "0.4rem",
+              fontWeight: 700,
+              cursor: "pointer",
+              whiteSpace: "nowrap",
+              boxShadow: "0 1px 3px rgba(0,0,0,0.15)",
+            }}
+          >
+            + Add item
+          </button>
+        )}
       </div>
 
       {err && (
@@ -3780,7 +3803,9 @@ function ClassroomStoreView() {
             color: "#64748b",
           }}
         >
-          <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>🎁</div>
+          <div style={{ fontSize: "2.5rem", marginBottom: "0.5rem" }}>
+            {config.headerIcon}
+          </div>
           <div
             style={{
               fontSize: "1.05rem",
@@ -3789,11 +3814,9 @@ function ClassroomStoreView() {
               marginBottom: "0.25rem",
             }}
           >
-            Your store is empty
+            {config.emptyTitle}
           </div>
-          <div style={{ fontSize: "0.9rem" }}>
-            Click <strong>“+ Add item”</strong> to add your first reward.
-          </div>
+          <div style={{ fontSize: "0.9rem" }}>{config.emptyHint}</div>
         </div>
       ) : (
         <div
@@ -3807,6 +3830,7 @@ function ClassroomStoreView() {
             <StoreItemCard
               key={item.id}
               item={item}
+              canEdit={canEdit}
               onEdit={() => setEditing(item)}
               onDelete={() => handleDelete(item)}
             />
@@ -3816,6 +3840,7 @@ function ClassroomStoreView() {
 
       {editing && (
         <StoreItemModal
+          apiPath={config.apiPath}
           existing={editing === "new" ? null : editing}
           onClose={() => setEditing(null)}
           onSaved={(saved, mode) => {
@@ -3831,12 +3856,63 @@ function ClassroomStoreView() {
   );
 }
 
+// Per-teacher Classroom Store: each staffer manages their own catalog. Any
+// signed-in staffer can add to their own list (server enforces ownership).
+function ClassroomStoreView() {
+  return (
+    <StoreView
+      config={{
+        apiPath: "/api/classroom-store",
+        headerIcon: "🎁",
+        headerTitle: "Classroom Store",
+        headerSubtitle:
+          "Build a list of rewards your students can redeem with their PBIS points.",
+        headerGradient:
+          "linear-gradient(135deg, #0e7490 0%, #6366f1 50%, #a855f7 100%)",
+        headerShadow: "rgba(14, 116, 144, 0.18)",
+        emptyTitle: "Your store is empty",
+        emptyHint: 'Click "+ Add item" to add your first reward.',
+      }}
+      canEdit
+    />
+  );
+}
+
+// School-wide School Store: shared catalog visible to all staff in the
+// school. Only admins can add/edit/delete (server enforces this too).
+function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
+  return (
+    <StoreView
+      config={{
+        apiPath: "/api/school-store",
+        headerIcon: "🏫",
+        headerTitle: "School Store",
+        headerSubtitle: canEdit
+          ? "Set up rewards available school-wide that any student can redeem."
+          : "Browse the school-wide rewards catalog. Only admins can edit items.",
+        headerGradient:
+          "linear-gradient(135deg, #1e3a8a 0%, #6d28d9 50%, #be185d 100%)",
+        headerShadow: "rgba(30, 58, 138, 0.22)",
+        emptyTitle: canEdit
+          ? "The school store is empty"
+          : "No school-wide rewards yet",
+        emptyHint: canEdit
+          ? 'Click "+ Add item" to add the first school-wide reward.'
+          : "Check back later — your admin hasn't added any items yet.",
+      }}
+      canEdit={canEdit}
+    />
+  );
+}
+
 function StoreItemCard({
   item,
+  canEdit,
   onEdit,
   onDelete,
 }: {
   item: StoreItem;
+  canEdit: boolean;
   onEdit: () => void;
   onDelete: () => void;
 }) {
@@ -3937,59 +4013,63 @@ function StoreItemCard({
             {item.description}
           </div>
         )}
-        <div
-          style={{
-            display: "flex",
-            gap: "0.4rem",
-            marginTop: "auto",
-            paddingTop: "0.65rem",
-          }}
-        >
-          <button
-            type="button"
-            onClick={onEdit}
+        {canEdit && (
+          <div
             style={{
-              flex: 1,
-              padding: "0.35rem 0.5rem",
-              border: "1px solid #cbd5e1",
-              background: "white",
-              color: "#0e7490",
-              borderRadius: "0.3rem",
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
+              display: "flex",
+              gap: "0.4rem",
+              marginTop: "auto",
+              paddingTop: "0.65rem",
             }}
           >
-            Edit
-          </button>
-          <button
-            type="button"
-            onClick={onDelete}
-            style={{
-              padding: "0.35rem 0.55rem",
-              border: "1px solid #fecaca",
-              background: "white",
-              color: "#dc2626",
-              borderRadius: "0.3rem",
-              fontSize: "0.8rem",
-              fontWeight: 600,
-              cursor: "pointer",
-            }}
-            aria-label={`Delete ${item.name}`}
-          >
-            Delete
-          </button>
-        </div>
+            <button
+              type="button"
+              onClick={onEdit}
+              style={{
+                flex: 1,
+                padding: "0.35rem 0.5rem",
+                border: "1px solid #cbd5e1",
+                background: "white",
+                color: "#0e7490",
+                borderRadius: "0.3rem",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+            >
+              Edit
+            </button>
+            <button
+              type="button"
+              onClick={onDelete}
+              style={{
+                padding: "0.35rem 0.55rem",
+                border: "1px solid #fecaca",
+                background: "white",
+                color: "#dc2626",
+                borderRadius: "0.3rem",
+                fontSize: "0.8rem",
+                fontWeight: 600,
+                cursor: "pointer",
+              }}
+              aria-label={`Delete ${item.name}`}
+            >
+              Delete
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 function StoreItemModal({
+  apiPath,
   existing,
   onClose,
   onSaved,
 }: {
+  apiPath: string; // e.g. "/api/classroom-store" or "/api/school-store"
   existing: StoreItem | null;
   onClose: () => void;
   onSaved: (saved: StoreItem, mode: "create" | "update") => void;
@@ -4095,7 +4175,7 @@ function StoreItemModal({
         imageUrl: imageUrl ?? null,
       };
       const res = await authFetch(
-        existing ? `/api/classroom-store/${existing.id}` : "/api/classroom-store",
+        existing ? `${apiPath}/${existing.id}` : apiPath,
         {
           method: existing ? "PATCH" : "POST",
           headers: { "Content-Type": "application/json" },

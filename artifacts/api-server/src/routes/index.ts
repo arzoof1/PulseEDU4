@@ -36,6 +36,7 @@ import issAttendanceRouter from "./issAttendance";
 import tenancyRouter from "./tenancy";
 import storageRouter from "./storage";
 import classroomStoreRouter from "./classroomStore";
+import schoolStoreRouter from "./schoolStore";
 
 const router: IRouter = Router();
 
@@ -76,5 +77,6 @@ router.use(issAttendanceRouter);
 router.use(tenancyRouter);
 router.use(storageRouter);
 router.use(classroomStoreRouter);
+router.use(schoolStoreRouter);
 
 export default router;

@@ -26,21 +26,37 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
-## Classroom Store + Object-storage thumbnails (April 2026)
+## Classroom Store + School Store + Object-storage thumbnails (April 2026)
 
-PbisPointsHub's "rewards" tab now renders `ClassroomStoreView` (in
-`PbisPointsHub.tsx`): per-teacher catalog of redeemable items with a
-gradient header, "+ Add item" button, card grid (gift placeholder when no
-image), and an add/edit modal that uploads thumbnails through Replit object
-storage.
+PbisPointsHub now has two reward catalogs that share a single generic
+`StoreView` component (in `PbisPointsHub.tsx`):
+
+- **Classroom Store** (`tab === "rewards"`, `<ClassroomStoreView />`) —
+  per-teacher catalog. Each staffer manages their own list. Anyone signed
+  in can add to their own store; admins can edit anyone's row.
+- **School Store** (`tab === "rubric"`, `<SchoolStoreView canEdit={isAdmin} />`) —
+  school-wide catalog visible to every staffer. Only school admins see the
+  "+ Add item" header button and edit/delete card buttons; the server also
+  enforces this with a 403.
+
+Both use the same `StoreItemCard`, `StoreItemModal`, image-upload flow, and
+local blob preview (instant in-modal preview before Save). They differ only
+in apiPath, header copy/gradient/icon, and `canEdit`. Cleanest place to
+add a third reward catalog later is another `StoreConfig` + thin wrapper.
 
 Backend pieces:
-- Table `classroom_store_items` (`lib/db/src/schema/classroomStoreItems.ts`):
-  per `school_id` + `owner_staff_id`, name/description/points_cost/image_url
-  /sort_order/archived. Hard delete (no redemption history yet).
+- Tables `classroom_store_items` and `school_store_items`
+  (`lib/db/src/schema/{classroomStoreItems,schoolStoreItems}.ts`): same
+  shape (name/description/points_cost/image_url/sort_order/archived) — the
+  classroom variant has `owner_staff_id`, the school variant doesn't. Hard
+  delete (no redemption history yet).
 - `/api/classroom-store` GET/POST/PATCH/DELETE
   (`artifacts/api-server/src/routes/classroomStore.ts`): scoped by
   schoolId+ownerStaffId on read; per-row write gated to admin OR owner.
+- `/api/school-store` GET/POST/PATCH/DELETE
+  (`artifacts/api-server/src/routes/schoolStore.ts`): scoped by schoolId on
+  every read/write; **all writes require `staff.isAdmin`** (`requireAdmin`
+  helper returns 403 otherwise). GET is open to any signed-in staffer.
 - `/api/storage/uploads/request-url`, `/api/storage/objects/*tail`,
   `/api/storage/public-objects/*tail`
   (`artifacts/api-server/src/routes/storage.ts`) on top of
@@ -60,8 +76,9 @@ Storage tenant isolation:
 - `GET /storage/objects/*tail` requires `req.staffId` AND `req.schoolId`,
   then allows iff `policy.owner === school:<reqSchoolId>` OR (no policy yet
   AND pending entry's schoolId matches). All other cases 404.
-- `classroomStore` POST/PATCH call `bindObjectToSchool` and roll back / 400
-  if the bind is refused, so we never persist an unservable thumbnail.
+- Both `classroomStore` and `schoolStore` POST/PATCH call
+  `bindObjectToSchool` and roll back / 400 if the bind is refused, so we
+  never persist an unservable thumbnail.
 
 ## Multi-tenancy / Cross-school Isolation (April 2026)
 
