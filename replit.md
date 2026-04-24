@@ -1008,6 +1008,17 @@ created/updated). Indexes on `school_id` and `(school_id, student_id)`.
 No FK constraint on student_id (matches codebase convention — JS-side
 joins, AND-school filter).
 
+**Goals format.** The `goals` column is a single text field, but the
+client and server treat it as a **newline-delimited list of 1–5 goals**
+(cap 800 chars per goal). `splitGoals` / `joinGoals` in
+`MtssPlansAdmin.tsx` and `normalizeGoals` in `routes/mtssPlans.ts` keep
+the two sides in sync — both trim, drop empty lines, slice to 5, and
+clamp each line. The modal renders 1–5 numbered slots with "+ Add
+another goal" (gated at 5) and a per-row remove button; removing the
+last row resets to one empty input. The list view renders an `<ol>`
+clamped to 3 visible lines. Legacy single-line plans parse cleanly as
+a single goal — no migration needed.
+
 **DDL on boot, not via drizzle-kit.** `drizzle-kit push` refuses to
 apply this table non-interactively because rename detection confuses it
 with legacy `user_sessions` / `check_in_with_options`. Instead, the

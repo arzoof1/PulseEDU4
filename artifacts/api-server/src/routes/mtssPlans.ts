@@ -71,6 +71,22 @@ function requireCoreTeam(
   return true;
 }
 
+// Goals are stored newline-delimited in the existing `goals` text column.
+// Cap at 5 goals × 800 chars each so the rendered list stays manageable.
+const MAX_GOALS = 5;
+const MAX_GOAL_CHARS = 800;
+
+function normalizeGoals(v: unknown): string {
+  if (typeof v !== "string") return "";
+  return v
+    .split(/\r?\n/)
+    .map((g) => g.trim())
+    .filter((g) => g.length > 0)
+    .slice(0, MAX_GOALS)
+    .map((g) => g.slice(0, MAX_GOAL_CHARS))
+    .join("\n");
+}
+
 function clampString(v: unknown, max: number): string {
   if (typeof v !== "string") return "";
   return v.trim().slice(0, max);
@@ -220,7 +236,7 @@ router.post("/mtss-plans", async (req, res) => {
       schoolId,
       studentId: cleanStudentId,
       title: cleanTitle,
-      goals: clampString(goals, 4000),
+      goals: normalizeGoals(goals),
       tier: tierVal,
       pointRangeMin: minParsed,
       pointRangeMax: maxParsed,
@@ -277,7 +293,7 @@ router.patch("/mtss-plans/:id", async (req, res) => {
     updates.title = title.trim().slice(0, 200);
   }
   if (typeof goals === "string") {
-    updates.goals = goals.trim().slice(0, 4000);
+    updates.goals = normalizeGoals(goals);
   }
   if (typeof notes === "string") {
     updates.notes = notes.trim().slice(0, 4000);

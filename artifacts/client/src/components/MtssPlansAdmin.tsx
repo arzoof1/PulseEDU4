@@ -57,6 +57,30 @@ function fmtDate(iso: string | null | undefined): string {
   }
 }
 
+const MAX_GOALS = 5;
+const MAX_GOAL_CHARS = 800;
+
+// Goals are stored in the existing `goals` text column as a newline-
+// delimited list (one goal per line). This keeps the schema unchanged
+// while letting the UI present 1–5 numbered goal slots.
+function splitGoals(raw: string | null | undefined): string[] {
+  if (!raw) return [];
+  return raw
+    .split(/\r?\n/)
+    .map((g) => g.trim())
+    .filter((g) => g.length > 0)
+    .slice(0, MAX_GOALS);
+}
+
+function joinGoals(list: string[]): string {
+  return list
+    .map((g) => g.trim())
+    .filter((g) => g.length > 0)
+    .slice(0, MAX_GOALS)
+    .map((g) => g.slice(0, MAX_GOAL_CHARS))
+    .join("\n");
+}
+
 export default function MtssPlansAdmin({ canManage, onBack }: Props) {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
@@ -352,17 +376,28 @@ export default function MtssPlansAdmin({ canManage, onBack }: Props) {
                         color: "#475569",
                       }}
                     >
-                      <div
-                        style={{
-                          overflow: "hidden",
-                          textOverflow: "ellipsis",
-                          display: "-webkit-box",
-                          WebkitLineClamp: 2,
-                          WebkitBoxOrient: "vertical",
-                        }}
-                      >
-                        {p.goals || <em>—</em>}
-                      </div>
+                      {(() => {
+                        const list = splitGoals(p.goals);
+                        if (list.length === 0) return <em>—</em>;
+                        return (
+                          <ol
+                            style={{
+                              margin: 0,
+                              paddingLeft: "1.1rem",
+                              display: "-webkit-box",
+                              WebkitLineClamp: 3,
+                              WebkitBoxOrient: "vertical",
+                              overflow: "hidden",
+                            }}
+                          >
+                            {list.map((g, i) => (
+                              <li key={i} style={{ marginBottom: 2 }}>
+                                {g}
+                              </li>
+                            ))}
+                          </ol>
+                        );
+                      })()}
                     </td>
                     <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
                       {p.pointRangeMin != null || p.pointRangeMax != null
@@ -532,7 +567,10 @@ function PlanModal({
   const isEdit = plan !== null;
   const [studentId, setStudentId] = useState(plan?.studentId ?? "");
   const [title, setTitle] = useState(plan?.title ?? "");
-  const [goals, setGoals] = useState(plan?.goals ?? "");
+  const [goalsList, setGoalsList] = useState<string[]>(() => {
+    const initial = splitGoals(plan?.goals ?? "");
+    return initial.length === 0 ? [""] : initial;
+  });
   const [tier, setTier] = useState<number>(plan?.tier ?? 2);
   const [pointMin, setPointMin] = useState<string>(
     plan?.pointRangeMin == null ? "" : String(plan.pointRangeMin),
@@ -588,7 +626,7 @@ function PlanModal({
       const method = isEdit ? "PATCH" : "POST";
       const body: Record<string, unknown> = {
         title: title.trim(),
-        goals: goals.trim(),
+        goals: joinGoals(goalsList),
         tier,
         pointRangeMin: minN,
         pointRangeMax: maxN,
@@ -738,22 +776,100 @@ function PlanModal({
           <label
             style={{ display: "block", fontWeight: 600, marginBottom: 4 }}
           >
-            Goals
+            Goals{" "}
+            <span style={{ fontWeight: 400, color: "#64748b" }}>
+              (up to {MAX_GOALS})
+            </span>
           </label>
-          <textarea
-            value={goals}
-            onChange={(e) => setGoals(e.target.value)}
-            rows={4}
-            maxLength={4000}
-            placeholder="What does success look like for this student?"
-            style={{
-              width: "100%",
-              padding: "0.5rem",
-              border: "1px solid #cbd5e1",
-              borderRadius: 6,
-              fontFamily: "inherit",
-            }}
-          />
+          {goalsList.map((g, i) => (
+            <div
+              key={i}
+              style={{
+                display: "flex",
+                gap: 6,
+                alignItems: "flex-start",
+                marginBottom: 6,
+              }}
+            >
+              <div
+                style={{
+                  width: 24,
+                  flexShrink: 0,
+                  fontWeight: 600,
+                  color: "#475569",
+                  paddingTop: 8,
+                }}
+              >
+                {i + 1}.
+              </div>
+              <input
+                type="text"
+                value={g}
+                onChange={(e) => {
+                  const next = [...goalsList];
+                  next[i] = e.target.value;
+                  setGoalsList(next);
+                }}
+                placeholder={
+                  i === 0
+                    ? "e.g. Reduce tardies to fewer than 2 per week"
+                    : "Another goal…"
+                }
+                maxLength={MAX_GOAL_CHARS}
+                style={{
+                  flex: 1,
+                  padding: "0.5rem",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  fontFamily: "inherit",
+                }}
+              />
+              <button
+                type="button"
+                onClick={() => {
+                  if (goalsList.length === 1) {
+                    setGoalsList([""]);
+                  } else {
+                    setGoalsList(goalsList.filter((_, idx) => idx !== i));
+                  }
+                }}
+                title="Remove this goal"
+                aria-label="Remove this goal"
+                style={{
+                  flexShrink: 0,
+                  width: 32,
+                  height: 32,
+                  background: "#fee2e2",
+                  color: "#b91c1c",
+                  border: "1px solid #fecaca",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontSize: "1rem",
+                  lineHeight: 1,
+                }}
+              >
+                ×
+              </button>
+            </div>
+          ))}
+          {goalsList.length < MAX_GOALS && (
+            <button
+              type="button"
+              onClick={() => setGoalsList([...goalsList, ""])}
+              style={{
+                background: "#ede9fe",
+                color: "#6d28d9",
+                border: "1px solid #ddd6fe",
+                borderRadius: 6,
+                padding: "0.35rem 0.75rem",
+                cursor: "pointer",
+                fontSize: "0.85rem",
+                fontWeight: 600,
+              }}
+            >
+              + Add another goal
+            </button>
+          )}
         </div>
 
         <div
