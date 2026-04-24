@@ -91,6 +91,10 @@ const BUCKET_COLOR: Record<"green" | "orange" | "red", string> = {
   red: "#dc2626",
 };
 
+// Click-to-flip pill. Default face shows the FAST sub-level; clicking
+// (or focusing + pressing Enter/Space) flips it to show the raw scale
+// score. Each pill manages its own flipped state so users can pop open
+// just the cells they care about without losing the rest of the table.
 function ScorePill({
   score,
   placement,
@@ -100,6 +104,7 @@ function ScorePill({
   placement: Placement | null;
   pmLabel: string;
 }) {
+  const [flipped, setFlipped] = useState(false);
   if (score == null || placement == null) {
     return (
       <span
@@ -119,23 +124,32 @@ function ScorePill({
       </span>
     );
   }
+  const tooltip = `${pmLabel} • Level ${placement.subLevel} • Scale score ${score} (click to flip)`;
   return (
-    <span
-      title={`${pmLabel} • Level ${placement.subLevel} • Scale score ${score}`}
+    <button
+      type="button"
+      title={tooltip}
+      aria-label={tooltip}
+      aria-pressed={flipped}
+      onClick={() => setFlipped((f) => !f)}
       style={{
         display: "inline-block",
         minWidth: 36,
         padding: "2px 8px",
         borderRadius: 6,
+        border: "none",
         background: LEVEL_BG[placement.level],
         color: LEVEL_FG[placement.level],
         fontSize: 11,
         fontWeight: 600,
         textAlign: "center",
+        cursor: "pointer",
+        fontFamily: "inherit",
+        lineHeight: "16px",
       }}
     >
-      {placement.subLevel}
-    </span>
+      {flipped ? score : placement.subLevel}
+    </button>
   );
 }
 
