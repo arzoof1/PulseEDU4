@@ -67,20 +67,20 @@ interface Props {
   onBack?: () => void;
 }
 
-// Level → background color. Aligned with the conventional FAST color
-// coding (red/orange/yellow/green/blue) used across district reports.
+// Level → background color. Per product preference:
+// L1 red, L2 orange, L3 green, L4 blue, L5 purple.
 const LEVEL_BG: Record<1 | 2 | 3 | 4 | 5, string> = {
   1: "#dc2626", // red
-  2: "#f59e0b", // amber/orange
-  3: "#eab308", // yellow
-  4: "#16a34a", // green
-  5: "#2563eb", // blue
+  2: "#f59e0b", // orange
+  3: "#16a34a", // green
+  4: "#2563eb", // blue
+  5: "#7c3aed", // purple
 };
-// White text for the dark backgrounds; black for the yellow.
+// All chosen backgrounds are dark enough to take white text legibly.
 const LEVEL_FG: Record<1 | 2 | 3 | 4 | 5, string> = {
   1: "#fff",
   2: "#fff",
-  3: "#111",
+  3: "#fff",
   4: "#fff",
   5: "#fff",
 };
