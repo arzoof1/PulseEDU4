@@ -11,6 +11,7 @@ export type SettingsTileId =
   | "bell-schedule"
   | "pbis-thresholds"
   | "schoolFeatures"
+  | "parent-access"
   | "tenancy";
 
 export interface SettingsTile {

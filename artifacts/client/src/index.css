@@ -1,5 +1,13 @@
 @import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
 
+/* Tailwind v4 utilities + theme only (no Preflight). The staff app uses
+   plain custom CSS and inline styles; Preflight's body/heading/list resets
+   would change spacing and link colors across the whole staff side. The
+   parent portal pages opt into Tailwind classes and render fine without
+   Preflight because we scope styling tightly inside those components. */
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/utilities.css" layer(utilities);
+
 :root {
   --bg: #f6f8fb;
   --surface: #ffffff;

@@ -13,6 +13,7 @@ import PbisPointsHub, {
   SchoolStoreView,
 } from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
+import ParentAccess from "./components/ParentAccess";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
@@ -16525,6 +16526,13 @@ function App() {
               title: "School Features",
               subtitle: `Turn major features on or off for this school · ${liveCount}/${featureKeys.length} live.`,
             });
+            tiles.push({
+              id: "parent-access",
+              icon: "👪",
+              title: "Parent Access",
+              subtitle:
+                "Invite parents to the HeartBEAT Snapshot portal · resend, revoke, multi-parent.",
+            });
             if (isSuperUser) {
               tiles.push({
                 id: "tenancy",
@@ -16546,6 +16554,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "tenancy" && isSuperUser && (
         <TenancyPanel />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "parent-access" && (
+        <ParentAccess />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "notifications" && (

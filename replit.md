@@ -1363,37 +1363,97 @@ entry — do not piggy-back on `RequestPullout`.
 
 ---
 
-## Active: HeartBEAT Snapshot — Parent / Student Portal
+## HeartBEAT Snapshot — Parent Portal v1 (shipped Apr 24, 2026)
 
-User asked for a parent/student-facing dashboard ("snapshot of everything
-their student has in the form of school interactions") with a toggle
-system for what's included in a printable/emailable HeartBEAT Report.
+Parents log into a separate portal to see their student's HeartBEAT
+data (PBIS, hall passes, tardies, accommodations, staff notes). Admin
+sends invites from Settings → Parent Access; parent clicks the email
+link, sets a password, sees their kid.
 
-**Status (Apr 24, 2026):** Mockups approved ("that look amazing"). User
-wants to build it for real next. Bathroom Queue feature has been moved
-to the parked list below.
+**Decisions made (don't re-ask):**
+1. Parents only in v1. Students later via ClassLink (deferred).
+2. Email + self-set password. Invite link is the bootstrap.
+3. Linking is admin-driven: admin uploads parent emails on the student
+   roster (or types them inline in Parent Access), parent accepts the
+   invite — that creates the `parents` row and the `parent_students`
+   link. **Never written back to `students` table.**
+4. Per-row email override + "+ Add another email" button supports
+   mom/dad/grandma — each adult gets their own invite for the same
+   student; all of them land on the same Snapshot when accepted.
+5. Sibling switcher lives in the dashboard header (reads `parent_students`).
+6. Section visibility is gated by `school_heartbeat_settings`.
 
-- Mockup files (do not delete):
-  - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
-  - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/ReportToggle.tsx`
-- Canvas shape IDs: `heartbeat-snapshot`, `heartbeat-report-toggle`
-- Full proposal (data inventory, section order, 3-layer toggle system,
-  auth open questions) is in the chat history of the same session.
+**DB tables (migration: `pnpm db:push --force` already run):**
+- `parents` — id, email, passwordHash, displayName, schoolId
+- `parent_students` — M:N (parentId, studentId)
+- `parent_invites` — id, schoolId, studentId, email, token, status
+  (pending/accepted/expired/revoked), sentAt, expiresAt, acceptedAt,
+  acceptedParentId, resendCount, sentByStaffId
+- `school_heartbeat_settings` — per-school visibility flags for each
+  Snapshot section
+- `parent_heartbeat_prefs` — per-parent saved toggles (used later by
+  HeartBEAT Report PDF)
 
-**Open decisions blocking the real build (revisit when resuming):**
-1. Who logs in: parents only, or parents + students?
-2. Login method: email+password, magic link, or school-issued code?
-3. How parent ↔ student linking is established (registration vs admin-approved).
-4. Sibling switcher prominence in the identity strip.
-5. Parent vs student visibility differences per section.
+**Backend routes:**
+- `artifacts/api-server/src/routes/parentAuth.ts` — login, me, logout,
+  accept-invite, change-password, request-password-reset. Session key
+  is `req.session.parentId` (separate from staff `staffId`). Bearer
+  token variant for iframe stored in sessionStorage `pulseed.parentToken`.
+- `artifacts/api-server/src/routes/parentInvites.ts` — admin endpoints:
+  - `GET /api/admin/parent-invites` — one row per student, with **all**
+    invites for that student (latest-first) so multi-parent shows up.
+  - `POST /api/admin/parent-invites/send` — bulk send to every eligible
+    student (uses `students.parent_email`).
+  - `POST /api/admin/parent-invites/send-one` `{studentId, email}` —
+    single send with email override; powers the per-row form and the
+    "+ Add another email" button.
+  - `POST /api/admin/parent-invites/:id/resend` and `/revoke`.
+- `artifacts/api-server/src/routes/parentSnapshot.ts` —
+  `GET /api/parent/snapshot?studentId=…` returns identity, PBIS (with
+  sparkline + week stats), hall passes, tardies, accommodations, staff
+  notes. Each section is gated by `school_heartbeat_settings`.
+- `artifacts/api-server/src/lib/parentInviteEmail.ts` — Resend wrapper
+  with branded subject/body using school name + signature.
 
-**Build sequence to follow when un-parking:**
-1. Parent auth + parent↔student linking
-2. Read-only dashboard (most data already exposed via existing routes)
-3. School-level "available sections" admin toggles (Settings → HeartBEAT)
-4. Per-parent saved toggle preferences
-5. PDF export of the HeartBEAT report
-6. Optional weekly emailed PDF (Resend already wired)
+**Frontend:**
+- `artifacts/client/src/parent/` — standalone parent app:
+  - `ParentApp.tsx` — path-based router (login / accept-invite /
+    forgot / reset / dashboard). No staff sidebar.
+  - `api.ts` — `parentFetch()` + redirect-on-401.
+  - `ParentLogin.tsx`, `AcceptInvite.tsx`, `Dashboard.tsx`
+    (real-data port of the Snapshot mockup, sibling switcher in header).
+- `artifacts/client/src/main.tsx` — `path.includes("/parent")` →
+  `ParentApp` (else `App` for staff, `/kiosk` → `Kiosk`).
+- `artifacts/client/src/components/ParentAccess.tsx` — the admin tile
+  (Settings → 👪 Parent Access). Per-student card: name + grade,
+  status pill, list of invites with Resend/Revoke per email, inline
+  "Send invite" form (pre-fills with Skyward parent_email if no
+  invite yet), "+ Add another email" for multi-parent.
+- `artifacts/client/src/components/SettingsHub.tsx` — added
+  `"parent-access"` to `SettingsTileId`.
+
+**Tailwind wiring (important):** parent components use Tailwind
+utilities; staff app does NOT. Resolved with a top-of-file import in
+`artifacts/client/src/index.css`:
+```css
+@import "tailwindcss/theme.css";
+@import "tailwindcss/utilities.css";
+```
+**Preflight is intentionally NOT imported** — that would clobber the
+staff app's existing custom CSS. Verified parent login + staff app both
+render correctly.
+
+**Deferred (revisit later):**
+1. ClassLink SSO for students.
+2. School-level "available sections" admin toggle UI (rows exist,
+   admin UI not built).
+3. Per-parent toggle UI for what's in their HeartBEAT Report.
+4. PDF export of the HeartBEAT Report.
+5. Optional weekly emailed PDF (Resend already wired).
+
+**Mockup files (do not delete — referenced when iterating):**
+- `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
+- `artifacts/mockup-sandbox/src/components/mockups/heartbeat/ReportToggle.tsx`
 
 ## Parked: Bathroom Queue (kiosk station)
 

@@ -114,11 +114,12 @@ router.get("/admin/parent-invites", async (req, res) => {
     lastResentAt: Date | null;
     acceptedParentName: string | null;
   };
-  let invitesByStudent = new Map<number, InviteJoin>();
+  // Return ALL invites per student (not just latest) so the admin UI can
+  // show every email a student has been invited under — supports the
+  // multi-parent case (mom + dad + grandma) where each adult gets their own
+  // row with their own status. Latest-first within each student.
+  const invitesByStudent = new Map<number, InviteJoin[]>();
   if (studentIds.length > 0) {
-    // Fetch all invites for these students, then keep the most recent per
-    // student in JS — simpler than a window function for the row count we
-    // expect (a few hundred per school at most).
     const allInvites = await db
       .select({
         id: parentInvitesTable.id,
@@ -141,24 +142,47 @@ router.get("/admin/parent-invites", async (req, res) => {
       .orderBy(desc(parentInvitesTable.sentAt));
 
     for (const inv of allInvites) {
-      if (!invitesByStudent.has(inv.studentId)) {
-        invitesByStudent.set(inv.studentId, inv as InviteJoin);
-      }
+      const list = invitesByStudent.get(inv.studentId) ?? [];
+      list.push(inv as InviteJoin);
+      invitesByStudent.set(inv.studentId, list);
     }
   }
 
   const now = Date.now();
   const rows = students
     .map((s) => {
-      const inv = invitesByStudent.get(s.id);
-      let status: string;
-      if (!inv) {
-        status = isValidEmail(s.parentEmail) ? "not_sent" : "no_email";
-      } else if (inv.status === "pending" && inv.expiresAt.getTime() < now) {
-        status = "expired";
-      } else {
-        status = inv.status;
-      }
+      const invs = invitesByStudent.get(s.id) ?? [];
+      const invitesOut = invs.map((inv) => {
+        let status: string;
+        if (inv.status === "pending" && inv.expiresAt.getTime() < now) {
+          status = "expired";
+        } else {
+          status = inv.status;
+        }
+        return {
+          id: inv.id,
+          email: inv.email,
+          status,
+          sentAt: inv.sentAt,
+          expiresAt: inv.expiresAt,
+          acceptedAt: inv.acceptedAt,
+          acceptedParentName: inv.acceptedParentName,
+          resendCount: inv.resendCount,
+          lastResentAt: inv.lastResentAt,
+        };
+      });
+      const overall =
+        invitesOut.length === 0
+          ? isValidEmail(s.parentEmail)
+            ? "not_sent"
+            : "no_email"
+          : invitesOut.some((i) => i.status === "accepted")
+            ? "accepted"
+            : invitesOut.some((i) => i.status === "pending")
+              ? "pending"
+              : invitesOut.some((i) => i.status === "expired")
+                ? "expired"
+                : "revoked";
       return {
         student: {
           id: s.id,
@@ -169,23 +193,8 @@ router.get("/admin/parent-invites", async (req, res) => {
           parentName: s.parentName,
           parentEmail: s.parentEmail,
         },
-        invite: inv
-          ? {
-              id: inv.id,
-              email: inv.email,
-              status,
-              sentAt: inv.sentAt,
-              expiresAt: inv.expiresAt,
-              acceptedAt: inv.acceptedAt,
-              acceptedParentName: inv.acceptedParentName,
-              resendCount: inv.resendCount,
-              lastResentAt: inv.lastResentAt,
-            }
-          : null,
-        canSend:
-          (!inv || inv.status === "expired" || inv.status === "revoked") &&
-          isValidEmail(s.parentEmail),
-        canResend: !!inv && inv.status === "pending",
+        overallStatus: overall,
+        invites: invitesOut,
       };
     })
     .sort((a, b) =>
@@ -195,6 +204,123 @@ router.get("/admin/parent-invites", async (req, res) => {
     );
 
   res.json({ rows });
+});
+
+// -----------------------------------------------------------------------------
+// POST /api/admin/parent-invites/send-one
+// Body: { studentId: number, email: string }
+// Sends ONE invite to a specific email for a specific student. Used by the
+// per-row Send button in the admin UI when the admin wants to override the
+// Skyward parent_email or send to an additional family member (mom + dad).
+// Idempotent for live invites (returns 409 if (student × email) already has
+// a pending or accepted invite).
+// -----------------------------------------------------------------------------
+router.post("/admin/parent-invites/send-one", async (req, res) => {
+  if (!(await requireAdmin(req, res))) return;
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(400).json({ error: "No active school" });
+    return;
+  }
+  const body = (req.body ?? {}) as { studentId?: unknown; email?: unknown };
+  const studentRowId = Number(body.studentId);
+  if (!Number.isInteger(studentRowId) || studentRowId <= 0) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  if (typeof body.email !== "string" || !isValidEmail(body.email)) {
+    res.status(400).json({ error: "Valid email is required" });
+    return;
+  }
+  const email = body.email.trim().toLowerCase();
+
+  const [student] = await db
+    .select({
+      id: studentsTable.id,
+      schoolId: studentsTable.schoolId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+    })
+    .from(studentsTable)
+    .where(eq(studentsTable.id, studentRowId));
+  if (!student || student.schoolId !== schoolId) {
+    res.status(404).json({ error: "Student not in active school" });
+    return;
+  }
+
+  // Block if the same (student, email) pair already has a live invite or an
+  // accepted parent — don't double-send.
+  const existing = await db
+    .select({
+      id: parentInvitesTable.id,
+      status: parentInvitesTable.status,
+      expiresAt: parentInvitesTable.expiresAt,
+    })
+    .from(parentInvitesTable)
+    .where(
+      and(
+        eq(parentInvitesTable.studentId, student.id),
+        eq(parentInvitesTable.email, email),
+      ),
+    );
+  const live = existing.find(
+    (e) =>
+      e.status === "accepted" ||
+      (e.status === "pending" && e.expiresAt.getTime() > Date.now()),
+  );
+  if (live) {
+    res.status(409).json({
+      error:
+        live.status === "accepted"
+          ? "This email already has access to this student. Ask them to sign in."
+          : "An invite is already pending for this email. Use Resend to refresh it.",
+    });
+    return;
+  }
+
+  const ctx = await getSchoolContext(schoolId);
+  const now = new Date();
+  const expires = new Date(now.getTime() + INVITE_TTL_DAYS * 24 * 60 * 60 * 1000);
+  const token = newInviteToken();
+
+  const inserted = await db
+    .insert(parentInvitesTable)
+    .values({
+      schoolId,
+      studentId: student.id,
+      email,
+      token,
+      status: "pending",
+      sentAt: now,
+      expiresAt: expires,
+      sentByStaffId: req.staffId!,
+    })
+    .returning({ id: parentInvitesTable.id });
+
+  try {
+    await sendParentInviteEmail({
+      to: email,
+      studentFirstName: student.firstName,
+      studentLastName: student.lastName,
+      schoolName: ctx.schoolName,
+      fromName: ctx.fromName,
+      emailSignature: ctx.emailSignature,
+      acceptUrl: buildAcceptInviteUrl(token),
+      isResend: false,
+    });
+    res.json({ ok: true, inviteId: inserted[0].id, email });
+  } catch (err) {
+    await db
+      .delete(parentInvitesTable)
+      .where(eq(parentInvitesTable.id, inserted[0].id));
+    logger.warn(
+      { err, studentId: student.id, email },
+      "parent invite send-one failed",
+    );
+    res
+      .status(502)
+      .json({ error: err instanceof Error ? err.message : "Send failed" });
+  }
 });
 
 // -----------------------------------------------------------------------------
