@@ -12880,12 +12880,76 @@ function App() {
           </>)}
 
           {activeSection === "pbisReports" && (<>
-          <h3 style={{ marginTop: 0 }}>PBIS Report</h3>
-          <p style={{ marginTop: 0, color: "var(--muted, #64748b)", fontSize: "0.85rem" }}>
-            {isPbisCoord || isAdmin || isEseCoord
-              ? "School-wide. Leave a filter blank to ignore it."
-              : "Showing only PBIS points you awarded."}
-          </p>
+          {/* Site-based gradient header: matches the PBIS Hub palette
+              (purple → teal → green) so the Reports page reads as a
+              sub-page of the hub instead of a bare table view. */}
+          <div
+            className="no-print"
+            style={{
+              background:
+                "linear-gradient(135deg, #7c3aed 0%, #0e7490 60%, #0d9488 100%)",
+              color: "white",
+              padding: "1.25rem 1.5rem",
+              borderRadius: 8,
+              marginBottom: "1rem",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "space-between",
+                gap: "1rem",
+                flexWrap: "wrap",
+              }}
+            >
+              <div>
+                <div
+                  style={{
+                    fontSize: "0.75rem",
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    opacity: 0.85,
+                  }}
+                >
+                  PBIS Hub
+                </div>
+                <h2 style={{ margin: "0.15rem 0 0", color: "white" }}>
+                  PBIS Report
+                </h2>
+                <div
+                  style={{
+                    opacity: 0.9,
+                    fontSize: "0.9rem",
+                    marginTop: 4,
+                    maxWidth: "48rem",
+                  }}
+                >
+                  {isPbisCoord || isAdmin || isEseCoord
+                    ? "School-wide. Filter by date range, teacher, reason, or student. Leave any filter blank to ignore it."
+                    : "Showing only PBIS points you awarded. Filter by date range, reason, or student."}
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setActiveSection("pbisHub")}
+                style={{
+                  background: "rgba(255,255,255,0.15)",
+                  border: "1px solid rgba(255,255,255,0.4)",
+                  color: "white",
+                  padding: "0.4rem 0.8rem",
+                  borderRadius: 999,
+                  fontSize: "0.85rem",
+                  cursor: "pointer",
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                ← Back to PBIS Hub
+              </button>
+            </div>
+          </div>
           <div
             style={{
               display: "grid",
