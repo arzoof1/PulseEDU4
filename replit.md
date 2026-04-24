@@ -34,10 +34,22 @@ PbisPointsHub now has two reward catalogs that share a single generic
 - **Classroom Store** (`tab === "rewards"`, `<ClassroomStoreView />`) —
   per-teacher catalog. Each staffer manages their own list. Anyone signed
   in can add to their own store; admins can edit anyone's row.
-- **School Store** (`tab === "rubric"`, `<SchoolStoreView canEdit={isAdmin} />`) —
-  school-wide catalog visible to every staffer. Only school admins see the
-  "+ Add item" header button and edit/delete card buttons; the server also
-  enforces this with a 403.
+- **School Store** — school-wide catalog. Reachable from **three** places
+  depending on role:
+  - **Sidebar "School Store"** (`activeSection === "schoolStore"` in
+    App.tsx, `baseNavSections`) — **always read-only** for everyone, even
+    admins. This is the teacher-facing browse surface.
+  - **PBIS Hub → "School Store" tab** (`tab === "rubric"`,
+    `<SchoolStoreView canEdit={...} />`) — full edit controls if the
+    viewer can edit.
+  - **BS hub tile + MTSS hub tile** (`activeSection === "schoolStoreManage"`)
+    — full edit controls.
+
+  Edit access (`canEditSchoolStore` in App.tsx, `requireWriteAccess` in
+  routes/schoolStore.ts) = `isSuperUser || isAdmin || isBehaviorSpecialist
+  || isMtssCoordinator || isPbisCoordinator`. Plain teachers get 403 on
+  writes and don't see edit/delete/+ controls anywhere. The two gates are
+  intentionally mirrored — keep them in sync if either changes.
 
 Both use the same `StoreItemCard`, `StoreItemModal`, image-upload flow, and
 local blob preview (instant in-modal preview before Save). They differ only

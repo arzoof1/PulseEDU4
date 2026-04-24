@@ -6,7 +6,10 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
-import PbisPointsHub, { SchoolWidePbisAdminView } from "./components/PbisPointsHub";
+import PbisPointsHub, {
+  SchoolWidePbisAdminView,
+  SchoolStoreView,
+} from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
@@ -3069,6 +3072,8 @@ function App() {
     | "pbisMilestoneEmails"
     | "pbisStore"
     | "pbisHub"
+    | "schoolStore"
+    | "schoolStoreManage"
     | "accommodations"
     | "ese"
     | "pbisLists"
@@ -5961,6 +5966,17 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     isPbisCoord;
+  // School Store edit access — kept in sync with the server's
+  // requireWriteAccess gate in routes/schoolStore.ts. SuperUser is
+  // included so a SuperUser entering the BS or MTSS hub (both of which
+  // already admit SuperUsers) can edit the catalog from the tile rather
+  // than landing on a silent read-only view.
+  const canEditSchoolStore =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    isPbisCoord;
   const isSuperUser = authUser?.isSuperUser === true;
   const canViewIssDashboard =
     isSuperUser ||
@@ -6077,6 +6093,12 @@ function App() {
     if (!canManageBehaviorLists && activeSection === "interventions") {
       setActiveSection("hallPasses");
     }
+    // Demote a user who lost edit access while sitting on the editable
+    // School Store. Bounce them to the read-only sidebar view rather than
+    // hallPasses so they don't lose their place in the catalog.
+    if (!canEditSchoolStore && activeSection === "schoolStoreManage") {
+      setActiveSection("schoolStore");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -6084,6 +6106,7 @@ function App() {
     isBehaviorSpec,
     canAccessPbisHub,
     canManageBehaviorLists,
+    canEditSchoolStore,
     activeSection,
   ]);
 
@@ -6137,6 +6160,10 @@ function App() {
     { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Family Communication", icon: IconUser },
     { key: "pbis", label: "PBIS Points", icon: IconStar },
+    // Read-only school-wide rewards catalog. Visible to every signed-in
+    // staffer so teachers can browse what students can redeem. The
+    // editable version lives inside the PBIS / BS / MTSS hubs.
+    { key: "schoolStore", label: "School Store", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
@@ -11892,6 +11919,22 @@ function App() {
 
       {activeSection === "pbis" && <PbisPointsHub />}
 
+      {/* Read-only School Store catalog — sidebar entry visible to every
+          signed-in staffer. Always renders with canEdit=false so even
+          admins/BS/MTSS/PBIS coords browsing here don't get edit
+          controls. The editable surface lives in the PBIS / BS / MTSS
+          hubs. */}
+      {activeSection === "schoolStore" && <SchoolStoreView canEdit={false} />}
+
+      {/* Editable School Store — opened from the BS hub or MTSS hub
+          tile. canEditSchoolStore mirrors the server's requireWriteAccess
+          gate; if a non-eligible user ever lands here we still render
+          read-only rather than crash, but the UI only links to this
+          section from a tile that's already gated. */}
+      {activeSection === "schoolStoreManage" && (
+        <SchoolStoreView canEdit={canEditSchoolStore} />
+      )}
+
       {(activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
         <section className="card">
           {/* Legacy "PBIS Points" awarding form. Replaced by <PbisPointsHub />
@@ -13135,6 +13178,16 @@ function App() {
             color: "#1e3a8a",
             show: true,
           },
+          {
+            // Manage version of the school-wide rewards catalog. The
+            // sidebar's "School Store" entry is read-only; this tile opens
+            // the same view with edit/add/delete enabled.
+            key: "schoolStoreManage",
+            label: "School Store",
+            desc: "Add, edit, and remove school-wide rewards students can redeem.",
+            color: "#6d28d9",
+            show: canEditSchoolStore,
+          },
         ];
         return (
           <>
@@ -13758,6 +13811,15 @@ function App() {
             label: "School-wide PBIS",
             desc: "Manage the rubric and note templates every teacher uses.",
             color: "#1e3a8a",
+          },
+          {
+            // Same edit-enabled view that the BS hub exposes. Anyone who
+            // can reach the MTSS hub also has write access (admins, MTSS
+            // coords, BS), so no extra gating needed here.
+            key: "schoolStoreManage",
+            label: "School Store",
+            desc: "Add, edit, and remove school-wide rewards students can redeem.",
+            color: "#6d28d9",
           },
         ];
         return (

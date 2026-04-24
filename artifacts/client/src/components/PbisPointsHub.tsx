@@ -85,6 +85,7 @@ type Me = {
   isEseCoordinator?: boolean;
   isMtssCoordinator?: boolean;
   isBehaviorSpecialist?: boolean;
+  isPbisCoordinator?: boolean;
 };
 
 type Teacher = { id: number; name: string };
@@ -449,7 +450,16 @@ export default function PbisPointsHub() {
       ) : tab === "rewards" ? (
         <ClassroomStoreView />
       ) : tab === "rubric" ? (
-        <SchoolStoreView canEdit={!!me?.isAdmin} />
+        <SchoolStoreView
+          canEdit={
+            !!(
+              me?.isAdmin ||
+              me?.isBehaviorSpecialist ||
+              me?.isMtssCoordinator ||
+              me?.isPbisCoordinator
+            )
+          }
+        />
       ) : (
         <ComingSoon tab={tab} />
       )}
@@ -3879,8 +3889,11 @@ function ClassroomStoreView() {
 }
 
 // School-wide School Store: shared catalog visible to all staff in the
-// school. Only admins can add/edit/delete (server enforces this too).
-function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
+// school. Writes are gated to admin / Behavior Specialist / MTSS
+// Coordinator / PBIS Coordinator (server enforces this too). Exported so
+// it can be embedded in the BS hub, MTSS hub, and a top-level read-only
+// sidebar entry — see App.tsx.
+export function SchoolStoreView({ canEdit }: { canEdit: boolean }) {
   return (
     <StoreView
       config={{

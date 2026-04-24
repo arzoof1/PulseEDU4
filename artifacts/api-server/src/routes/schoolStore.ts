@@ -1,15 +1,17 @@
 // School Store CRUD — school-wide catalog of rewards a student can "buy"
 // with their PBIS points. Unlike the classroom store (per-teacher), this
 // list is shared across the school: any signed-in staff member can read
-// it, but only school admins can create / edit / delete entries.
+// it, but writes are gated to roles that own the school-wide rewards
+// program — admins, Behavior Specialists, MTSS Coordinators, and PBIS
+// Coordinators. Plain teachers can only browse.
 //
 // Routes:
 //   GET    /api/school-store          → list this school's items
-//   POST   /api/school-store          → create (admin only)
-//   PATCH  /api/school-store/:id      → edit   (admin only)
-//   DELETE /api/school-store/:id      → delete (admin only; hard delete —
-//                                        no redemption history exists yet,
-//                                        so safe to remove)
+//   POST   /api/school-store          → create (admin / BS / MTSS / PBIS coord)
+//   PATCH  /api/school-store/:id      → edit   (admin / BS / MTSS / PBIS coord)
+//   DELETE /api/school-store/:id      → delete (admin / BS / MTSS / PBIS coord;
+//                                        hard delete — no redemption history
+//                                        exists yet, so safe to remove)
 import { Router, type IRouter } from "express";
 import { db, schoolStoreItemsTable, staffTable } from "@workspace/db";
 import { and, eq, sql } from "drizzle-orm";
@@ -38,14 +40,26 @@ async function loadStaff(
   return staff;
 }
 
-function requireAdmin(
+// Write access to the school-wide rewards catalog is shared by every role
+// that "owns" the school-wide PBIS program: SuperUsers (district-wide),
+// admins (everything), Behavior Specialists, MTSS Coordinators, and PBIS
+// Coordinators. Plain teachers (and any other role) get a 403. Kept in
+// sync with the client's `canEditSchoolStore` in App.tsx.
+function requireWriteAccess(
   staff: typeof staffTable.$inferSelect,
   res: import("express").Response,
 ) {
-  if (!staff.isAdmin) {
-    res
-      .status(403)
-      .json({ error: "Only school admins can edit the school store" });
+  const allowed =
+    staff.isSuperUser ||
+    staff.isAdmin ||
+    staff.isBehaviorSpecialist ||
+    staff.isMtssCoordinator ||
+    staff.isPbisCoordinator;
+  if (!allowed) {
+    res.status(403).json({
+      error:
+        "Only admins, Behavior Specialists, MTSS Coordinators, and PBIS Coordinators can edit the school store",
+    });
     return false;
   }
   return true;
@@ -78,7 +92,7 @@ router.get("/school-store", async (req, res) => {
 router.post("/school-store", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
-  if (!requireAdmin(staff, res)) return;
+  if (!requireWriteAccess(staff, res)) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const { name, description, pointsCost, imageUrl } = req.body ?? {};
@@ -162,7 +176,7 @@ router.post("/school-store", async (req, res) => {
 router.patch("/school-store/:id", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
-  if (!requireAdmin(staff, res)) return;
+  if (!requireWriteAccess(staff, res)) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const id = Number(req.params.id);
@@ -265,7 +279,7 @@ router.patch("/school-store/:id", async (req, res) => {
 router.delete("/school-store/:id", async (req, res) => {
   const staff = await loadStaff(req, res);
   if (!staff) return;
-  if (!requireAdmin(staff, res)) return;
+  if (!requireWriteAccess(staff, res)) return;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const id = Number(req.params.id);
