@@ -1339,9 +1339,11 @@ safe on every restart, and back-fills existing rows to TRUE.
     `pbis`, `schoolStore`, `accommodations`, `logIntervention`,
     `requestPullout`); Hall Passes / Tardy Pass / Teacher Roster are
     never gated.
-  - hide the `pbisStore` tile in the PBIS hub when SchoolStore is off.
-  - hide the `schoolStoreManage` tile in both the BS and MTSS hubs
-    when SchoolStore is off.
+  - hide the `schoolStoreManage` tile in the PBIS, BS, and MTSS hubs
+    when SchoolStore is off. (The PBIS Hub previously had a separate
+    `pbisStore` placeholder tile; that was retired in favor of pointing
+    all three hubs at the same `schoolStoreManage` view, since the
+    rewards catalog is school-wide rather than PBIS-only.)
   - hide the `logIntervention` tile in the BS hub when LogIntervention
     is off.
 - New "School Features" tile in `SettingsHub` (admin + SuperUser),

@@ -3072,7 +3072,6 @@ function App() {
     | "pbisReports"
     | "pbisReasons"
     | "pbisMilestoneEmails"
-    | "pbisStore"
     | "pbisHub"
     | "schoolStore"
     | "schoolStoreManage"
@@ -6156,9 +6155,7 @@ function App() {
     }
     if (
       !canAccessPbisHub &&
-      (activeSection === "pbisRecent" ||
-        activeSection === "pbisReports" ||
-        activeSection === "pbisStore")
+      (activeSection === "pbisRecent" || activeSection === "pbisReports")
     ) {
       setActiveSection("hallPasses");
     }
@@ -13673,7 +13670,7 @@ function App() {
           | "pbisReports"
           | "pbisReasons"
           | "pbisMilestoneEmails"
-          | "pbisStore";
+          | "schoolStoreManage";
         type PbisTool = {
           key: PbisHubKey;
           label: string;
@@ -13718,11 +13715,16 @@ function App() {
             show: isPbisCoord,
           },
           {
-            key: "pbisStore",
-            label: "PBIS Store",
-            desc: "Manage rewards students can redeem with PBIS points.",
+            // Same destination as the BS / MTSS hub "School Store" tile —
+            // opens the editable SchoolStoreView. The previous "PBIS Store"
+            // placeholder was retired in favor of this unified store; the
+            // user-facing label stays "School Store" because the rewards
+            // catalog is shared school-wide, not PBIS-only.
+            key: "schoolStoreManage",
+            label: "School Store",
+            desc: "Add, edit, and remove school-wide rewards students can redeem.",
             color: "#b45309",
-            show: effectiveFeatures.SchoolStore,
+            show: canEditSchoolStore && effectiveFeatures.SchoolStore,
           },
         ];
         return (
@@ -13971,28 +13973,6 @@ function App() {
           </>
         );
       })()}
-
-      {activeSection === "pbisStore" && canAccessPbisHub && (
-        <section className="card">
-          <h2>PBIS Store</h2>
-          <p style={{ marginTop: 0, color: "var(--muted, #64748b)" }}>
-            Manage the rewards that students can redeem with their PBIS points.
-          </p>
-          <div
-            style={{
-              marginTop: "1rem",
-              padding: "1.5rem",
-              border: "1px dashed var(--muted, #cbd5e1)",
-              borderRadius: 8,
-              color: "#64748b",
-              textAlign: "center",
-            }}
-          >
-            Coming soon. The PBIS Store will let you publish reward items,
-            track inventory, and approve student redemptions here.
-          </div>
-        </section>
-      )}
 
       {activeSection === "mtssPlans" && canManageMtssPlans && (
         <MtssPlansAdmin
