@@ -289,9 +289,19 @@ function SubjectCells({
     padding: "6px 6px",
     textAlign: "center",
   };
+  // Per product preference, PM3 is the most-recent / most important
+  // score and renders first, followed by the older PM1 and PM2, then
+  // the LG bucket.
   return (
     <>
       <td style={{ ...cell, ...GROUP_DIVIDER }}>
+        <ScorePill
+          score={block.pm3}
+          placement={block.pm3Placement}
+          pmLabel={`${subjectLabel} PM3`}
+        />
+      </td>
+      <td style={cell}>
         <ScorePill
           score={block.pm1}
           placement={block.pm1Placement}
@@ -303,13 +313,6 @@ function SubjectCells({
           score={block.pm2}
           placement={block.pm2Placement}
           pmLabel={`${subjectLabel} PM2`}
-        />
-      </td>
-      <td style={cell}>
-        <ScorePill
-          score={block.pm3}
-          placement={block.pm3Placement}
-          pmLabel={`${subjectLabel} PM3`}
         />
       </td>
       <td style={cell}>
@@ -653,16 +656,16 @@ export default function TeacherRosterPage({
                 }}
               >
                 <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
-                  PM1
+                  PM3
                 </th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM3</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
-                  PM1
+                  PM3
                 </th>
+                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM3</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
               </tr>
             </thead>
