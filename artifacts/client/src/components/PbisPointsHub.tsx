@@ -2363,14 +2363,6 @@ function SettingsView({
         )}
       </div>
 
-      {/* Note Templates */}
-      <NoteTemplatesSection
-        canEdit={canEdit}
-        templates={templates}
-        onTemplatesChanged={onTemplatesChanged}
-        onError={setErr}
-      />
-
       {/* Negative-points policy toggle */}
       {settings && (
         <div
@@ -2493,6 +2485,23 @@ function SettingsView({
           </div>
         ))
       )}
+
+      {/* Visual separator between behaviors and templates */}
+      <hr
+        style={{
+          border: 0,
+          borderTop: "1px solid #e2e8f0",
+          margin: "1.5rem 0 1.25rem",
+        }}
+      />
+
+      {/* Note Templates */}
+      <NoteTemplatesSection
+        canEdit={canEdit}
+        templates={templates}
+        onTemplatesChanged={onTemplatesChanged}
+        onError={setErr}
+      />
 
       {editing && canEdit && (
         <BehaviorEditModal
