@@ -52,12 +52,20 @@ interface RosterRow {
   grade: number | string;
   ela: SubjectBlock;
   math: SubjectBlock;
+  // Invisible Student Finder signals (server-computed). isInvisible =
+  // 0 non-voided PBIS recognitions in the school's invisibleDays
+  // window. mtssTier = highest active MTSS plan tier, or null.
+  isInvisible: boolean;
+  mtssTier: number | null;
 }
 
 interface RosterResponse {
   teacher: { id: number; displayName: string | null };
   availablePeriods: number[];
   selectedPeriod: number | null;
+  // Days of school used for the invisible-student window (mirrors PBIS
+  // Needs Attention so the teacher sees the same definition).
+  invisibleDays?: number;
   students: RosterRow[];
 }
 
@@ -247,6 +255,96 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
       >
         {overlay}
       </span>
+    </span>
+  );
+}
+
+// Eye-with-slash icon used to flag "invisible" students — those who
+// have received zero non-voided PBIS recognitions in the school's
+// invisible-student window. The same shape is used for every tier; we
+// vary the color and add a small superscript ("2"/"3") for students
+// who also have an active MTSS plan at that tier so they read as a
+// "more urgent" version of the same indicator.
+function InvisibleEyeIcon({
+  tier,
+  windowDays,
+}: {
+  tier: number | null;
+  windowDays: number | null;
+}) {
+  // Color encodes severity. Badge ink is intentionally dark so the
+  // small "2"/"3" stays readable against the orange/red fill (white
+  // text fails WCAG contrast on #f59e0b at this size).
+  let color = "#6b7280"; // gray default — invisible, no MTSS plan
+  let badgeInk = "#fff";
+  let badge: string | null = null;
+  if (tier === 2) {
+    color = "#f59e0b"; // orange — Tier 2
+    badgeInk = "#78350f"; // dark amber for contrast
+    badge = "2";
+  } else if (tier && tier >= 3) {
+    color = "#dc2626"; // red — Tier 3+
+    badgeInk = "#7f1d1d"; // dark red for contrast
+    badge = "3";
+  }
+  const baseLabel =
+    windowDays != null
+      ? `Invisible — 0 PBIS recognitions in the last ${windowDays} school days`
+      : "Invisible — 0 recent PBIS recognitions";
+  const tierLabel =
+    tier && tier >= 2 ? ` • Active MTSS Tier ${tier} plan` : "";
+  const label = `${baseLabel}${tierLabel}`;
+  return (
+    <span
+      title={label}
+      aria-label={label}
+      style={{
+        position: "relative",
+        display: "inline-block",
+        width: 22,
+        height: 22,
+        lineHeight: 0,
+      }}
+    >
+      <svg
+        width={22}
+        height={22}
+        viewBox="0 0 24 24"
+        aria-hidden="true"
+        focusable="false"
+        fill="none"
+        stroke={color}
+        strokeWidth={2}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      >
+        {/* Eye outline + pupil + diagonal slash */}
+        <path d="M2 12 C 5 6, 9 4, 12 4 C 15 4, 19 6, 22 12 C 19 18, 15 20, 12 20 C 9 20, 5 18, 2 12 Z" />
+        <circle cx="12" cy="12" r="3" />
+        <line x1="3" y1="3" x2="21" y2="21" />
+      </svg>
+      {badge && (
+        <span
+          aria-hidden="true"
+          style={{
+            position: "absolute",
+            top: -4,
+            right: -6,
+            minWidth: 12,
+            height: 12,
+            padding: "0 3px",
+            borderRadius: 6,
+            background: color,
+            color: badgeInk,
+            fontSize: 9,
+            fontWeight: 800,
+            lineHeight: "12px",
+            textAlign: "center",
+          }}
+        >
+          {badge}
+        </span>
+      )}
     </span>
   );
 }
@@ -576,6 +674,18 @@ export default function TeacherRosterPage({
           &gt; 5 pts to next level
         </span>
         <span>BQ = Bottom Quartile (prior-year final scale score)</span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <InvisibleEyeIcon tier={null} windowDays={data?.invisibleDays ?? null} />
+          Invisible (0 PBIS in last {data?.invisibleDays ?? 10} school days)
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <InvisibleEyeIcon tier={2} windowDays={data?.invisibleDays ?? null} />
+          + active MTSS Tier 2
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <InvisibleEyeIcon tier={3} windowDays={data?.invisibleDays ?? null} />
+          + active MTSS Tier 3
+        </span>
       </div>
 
       {summary && (
@@ -624,6 +734,13 @@ export default function TeacherRosterPage({
                   first cell of each subject group in the body extends
                   the divider down through every row. */}
               <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
+                {/* Eye-icon column. Header is intentionally blank — the
+                    legend (and the icon's tooltip) carry the meaning. */}
+                <th
+                  rowSpan={2}
+                  style={{ padding: "8px 6px", verticalAlign: "bottom", width: 32 }}
+                  aria-label="Invisible-student indicator"
+                />
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Student
                 </th>
@@ -689,6 +806,20 @@ export default function TeacherRosterPage({
                     background: idx % 2 === 1 ? "#f9fafb" : "transparent",
                   }}
                 >
+                  <td
+                    style={{
+                      padding: "6px 6px",
+                      width: 32,
+                      textAlign: "center",
+                    }}
+                  >
+                    {row.isInvisible && (
+                      <InvisibleEyeIcon
+                        tier={row.mtssTier}
+                        windowDays={data.invisibleDays ?? null}
+                      />
+                    )}
+                  </td>
                   <td style={{ padding: "6px 10px" }}>
                     {row.lastName}, {row.firstName}
                   </td>

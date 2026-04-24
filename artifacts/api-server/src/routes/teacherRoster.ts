@@ -26,8 +26,11 @@ import {
   staffTable,
   studentsTable,
   studentFastScoresTable,
+  pbisEntriesTable,
+  studentMtssPlansTable,
+  schoolSettingsTable,
 } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   bucketFor,
@@ -60,6 +63,21 @@ function isCoreTeam(s: typeof staffTable.$inferSelect): boolean {
       s.isMtssCoordinator ||
       s.isBehaviorSpecialist,
   );
+}
+
+// Mirror of the Mon–Fri "school day" subtraction used in pbis.ts so the
+// roster view stays consistent with PBIS Needs Attention.
+function subtractSchoolDays(n: number): Date {
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const d = new Date(today);
+  let remaining = n;
+  while (remaining > 0) {
+    d.setDate(d.getDate() - 1);
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6) remaining -= 1;
+  }
+  return d;
 }
 
 interface SubjectBlock {
@@ -254,8 +272,20 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     return;
   }
 
-  // Pull demographics + FAST scores in parallel.
-  const [students, scores] = await Promise.all([
+  // Resolve the school's invisible-student window (mirrors PBIS Needs
+  // Attention). Default 10 school days when no row exists.
+  const [settingsRow] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const invisibleDays = settingsRow?.pbisInvisibleStudentDays ?? 10;
+  const invisibleWindow = subtractSchoolDays(invisibleDays);
+  const invisibleWindowIso = invisibleWindow.toISOString();
+
+  // Pull demographics + FAST scores + recent PBIS entries + active MTSS
+  // plans in parallel. The PBIS query only returns studentId since
+  // that's all we need to mark "has been recognized recently".
+  const [students, scores, recentPbis, activeMtss] = await Promise.all([
     db
       .select()
       .from(studentsTable)
@@ -274,7 +304,43 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(studentFastScoresTable.studentId, studentIds),
         ),
       ),
+    db
+      .select({ studentId: pbisEntriesTable.studentId })
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          eq(pbisEntriesTable.schoolId, schoolId),
+          isNull(pbisEntriesTable.voidedAt),
+          gte(pbisEntriesTable.createdAt, invisibleWindowIso),
+          inArray(pbisEntriesTable.studentId, studentIds),
+        ),
+      ),
+    db
+      .select({
+        studentId: studentMtssPlansTable.studentId,
+        tier: studentMtssPlansTable.tier,
+      })
+      .from(studentMtssPlansTable)
+      .where(
+        and(
+          eq(studentMtssPlansTable.schoolId, schoolId),
+          isNull(studentMtssPlansTable.closedAt),
+          inArray(studentMtssPlansTable.studentId, studentIds),
+        ),
+      ),
   ]);
+
+  // Set of students with at least one non-voided PBIS entry in the window.
+  const recognizedIds = new Set<string>();
+  for (const r of recentPbis) recognizedIds.add(r.studentId);
+
+  // Highest active MTSS tier per student (a student can have multiple
+  // active plans — we surface the most intensive one).
+  const mtssTierByStudent = new Map<string, number>();
+  for (const p of activeMtss) {
+    const cur = mtssTierByStudent.get(p.studentId) ?? 0;
+    if (p.tier > cur) mtssTierByStudent.set(p.studentId, p.tier);
+  }
 
   // (studentId, subject) → row
   const scoreKey = (sid: string, subj: Subject) => `${sid}::${subj}`;
@@ -297,6 +363,8 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     const grade = Number(stu.grade);
     const elaRow = scoreMap.get(scoreKey(stu.studentId, "ela"));
     const mathRow = scoreMap.get(scoreKey(stu.studentId, "math"));
+    const mtssTier = mtssTierByStudent.get(stu.studentId) ?? null;
+    const isInvisible = !recognizedIds.has(stu.studentId);
     return {
       studentId: stu.studentId,
       firstName: stu.firstName,
@@ -304,6 +372,11 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       grade: stu.grade,
       ela: buildSubjectBlock(elaRow, "ela", grade),
       math: buildSubjectBlock(mathRow, "math", grade),
+      // Invisibility = no non-voided PBIS entry in the school's
+      // invisibleDays window. Tier is the highest active MTSS plan
+      // tier (or null when the student has no open plan).
+      isInvisible,
+      mtssTier,
     };
   });
 
@@ -314,6 +387,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     },
     availablePeriods,
     selectedPeriod: periodFilter,
+    invisibleDays,
     students: out,
   });
 });
