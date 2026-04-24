@@ -248,8 +248,10 @@ function BucketIcon({ bucket }: { bucket: Bucket }) {
           // rather than on top of the handle. Scales with icon size.
           paddingTop: BUCKET_PX * 0.18,
           color: ink,
-          fontSize: Math.round(BUCKET_PX * 0.45),
-          fontWeight: 800,
+          // Smaller, less dominant gap number — the pail is the focal
+          // shape; the digit is supplemental.
+          fontSize: Math.round(BUCKET_PX * 0.28),
+          fontWeight: 700,
           lineHeight: 1,
         }}
       >
