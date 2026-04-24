@@ -374,14 +374,19 @@ const GROUP_DIVIDER: React.CSSProperties = {
 function SubjectCells({
   block,
   subjectLabel,
+  showLg,
 }: {
   block: SubjectBlock;
   subjectLabel: string;
+  showLg: boolean;
 }) {
+  // colspan shrinks by 1 when LG is hidden so the "n/a" row still
+  // exactly fills the subject group.
+  const groupCols = showLg ? 4 : 3;
   if (block.noChart) {
     return (
       <td
-        colSpan={4}
+        colSpan={groupCols}
         style={{
           padding: "6px 10px",
           color: "#9ca3af",
@@ -424,9 +429,11 @@ function SubjectCells({
           pmLabel={`${subjectLabel} PM2`}
         />
       </td>
-      <td style={cell}>
-        <BucketCell bucket={block.bucket} />
-      </td>
+      {showLg && (
+        <td style={cell}>
+          <BucketCell bucket={block.bucket} />
+        </td>
+      )}
     </>
   );
 }
@@ -480,6 +487,38 @@ export default function TeacherRosterPage({
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Per-user view toggles. Each maps to one optional column. Defaults
+  // to all-on; persisted to localStorage so the teacher's preference
+  // survives reloads.
+  type Visibility = { lg: boolean; bq: boolean; invisible: boolean };
+  const VIS_KEY = "teacherRoster.visibility.v1";
+  const [visibility, setVisibility] = useState<Visibility>(() => {
+    if (typeof window === "undefined") {
+      return { lg: true, bq: true, invisible: true };
+    }
+    try {
+      const raw = window.localStorage.getItem(VIS_KEY);
+      if (!raw) return { lg: true, bq: true, invisible: true };
+      const parsed = JSON.parse(raw) as Partial<Visibility>;
+      return {
+        lg: parsed.lg ?? true,
+        bq: parsed.bq ?? true,
+        invisible: parsed.invisible ?? true,
+      };
+    } catch {
+      return { lg: true, bq: true, invisible: true };
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(VIS_KEY, JSON.stringify(visibility));
+    } catch {
+      /* ignore quota / privacy-mode errors */
+    }
+  }, [visibility]);
+  const toggleVis = (key: keyof Visibility) =>
+    setVisibility((v) => ({ ...v, [key]: !v[key] }));
 
   // Load teacher options on mount (the API decides what to return based
   // on the caller's role — plain teachers get a single-entry list).
@@ -690,6 +729,60 @@ export default function TeacherRosterPage({
         </span>
       </div>
 
+      {/* View toggles — let teachers hide optional columns. PM pills
+          stay always-on since they're the core data. Preferences are
+          remembered per browser. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 14,
+          flexWrap: "wrap",
+          marginBottom: 12,
+          padding: "6px 10px",
+          background: "#f9fafb",
+          border: "1px solid #e5e7eb",
+          borderRadius: 6,
+          fontSize: 12,
+          color: "#374151",
+        }}
+      >
+        <span style={{ fontWeight: 600 }}>Show:</span>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the LG (learning-gain bucket) column for both ELA and Math"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.lg}
+            onChange={() => toggleVis("lg")}
+          />
+          LG bucket
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the Bottom-Quartile column"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.bq}
+            onChange={() => toggleVis("bq")}
+          />
+          BQ flag
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the invisible-student eye icon column"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.invisible}
+            onChange={() => toggleVis("invisible")}
+          />
+          Invisible-student eye
+        </label>
+      </div>
+
       {summary && (
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 12 }}>
           {summary.total} student{summary.total === 1 ? "" : "s"} •{" "}
@@ -738,11 +831,13 @@ export default function TeacherRosterPage({
               <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
                 {/* Eye-icon column. Header is intentionally blank — the
                     legend (and the icon's tooltip) carry the meaning. */}
-                <th
-                  rowSpan={2}
-                  style={{ padding: "8px 6px", verticalAlign: "bottom", width: 32 }}
-                  aria-label="Invisible-student indicator"
-                />
+                {visibility.invisible && (
+                  <th
+                    rowSpan={2}
+                    style={{ padding: "8px 6px", verticalAlign: "bottom", width: 32 }}
+                    aria-label="Invisible-student indicator"
+                  />
+                )}
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Student
                 </th>
@@ -750,7 +845,7 @@ export default function TeacherRosterPage({
                   Grade
                 </th>
                 <th
-                  colSpan={4}
+                  colSpan={visibility.lg ? 4 : 3}
                   style={{
                     padding: "8px 10px",
                     textAlign: "center",
@@ -760,7 +855,7 @@ export default function TeacherRosterPage({
                   ELA
                 </th>
                 <th
-                  colSpan={4}
+                  colSpan={visibility.lg ? 4 : 3}
                   style={{
                     padding: "8px 10px",
                     textAlign: "center",
@@ -769,9 +864,11 @@ export default function TeacherRosterPage({
                 >
                   Math
                 </th>
-                <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
-                  BQ
-                </th>
+                {visibility.bq && (
+                  <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
+                    BQ
+                  </th>
+                )}
               </tr>
               <tr
                 style={{
@@ -788,13 +885,17 @@ export default function TeacherRosterPage({
                 </th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
+                {visibility.lg && (
+                  <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
+                )}
                 <th style={{ padding: "4px 6px", fontWeight: 600, ...GROUP_DIVIDER }}>
                   PM3
                 </th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM1</th>
                 <th style={{ padding: "4px 6px", fontWeight: 600 }}>PM2</th>
-                <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
+                {visibility.lg && (
+                  <th style={{ padding: "4px 6px", fontWeight: 600 }}>LG</th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -808,29 +909,41 @@ export default function TeacherRosterPage({
                     background: idx % 2 === 1 ? "#f9fafb" : "transparent",
                   }}
                 >
-                  <td
-                    style={{
-                      padding: "6px 6px",
-                      width: 32,
-                      textAlign: "center",
-                    }}
-                  >
-                    {row.isInvisible && (
-                      <InvisibleEyeIcon
-                        tier={row.mtssTier}
-                        windowDays={data.invisibleDays ?? null}
-                      />
-                    )}
-                  </td>
+                  {visibility.invisible && (
+                    <td
+                      style={{
+                        padding: "6px 6px",
+                        width: 32,
+                        textAlign: "center",
+                      }}
+                    >
+                      {row.isInvisible && (
+                        <InvisibleEyeIcon
+                          tier={row.mtssTier}
+                          windowDays={data.invisibleDays ?? null}
+                        />
+                      )}
+                    </td>
+                  )}
                   <td style={{ padding: "6px 10px" }}>
                     {row.lastName}, {row.firstName}
                   </td>
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
-                  <SubjectCells block={row.ela} subjectLabel="ELA" />
-                  <SubjectCells block={row.math} subjectLabel="Math" />
-                  <td style={{ padding: "6px 10px" }}>
-                    <BqPills row={row} />
-                  </td>
+                  <SubjectCells
+                    block={row.ela}
+                    subjectLabel="ELA"
+                    showLg={visibility.lg}
+                  />
+                  <SubjectCells
+                    block={row.math}
+                    subjectLabel="Math"
+                    showLg={visibility.lg}
+                  />
+                  {visibility.bq && (
+                    <td style={{ padding: "6px 10px" }}>
+                      <BqPills row={row} />
+                    </td>
+                  )}
                 </tr>
               ))}
             </tbody>
