@@ -13291,7 +13291,8 @@ function App() {
           | "verifyPullouts"
           | "schoolWidePbis"
           | "schoolStoreManage"
-          | "mtssPlans";
+          | "mtssPlans"
+          | "teacherRoster";
         type HubTool = {
           key: HubKey;
           label: string;
@@ -13301,6 +13302,14 @@ function App() {
           badge?: number;
         };
         const tools: HubTool[] = [
+          {
+            key: "verifyPullouts",
+            label: "Verify Pullouts",
+            desc: "Approve or reject pending pullout requests.",
+            color: "#b45309",
+            show: canVerifyPullouts,
+            badge: pendingPulloutCount,
+          },
           {
             key: "issDashboard",
             label: "ISS Dashboard",
@@ -13350,14 +13359,6 @@ function App() {
             desc: "Record an intervention you delivered.",
             color: "#0e7490",
             show: effectiveFeatures.LogIntervention,
-          },
-          {
-            key: "verifyPullouts",
-            label: "Verify Pullouts",
-            desc: "Approve or reject pending pullout requests.",
-            color: "#b45309",
-            show: canVerifyPullouts,
-            badge: pendingPulloutCount,
           },
           {
             key: "schoolWidePbis",
