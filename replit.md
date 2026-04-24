@@ -995,6 +995,66 @@ and the static config tables (`schools`, `districts`, `custom_roles`,
 `polarity_pairs`, `trusted_adult_interventions`,
 `district_integrations`) before re-inserting.
 
+## MTSS Plans v1 (2026-04-24)
+
+First slice of the MTSS Intervention Plan system. The Invisible Student
+Finder and Teacher Roster page (both spec'd, on hold) will read from
+this table.
+
+**Schema.** `lib/db/src/schema/studentMtssPlans.ts` →
+`student_mtss_plans` table (id, schoolId, studentId text, title, goals,
+tier default 2, pointRangeMin/Max, notes, openedAt/By, closedAt/By,
+created/updated). Indexes on `school_id` and `(school_id, student_id)`.
+No FK constraint on student_id (matches codebase convention — JS-side
+joins, AND-school filter).
+
+**DDL on boot, not via drizzle-kit.** `drizzle-kit push` refuses to
+apply this table non-interactively because rename detection confuses it
+with legacy `user_sessions` / `check_in_with_options`. Instead, the
+table is created idempotently at boot by `ensureMtssPlansSchema()` in
+`seed.ts`, which is called from `seedMtssPlansIfEmpty()`. Mirrors the
+"always-run schema fix" pattern already used for the bell_schedules
+index. Fresh prod deploys self-heal — no manual SQL needed.
+
+**Routes.** `artifacts/api-server/src/routes/mtssPlans.ts`:
+- `GET /api/mtss-plans?status=active|closed|all&studentId=...`
+- `POST /api/mtss-plans`
+- `PATCH /api/mtss-plans/:id` — pass `{closed: true}` to close,
+  `{closed: false}` to reopen
+- `DELETE /api/mtss-plans/:id`
+
+**Authz — "core team" gate on BOTH read and write.** Allowed:
+SuperUser, Admin, BehaviorSpecialist, MtssCoordinator, PbisCoordinator.
+Plain teachers get 403. Read is gated the same as write because plans
+contain protected intervention notes; a broader read-only view for
+classroom teachers can be added later if needed. Mirror flag on the
+client is `canManageMtssPlans` in App.tsx — keep both in sync.
+
+**Seed.** `seedMtssPlansIfEmpty()` is idempotent per-school: skips any
+school that already has at least one plan. For each empty school it
+seeds 20% of the roster with a placeholder Tier-2 plan, attributed to
+"System Seed" so coordinators can tell them from real plans. Runs at
+boot AFTER `seedIfEmpty()`. Verified: 1,950 plans across 7 dev schools
+(175/400/300/325/275/175/300).
+
+**UI.** `artifacts/client/src/components/MtssPlansAdmin.tsx`. Reachable
+from two places (no sidebar entry — hub-tile only, like
+`schoolStoreManage`):
+- BS hub tile "MTSS Plans" (teal)
+- MTSS Coordinator hub tile "MTSS Plans" (teal, first tile)
+
+Single-screen list with status filter (active/closed/all), free-text
+search across student name/ID/title, +New Plan button, per-row
+edit/close/reopen/delete. Modal allows multiple active plans per
+student (soft warning, not blocked).
+
+**Open follow-ups (not blocking).**
+- Concurrent boot seeding could double-seed if scaled horizontally.
+  Single-instance deploy today, so not addressed.
+- Sub-level cut points for the FAST PM pills (1.1/1.2/1.3, 2.1/2.2)
+  still pending from user — only affects the Teacher Roster pill label,
+  not anything in this slice.
+
 ## Where we paused (end of session, 2026-04-23)
 
 Migration is done, app is published, but production is unusable

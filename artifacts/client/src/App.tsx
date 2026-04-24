@@ -4,6 +4,7 @@ import CreatePassModal from "./components/CreatePassModal";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
+import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
 import PbisPointsHub, {
@@ -3088,6 +3089,7 @@ function App() {
     | "hallPassMgmt"
     | "mtssCoordinator"
     | "mtssTemplates"
+    | "mtssPlans"
     | "settings"
     | "staffRoles"
     | "bellSchedule"
@@ -5966,6 +5968,16 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     isPbisCoord;
+  // MTSS Plans edit/read access — kept in sync with the server's
+  // requireCoreTeam gate in routes/mtssPlans.ts. Read access is gated
+  // the same as write because plans contain protected intervention
+  // notes meant only for the support team.
+  const canManageMtssPlans =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    isPbisCoord;
   // School Store edit access — kept in sync with the server's
   // requireWriteAccess gate in routes/schoolStore.ts. SuperUser is
   // included so a SuperUser entering the BS or MTSS hub (both of which
@@ -6099,6 +6111,11 @@ function App() {
     if (!canEditSchoolStore && activeSection === "schoolStoreManage") {
       setActiveSection("schoolStore");
     }
+    // MTSS Plans is core-team only — bounce anyone who lost access while
+    // sitting on it.
+    if (!canManageMtssPlans && activeSection === "mtssPlans") {
+      setActiveSection("hallPasses");
+    }
   }, [
     isAdmin,
     isEseCoord,
@@ -6107,6 +6124,7 @@ function App() {
     canAccessPbisHub,
     canManageBehaviorLists,
     canEditSchoolStore,
+    canManageMtssPlans,
     activeSection,
   ]);
 
@@ -13103,7 +13121,9 @@ function App() {
           | "hallPassMgmt"
           | "logIntervention"
           | "verifyPullouts"
-          | "schoolWidePbis";
+          | "schoolWidePbis"
+          | "schoolStoreManage"
+          | "mtssPlans";
         type HubTool = {
           key: HubKey;
           label: string;
@@ -13187,6 +13207,13 @@ function App() {
             desc: "Add, edit, and remove school-wide rewards students can redeem.",
             color: "#6d28d9",
             show: canEditSchoolStore,
+          },
+          {
+            key: "mtssPlans",
+            label: "MTSS Plans",
+            desc: "Open and manage student intervention plans (Tier 1/2/3).",
+            color: "#0d9488",
+            show: canManageMtssPlans,
           },
         ];
         return (
@@ -13791,8 +13818,23 @@ function App() {
         </section>
       )}
 
+      {activeSection === "mtssPlans" && canManageMtssPlans && (
+        <MtssPlansAdmin
+          canManage={canManageMtssPlans}
+          onBack={() =>
+            setActiveSection(
+              isMtss ? "mtssCoordinator" : "behaviorSpecialist",
+            )
+          }
+        />
+      )}
+
       {activeSection === "mtssCoordinator" && canAccessMtssHub && (() => {
-        type MtssHubKey = "mtssTemplates" | "schoolWidePbis";
+        type MtssHubKey =
+          | "mtssTemplates"
+          | "schoolWidePbis"
+          | "schoolStoreManage"
+          | "mtssPlans";
         type MtssTool = {
           key: MtssHubKey;
           label: string;
@@ -13800,6 +13842,12 @@ function App() {
           color: string;
         };
         const tools: MtssTool[] = [
+          {
+            key: "mtssPlans",
+            label: "MTSS Plans",
+            desc: "Open and manage student intervention plans (Tier 1/2/3).",
+            color: "#0d9488",
+          },
           {
             key: "mtssTemplates",
             label: "Templates",

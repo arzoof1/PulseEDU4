@@ -27,9 +27,10 @@ import {
   issAttendanceDayTable,
   issRosterTable,
   interventionEntriesTable,
+  studentMtssPlansTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { sql } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { logger } from "./lib/logger";
 
 // =============================================================================
@@ -244,6 +245,115 @@ export async function seedTenancy() {
         isPrimary: s.isPrimary,
       })
       .onConflictDoNothing();
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedMtssPlansIfEmpty: idempotent per-school. Adds an active MTSS plan to
+// 20% of the students at any school that has zero plans yet. Runs at boot
+// AFTER the main dataset is in place so the demo always has a realistic
+// pool of Tier-2 students for the Invisible Student Finder to flag.
+//
+// Uses a deterministic RNG seeded by school id so re-runs produce the same
+// 20% sample (until plans are added/deleted manually). Plans the seed
+// inserts are explicitly attributed to "System Seed" so coordinators can
+// distinguish them from real plans they've authored.
+// -----------------------------------------------------------------------------
+const MTSS_SEED_TITLES = [
+  "Tier 2 Behavior Support",
+  "Reading Intervention",
+  "Math Intervention",
+  "Attendance Plan",
+  "Engagement / Check-in Plan",
+  "Social-Emotional Support",
+];
+
+// Idempotent CREATE TABLE for student_mtss_plans. drizzle-kit push refuses
+// to apply this non-interactively because it confuses the new table with
+// legacy `user_sessions` / `check_in_with_options` rename targets, so we
+// commit the DDL here so a fresh prod deploy still gets the table without
+// any out-of-band SQL. Mirrors the always-run bell_schedules index fix in
+// seedIfEmpty(). Safe to re-run: every statement uses IF NOT EXISTS.
+export async function ensureMtssPlansSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_mtss_plans (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      goals TEXT NOT NULL DEFAULT '',
+      tier INTEGER NOT NULL DEFAULT 2,
+      point_range_min INTEGER,
+      point_range_max INTEGER,
+      notes TEXT NOT NULL DEFAULT '',
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      opened_by_staff_id INTEGER,
+      opened_by_name TEXT,
+      closed_at TIMESTAMPTZ,
+      closed_by_staff_id INTEGER,
+      closed_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_mtss_plans_school_idx ON student_mtss_plans (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_mtss_plans_student_idx ON student_mtss_plans (school_id, student_id)`,
+  );
+}
+
+export async function seedMtssPlansIfEmpty() {
+  // Ensure the table exists first. On a fresh prod DB this is the only
+  // place the DDL runs; in dev it's a no-op after the first boot.
+  await ensureMtssPlansSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c }] = (await db.execute(
+      sql`SELECT COUNT(*)::int AS c FROM student_mtss_plans WHERE school_id = ${school.id}`,
+    )).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+
+    // Deterministic shuffle, then take the first 20%.
+    const rng = makeRng(school.id * 31 + 7);
+    const ids = studentRows.map((s) => s.studentId);
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    const sampleSize = Math.floor(ids.length * 0.2);
+    const sampled = ids.slice(0, sampleSize);
+
+    const plans = sampled.map((studentId) => ({
+      schoolId: school.id,
+      studentId,
+      title: pick(rng, MTSS_SEED_TITLES),
+      goals:
+        "Placeholder goals — to be filled in by the MTSS coordinator. v1 seed only.",
+      tier: 2,
+      pointRangeMin: 0,
+      pointRangeMax: 100,
+      notes: "Auto-seeded plan. Remove or edit before live use.",
+      openedByName: "System Seed",
+    }));
+
+    if (plans.length === 0) continue;
+
+    // Batch insert to avoid one-giant-statement issues at large schools.
+    for (let i = 0; i < plans.length; i += 500) {
+      await db.insert(studentMtssPlansTable).values(plans.slice(i, i + 500));
+    }
+    logger.info(
+      { schoolId: school.id, count: plans.length },
+      "[seed] MTSS plans seeded (20% of students)",
+    );
   }
 }
 

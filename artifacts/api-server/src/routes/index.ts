@@ -37,6 +37,7 @@ import tenancyRouter from "./tenancy";
 import storageRouter from "./storage";
 import classroomStoreRouter from "./classroomStore";
 import schoolStoreRouter from "./schoolStore";
+import mtssPlansRouter from "./mtssPlans";
 
 const router: IRouter = Router();
 
@@ -78,5 +79,6 @@ router.use(tenancyRouter);
 router.use(storageRouter);
 router.use(classroomStoreRouter);
 router.use(schoolStoreRouter);
+router.use(mtssPlansRouter);
 
 export default router;

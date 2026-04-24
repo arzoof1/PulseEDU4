@@ -37,3 +37,4 @@ export * from "./issRoster";
 export * from "./issAttendanceDay";
 export * from "./classroomStoreItems";
 export * from "./schoolStoreItems";
+export * from "./studentMtssPlans";

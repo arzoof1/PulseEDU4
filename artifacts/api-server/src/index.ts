@@ -1,6 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import { seedIfEmpty, seedTenancy } from "./seed";
+import { seedIfEmpty, seedTenancy, seedMtssPlansIfEmpty } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 
@@ -25,6 +25,9 @@ if (Number.isNaN(port) || port <= 0) {
 (async () => {
   await seedTenancy();
   await seedIfEmpty();
+  // Runs after the main seed so studentsTable is populated. Idempotent
+  // per-school: skipped for any school that already has at least one plan.
+  await seedMtssPlansIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {
