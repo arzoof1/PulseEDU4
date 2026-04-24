@@ -46,6 +46,15 @@ type PbisEntry = {
   voidedAt?: string | null;
 };
 
+type Me = {
+  id: number;
+  displayName?: string;
+  isAdmin?: boolean;
+  isEseCoordinator?: boolean;
+};
+
+type Teacher = { id: number; name: string };
+
 const TAB_LABELS: { key: Tab; label: string }[] = [
   { key: "classes", label: "Classes" },
   { key: "rubric", label: "Rubric" },
@@ -59,14 +68,22 @@ export default function PbisPointsHub() {
   const [loading, setLoading] = useState(true);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
+  const [me, setMe] = useState<Me | null>(null);
   const [sections, setSections] = useState<Section[]>([]);
   const [students, setStudents] = useState<Student[]>([]);
   const [reasons, setReasons] = useState<Reason[]>([]);
   // studentId -> total active points (sum of non-voided entries)
   const [totals, setTotals] = useState<Map<string, number>>(new Map());
 
+  const [selectedTeacherId, setSelectedTeacherId] = useState<number | null>(
+    null,
+  );
   const [activePeriod, setActivePeriod] = useState<number | "all">("all");
   const [awardingFor, setAwardingFor] = useState<Student | null>(null);
+
+  // Admin/ESE coords can pull every section in their school via ?all=1.
+  // Anyone else only sees their own roster — gated server-side too.
+  const canViewAllTeachers = !!(me?.isAdmin || me?.isEseCoordinator);
 
   // ---- Initial data load
   useEffect(() => {
@@ -75,8 +92,17 @@ export default function PbisPointsHub() {
       setLoading(true);
       setErrorMsg(null);
       try {
+        // First we need to know whether the viewer is an admin so we can
+        // request the right schedule scope.
+        const meRes = await authFetch("/api/auth/me");
+        if (!meRes.ok) throw new Error("Failed to load your account");
+        const meJson = (await meRes.json()) as Me;
+        if (cancelled) return;
+
+        const adminScope = !!(meJson.isAdmin || meJson.isEseCoordinator);
+
         const [schedRes, studRes, reasonsRes, pbisRes] = await Promise.all([
-          authFetch("/api/schedule"),
+          authFetch(adminScope ? "/api/schedule?all=1" : "/api/schedule"),
           authFetch("/api/students"),
           authFetch("/api/pbis-reasons"),
           authFetch("/api/pbis"),
@@ -93,11 +119,31 @@ export default function PbisPointsHub() {
 
         if (cancelled) return;
 
-        setSections(
-          (schedJson.sections ?? []).filter((s) => !s.isPlanning),
+        const filteredSections = (schedJson.sections ?? []).filter(
+          (s) => !s.isPlanning,
         );
+        setMe(meJson);
+        setSections(filteredSections);
         setStudents(studJson);
         setReasons(reasonsJson.filter((r) => r.active));
+
+        // Default the teacher picker to the viewer when they have any
+        // sections; otherwise pick the first teacher alphabetically so the
+        // grid isn't empty for an admin who doesn't teach.
+        if (adminScope) {
+          const selfHasSections = filteredSections.some(
+            (s) => s.teacherStaffId === meJson.id,
+          );
+          if (selfHasSections) {
+            setSelectedTeacherId(meJson.id);
+          } else {
+            const firstTeacher = [...filteredSections]
+              .sort((a, b) => a.teacherName.localeCompare(b.teacherName))[0];
+            setSelectedTeacherId(firstTeacher?.teacherStaffId ?? null);
+          }
+        } else {
+          setSelectedTeacherId(meJson.id);
+        }
 
         const t = new Map<string, number>();
         for (const e of pbisJson) {
@@ -119,6 +165,32 @@ export default function PbisPointsHub() {
       cancelled = true;
     };
   }, []);
+
+  // Distinct teachers represented in the loaded sections, alphabetized.
+  const teachers = useMemo<Teacher[]>(() => {
+    const m = new Map<number, string>();
+    for (const s of sections) {
+      if (!m.has(s.teacherStaffId)) {
+        m.set(s.teacherStaffId, s.teacherName || `Staff #${s.teacherStaffId}`);
+      }
+    }
+    return Array.from(m.entries())
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [sections]);
+
+  // Sections to display in the Classes tab — narrowed to the selected
+  // teacher (or all of the viewer's own when not admin).
+  const visibleSectionsForTeacher = useMemo(() => {
+    if (selectedTeacherId == null) return sections;
+    return sections.filter((s) => s.teacherStaffId === selectedTeacherId);
+  }, [sections, selectedTeacherId]);
+
+  // Reset the period filter when switching teachers so we don't leave the
+  // user filtered to a period the new teacher doesn't have.
+  useEffect(() => {
+    setActivePeriod("all");
+  }, [selectedTeacherId]);
 
   // ---- Award points (used by AwardModal)
   async function awardPoints(
@@ -190,12 +262,15 @@ export default function PbisPointsHub() {
         </div>
       ) : tab === "classes" ? (
         <ClassesView
-          sections={sections}
+          sections={visibleSectionsForTeacher}
           students={students}
           totals={totals}
           activePeriod={activePeriod}
           onChangePeriod={setActivePeriod}
           onSelectStudent={setAwardingFor}
+          teachers={canViewAllTeachers ? teachers : null}
+          selectedTeacherId={selectedTeacherId}
+          onChangeTeacher={setSelectedTeacherId}
         />
       ) : (
         <ComingSoon tab={tab} />
@@ -273,6 +348,9 @@ function ClassesView({
   activePeriod,
   onChangePeriod,
   onSelectStudent,
+  teachers,
+  selectedTeacherId,
+  onChangeTeacher,
 }: {
   sections: Section[];
   students: Student[];
@@ -280,6 +358,10 @@ function ClassesView({
   activePeriod: number | "all";
   onChangePeriod: (p: number | "all") => void;
   onSelectStudent: (s: Student) => void;
+  // null = no teacher picker (regular teacher view).
+  teachers: Teacher[] | null;
+  selectedTeacherId: number | null;
+  onChangeTeacher: (id: number) => void;
 }) {
   // Build the period filter from the actual periods present in the schedule.
   const periods = useMemo(() => {
@@ -300,26 +382,78 @@ function ClassesView({
     return sections.filter((s) => s.period === activePeriod);
   }, [sections, activePeriod]);
 
-  if (sections.length === 0) {
-    return (
-      <div
-        style={{
-          padding: "2rem",
-          textAlign: "center",
-          color: "#64748b",
-          background: "#f8fafc",
-          borderRadius: "0.5rem",
-        }}
-      >
-        You don't have any classes assigned yet.
-        <br />
-        Once your schedule is set up, your students will show up here.
-      </div>
-    );
-  }
+  const showTeacherPicker = teachers !== null && teachers.length > 0;
+
+  const emptyState = sections.length === 0 ? (
+    <div
+      style={{
+        padding: "2rem",
+        textAlign: "center",
+        color: "#64748b",
+        background: "#f8fafc",
+        borderRadius: "0.5rem",
+      }}
+    >
+      {showTeacherPicker
+        ? "This teacher doesn't have any sections rostered yet."
+        : "You don't have any classes assigned yet. Once your schedule is set up, your students will show up here."}
+    </div>
+  ) : null;
 
   return (
     <div>
+      {/* Teacher picker (admin/ESE coord only) */}
+      {showTeacherPicker && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+            marginBottom: "0.75rem",
+            padding: "0.6rem 0.75rem",
+            background: "#f1f5f9",
+            border: "1px solid #e2e8f0",
+            borderRadius: "0.5rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <span
+            style={{
+              fontSize: "0.8rem",
+              color: "#475569",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
+            Admin view
+          </span>
+          <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+            Teacher:
+          </span>
+          <select
+            value={selectedTeacherId ?? ""}
+            onChange={(e) => onChangeTeacher(Number(e.target.value))}
+            style={{
+              padding: "0.35rem 0.5rem",
+              border: "1px solid #cbd5e1",
+              borderRadius: "0.35rem",
+              fontSize: "0.9rem",
+              background: "white",
+              minWidth: "14rem",
+            }}
+          >
+            {teachers!.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
+
+      {emptyState}
+      {emptyState !== null ? null : (<>
       {/* Filter row */}
       <div
         style={{
@@ -420,6 +554,7 @@ function ClassesView({
           );
         })}
       </div>
+      </>)}
     </div>
   );
 }
