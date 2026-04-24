@@ -181,7 +181,12 @@ export default function CheckInOutModal({
           <div className="cp-title">
             {step === 1 && "Check-In or Check-Out?"}
             {step === 2 && "Select Student"}
-            {step === 3 && (entryType === "checkin" ? "Confirm Check-In" : "Confirm Check-Out")}
+            {step === 3 &&
+              (entryType === "checkin"
+                ? "Confirm Check-In"
+                : entryType === "checkout"
+                  ? "Confirm Check-Out"
+                  : "Confirm Intervention")}
           </div>
           <button
             type="button"
@@ -369,7 +374,9 @@ export default function CheckInOutModal({
                     ? "Saving…"
                     : entryType === "checkin"
                       ? "Log Check-In"
-                      : "Log Check-Out"}
+                      : entryType === "checkout"
+                        ? "Log Check-Out"
+                        : "Log Intervention"}
                 </button>
               </div>
             </>

@@ -54,21 +54,28 @@ router.post("/tardies", async (req, res) => {
     return;
   }
 
-  const type: "tardy" | "checkin" | "checkout" =
+  // "intervention" is a first-class entry type written by the
+  // CheckInOutModal when a teacher logs a classroom intervention. Without
+  // it here the row would silently land as "tardy" and disappear from the
+  // Recent Interventions list (which filters on checkin/checkout/intervention).
+  const type: "tardy" | "checkin" | "checkout" | "intervention" =
     entryType === "checkin"
       ? "checkin"
       : entryType === "checkout"
         ? "checkout"
-        : "tardy";
+        : entryType === "intervention"
+          ? "intervention"
+          : "tardy";
 
   if (
-    (type === "checkin" || type === "checkout") &&
+    (type === "checkin" || type === "checkout" || type === "intervention") &&
     (typeof checkInWith !== "string" || !checkInWith)
   ) {
     res
       .status(400)
       .json({
-        error: "checkInWith is required for check-in and check-out entries",
+        error:
+          "checkInWith is required for check-in, check-out, and intervention entries",
       });
     return;
   }
@@ -82,8 +89,10 @@ router.post("/tardies", async (req, res) => {
       period,
       reason: typeof reason === "string" ? reason : "",
       entryType: type,
+      // Persist the intervention/check-in/check-out label so the Recent
+      // Interventions table can render the intervention name.
       checkInWith:
-        type === "checkin" || type === "checkout"
+        type === "checkin" || type === "checkout" || type === "intervention"
           ? (checkInWith as string)
           : null,
       notes: typeof notes === "string" ? notes : "",
