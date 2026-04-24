@@ -25,6 +25,8 @@ import SettingsHub, {
   type SettingsTileId,
 } from "./components/SettingsHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
+import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
+import { useSchoolBranding } from "./lib/branding";
 import { authFetch } from "./lib/authToken";
 import {
   AreaChart,
@@ -2967,6 +2969,9 @@ function StudentCombobox({
 }
 
 function App() {
+  // Apply per-school branding (header gradient, logo) to the document root
+  // so any component reading var(--brand-header-bg) retints automatically.
+  useSchoolBranding();
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
@@ -16616,6 +16621,13 @@ function App() {
               subtitle:
                 "Invite parents to the HeartBEAT Snapshot portal · resend, revoke, multi-parent.",
             });
+            tiles.push({
+              id: "branding",
+              icon: "🎨",
+              title: "Branding",
+              subtitle:
+                "Header gradient, logo, and school colors for printouts, parent snapshot, and Kiosk.",
+            });
             if (isSuperUser) {
               tiles.push({
                 id: "tenancy",
@@ -16641,6 +16653,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "parent-access" && (
         <ParentAccess />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "branding" && (
+        <SchoolBrandingPanel />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "notifications" && (

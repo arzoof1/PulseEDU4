@@ -12,6 +12,7 @@ import {
   issueParentAuthToken,
   verifyParentAuthToken,
 } from "../lib/authToken.js";
+import { loadBrandingForSchool } from "./schoolBranding.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -164,6 +165,33 @@ router.get("/parent-auth/me", async (req, res) => {
       grade: s.grade,
     })),
   });
+});
+
+// -----------------------------------------------------------------------------
+// Branding for the parent portal — resolves the school from the parent's first
+// linked student so the HeartBEAT snapshot can be tinted in the school's
+// colors. Returns the same shape as the staff /api/school-branding endpoint.
+// -----------------------------------------------------------------------------
+router.get("/parent-auth/branding", async (req, res) => {
+  const pid = req.parentId;
+  if (!pid) {
+    res.status(401).json({ error: "Not authenticated" });
+    return;
+  }
+  const [link] = await db
+    .select({ schoolId: studentsTable.schoolId })
+    .from(parentStudentsTable)
+    .innerJoin(
+      studentsTable,
+      eq(parentStudentsTable.studentId, studentsTable.id),
+    )
+    .where(eq(parentStudentsTable.parentId, pid))
+    .limit(1);
+  if (!link) {
+    res.status(404).json({ error: "No linked students" });
+    return;
+  }
+  res.json(await loadBrandingForSchool(link.schoolId));
 });
 
 // -----------------------------------------------------------------------------

@@ -42,6 +42,7 @@ import teacherRosterRouter from "./teacherRoster";
 import parentAuthRouter from "./parentAuth";
 import parentInvitesRouter from "./parentInvites";
 import parentSnapshotRouter from "./parentSnapshot";
+import schoolBrandingRouter from "./schoolBranding";
 
 const router: IRouter = Router();
 
@@ -88,5 +89,6 @@ router.use(teacherRosterRouter);
 router.use(parentAuthRouter);
 router.use(parentInvitesRouter);
 router.use(parentSnapshotRouter);
+router.use(schoolBrandingRouter);
 
 export default router;

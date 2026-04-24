@@ -12,6 +12,7 @@ export type SettingsTileId =
   | "pbis-thresholds"
   | "schoolFeatures"
   | "parent-access"
+  | "branding"
   | "tenancy";
 
 export interface SettingsTile {

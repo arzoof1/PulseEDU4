@@ -13,6 +13,7 @@ import {
   CheckCircle2,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
+import { useSchoolBranding } from "../lib/branding";
 import { Badge } from "@/components/ui/badge";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -124,6 +125,9 @@ function fmtTime(iso: string): string {
 }
 
 export default function Dashboard({ me }: { me: ParentMe }) {
+  // Pull the active child's school branding into CSS vars; the snapshot
+  // header below uses var(--brand-header-bg) when set.
+  useSchoolBranding({ mode: "parent" });
   const [activeStudentId, setActiveStudentId] = useState<number | null>(
     me.students[0]?.id ?? null,
   );

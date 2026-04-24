@@ -16,6 +16,7 @@ import { and, eq, isNull, gt, desc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
+import { loadBrandingForSchool } from "./schoolBranding.js";
 import {
   findPolarityConflict,
   polarityConflictMessage,
@@ -224,6 +225,34 @@ router.get("/kiosk/activation/:token", async (req, res) => {
     expiresAt: act.expiresAt,
     deviceLabel: act.deviceLabel,
   });
+});
+
+// Branding for an activated kiosk — uses the same activation token already
+// stored on the device so the masthead can pull the school's gradient/logo
+// without needing staff auth.
+router.get("/kiosk/branding/:token", async (req, res) => {
+  const token = req.params.token;
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "Invalid token" });
+    return;
+  }
+  const [act] = await db
+    .select({ schoolId: kioskActivationsTable.schoolId })
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res
+      .status(401)
+      .json({ error: "Activation not found, revoked, or expired" });
+    return;
+  }
+  res.json(await loadBrandingForSchool(act.schoolId));
 });
 
 router.post("/kiosk/deactivate", requireStaff, async (req, res) => {

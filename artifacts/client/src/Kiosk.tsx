@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useSchoolBranding } from "./lib/branding";
 
 interface SchoolSettings {
   schoolName: string;
@@ -106,6 +107,12 @@ type Status =
 export default function Kiosk() {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [showDeactivate, setShowDeactivate] = useState(false);
+
+  // Apply per-school branding once we have an activation token. The hook
+  // re-fetches automatically when the token (and therefore the school)
+  // changes, so reactivating to a different school retints the masthead.
+  const kioskToken = phase.kind === "ready" ? phase.token : null;
+  useSchoolBranding({ mode: "kiosk", token: kioskToken });
 
   useEffect(() => {
     const token = getStoredToken();
@@ -920,7 +927,7 @@ function Shell({ children }: { children: React.ReactNode }) {
         flexDirection: "column",
         alignItems: "center",
         justifyContent: "center",
-        background: "linear-gradient(180deg, #0f172a 0%, #1e293b 100%)",
+        background: "var(--brand-header-bg)",
         color: "#fff",
         fontFamily: "system-ui, sans-serif",
         padding: "2rem",
