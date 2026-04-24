@@ -450,16 +450,10 @@ export default function PbisPointsHub() {
       ) : tab === "rewards" ? (
         <ClassroomStoreView />
       ) : tab === "rubric" ? (
-        <SchoolStoreView
-          canEdit={
-            !!(
-              me?.isAdmin ||
-              me?.isBehaviorSpecialist ||
-              me?.isMtssCoordinator ||
-              me?.isPbisCoordinator
-            )
-          }
-        />
+        // Read-only School Store tab in the teacher PBIS hub. Editing is
+        // intentionally disabled here for everyone (including admins) — use
+        // the BS hub, MTSS hub, or the "School Store" admin section instead.
+        <SchoolStoreView canEdit={false} />
       ) : (
         <ComingSoon tab={tab} />
       )}
