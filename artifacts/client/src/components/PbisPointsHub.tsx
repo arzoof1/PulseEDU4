@@ -51,6 +51,8 @@ type Me = {
   displayName?: string;
   isAdmin?: boolean;
   isEseCoordinator?: boolean;
+  isMtssCoordinator?: boolean;
+  isBehaviorSpecialist?: boolean;
 };
 
 type Teacher = { id: number; name: string };
@@ -81,9 +83,16 @@ export default function PbisPointsHub() {
   const [activePeriod, setActivePeriod] = useState<number | "all">("all");
   const [awardingFor, setAwardingFor] = useState<Student | null>(null);
 
-  // Admin/ESE coords can pull every section in their school via ?all=1.
-  // Anyone else only sees their own roster — gated server-side too.
-  const canViewAllTeachers = !!(me?.isAdmin || me?.isEseCoordinator);
+  // Admins, ESE coords, MTSS coords, and behavior specialists can pull
+  // every section in their school via ?all=1 — they all need cross-room
+  // visibility for their roles. Everyone else only sees their own roster
+  // (gated server-side too).
+  const canViewAllTeachers = !!(
+    me?.isAdmin ||
+    me?.isEseCoordinator ||
+    me?.isMtssCoordinator ||
+    me?.isBehaviorSpecialist
+  );
 
   // ---- Initial data load
   useEffect(() => {

@@ -40,11 +40,19 @@ router.get("/schedule", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
 
-  // ?all=1 lets admins/ESE coordinators browse every section in their school.
-  // Mirror the client-side gate at the API boundary as defense-in-depth so a
+  // ?all=1 lets privileged staff browse every section in their school —
+  // admins, ESE coordinators, MTSS coordinators, and behavior specialists
+  // all need cross-classroom visibility for their roles. Mirror the
+  // client-side gate at the API boundary as defense-in-depth so a
   // non-privileged user can't bypass UI checks by hitting the URL directly.
-  if (wantAll && !staff.isAdmin && !staff.isEseCoordinator) {
-    res.status(403).json({ error: "Admin or ESE coordinator only" });
+  if (
+    wantAll &&
+    !staff.isAdmin &&
+    !staff.isEseCoordinator &&
+    !staff.isMtssCoordinator &&
+    !staff.isBehaviorSpecialist
+  ) {
+    res.status(403).json({ error: "Not authorized for school-wide view" });
     return;
   }
 
