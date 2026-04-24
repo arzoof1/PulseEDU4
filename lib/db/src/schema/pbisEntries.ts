@@ -17,6 +17,10 @@ export const pbisEntriesTable = pgTable("pbis_entries", {
   // because schools can choose to log negatives without subtracting from the
   // student's total — see school_settings.pbisNegativeAffectsTotal.
   polarity: text("polarity").notNull().default("positive"),
+  // Optional free-text note attached at award time. Useful for bulk awards
+  // ("Class earned this together because…") and for context teachers want
+  // visible on a student's record.
+  note: text("note"),
 });
 
 export type PbisEntryRow = typeof pbisEntriesTable.$inferSelect;

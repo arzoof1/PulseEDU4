@@ -88,6 +88,17 @@ export default function PbisPointsHub() {
   );
   const [activePeriod, setActivePeriod] = useState<number | "all">("all");
   const [awardingFor, setAwardingFor] = useState<Student | null>(null);
+  // Bulk selection — set of studentIds checked across all sections.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkOpen, setBulkOpen] = useState(false);
+
+  // Clear bulk selection whenever the visible roster changes (period filter
+  // or admin's teacher picker). Otherwise a teacher could "Select all" in
+  // Period 1, switch to Period 2, and accidentally bulk-award students who
+  // are no longer on screen.
+  useEffect(() => {
+    setSelectedIds(new Set());
+  }, [activePeriod, selectedTeacherId]);
 
   // Admins, ESE coords, MTSS coords, and behavior specialists can pull
   // every section in their school via ?all=1 — they all need cross-room
@@ -237,6 +248,47 @@ export default function PbisPointsHub() {
     });
   }
 
+  // Bulk award: same reason+points (and optional note) to many students.
+  // Server is authoritative on polarity and on whether negatives subtract,
+  // so we read the canonical `points` back and use that for each row.
+  async function bulkAward(
+    studentIds: string[],
+    reason: Reason,
+    points: number,
+    note: string,
+  ): Promise<void> {
+    const res = await authFetch("/api/pbis/bulk", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        studentIds,
+        reason: reason.name,
+        points,
+        note,
+      }),
+    });
+    if (!res.ok) {
+      let msg = "Failed to award points";
+      try {
+        const j = (await res.json()) as { error?: string };
+        if (j?.error) msg = j.error;
+      } catch {
+        // ignore
+      }
+      throw new Error(msg);
+    }
+    const body = (await res.json().catch(() => null)) as
+      | { entries?: Array<{ studentId: string; points: number }> }
+      | null;
+    setTotals((prev) => {
+      const next = new Map(prev);
+      for (const e of body?.entries ?? []) {
+        next.set(e.studentId, (next.get(e.studentId) ?? 0) + (e.points ?? 0));
+      }
+      return next;
+    });
+  }
+
   return (
     <section className="card">
       <div className="section-header-bar-teal" />
@@ -292,6 +344,31 @@ export default function PbisPointsHub() {
           teachers={canViewAllTeachers ? teachers : null}
           selectedTeacherId={selectedTeacherId}
           onChangeTeacher={setSelectedTeacherId}
+          selectedIds={selectedIds}
+          onToggleSelect={(id) =>
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              if (next.has(id)) next.delete(id);
+              else next.add(id);
+              return next;
+            })
+          }
+          onSelectMany={(ids) =>
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of ids) next.add(id);
+              return next;
+            })
+          }
+          onUnselectMany={(ids) =>
+            setSelectedIds((prev) => {
+              const next = new Set(prev);
+              for (const id of ids) next.delete(id);
+              return next;
+            })
+          }
+          onClearSelection={() => setSelectedIds(new Set())}
+          onOpenBulk={() => setBulkOpen(true)}
         />
       ) : tab === "settings" ? (
         <SettingsView
@@ -311,6 +388,20 @@ export default function PbisPointsHub() {
           onSubmit={async (reason, points) => {
             await awardPoints(awardingFor, reason, points);
             setAwardingFor(null);
+          }}
+        />
+      )}
+
+      {bulkOpen && (
+        <BulkAwardModal
+          studentIds={Array.from(selectedIds)}
+          students={students}
+          reasons={reasons}
+          onClose={() => setBulkOpen(false)}
+          onSubmit={async (reason, points, note) => {
+            await bulkAward(Array.from(selectedIds), reason, points, note);
+            setBulkOpen(false);
+            setSelectedIds(new Set());
           }}
         />
       )}
@@ -378,6 +469,12 @@ function ClassesView({
   teachers,
   selectedTeacherId,
   onChangeTeacher,
+  selectedIds,
+  onToggleSelect,
+  onSelectMany,
+  onUnselectMany,
+  onClearSelection,
+  onOpenBulk,
 }: {
   sections: Section[];
   students: Student[];
@@ -389,6 +486,12 @@ function ClassesView({
   teachers: Teacher[] | null;
   selectedTeacherId: number | null;
   onChangeTeacher: (id: number) => void;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onSelectMany: (ids: string[]) => void;
+  onUnselectMany: (ids: string[]) => void;
+  onClearSelection: () => void;
+  onOpenBulk: () => void;
 }) {
   // Build the period filter from the actual periods present in the schedule.
   const periods = useMemo(() => {
@@ -509,7 +612,7 @@ function ClassesView({
         ))}
         <div style={{ flex: 1 }} />
         <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
-          Tap a student to award points
+          Tap a student to award · check the box to bulk-award
         </span>
       </div>
 
@@ -520,6 +623,12 @@ function ClassesView({
             .map((id) => studentById.get(id))
             .filter((s): s is Student => Boolean(s))
             .sort((a, b) => a.firstName.localeCompare(b.firstName));
+          const sectionIds = sectionStudents.map((s) => s.studentId);
+          const selectedHere = sectionIds.filter((id) =>
+            selectedIds.has(id),
+          ).length;
+          const allSelected =
+            sectionIds.length > 0 && selectedHere === sectionIds.length;
           return (
             <div key={sec.id}>
               <div
@@ -528,6 +637,7 @@ function ClassesView({
                   alignItems: "baseline",
                   gap: "0.5rem",
                   marginBottom: "0.5rem",
+                  flexWrap: "wrap",
                 }}
               >
                 <span
@@ -545,6 +655,32 @@ function ClassesView({
                 <span style={{ color: "#94a3b8", fontSize: "0.8rem" }}>
                   · {sectionStudents.length} students
                 </span>
+                <div style={{ flex: 1 }} />
+                {sectionStudents.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (allSelected) onUnselectMany(sectionIds);
+                      else onSelectMany(sectionIds);
+                    }}
+                    style={{
+                      background: allSelected ? "#0e7490" : "white",
+                      color: allSelected ? "white" : "#0e7490",
+                      border: "1px solid #0e7490",
+                      borderRadius: "0.35rem",
+                      padding: "0.25rem 0.6rem",
+                      fontSize: "0.78rem",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {allSelected
+                      ? "Clear all"
+                      : selectedHere > 0
+                        ? `Select all (${selectedHere}/${sectionIds.length})`
+                        : "Select all"}
+                  </button>
+                )}
               </div>
               {sectionStudents.length === 0 ? (
                 <div
@@ -573,6 +709,8 @@ function ClassesView({
                       student={s}
                       total={totals.get(s.studentId) ?? 0}
                       onClick={() => onSelectStudent(s)}
+                      selected={selectedIds.has(s.studentId)}
+                      onToggleSelect={() => onToggleSelect(s.studentId)}
                     />
                   ))}
                 </div>
@@ -582,6 +720,62 @@ function ClassesView({
         })}
       </div>
       </>)}
+
+      {/* Floating bulk-award action bar — shows whenever 1+ students are picked. */}
+      {selectedIds.size > 0 && (
+        <div
+          style={{
+            position: "sticky",
+            bottom: "1rem",
+            marginTop: "1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            padding: "0.6rem 0.9rem",
+            background: "#0f172a",
+            color: "white",
+            borderRadius: "0.6rem",
+            boxShadow: "0 6px 18px rgba(15,23,42,0.25)",
+          }}
+        >
+          <span style={{ fontWeight: 700 }}>
+            {selectedIds.size} student{selectedIds.size === 1 ? "" : "s"} selected
+          </span>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={onClearSelection}
+            style={{
+              background: "transparent",
+              color: "white",
+              border: "1px solid rgba(255,255,255,0.4)",
+              borderRadius: "0.35rem",
+              padding: "0.35rem 0.75rem",
+              fontSize: "0.85rem",
+              cursor: "pointer",
+            }}
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            onClick={onOpenBulk}
+            style={{
+              background: "#0e7490",
+              color: "white",
+              border: "1px solid #0e7490",
+              borderRadius: "0.35rem",
+              padding: "0.4rem 1rem",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+          >
+            Award {selectedIds.size}{" "}
+            student{selectedIds.size === 1 ? "" : "s"}
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -619,10 +813,14 @@ function StudentCard({
   student,
   total,
   onClick,
+  selected,
+  onToggleSelect,
 }: {
   student: Student;
   total: number;
   onClick: () => void;
+  selected: boolean;
+  onToggleSelect: () => void;
 }) {
   // Color the bottom badge by point bucket. Green = positive momentum,
   // amber = a couple of points, gray = none yet.
@@ -642,61 +840,101 @@ function StudentCard({
         : "#cbd5e1";
 
   return (
-    <button
-      type="button"
-      onClick={onClick}
+    <div
       style={{
         position: "relative",
-        textAlign: "left",
-        padding: "0.6rem 0.7rem 0.7rem",
         background: "white",
-        border: "1px solid #e2e8f0",
-        borderTop: `3px solid ${accent}`,
+        border: selected ? "2px solid #0e7490" : "1px solid #e2e8f0",
+        borderTop: selected ? "2px solid #0e7490" : `3px solid ${accent}`,
         borderRadius: "0.5rem",
-        cursor: "pointer",
-        boxShadow: "0 1px 2px rgba(15,23,42,0.04)",
+        boxShadow: selected
+          ? "0 0 0 3px rgba(14,116,144,0.15)"
+          : "0 1px 2px rgba(15,23,42,0.04)",
         transition: "transform 0.05s ease, box-shadow 0.1s ease",
       }}
-      onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
-      onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
-      onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
     >
-      <div
+      {/* Checkbox in top-right — its own click target, doesn't trigger award */}
+      <label
+        onClick={(e) => e.stopPropagation()}
         style={{
-          fontSize: "0.95rem",
-          fontWeight: 600,
-          color: "#0f172a",
-          lineHeight: 1.15,
-        }}
-      >
-        {student.firstName}
-      </div>
-      <div
-        style={{
-          fontSize: "0.8rem",
-          color: "#64748b",
-          marginTop: "0.1rem",
-        }}
-      >
-        {student.lastName}
-      </div>
-      <div
-        style={{
-          marginTop: "0.6rem",
-          display: "inline-flex",
+          position: "absolute",
+          top: "0.3rem",
+          right: "0.35rem",
+          display: "flex",
           alignItems: "center",
-          gap: "0.25rem",
-          padding: "0.15rem 0.5rem",
-          borderRadius: "9999px",
-          background: badgeColor,
-          color: "white",
-          fontSize: "0.75rem",
-          fontWeight: 700,
+          justifyContent: "center",
+          width: "1.4rem",
+          height: "1.4rem",
+          cursor: "pointer",
+          zIndex: 1,
         }}
+        title={selected ? "Deselect" : "Select for bulk award"}
       >
-        💬 {total}
-      </div>
-    </button>
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={onToggleSelect}
+          style={{
+            width: "1rem",
+            height: "1rem",
+            cursor: "pointer",
+            accentColor: "#0e7490",
+          }}
+        />
+      </label>
+      <button
+        type="button"
+        onClick={onClick}
+        style={{
+          width: "100%",
+          textAlign: "left",
+          padding: "0.6rem 1.9rem 0.7rem 0.7rem",
+          background: "transparent",
+          border: "none",
+          borderRadius: "0.5rem",
+          cursor: "pointer",
+        }}
+        onMouseDown={(e) => (e.currentTarget.style.transform = "scale(0.98)")}
+        onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
+        onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
+      >
+        <div
+          style={{
+            fontSize: "0.95rem",
+            fontWeight: 600,
+            color: "#0f172a",
+            lineHeight: 1.15,
+          }}
+        >
+          {student.firstName}
+        </div>
+        <div
+          style={{
+            fontSize: "0.8rem",
+            color: "#64748b",
+            marginTop: "0.1rem",
+          }}
+        >
+          {student.lastName}
+        </div>
+        <div
+          style={{
+            marginTop: "0.6rem",
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "0.25rem",
+            padding: "0.15rem 0.5rem",
+            borderRadius: "9999px",
+            background: badgeColor,
+            color: "white",
+            fontSize: "0.75rem",
+            fontWeight: 700,
+          }}
+        >
+          💬 {total}
+        </div>
+      </button>
+    </div>
   );
 }
 
@@ -965,6 +1203,406 @@ function AwardModal({
                 }}
               >
                 {submitting ? "Awarding…" : "Award Points"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// BulkAwardModal — same look as AwardModal but for many students + a note.
+// -----------------------------------------------------------------------------
+function BulkAwardModal({
+  studentIds,
+  students,
+  reasons,
+  onClose,
+  onSubmit,
+}: {
+  studentIds: string[];
+  students: Student[];
+  reasons: Reason[];
+  onClose: () => void;
+  onSubmit: (reason: Reason, points: number, note: string) => Promise<void>;
+}) {
+  const [selectedReasonId, setSelectedReasonId] = useState<number | null>(
+    reasons[0]?.id ?? null,
+  );
+  const [points, setPoints] = useState<number>(reasons[0]?.defaultPoints ?? 1);
+  const [note, setNote] = useState<string>("");
+  const [submitting, setSubmitting] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const selected = reasons.find((r) => r.id === selectedReasonId) ?? null;
+  const pointsValid = Number.isInteger(points) && points >= 1;
+  // Cap the note client-side at the same 500-char limit the server enforces.
+  const noteOver = note.length > 500;
+
+  useEffect(() => {
+    if (selected) setPoints(selected.defaultPoints);
+  }, [selectedReasonId]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  // Build a name preview for the chip strip at the top.
+  const studentById = useMemo(() => {
+    const m = new Map<string, Student>();
+    for (const s of students) m.set(s.studentId, s);
+    return m;
+  }, [students]);
+  const namesPreview = studentIds
+    .map((id) => {
+      const s = studentById.get(id);
+      return s ? `${s.firstName} ${s.lastName}` : id;
+    })
+    .sort();
+
+  const reasonsByCategory = useMemo(() => {
+    const m = new Map<string, Reason[]>();
+    for (const r of reasons) {
+      const arr = m.get(r.category) ?? [];
+      arr.push(r);
+      m.set(r.category, arr);
+    }
+    return Array.from(m.entries());
+  }, [reasons]);
+
+  return (
+    <div
+      onClick={onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(15,23,42,0.55)",
+        zIndex: 50,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Award points to ${studentIds.length} students`}
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: "0.6rem",
+          width: "100%",
+          maxWidth: "34rem",
+          maxHeight: "90vh",
+          overflow: "auto",
+          padding: "1.25rem",
+          boxShadow: "0 20px 40px rgba(15,23,42,0.25)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            marginBottom: "0.5rem",
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: "1.15rem" }}>
+            Award {studentIds.length} student{studentIds.length === 1 ? "" : "s"}
+          </h3>
+          <div style={{ flex: 1 }} />
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              background: "none",
+              border: "none",
+              fontSize: "1.4rem",
+              cursor: "pointer",
+              color: "#64748b",
+              lineHeight: 1,
+            }}
+            aria-label="Close"
+          >
+            ×
+          </button>
+        </div>
+
+        {/* Selected students summary chip strip */}
+        <div
+          style={{
+            display: "flex",
+            flexWrap: "wrap",
+            gap: "0.3rem",
+            padding: "0.5rem 0.6rem",
+            background: "#f1f5f9",
+            border: "1px solid #e2e8f0",
+            borderRadius: "0.4rem",
+            marginBottom: "1rem",
+            maxHeight: "5.5rem",
+            overflow: "auto",
+          }}
+        >
+          {namesPreview.map((n) => (
+            <span
+              key={n}
+              style={{
+                fontSize: "0.78rem",
+                background: "white",
+                color: "#334155",
+                border: "1px solid #cbd5e1",
+                borderRadius: "9999px",
+                padding: "0.1rem 0.55rem",
+              }}
+            >
+              {n}
+            </span>
+          ))}
+        </div>
+
+        {reasons.length === 0 ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "#fef3c7",
+              color: "#92400e",
+              borderRadius: "0.4rem",
+              fontSize: "0.9rem",
+            }}
+          >
+            No active PBIS reasons are set up for this school yet. Ask an admin
+            to add some in the PBIS list settings.
+          </div>
+        ) : (
+          <>
+            <div style={{ marginBottom: "1rem" }}>
+              {reasonsByCategory.map(([cat, list]) => (
+                <div key={cat} style={{ marginBottom: "0.6rem" }}>
+                  <div
+                    style={{
+                      fontSize: "0.75rem",
+                      fontWeight: 700,
+                      color: "#94a3b8",
+                      textTransform: "uppercase",
+                      letterSpacing: "0.04em",
+                      marginBottom: "0.3rem",
+                    }}
+                  >
+                    {cat}
+                  </div>
+                  <div
+                    style={{
+                      display: "flex",
+                      flexWrap: "wrap",
+                      gap: "0.35rem",
+                    }}
+                  >
+                    {list.map((r) => {
+                      const active = r.id === selectedReasonId;
+                      const isNeg = r.polarity === "negative";
+                      return (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => setSelectedReasonId(r.id)}
+                          style={{
+                            padding: "0.4rem 0.7rem",
+                            borderRadius: "0.4rem",
+                            border: active
+                              ? `1.5px solid ${isNeg ? "#dc2626" : "#0e7490"}`
+                              : "1px solid #cbd5e1",
+                            background: active
+                              ? isNeg
+                                ? "#fef2f2"
+                                : "#ecfeff"
+                              : "white",
+                            color: active
+                              ? isNeg
+                                ? "#991b1b"
+                                : "#0e7490"
+                              : "#334155",
+                            fontSize: "0.85rem",
+                            fontWeight: 500,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {r.name}{" "}
+                          <span
+                            style={{
+                              opacity: 0.65,
+                              marginLeft: "0.25rem",
+                              fontSize: "0.75rem",
+                            }}
+                          >
+                            {isNeg ? "−" : "+"}
+                            {r.defaultPoints}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                marginBottom: "1rem",
+              }}
+            >
+              <span style={{ fontSize: "0.9rem", color: "#475569" }}>
+                Points each:
+              </span>
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={points}
+                onChange={(e) => setPoints(Number(e.target.value))}
+                style={{
+                  width: "5rem",
+                  padding: "0.35rem 0.5rem",
+                  border: pointsValid
+                    ? "1px solid #cbd5e1"
+                    : "1px solid #dc2626",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.95rem",
+                }}
+              />
+              {!pointsValid && (
+                <span style={{ fontSize: "0.8rem", color: "#dc2626" }}>
+                  Must be a whole number, 1 or more.
+                </span>
+              )}
+            </label>
+
+            <label
+              style={{
+                display: "block",
+                marginBottom: "1rem",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "baseline",
+                  marginBottom: "0.3rem",
+                }}
+              >
+                <span style={{ fontSize: "0.9rem", color: "#475569" }}>
+                  Note (optional)
+                </span>
+                <div style={{ flex: 1 }} />
+                <span
+                  style={{
+                    fontSize: "0.75rem",
+                    color: noteOver ? "#dc2626" : "#94a3b8",
+                  }}
+                >
+                  {note.length}/500
+                </span>
+              </div>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={3}
+                placeholder="Why is the whole group earning these points? (Saved on each student's record.)"
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.6rem",
+                  border: noteOver ? "1px solid #dc2626" : "1px solid #cbd5e1",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.9rem",
+                  fontFamily: "inherit",
+                  resize: "vertical",
+                  boxSizing: "border-box",
+                }}
+              />
+            </label>
+
+            {err && (
+              <div
+                style={{
+                  marginBottom: "0.75rem",
+                  padding: "0.5rem 0.75rem",
+                  background: "#fee2e2",
+                  color: "#991b1b",
+                  borderRadius: "0.35rem",
+                  fontSize: "0.85rem",
+                }}
+              >
+                {err}
+              </div>
+            )}
+
+            <div
+              style={{
+                display: "flex",
+                gap: "0.5rem",
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={onClose}
+                style={{
+                  padding: "0.5rem 1rem",
+                  background: "white",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: "0.4rem",
+                  color: "#475569",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={
+                  !selected ||
+                  submitting ||
+                  !pointsValid ||
+                  noteOver ||
+                  studentIds.length === 0
+                }
+                onClick={async () => {
+                  if (!selected) return;
+                  setSubmitting(true);
+                  setErr(null);
+                  try {
+                    await onSubmit(selected, points, note.trim());
+                  } catch (e) {
+                    setErr(e instanceof Error ? e.message : "Failed");
+                  } finally {
+                    setSubmitting(false);
+                  }
+                }}
+                style={{
+                  padding: "0.5rem 1rem",
+                  background: "#0e7490",
+                  border: "1px solid #0e7490",
+                  borderRadius: "0.4rem",
+                  color: "white",
+                  fontWeight: 600,
+                  cursor: submitting ? "wait" : "pointer",
+                  opacity:
+                    !selected || submitting || !pointsValid || noteOver
+                      ? 0.6
+                      : 1,
+                }}
+              >
+                {submitting
+                  ? "Awarding…"
+                  : `Award ${studentIds.length} student${studentIds.length === 1 ? "" : "s"}`}
               </button>
             </div>
           </>

@@ -11,7 +11,7 @@ import {
   bellSchedulesTable,
   bellSchedulePeriodsTable,
 } from "@workspace/db";
-import { eq, and, isNull, gte, lt } from "drizzle-orm";
+import { eq, and, isNull, gte, lt, inArray } from "drizzle-orm";
 import {
   processMilestonesForStudent,
   processMilestonesForStudents,
@@ -158,7 +158,7 @@ router.get("/pbis/leaderboard", async (req: Request, res: Response) => {
 router.post("/pbis", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const { studentId, reason, points, staffName } = req.body ?? {};
+  const { studentId, reason, points, staffName, note } = req.body ?? {};
   const sessionStaffId = req.staffId;
   let resolvedStaffId: number | null = null;
   let resolvedStaffName =
@@ -180,6 +180,22 @@ router.post("/pbis", async (req, res) => {
   }
   if (typeof reason !== "string" || !reason) {
     res.status(400).json({ error: "reason is required" });
+    return;
+  }
+  // Cross-school protection: confirm the student exists in THIS school before
+  // we accept the entry — otherwise an attacker could file an entry against a
+  // student id from another school under their school's tenant.
+  const [studentRow] = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  if (!studentRow) {
+    res.status(404).json({ error: "Student not found in this school" });
     return;
   }
   const pts = Number(points);
@@ -220,6 +236,13 @@ router.post("/pbis", async (req, res) => {
     storedPoints = Math.abs(pts);
   }
 
+  // Optional teacher note (trim, cap to 500 chars to keep rows reasonable).
+  let cleanNote: string | null = null;
+  if (typeof note === "string") {
+    const t = note.trim();
+    if (t) cleanNote = t.slice(0, 500);
+  }
+
   const [entry] = await db
     .insert(pbisEntriesTable)
     .values({
@@ -231,6 +254,7 @@ router.post("/pbis", async (req, res) => {
       staffId: resolvedStaffId,
       staffName: resolvedStaffName,
       createdAt: new Date().toISOString(),
+      note: cleanNote,
     })
     .returning();
 
@@ -250,7 +274,7 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
-  const { studentIds, reason, points } = req.body ?? {};
+  const { studentIds, reason, points, note } = req.body ?? {};
   if (!Array.isArray(studentIds) || studentIds.length === 0) {
     res
       .status(400)
@@ -286,6 +310,65 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
     return;
   }
 
+  // Cross-school protection: every id must exist in THIS school's roster.
+  // Reject the whole batch on any stranger so we never silently file entries
+  // against another school's students.
+  const owned = await db
+    .select({ studentId: studentsTable.studentId })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, req.schoolId!),
+        inArray(studentsTable.studentId, ids),
+      ),
+    );
+  if (owned.length !== ids.length) {
+    res
+      .status(403)
+      .json({ error: "Some students are not in your school" });
+    return;
+  }
+
+  // Resolve polarity ONCE (every student in this bulk gets the same reason),
+  // then apply the school's negative-affects-total policy. This mirrors the
+  // single-award endpoint so a bulk "Disruption" can't slip past the school's
+  // log-only policy.
+  const trimmedReason = reason.trim();
+  const [matched] = await db
+    .select()
+    .from(pbisReasonsTable)
+    .where(
+      and(
+        eq(pbisReasonsTable.schoolId, req.schoolId!),
+        eq(pbisReasonsTable.name, trimmedReason),
+      ),
+    );
+  let polarity: "positive" | "negative" = "positive";
+  if (matched) {
+    polarity = matched.polarity === "negative" ? "negative" : "positive";
+  } else if (pts < 0) {
+    polarity = "negative";
+  }
+  let storedPoints = pts;
+  if (polarity === "negative") {
+    const [settingsRow] = await db
+      .select()
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, req.schoolId!));
+    const subtract = settingsRow?.pbisNegativeAffectsTotal ?? false;
+    const magnitude = Math.abs(pts);
+    storedPoints = subtract ? -magnitude : 0;
+  } else {
+    storedPoints = Math.abs(pts);
+  }
+
+  // Optional shared note attached to every entry in this bulk.
+  let cleanNote: string | null = null;
+  if (typeof note === "string") {
+    const t = note.trim();
+    if (t) cleanNote = t.slice(0, 500);
+  }
+
   const nowIso = new Date().toISOString();
   const created: Array<typeof pbisEntriesTable.$inferSelect> = [];
   const errors: Array<{ studentId: string; error: string }> = [];
@@ -296,11 +379,13 @@ router.post("/pbis/bulk", async (req: Request, res: Response) => {
         .values({
           schoolId: req.schoolId!,
           studentId: id,
-          reason: reason.trim(),
-          points: pts,
+          reason: trimmedReason,
+          points: storedPoints,
+          polarity,
           staffId: staff.id,
           staffName: staff.displayName,
           createdAt: nowIso,
+          note: cleanNote,
         })
         .returning();
       created.push(row);
