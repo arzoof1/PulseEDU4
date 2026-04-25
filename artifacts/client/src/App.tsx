@@ -6,6 +6,7 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
+import SignageLauncherView from "./components/SignageLauncherView";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
 import PbisPointsHub, {
@@ -3100,6 +3101,7 @@ function App() {
     | "settings"
     | "staffRoles"
     | "bellSchedule"
+    | "signage"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -6006,6 +6008,13 @@ function App() {
       <path d="M9 11h6M9 15h6" />
     </svg>
   );
+  // Hallway TV / kiosk icon used for the Signage launcher.
+  const IconMonitor = (
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="3" y="4" width="18" height="12" rx="2" />
+      <path d="M8 20h8M12 16v4" />
+    </svg>
+  );
 
   const IconSettings = (
     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -6277,6 +6286,10 @@ function App() {
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
+    // Launcher for the hallway-TV signage screens (Heartbeat, Houses,
+    // Student Timeline). Always visible to signed-in staff so anyone can
+    // copy a kiosk URL or pop one open in a new tab.
+    { key: "signage", label: "Signage", icon: IconMonitor },
   ];
   // Sidebar entries that map to a per-school feature flag. Anything not
   // in this map (Hall Passes, Tardy Pass, Teacher Roster) is always on.
@@ -12133,6 +12146,13 @@ function App() {
           controls. The editable surface lives in the PBIS / BS / MTSS
           hubs. */}
       {activeSection === "schoolStore" && <SchoolStoreView canEdit={false} />}
+
+      {/* Signage launcher — sidebar entry visible to all signed-in staff.
+          Surfaces the three /signage/* URLs (Today's Heartbeat, PBIS House
+          Cup, Student Timeline) with one-click "Open in new tab" + "Copy
+          link" buttons so anyone can fling a kiosk URL onto a hallway TV
+          without remembering the path scheme. */}
+      {activeSection === "signage" && <SignageLauncherView authUser={authUser} />}
 
       {/* Editable School Store — opened from the BS hub or MTSS hub
           tile. canEditSchoolStore mirrors the server's requireWriteAccess
