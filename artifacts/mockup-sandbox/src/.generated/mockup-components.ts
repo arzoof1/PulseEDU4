@@ -5,5 +5,8 @@ export const modules: ModuleMap = {
   "./components/mockups/heartbeat/Snapshot.tsx": () => import("../components/mockups/heartbeat/Snapshot.tsx"),
   "./components/mockups/pulse-screens/HousesPbis.tsx": () => import("../components/mockups/pulse-screens/HousesPbis.tsx"),
   "./components/mockups/pulse-screens/SchoolTrunk.tsx": () => import("../components/mockups/pulse-screens/SchoolTrunk.tsx"),
-  "./components/mockups/pulse-screens/StudentTimeline.tsx": () => import("../components/mockups/pulse-screens/StudentTimeline.tsx")
+  "./components/mockups/pulse-screens/StudentTimeline.tsx": () => import("../components/mockups/pulse-screens/StudentTimeline.tsx"),
+  "./components/mockups/pulse-screens/TrunkDrift.tsx": () => import("../components/mockups/pulse-screens/TrunkDrift.tsx"),
+  "./components/mockups/pulse-screens/TrunkMeander.tsx": () => import("../components/mockups/pulse-screens/TrunkMeander.tsx"),
+  "./components/mockups/pulse-screens/TrunkSegmented.tsx": () => import("../components/mockups/pulse-screens/TrunkSegmented.tsx")
 };

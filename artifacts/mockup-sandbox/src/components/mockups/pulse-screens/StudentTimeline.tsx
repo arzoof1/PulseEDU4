@@ -35,17 +35,14 @@ export function StudentTimeline() {
           <div className="flex items-center gap-2 text-xs uppercase tracking-[0.25em] text-slate-400">
             <Heart className="h-3.5 w-3.5 text-rose-500 fill-rose-500" /> Pulse · Student Timeline
           </div>
-          <div className="flex items-center gap-2">
-            <span className="px-3 py-1 rounded-full bg-slate-100 text-slate-500 text-xs font-medium">Parent view</span>
-            <span className="px-3 py-1 rounded-full bg-violet-100 text-violet-700 text-xs font-medium">Teacher of record</span>
-          </div>
+          <div className="text-[11px] text-slate-400">Visible to assigned staff & linked family · Period 4</div>
         </div>
 
         <div className="flex items-center gap-5">
           <div className="h-20 w-20 rounded-2xl bg-gradient-to-br from-blue-500 to-cyan-400 grid place-items-center text-white text-2xl font-black ring-4 ring-blue-200 shadow-lg shrink-0">TC</div>
           <div className="flex-1 min-w-0">
             <div className="text-2xl font-black tracking-tight">Tomás Castillo</div>
-            <div className="text-sm text-slate-500">Grade 3 · Falcon House · Teacher of record: <span className="text-slate-800 font-semibold">Ms. Patel</span></div>
+            <div className="text-sm text-slate-500">Grade 3 · Falcon House · Student ID 4128</div>
             <div className="mt-2 flex items-center gap-2 flex-wrap">
               <span className="text-[11px] px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-700 font-semibold">+24 pts this week</span>
               <span className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 font-semibold">98% attendance</span>
