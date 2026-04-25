@@ -1,0 +1,294 @@
+import { Router, type IRouter, type Request, type Response } from "express";
+import {
+  db,
+  pbisEntriesTable,
+  tardiesTable,
+  pulloutsTable,
+  interventionEntriesTable,
+  studentsTable,
+} from "@workspace/db";
+import { eq, and, gte, lt, desc, isNull, inArray } from "drizzle-orm";
+
+// =============================================================================
+// PULSE — School-wide signage feeds.
+// -----------------------------------------------------------------------------
+// These endpoints back the "Today's Heartbeat" hallway/TV signage screen.
+// They are deliberately allowed to be unauthenticated when called with an
+// explicit `?schoolId=N` query param, because signage displays usually run on
+// kiosk hardware that isn't signed in. To avoid casual PII exposure the event
+// feed always masks student names to "First L." (configurable per-school in
+// the future).
+//
+// SECURITY NOTE: The unauthenticated mode trusts whoever knows the URL. A
+// follow-up should swap `?schoolId=` for a per-school signed signage token
+// (similar to parent invite tokens). For MVP signage on internal kiosks this
+// is acceptable.
+// =============================================================================
+
+const router: IRouter = Router();
+
+type EventKind = "positive" | "negative" | "neutral";
+interface PulseEvent {
+  id: string;
+  kind: EventKind;
+  source: "pbis" | "tardy" | "pullout" | "intervention";
+  studentId: string;          // first name + last initial (masked)
+  studentInitials: string;    // 2-char initials for avatar
+  staffName: string;
+  what: string;
+  detail: string;
+  points: number | null;
+  createdAt: string;          // ISO
+}
+
+function resolveSchoolId(req: Request, res: Response): number | null {
+  if (req.schoolId) return req.schoolId;
+  const raw = req.query.schoolId;
+  const n = Number(Array.isArray(raw) ? raw[0] : raw);
+  if (!Number.isFinite(n) || n <= 0) {
+    res.status(400).json({ error: "schoolId required (sign in or pass ?schoolId=N)" });
+    return null;
+  }
+  return n;
+}
+
+function clampWindow(req: Request, def = 35, max = 1440): number {
+  const raw = req.query.windowMinutes;
+  const n = Number(Array.isArray(raw) ? raw[0] : raw);
+  if (!Number.isFinite(n) || n <= 0) return def;
+  return Math.min(Math.max(Math.floor(n), 1), max);
+}
+
+function maskName(first: string, last: string): { display: string; initials: string } {
+  const f = first?.trim() || "?";
+  const l = last?.trim() || "";
+  return {
+    display: l ? `${f} ${l.charAt(0)}.` : f,
+    initials: ((f.charAt(0) || "?") + (l.charAt(0) || "")).toUpperCase(),
+  };
+}
+
+async function loadStudentLookup(schoolId: number, studentIds: string[]) {
+  if (studentIds.length === 0) return new Map<string, { firstName: string; lastName: string }>();
+  const rows = await db
+    .select({ studentId: studentsTable.studentId, firstName: studentsTable.firstName, lastName: studentsTable.lastName })
+    .from(studentsTable)
+    .where(and(eq(studentsTable.schoolId, schoolId), inArray(studentsTable.studentId, studentIds)));
+  return new Map(rows.map((r) => [r.studentId, { firstName: r.firstName, lastName: r.lastName }]));
+}
+
+async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string): Promise<PulseEvent[]> {
+  // Each source query is filtered by school + time window. Voided PBIS
+  // entries are excluded so corrected mistakes don't keep blinking on the
+  // signage screen.
+  const [pbisRows, tardyRows, pulloutRows, interventionRows] = await Promise.all([
+    db
+      .select()
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          eq(pbisEntriesTable.schoolId, schoolId),
+          gte(pbisEntriesTable.createdAt, sinceIso),
+          lt(pbisEntriesTable.createdAt, untilIso),
+          isNull(pbisEntriesTable.voidedAt),
+        ),
+      ),
+    db
+      .select()
+      .from(tardiesTable)
+      .where(
+        and(
+          eq(tardiesTable.schoolId, schoolId),
+          gte(tardiesTable.createdAt, sinceIso),
+          lt(tardiesTable.createdAt, untilIso),
+        ),
+      ),
+    db
+      .select()
+      .from(pulloutsTable)
+      .where(
+        and(
+          eq(pulloutsTable.schoolId, schoolId),
+          gte(pulloutsTable.requestedAt, sinceIso),
+          lt(pulloutsTable.requestedAt, untilIso),
+        ),
+      ),
+    db
+      .select()
+      .from(interventionEntriesTable)
+      .where(
+        and(
+          eq(interventionEntriesTable.schoolId, schoolId),
+          gte(interventionEntriesTable.createdAt, sinceIso),
+          lt(interventionEntriesTable.createdAt, untilIso),
+        ),
+      ),
+  ]);
+
+  const studentIds = Array.from(
+    new Set([
+      ...pbisRows.map((r) => r.studentId),
+      ...tardyRows.map((r) => r.studentId),
+      ...pulloutRows.map((r) => r.studentId),
+      ...interventionRows.map((r) => r.studentId),
+    ]),
+  );
+  const lookup = await loadStudentLookup(schoolId, studentIds);
+  const nameFor = (sid: string) => {
+    const r = lookup.get(sid);
+    return maskName(r?.firstName ?? "Student", r?.lastName ?? "");
+  };
+
+  const events: PulseEvent[] = [];
+
+  for (const r of pbisRows) {
+    const n = nameFor(r.studentId);
+    events.push({
+      id: `pbis-${r.id}`,
+      kind: r.polarity === "negative" ? "negative" : "positive",
+      source: "pbis",
+      studentId: n.display,
+      studentInitials: n.initials,
+      staffName: r.staffName,
+      what: r.reason,
+      detail: r.note ?? "",
+      points: r.points,
+      createdAt: r.createdAt,
+    });
+  }
+  for (const r of tardyRows) {
+    const n = nameFor(r.studentId);
+    events.push({
+      id: `tardy-${r.id}`,
+      kind: "neutral",
+      source: "tardy",
+      studentId: n.display,
+      studentInitials: n.initials,
+      staffName: r.teacherName,
+      what: r.entryType === "tardy" ? `Tardy · ${r.period}` : `${r.entryType.replace(/_/g, " ")} · ${r.period}`,
+      detail: r.reason || "",
+      points: null,
+      createdAt: r.createdAt,
+    });
+  }
+  for (const r of pulloutRows) {
+    const n = nameFor(r.studentId);
+    events.push({
+      id: `pullout-${r.id}`,
+      kind: "negative",
+      source: "pullout",
+      studentId: n.display,
+      studentInitials: n.initials,
+      staffName: r.requestedByName,
+      what: "Pull-out · Restorative",
+      detail: r.editedReason ?? r.reason ?? "",
+      points: null,
+      createdAt: r.requestedAt,
+    });
+  }
+  for (const r of interventionRows) {
+    const n = nameFor(r.studentId);
+    events.push({
+      id: `intervention-${r.id}`,
+      kind: "positive",
+      source: "intervention",
+      studentId: n.display,
+      studentInitials: n.initials,
+      staffName: r.staffName,
+      what: r.interventionType,
+      detail: r.note ?? "",
+      points: null,
+      createdAt: r.createdAt,
+    });
+  }
+
+  events.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+  return events;
+}
+
+// GET /api/pulse/events?schoolId=N&windowMinutes=35&limit=50
+router.get("/pulse/events", async (req, res) => {
+  const schoolId = resolveSchoolId(req, res);
+  if (schoolId === null) return;
+
+  const windowMinutes = clampWindow(req, 35);
+  const until = new Date();
+  const since = new Date(until.getTime() - windowMinutes * 60_000);
+  const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
+
+  try {
+    const events = await gatherEvents(schoolId, since.toISOString(), until.toISOString());
+    res.json({
+      windowMinutes,
+      since: since.toISOString(),
+      until: until.toISOString(),
+      events: events.slice(0, limit),
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load pulse events", detail: String(err) });
+  }
+});
+
+// GET /api/pulse/heartbeat?schoolId=N&windowMinutes=35
+// Returns aggregate counts for the headline mood meter on the signage screen.
+// Compares against the same-length window 24h earlier so the "Trending up
+// vs. yesterday" chip has something to base its arrow on.
+router.get("/pulse/heartbeat", async (req, res) => {
+  const schoolId = resolveSchoolId(req, res);
+  if (schoolId === null) return;
+
+  const windowMinutes = clampWindow(req, 35);
+  const until = new Date();
+  const since = new Date(until.getTime() - windowMinutes * 60_000);
+  const ydUntil = new Date(until.getTime() - 24 * 60 * 60_000);
+  const ydSince = new Date(ydUntil.getTime() - windowMinutes * 60_000);
+
+  function summarize(events: PulseEvent[]) {
+    let pos = 0, neg = 0, neu = 0, netPts = 0;
+    for (const e of events) {
+      if (e.kind === "positive") pos++;
+      else if (e.kind === "negative") neg++;
+      else neu++;
+      if (typeof e.points === "number") {
+        netPts += e.kind === "negative" ? -Math.abs(e.points) : e.points;
+      }
+    }
+    const total = pos + neg + neu;
+    return {
+      positive: pos,
+      negative: neg,
+      concern: neu,
+      total,
+      netPoints: netPts,
+      positivePct: total > 0 ? Math.round((pos / total) * 100) : 0,
+    };
+  }
+
+  try {
+    const [todayEvents, yEvents] = await Promise.all([
+      gatherEvents(schoolId, since.toISOString(), until.toISOString()),
+      gatherEvents(schoolId, ydSince.toISOString(), ydUntil.toISOString()),
+    ]);
+    const today = summarize(todayEvents);
+    const yesterday = summarize(yEvents);
+    const trendDelta = today.netPoints - yesterday.netPoints;
+    const mood: "positive" | "neutral" | "negative" =
+      today.netPoints > 0 ? "positive" : today.netPoints < 0 ? "negative" : "neutral";
+
+    res.json({
+      schoolId,
+      windowMinutes,
+      since: since.toISOString(),
+      until: until.toISOString(),
+      mood,
+      today,
+      yesterday,
+      trendDelta,
+      trendDirection: trendDelta > 0 ? "up" : trendDelta < 0 ? "down" : "flat",
+    });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to load heartbeat", detail: String(err) });
+  }
+});
+
+export default router;

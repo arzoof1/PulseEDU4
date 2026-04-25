@@ -10,6 +10,10 @@ export const studentsTable = pgTable("students", {
   parentName: text("parent_name"),
   parentEmail: text("parent_email"),
   parentPhone: text("parent_phone"),
+  // Optional PBIS house affiliation (FK to houses.id). Nullable so existing
+  // students remain valid; populated by seed (round-robin) and by the
+  // forthcoming admin houses screen.
+  houseId: integer("house_id"),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

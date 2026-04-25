@@ -80,21 +80,21 @@ export function StudentTimeline() {
         </div>
 
         <div className="relative h-5 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
-          <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.4)]" style={{ width: "71%" }} />
-          <div className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-rose-500 to-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.3)]" style={{ width: "29%" }} />
+          <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-rose-500 to-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.3)]" style={{ width: "29%" }} />
+          <div className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-emerald-500 to-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.4)]" style={{ width: "71%" }} />
           <div className="absolute inset-0 flex items-center justify-center text-[11px] font-black text-white mix-blend-difference">71% positive moments</div>
         </div>
 
         <div className="mt-3 flex items-center gap-5 text-sm flex-wrap">
           <div className="flex items-center gap-2">
-            <div className="h-3 w-3 rounded-full bg-emerald-500" />
-            <span className="font-bold text-emerald-700 tabular-nums">4</span>
-            <span className="text-slate-500">positive</span>
-          </div>
-          <div className="flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-rose-500" />
             <span className="font-bold text-rose-700 tabular-nums">1</span>
             <span className="text-slate-500">concern</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-emerald-500" />
+            <span className="font-bold text-emerald-700 tabular-nums">4</span>
+            <span className="text-slate-500">positive</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-sky-500" />

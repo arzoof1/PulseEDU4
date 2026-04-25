@@ -29,9 +29,10 @@ import {
   interventionEntriesTable,
   studentMtssPlansTable,
   studentFastScoresTable,
+  housesTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq, sql } from "drizzle-orm";
+import { eq, sql, and, inArray } from "drizzle-orm";
 import { logger } from "./lib/logger";
 
 // =============================================================================
@@ -246,6 +247,112 @@ export async function seedTenancy() {
         isPrimary: s.isPrimary,
       })
       .onConflictDoNothing();
+  }
+}
+
+// -----------------------------------------------------------------------------
+// HOUSES: PBIS team affiliations (Falcon, Phoenix, Stag, Wolf). Idempotent
+// CREATE TABLE IF NOT EXISTS at boot mirrors the MTSS / FAST-scores pattern
+// because drizzle-kit push refuses to apply this non-interactively (it
+// confuses the new table with legacy `user_sessions` / `check_in_with_options`
+// rename targets). Safe to re-run on every boot.
+// -----------------------------------------------------------------------------
+const HOUSE_DEFAULTS = [
+  { name: "Falcon",  color: "#3b82f6", motto: "Sharp eyes. Steady wings." },
+  { name: "Phoenix", color: "#ef4444", motto: "Rise every day."           },
+  { name: "Stag",    color: "#10b981", motto: "Stand tall. Stand together." },
+  { name: "Wolf",    color: "#8b5cf6", motto: "One pack."                  },
+];
+
+export async function ensureHousesSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS houses (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      color TEXT NOT NULL,
+      motto TEXT,
+      created_at TEXT NOT NULL
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS houses_school_idx ON houses (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS houses_school_name_unique ON houses (school_id, name)`,
+  );
+  // students.house_id is added separately because it's an ALTER on an
+  // existing table. IF NOT EXISTS keeps re-runs harmless.
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS house_id INTEGER`,
+  );
+}
+
+export async function seedHousesIfEmpty() {
+  await ensureHousesSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    // 1. Houses for this school (idempotent).
+    const existing = await db
+      .select()
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, school.id));
+    let houseRows = existing;
+    if (houseRows.length === 0) {
+      const created = await db
+        .insert(housesTable)
+        .values(
+          HOUSE_DEFAULTS.map((h) => ({
+            schoolId: school.id,
+            name: h.name,
+            color: h.color,
+            motto: h.motto,
+            createdAt: new Date().toISOString(),
+          })),
+        )
+        .returning();
+      houseRows = created;
+      logger.info(
+        { schoolId: school.id, count: created.length },
+        "[seed] houses seeded",
+      );
+    }
+
+    // 2. Round-robin assign students that don't yet have a house.
+    if (houseRows.length === 0) continue;
+    const unassigned = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, school.id),
+          sql`${studentsTable.houseId} IS NULL`,
+        ),
+      );
+    if (unassigned.length === 0) continue;
+
+    // Group student ids by target house, then UPDATE in batches per house.
+    const buckets: Record<number, number[]> = {};
+    unassigned.forEach((s, i) => {
+      const houseId = houseRows[i % houseRows.length].id;
+      if (!buckets[houseId]) buckets[houseId] = [];
+      buckets[houseId].push(s.id);
+    });
+    for (const [houseIdStr, ids] of Object.entries(buckets)) {
+      const houseId = Number(houseIdStr);
+      // chunk to keep the IN-list reasonable
+      for (let i = 0; i < ids.length; i += 500) {
+        const chunk = ids.slice(i, i + 500);
+        await db
+          .update(studentsTable)
+          .set({ houseId })
+          .where(inArray(studentsTable.id, chunk));
+      }
+    }
+    logger.info(
+      { schoolId: school.id, assigned: unassigned.length },
+      "[seed] students assigned to houses (round-robin)",
+    );
   }
 }
 

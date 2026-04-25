@@ -74,8 +74,8 @@ export function SchoolTrunk() {
 
         {/* Big gradient bar */}
         <div className="relative h-6 rounded-full bg-white/5 overflow-hidden border border-white/10">
-          <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-600 via-emerald-400 to-emerald-300 shadow-[0_0_30px_rgba(16,185,129,0.6)]" style={{ width: `${positivePct}%` }} />
-          <div className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-rose-600 via-rose-500 to-rose-400 shadow-[0_0_30px_rgba(244,63,94,0.5)]" style={{ width: `${100 - positivePct}%` }} />
+          <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-rose-600 via-rose-500 to-rose-400 shadow-[0_0_30px_rgba(244,63,94,0.5)]" style={{ width: `${100 - positivePct}%` }} />
+          <div className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-emerald-600 via-emerald-400 to-emerald-300 shadow-[0_0_30px_rgba(16,185,129,0.6)]" style={{ width: `${positivePct}%` }} />
           <div className="absolute inset-0 flex items-center justify-center text-xs font-black text-white/90 mix-blend-overlay">
             {Math.round(positivePct)}% positive
           </div>
@@ -83,14 +83,14 @@ export function SchoolTrunk() {
 
         <div className="mt-3 flex items-center gap-6 text-sm">
           <div className="flex items-center gap-2">
-            <div className="h-3 w-3 rounded-full bg-emerald-500" />
-            <span className="font-bold text-emerald-300 tabular-nums">{positiveCount}</span>
-            <span className="text-white/60">positive</span>
-          </div>
-          <div className="flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-rose-500" />
             <span className="font-bold text-rose-300 tabular-nums">{negativeCount}</span>
             <span className="text-white/60">negative</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-emerald-500" />
+            <span className="font-bold text-emerald-300 tabular-nums">{positiveCount}</span>
+            <span className="text-white/60">positive</span>
           </div>
           <div className="flex items-center gap-2">
             <div className="h-3 w-3 rounded-full bg-amber-500" />

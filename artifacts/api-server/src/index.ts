@@ -5,6 +5,7 @@ import {
   seedTenancy,
   seedMtssPlansIfEmpty,
   seedFastScoresIfEmpty,
+  seedHousesIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -36,6 +37,8 @@ if (Number.isNaN(port) || port <= 0) {
   // Same pattern: ensure schema + skip-if-non-empty per school. Required
   // before the Teacher Roster API has anything to render.
   await seedFastScoresIfEmpty();
+  // Houses (PBIS teams) + round-robin assign students. Idempotent per school.
+  await seedHousesIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {
