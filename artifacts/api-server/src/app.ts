@@ -74,8 +74,11 @@ app.use(
   }),
 );
 app.use(cors());
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+// JSON body limit: bumped from the 100KB default so the Data Imports
+// route can accept CSV text in the request body. The frontend caps file
+// uploads at 10MB; 15MB gives headroom for JSON-quoting overhead.
+app.use(express.json({ limit: "15mb" }));
+app.use(express.urlencoded({ extended: true, limit: "15mb" }));
 
 app.use(
   session({

@@ -11,6 +11,38 @@ export function canActAsDistrict(staff: {
   return Boolean(staff.isSuperUser) || Boolean(staff.isDistrictAdmin);
 }
 
+// ---------------------------------------------------------------------------
+// Data Imports tier gates (Phase 3). The importers all funnel through these
+// two helpers so the route layer never re-derives "who can upload data".
+// ---------------------------------------------------------------------------
+//
+// canImportSchoolData: anyone who can administer a single school. School
+// Admin, District Admin, and SuperUser all qualify. School Admins are
+// confined to their own school (req.schoolId); the higher tiers can
+// override the school via the existing tenancy switcher.
+export function canImportSchoolData(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+}): boolean {
+  return (
+    Boolean(staff.isSuperUser) ||
+    Boolean(staff.isDistrictAdmin) ||
+    Boolean(staff.isAdmin)
+  );
+}
+
+// canImportDistrictData: only District Admin + SuperUser. School Admins
+// cannot upload a district-scoped CSV (one with a school_code column that
+// fans out across many schools) because they have no authority over the
+// other schools.
+export function canImportDistrictData(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+}): boolean {
+  return Boolean(staff.isSuperUser) || Boolean(staff.isDistrictAdmin);
+}
+
 // Tiny helper to require a resolved school for a request. Most routes call
 // this at the top of each handler so the type narrows from `number | null`
 // to `number` and a 401 is written if the request is unauthenticated.

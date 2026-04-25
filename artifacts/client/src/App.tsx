@@ -26,6 +26,7 @@ import SettingsHub, {
   type SettingsTile,
   type SettingsTileId,
 } from "./components/SettingsHub";
+import DataImports from "./components/DataImports";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
@@ -6406,7 +6407,19 @@ function App() {
   };
 
   const isAdmin = authUser?.isAdmin === true;
-  const canManageSettings = isAdmin || authUser?.isSuperUser === true;
+  // District Admin counts as a "settings manager" because school-level
+  // settings (kiosk, locations, branding, bell schedule, data imports)
+  // all fall under their remit when they're acting as a school in their
+  // district via the tenancy switcher. School Admin and SuperUser
+  // already qualify; DA is added here so the Settings entry point and
+  // every tile inside it (including Data Imports) is reachable.
+  // Read flags directly off authUser instead of the hoisted isDistrictAdmin
+  // / isSuperUser bindings — those are declared further down (next to the
+  // sidebar-group arrays) and would put us in the temporal dead zone here.
+  const canManageSettings =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true;
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
@@ -7133,6 +7146,18 @@ function App() {
                 label: "Accommodations",
                 icon: IconClipboard,
               })}
+            {/* Verify Pullout — surfaces in Quick Access ONLY when there's
+                pending work (pendingPulloutCount > 0). When the queue is
+                empty it retreats to its quiet home in Behavior Support.
+                Without this promotion the badge sits inside a collapsed
+                accordion and verifiers never see it. The Behavior Support
+                copy is hidden when count > 0 so the item never duplicates. */}
+            {canVerifyPullouts && pendingPulloutCount > 0 &&
+              renderNavItem({
+                key: "verifyPullouts",
+                label: "Verify Pullout",
+                icon: IconClipboard,
+              })}
             {/* Active Kiosks moved out of Quick Access into School Admin
                 (admin-only operational monitoring lives with the other
                 admin tools — Bell Schedule, Settings). */}
@@ -7229,7 +7254,11 @@ function App() {
                   behaviorSpecNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
-                {canVerifyPullouts &&
+                {/* Hidden here when there's pending work because Verify
+                    Pullout gets promoted to Quick Access in that case
+                    (avoiding a duplicate nav item). Still visible here
+                    when the queue is empty, for spot-checks. */}
+                {canVerifyPullouts && pendingPulloutCount === 0 &&
                   renderNavItem({
                     key: "verifyPullouts",
                     label: "Verify Pullouts",
@@ -17274,6 +17303,19 @@ function App() {
                 group: "admin-tenancy",
               });
             }
+            // Data Imports — gated on isAdmin (which includes SuperUser
+            // + District Admin via the role flags). The route layer
+            // re-checks via canImportSchoolData; this is just visibility.
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "data-imports",
+                icon: "📥",
+                title: "Data Imports",
+                subtitle:
+                  "Upload assessment CSVs (FAST, iReady, MAP, …) with auto-mapping, preview, and one-click rollback.",
+                group: "admin-tenancy",
+              });
+            }
             return tiles;
           })()}
           onSelect={setSettingsTile}
@@ -17286,6 +17328,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "tenancy" && isSuperUser && (
         <TenancyPanel />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "data-imports" && (
+        <DataImports />
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (

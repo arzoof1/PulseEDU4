@@ -12,7 +12,8 @@ export type SettingsTileId =
   | "schoolFeatures"
   | "branding"
   | "signage"
-  | "tenancy";
+  | "tenancy"
+  | "data-imports";
 
 export type SettingsGroupId =
   | "hall-pass-ops"

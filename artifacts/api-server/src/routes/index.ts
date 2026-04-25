@@ -45,6 +45,7 @@ import parentSnapshotRouter from "./parentSnapshot";
 import schoolBrandingRouter from "./schoolBranding";
 import pulseRouter from "./pulse";
 import housesRouter from "./houses";
+import dataImportsRouter from "./dataImports";
 
 const router: IRouter = Router();
 
@@ -94,5 +95,6 @@ router.use(parentSnapshotRouter);
 router.use(schoolBrandingRouter);
 router.use(pulseRouter);
 router.use(housesRouter);
+router.use(dataImportsRouter);
 
 export default router;
