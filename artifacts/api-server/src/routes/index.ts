@@ -43,6 +43,8 @@ import parentAuthRouter from "./parentAuth";
 import parentInvitesRouter from "./parentInvites";
 import parentSnapshotRouter from "./parentSnapshot";
 import schoolBrandingRouter from "./schoolBranding";
+import pulseRouter from "./pulse";
+import housesRouter from "./houses";
 
 const router: IRouter = Router();
 
@@ -90,5 +92,7 @@ router.use(parentAuthRouter);
 router.use(parentInvitesRouter);
 router.use(parentSnapshotRouter);
 router.use(schoolBrandingRouter);
+router.use(pulseRouter);
+router.use(housesRouter);
 
 export default router;

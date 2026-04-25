@@ -11,6 +11,8 @@ import {
   LogOut,
   Star,
   CheckCircle2,
+  TrendingUp,
+  TrendingDown,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useSchoolBranding } from "../lib/branding";
@@ -38,6 +40,9 @@ interface Snapshot {
   pbis: {
     total: number;
     thisWeek: number;
+    // Full-week counts (server-side) — preferred over filtering `recent`
+    // because recent is capped at 10 entries.
+    weeklyCounts?: { positive: number; negative: number };
     sparkline: number[];
     recent: Array<{
       id: number;
@@ -319,6 +324,11 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Badge>
       </div>
 
+      {/* Parent-facing weekly mood meter — same red(left)/green(right)
+          pattern as the signage screens so families learn to read it once.
+          Counts come from the snapshot we already have, no extra fetch. */}
+      {sec.recognition && <ParentMoodMeter snapshot={snapshot} />}
+
       {/* Pulse cards */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         {sec.recognition && (
@@ -539,6 +549,121 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         Pulse<span className="font-semibold">EDU</span> HeartBEAT Snapshot
       </div>
     </>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// ParentMoodMeter — week-at-a-glance for a single student.
+//
+// Counts come straight from the snapshot we already loaded:
+//   - positive / negative: from snapshot.pbis.recent (filtered to last 7 days)
+//   - concern: snapshot.attendance.tardiesThisWeek
+//   - net points: snapshot.pbis.thisWeek (already a signed weekly total)
+// We deliberately don't fire a second fetch — the parent dashboard's first
+// paint should remain a single round-trip.
+// -----------------------------------------------------------------------------
+function ParentMoodMeter({ snapshot }: { snapshot: Snapshot }) {
+  // Prefer the server-computed weekly counts (full week, no truncation).
+  // Fall back to filtering `recent` only if an older API server hasn't
+  // shipped the field yet — in that case the ratio will be approximate.
+  const weeklyCounts = snapshot.pbis.weeklyCounts;
+  let positiveCount: number;
+  let negativeCount: number;
+  if (weeklyCounts) {
+    positiveCount = weeklyCounts.positive;
+    negativeCount = weeklyCounts.negative;
+  } else {
+    const weekAgo = Date.now() - 7 * 24 * 60 * 60_000;
+    const weekRecent = snapshot.pbis.recent.filter((r) => {
+      const t = new Date(r.createdAt).getTime();
+      return Number.isFinite(t) && t >= weekAgo;
+    });
+    positiveCount = weekRecent.filter((r) => r.polarity === "positive").length;
+    negativeCount = weekRecent.filter((r) => r.polarity === "negative").length;
+  }
+  const concernCount = snapshot.attendance.tardiesThisWeek;
+
+  const net = snapshot.pbis.thisWeek;
+  const totalSignals = positiveCount + negativeCount;
+  const positivePct = totalSignals > 0 ? Math.round((positiveCount / totalSignals) * 100) : 50;
+  const negativePct = 100 - positivePct;
+
+  const mood =
+    net > 0 || (positiveCount > negativeCount && positiveCount > 0)
+      ? "great"
+      : net < 0 || negativeCount > positiveCount
+        ? "rough"
+        : "steady";
+  const moodLabel = mood === "great" ? "DOING GREAT" : mood === "rough" ? "ROUGH WEEK" : "STEADY";
+  const moodColor =
+    mood === "great" ? "text-emerald-600" : mood === "rough" ? "text-rose-600" : "text-amber-600";
+  const bgGradient =
+    mood === "great" ? "from-emerald-50" : mood === "rough" ? "from-rose-50" : "from-amber-50";
+  const TrendIcon = net >= 0 ? TrendingUp : TrendingDown;
+  const trendChip =
+    net > 0
+      ? "bg-emerald-100 border-emerald-300 text-emerald-700"
+      : net < 0
+        ? "bg-rose-100 border-rose-300 text-rose-700"
+        : "bg-slate-100 border-slate-300 text-slate-600";
+  const trendText =
+    net > 0 ? "Trending up this week" : net < 0 ? "Trending down this week" : "Even week so far";
+
+  return (
+    <Card className={`bg-gradient-to-b ${bgGradient} to-white border-slate-200`}>
+      <CardContent className="p-5 space-y-3">
+        <div className="text-[10px] uppercase tracking-[0.2em] text-slate-500 font-bold">
+          How {snapshot.student.firstName} is doing this week
+        </div>
+        <div className="flex items-end justify-between gap-3 flex-wrap">
+          <div className="flex items-baseline gap-3 flex-wrap">
+            <div className={`text-3xl sm:text-4xl font-black ${moodColor}`}>{moodLabel}</div>
+            <div className={`text-2xl font-black tabular-nums ${moodColor}`}>
+              {net >= 0 ? "+" : ""}
+              {net}
+            </div>
+            <div className="text-sm text-slate-500">net points this week</div>
+          </div>
+          <div className={`flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-xs font-bold ${trendChip}`}>
+            <TrendIcon className="h-3.5 w-3.5" />
+            {trendText}
+          </div>
+        </div>
+
+        {/* RED on left, GREEN on right — matches signage screens. */}
+        <div className="relative h-5 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
+          <div
+            className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-rose-500 to-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.3)]"
+            style={{ width: `${negativePct}%` }}
+          />
+          <div
+            className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-emerald-500 to-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+            style={{ width: `${positivePct}%` }}
+          />
+          <div className="absolute inset-0 flex items-center justify-center text-[11px] font-black text-white mix-blend-difference">
+            {totalSignals === 0 ? "No PBIS signals this week" : `${positivePct}% positive moments`}
+          </div>
+        </div>
+
+        <div className="flex items-center gap-5 text-sm flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-rose-500" />
+            <span className="font-bold text-rose-700 tabular-nums">{negativeCount}</span>
+            <span className="text-slate-500">negative</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-emerald-500" />
+            <span className="font-bold text-emerald-700 tabular-nums">{positiveCount}</span>
+            <span className="text-slate-500">positive</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-amber-500" />
+            <span className="font-bold text-amber-700 tabular-nums">{concernCount}</span>
+            <span className="text-slate-500">tardies</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

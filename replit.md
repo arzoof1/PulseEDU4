@@ -26,6 +26,50 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Pulse signage screens (April 2026)
+
+Three live signage/dashboard surfaces for the School Operations app, served
+from the same Vite client under `/signage/*`:
+
+- `/signage/heartbeat` — `signage/HeartbeatSignage.tsx`. Live mood meter +
+  unified event feed (PBIS / tardies / pullouts / interventions). Polls
+  `/api/pulse/heartbeat` and `/api/pulse/events` every 30s. Public-kiosk OK
+  via `?schoolId=N` — server **redacts** free-text `detail` and replaces
+  `staffName` with `"Staff"` for unauthenticated callers.
+- `/signage/houses` — `signage/HousesSignage.tsx`. Four-house leaderboard
+  (Falcon=blue, Phoenix=red, Stag=green, Wolf=violet) with per-house
+  red-left / green-right mini mood meters under each bar. Polls
+  `/api/houses` every 30s. Kiosk OK.
+- `/signage/student?studentId=N` — `signage/StudentTimelineSignage.tsx`.
+  Per-student deep-dive timeline used for parent conferences / MTSS.
+  **REQUIRES staff session** — `/api/pulse/student-timeline` ignores
+  `?schoolId=` and only reads `req.schoolId` from the session, since this
+  screen surfaces full PII (real student names, free-text behavior notes,
+  staff names).
+
+Path dispatch lives in `signage/SignageApp.tsx`; `main.tsx` routes
+`/signage*` paths to it. Polling helper: `signage/usePolling.ts`.
+
+Schema additions (`lib/db/src/schema/houses.ts`):
+- `housesTable` (id, schoolId, name, color hex, motto, createdAt) seeded
+  idempotently in `seed.ts` via `ensureHousesSchema` + `seedHousesIfEmpty`.
+- `studentsTable.houseId` nullable column; existing students round-robin
+  assigned at seed time.
+
+Parent dashboard (`parent/Dashboard.tsx`) gained a `<ParentMoodMeter>` card
+above the Pulse cards. It reads `snapshot.pbis.weeklyCounts` (computed by a
+dedicated SQL aggregate in `routes/parentSnapshot.ts` so it isn't truncated
+by the 50-row recent-PBIS sample), with a fallback to filtering
+`snapshot.pbis.recent` for older API servers.
+
+API endpoints (all in `routes/pulse.ts` + `routes/houses.ts`):
+- `GET /api/houses` — leaderboard + per-house counts (kiosk OK).
+- `GET /api/pulse/heartbeat` — aggregate counts + trend vs yesterday.
+  `positivePct = positive / (positive + negative)` (neutral concerns are
+  surfaced separately, not folded into the bar).
+- `GET /api/pulse/events` — unified event feed; redacted for public callers.
+- `GET /api/pulse/student-timeline` — staff-only per-student timeline.
+
 ## Classroom Store + School Store + Object-storage thumbnails (April 2026)
 
 PbisPointsHub now has two reward catalogs that share a single generic

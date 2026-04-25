@@ -67,12 +67,12 @@ router.get("/houses", async (req, res) => {
     // We do this in one query per house so we can use Drizzle's typed
     // builder cleanly; with 4 houses per school the cost is negligible.
     const enriched = await Promise.all(
-      houses.map(async (h) => {
+      houses.map(async (h: typeof houses[number]) => {
         const studentRows = await db
           .select({ studentId: studentsTable.studentId })
           .from(studentsTable)
           .where(and(eq(studentsTable.schoolId, schoolId), eq(studentsTable.houseId, h.id)));
-        const studentIds = studentRows.map((r) => r.studentId);
+        const studentIds = studentRows.map((r: { studentId: string }) => r.studentId);
 
         if (studentIds.length === 0) {
           return {
@@ -147,8 +147,9 @@ router.get("/houses", async (req, res) => {
     );
 
     res.json({ schoolId, windowDays, houses: enriched });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to load houses", detail: String(err) });
+  } catch (_err) {
+    // Avoid leaking SQL/stack to anonymous callers.
+    res.status(500).json({ error: "Failed to load houses" });
   }
 });
 

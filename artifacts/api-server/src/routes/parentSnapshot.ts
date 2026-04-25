@@ -119,6 +119,36 @@ router.get("/parent/snapshot", async (req, res) => {
         .limit(50)
     : [];
   const pbisActive = pbisRows.filter((r) => r.voidedAt === null);
+
+  // Dedicated SQL aggregate for the full-week positive/negative counts so
+  // parent mood meter math doesn't depend on the 50-row sample above.
+  const weekStartIso = startOfDayN(7).toISOString();
+  const weeklyPbisCounts = sectionsAvailable.recognition
+    ? await (async () => {
+        const rows = await db
+          .select({
+            polarity: pbisEntriesTable.polarity,
+            count: sql<number>`COUNT(*)::int`,
+          })
+          .from(pbisEntriesTable)
+          .where(
+            and(
+              eq(pbisEntriesTable.schoolId, student.schoolId),
+              eq(pbisEntriesTable.studentId, student.studentId),
+              isNull(pbisEntriesTable.voidedAt),
+              sql`${pbisEntriesTable.createdAt} >= ${weekStartIso}`,
+            ),
+          )
+          .groupBy(pbisEntriesTable.polarity);
+        let positive = 0;
+        let negative = 0;
+        for (const r of rows) {
+          if (r.polarity === "positive") positive = r.count;
+          else if (r.polarity === "negative") negative = r.count;
+        }
+        return { positive, negative };
+      })()
+    : { positive: 0, negative: 0 };
   const pbisTotal = pbisActive.reduce((sum, r) => sum + r.points, 0);
   const pbisThisWeek = pbisActive
     .filter((r) => isWithinDays(r.createdAt, 7))
@@ -234,6 +264,12 @@ router.get("/parent/snapshot", async (req, res) => {
     pbis: {
       total: pbisTotal,
       thisWeek: pbisThisWeek,
+      // Full-week counts so the parent mood meter can render an accurate
+      // positive/negative ratio. We use a dedicated SQL aggregate (rather
+      // than filtering `pbisActive`) because the row sample above is
+      // capped at 50 — high-PBIS students would otherwise have truncated
+      // counts. Voided entries are excluded.
+      weeklyCounts: weeklyPbisCounts,
       sparkline: pbisDailyBuckets,
       recent: pbisActive.slice(0, 10).map((r) => ({
         id: r.id,

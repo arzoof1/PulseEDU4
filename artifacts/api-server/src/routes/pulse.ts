@@ -77,6 +77,18 @@ async function loadStudentLookup(schoolId: number, studentIds: string[]) {
   return new Map(rows.map((r) => [r.studentId, { firstName: r.firstName, lastName: r.lastName }]));
 }
 
+// Strip sensitive free-text and staff names from a feed before sending it
+// to an unauthenticated kiosk caller. We keep the kind/source/what/points
+// so the screen still tells a story, but the rich `detail` notes (which
+// can describe specific behaviors) and individual staff names stay private.
+function redactForPublic(events: PulseEvent[]): PulseEvent[] {
+  return events.map((e) => ({
+    ...e,
+    detail: "",
+    staffName: "Staff",
+  }));
+}
+
 async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string): Promise<PulseEvent[]> {
   // Each source query is filtered by school + time window. Voided PBIS
   // entries are excluded so corrected mistakes don't keep blinking on the
@@ -208,6 +220,10 @@ async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string
 
 // GET /api/pulse/events?schoolId=N&windowMinutes=35&limit=50
 router.get("/pulse/events", async (req, res) => {
+  // `isPublic` = served via ?schoolId= without an authenticated session.
+  // We snapshot it BEFORE resolveSchoolId mutates anything because that
+  // helper accepts both auth flavors.
+  const isPublic = !req.schoolId;
   const schoolId = resolveSchoolId(req, res);
   if (schoolId === null) return;
 
@@ -217,15 +233,17 @@ router.get("/pulse/events", async (req, res) => {
   const limit = Math.min(Math.max(Number(req.query.limit) || 50, 1), 200);
 
   try {
-    const events = await gatherEvents(schoolId, since.toISOString(), until.toISOString());
+    const all = await gatherEvents(schoolId, since.toISOString(), until.toISOString());
+    const events = (isPublic ? redactForPublic(all) : all).slice(0, limit);
     res.json({
       windowMinutes,
       since: since.toISOString(),
       until: until.toISOString(),
-      events: events.slice(0, limit),
+      events,
     });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to load pulse events", detail: String(err) });
+  } catch (_err) {
+    // Don't leak `String(err)` (stack/sql) to anonymous callers.
+    res.status(500).json({ error: "Failed to load pulse events" });
   }
 });
 
@@ -254,13 +272,18 @@ router.get("/pulse/heartbeat", async (req, res) => {
       }
     }
     const total = pos + neg + neu;
+    // Match the meter math used by HousesSignage + ParentMoodMeter:
+    // positivePct = positive / (positive + negative). Neutral "concern"
+    // events (tardies, etc.) are surfaced via their own count and don't
+    // inflate the negative side of the bar.
+    const polarized = pos + neg;
     return {
       positive: pos,
       negative: neg,
       concern: neu,
       total,
       netPoints: netPts,
-      positivePct: total > 0 ? Math.round((pos / total) * 100) : 0,
+      positivePct: polarized > 0 ? Math.round((pos / polarized) * 100) : 0,
     };
   }
 
@@ -286,8 +309,205 @@ router.get("/pulse/heartbeat", async (req, res) => {
       trendDelta,
       trendDirection: trendDelta > 0 ? "up" : trendDelta < 0 ? "down" : "flat",
     });
-  } catch (err) {
-    res.status(500).json({ error: "Failed to load heartbeat", detail: String(err) });
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to load heartbeat" });
+  }
+});
+
+// GET /api/pulse/student-timeline?studentId=N&windowDays=14
+//
+// Per-student deep-dive timeline used by the staff-facing "Pulse · Student
+// Timeline" signage screen (parent conferences, MTSS huddles, ISS check-ins).
+// REQUIRES staff session — unlike the school-wide signage feeds this returns
+// PII-bearing free-text and staff names, so we never honor `?schoolId=`
+// alone.
+router.get("/pulse/student-timeline", async (req, res) => {
+  const schoolId = req.schoolId;
+  if (!schoolId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const studentRowId = Number(req.query.studentId);
+  if (!Number.isFinite(studentRowId) || studentRowId <= 0) {
+    res.status(400).json({ error: "studentId required" });
+    return;
+  }
+
+  const rawDays = Number(req.query.windowDays);
+  const windowDays =
+    Number.isFinite(rawDays) && rawDays > 0 ? Math.min(Math.floor(rawDays), 90) : 14;
+  const until = new Date();
+  const since = new Date(until.getTime() - windowDays * 24 * 60 * 60_000);
+
+  try {
+    const [student] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.id, studentRowId), eq(studentsTable.schoolId, schoolId)));
+    if (!student) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+
+    // Pull each event source for THIS student in the window.
+    const [pbisRows, tardyRows, pulloutRows, interventionRows] = await Promise.all([
+      db
+        .select()
+        .from(pbisEntriesTable)
+        .where(
+          and(
+            eq(pbisEntriesTable.schoolId, schoolId),
+            eq(pbisEntriesTable.studentId, student.studentId),
+            gte(pbisEntriesTable.createdAt, since.toISOString()),
+            lt(pbisEntriesTable.createdAt, until.toISOString()),
+            isNull(pbisEntriesTable.voidedAt),
+          ),
+        ),
+      db
+        .select()
+        .from(tardiesTable)
+        .where(
+          and(
+            eq(tardiesTable.schoolId, schoolId),
+            eq(tardiesTable.studentId, student.studentId),
+            gte(tardiesTable.createdAt, since.toISOString()),
+            lt(tardiesTable.createdAt, until.toISOString()),
+          ),
+        ),
+      db
+        .select()
+        .from(pulloutsTable)
+        .where(
+          and(
+            eq(pulloutsTable.schoolId, schoolId),
+            eq(pulloutsTable.studentId, student.studentId),
+            gte(pulloutsTable.requestedAt, since.toISOString()),
+            lt(pulloutsTable.requestedAt, until.toISOString()),
+          ),
+        ),
+      db
+        .select()
+        .from(interventionEntriesTable)
+        .where(
+          and(
+            eq(interventionEntriesTable.schoolId, schoolId),
+            eq(interventionEntriesTable.studentId, student.studentId),
+            gte(interventionEntriesTable.createdAt, since.toISOString()),
+            lt(interventionEntriesTable.createdAt, until.toISOString()),
+          ),
+        ),
+    ]);
+
+    const events: PulseEvent[] = [];
+    const masked = maskName(student.firstName, student.lastName);
+
+    for (const r of pbisRows) {
+      events.push({
+        id: `pbis-${r.id}`,
+        kind: r.polarity === "negative" ? "negative" : "positive",
+        source: "pbis",
+        studentId: masked.display,
+        studentInitials: masked.initials,
+        staffName: r.staffName,
+        what: r.reason,
+        detail: r.note ?? "",
+        points: r.points,
+        createdAt: r.createdAt,
+      });
+    }
+    for (const r of tardyRows) {
+      events.push({
+        id: `tardy-${r.id}`,
+        kind: "neutral",
+        source: "tardy",
+        studentId: masked.display,
+        studentInitials: masked.initials,
+        staffName: r.teacherName,
+        what:
+          r.entryType === "tardy"
+            ? `Tardy · ${r.period}`
+            : `${r.entryType.replace(/_/g, " ")} · ${r.period}`,
+        detail: r.reason || "",
+        points: null,
+        createdAt: r.createdAt,
+      });
+    }
+    for (const r of pulloutRows) {
+      events.push({
+        id: `pullout-${r.id}`,
+        kind: "negative",
+        source: "pullout",
+        studentId: masked.display,
+        studentInitials: masked.initials,
+        staffName: r.requestedByName,
+        what: "Pull-out · Restorative",
+        detail: r.editedReason ?? r.reason ?? "",
+        points: null,
+        createdAt: r.requestedAt,
+      });
+    }
+    for (const r of interventionRows) {
+      events.push({
+        id: `intervention-${r.id}`,
+        kind: "positive",
+        source: "intervention",
+        studentId: masked.display,
+        studentInitials: masked.initials,
+        staffName: r.staffName,
+        what: r.interventionType,
+        detail: r.note ?? "",
+        points: null,
+        createdAt: r.createdAt,
+      });
+    }
+
+    events.sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
+
+    // Roll-ups for the header cards / mood meter.
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60_000).toISOString();
+    let totalPoints = 0;
+    let weekPoints = 0;
+    let weekPositive = 0;
+    let weekNegative = 0;
+    let weekConcern = 0;
+    for (const e of events) {
+      if (typeof e.points === "number") {
+        const signed = e.kind === "negative" ? -Math.abs(e.points) : e.points;
+        totalPoints += signed;
+        if (e.createdAt >= weekAgo) weekPoints += signed;
+      }
+      if (e.createdAt >= weekAgo) {
+        if (e.kind === "positive") weekPositive++;
+        else if (e.kind === "negative") weekNegative++;
+        else weekConcern++;
+      }
+    }
+
+    res.json({
+      schoolId,
+      windowDays,
+      since: since.toISOString(),
+      until: until.toISOString(),
+      student: {
+        id: student.id,
+        studentId: student.studentId,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        grade: student.grade,
+        houseId: student.houseId,
+      },
+      summary: {
+        totalPoints,
+        weekPoints,
+        weekPositive,
+        weekNegative,
+        weekConcern,
+        eventCount: events.length,
+      },
+      events,
+    });
+  } catch (_err) {
+    res.status(500).json({ error: "Failed to load student timeline" });
   }
 });
 
