@@ -1,4 +1,4 @@
-import { CalendarClock, Heart, Phone, MessageSquare, Award, AlertCircle, BookOpen, ShieldCheck } from "lucide-react";
+import { CalendarClock, Heart, Phone, MessageSquare, Award, AlertCircle, BookOpen, ShieldCheck, TrendingUp } from "lucide-react";
 
 type Event = {
   id: number;
@@ -63,6 +63,47 @@ export function StudentTimeline() {
           </div>
         </div>
       </header>
+
+      {/* PARENT MOOD METER */}
+      <section className="px-8 py-5 bg-gradient-to-b from-emerald-50 to-white border-b border-slate-200">
+        <div className="text-[10px] uppercase tracking-[0.3em] text-slate-400 font-bold mb-2">How Tomás is doing right now</div>
+        <div className="flex items-end justify-between mb-3 flex-wrap gap-3">
+          <div className="flex items-baseline gap-3">
+            <div className="text-4xl font-black text-emerald-600">DOING GREAT</div>
+            <div className="text-2xl font-black text-emerald-600 tabular-nums">+11</div>
+            <div className="text-sm text-slate-500">net points this week</div>
+          </div>
+          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-100 border border-emerald-300">
+            <TrendingUp className="h-4 w-4 text-emerald-700" />
+            <span className="text-emerald-700 font-bold text-sm">Trending up vs. last week</span>
+          </div>
+        </div>
+
+        <div className="relative h-5 rounded-full bg-slate-100 overflow-hidden border border-slate-200">
+          <div className="absolute inset-y-0 left-0 rounded-full bg-gradient-to-r from-emerald-500 to-emerald-300 shadow-[0_0_20px_rgba(16,185,129,0.4)]" style={{ width: "71%" }} />
+          <div className="absolute inset-y-0 right-0 rounded-full bg-gradient-to-l from-rose-500 to-rose-400 shadow-[0_0_20px_rgba(244,63,94,0.3)]" style={{ width: "29%" }} />
+          <div className="absolute inset-0 flex items-center justify-center text-[11px] font-black text-white mix-blend-difference">71% positive moments</div>
+        </div>
+
+        <div className="mt-3 flex items-center gap-5 text-sm flex-wrap">
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-emerald-500" />
+            <span className="font-bold text-emerald-700 tabular-nums">4</span>
+            <span className="text-slate-500">positive</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-rose-500" />
+            <span className="font-bold text-rose-700 tabular-nums">1</span>
+            <span className="text-slate-500">concern</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="h-3 w-3 rounded-full bg-sky-500" />
+            <span className="font-bold text-sky-700 tabular-nums">2</span>
+            <span className="text-slate-500">check-ins</span>
+          </div>
+          <div className="ml-auto text-xs text-slate-500 italic">Last positive call home: today at 2:00 PM</div>
+        </div>
+      </section>
 
       <div className="px-8 py-5">
         <div className="flex items-center justify-between mb-4">
