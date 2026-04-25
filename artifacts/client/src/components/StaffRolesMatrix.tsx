@@ -22,6 +22,7 @@ interface Props {
   currentUser: {
     id: number;
     isSuperUser?: boolean;
+    isDistrictAdmin?: boolean;
     isAdmin?: boolean;
     capManageRoles?: boolean;
   };
@@ -62,6 +63,11 @@ const ROLE_PRESETS: {
   {
     flag: "isSuperUser",
     label: "SuperUser",
+    capabilities: PAGES.map((p) => p.key),
+  },
+  {
+    flag: "isDistrictAdmin",
+    label: "District Admin",
     capabilities: PAGES.map((p) => p.key),
   },
   {
@@ -490,11 +496,14 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                         const disabled =
                           (r.flag === "isSuperUser" &&
                             !currentUser.isSuperUser) ||
+                          (r.flag === "isDistrictAdmin" &&
+                            !currentUser.isSuperUser) ||
                           (r.flag === "isAdmin" &&
                             !currentUser.isSuperUser &&
                             !currentUser.isAdmin) ||
                           (isSelf &&
                             (r.flag === "isSuperUser" ||
+                              r.flag === "isDistrictAdmin" ||
                               r.flag === "isAdmin") &&
                             active);
                         return (
@@ -662,6 +671,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
           canCreateAdmin={
             Boolean(currentUser.isAdmin) || Boolean(currentUser.isSuperUser)
           }
+          canCreateDistrict={Boolean(currentUser.isSuperUser)}
           canCreateSuper={Boolean(currentUser.isSuperUser)}
         />
       )}
@@ -711,18 +721,21 @@ function AddStaffModal({
   onClose,
   onCreated,
   canCreateAdmin,
+  canCreateDistrict,
   canCreateSuper,
 }: {
   actorId: number;
   onClose: () => void;
   onCreated: () => void;
   canCreateAdmin: boolean;
+  canCreateDistrict: boolean;
   canCreateSuper: boolean;
 }) {
   const [email, setEmail] = useState("");
   const [displayName, setDisplayName] = useState("");
   const [password, setPassword] = useState("");
   const [makeAdmin, setMakeAdmin] = useState(false);
+  const [makeDistrict, setMakeDistrict] = useState(false);
   const [makeSuper, setMakeSuper] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -739,6 +752,7 @@ function AddStaffModal({
           displayName,
           password,
           isAdmin: makeAdmin,
+          isDistrictAdmin: makeDistrict,
           isSuperUser: makeSuper,
         }),
       });
@@ -788,6 +802,16 @@ function AddStaffModal({
               onChange={(e) => setMakeAdmin(e.target.checked)}
             />
             Grant Admin
+          </label>
+        )}
+        {canCreateDistrict && (
+          <label style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input
+              type="checkbox"
+              checked={makeDistrict}
+              onChange={(e) => setMakeDistrict(e.target.checked)}
+            />
+            Grant District Admin
           </label>
         )}
         {canCreateSuper && (

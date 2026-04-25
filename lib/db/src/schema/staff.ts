@@ -33,6 +33,13 @@ export const staffTable = pgTable("staff", {
 
   // ---- Role flags (legacy gates + labels/presets) ----
   isSuperUser: boolean("is_super_user").notNull().default(false),
+  // District Admin tier: sits between SuperUser (cross-school within
+  // district) and school Admin (single school). District Admins can manage
+  // every school in their own district (rosters, staff, district-scoped
+  // CSV imports, district reports) but cannot reach across to other
+  // districts and cannot create or alter SuperUsers. The capability is
+  // grant-only by SuperUser; school Admins cannot grant it.
+  isDistrictAdmin: boolean("is_district_admin").notNull().default(false),
   isAdmin: boolean("is_admin").notNull().default(false),
   isEseCoordinator: boolean("is_ese_coordinator").notNull().default(false),
   isPbisCoordinator: boolean("is_pbis_coordinator").notNull().default(false),

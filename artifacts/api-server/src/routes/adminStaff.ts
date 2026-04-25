@@ -56,6 +56,7 @@ function requireAdminOrSuper() {
 
 const ROLE_FLAGS = [
   "isSuperUser",
+  "isDistrictAdmin",
   "isAdmin",
   "isEseCoordinator",
   "isPbisCoordinator",
@@ -113,6 +114,7 @@ const STAFF_SELECT = {
   displayName: staffTable.displayName,
   active: staffTable.active,
   isSuperUser: staffTable.isSuperUser,
+  isDistrictAdmin: staffTable.isDistrictAdmin,
   isAdmin: staffTable.isAdmin,
   isEseCoordinator: staffTable.isEseCoordinator,
   isPbisCoordinator: staffTable.isPbisCoordinator,
@@ -221,6 +223,16 @@ router.patch(
       res.status(403).json({ error: "Only a SuperUser can change SuperUser." });
       return;
     }
+    // District Admin is grant-only by SuperUser. School Admins cannot
+    // promote anyone to a tier above their own scope; without this gate a
+    // school Admin could grant District Admin to a colleague (or
+    // themselves) and immediately gain district-wide reach.
+    if ("isDistrictAdmin" in updates && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only a SuperUser can change District Admin." });
+      return;
+    }
     if ("isAdmin" in updates && !actor.isSuperUser && !actor.isAdmin) {
       res.status(403).json({ error: "Only Admin/SuperUser can change Admin." });
       return;
@@ -241,6 +253,16 @@ router.patch(
         res
           .status(409)
           .json({ error: "You cannot remove your own SuperUser role." });
+        return;
+      }
+      if (
+        updates.isDistrictAdmin === false &&
+        actor.isDistrictAdmin &&
+        !actor.isSuperUser
+      ) {
+        res
+          .status(409)
+          .json({ error: "You cannot remove your own District Admin role." });
         return;
       }
       if (updates.isAdmin === false && actor.isAdmin && !actor.isSuperUser) {
@@ -355,6 +377,9 @@ router.post(
     // SuperUser/Admin or with the role-management caps themselves — that
     // would be a privilege-escalation bootstrap.
     if (updates.isSuperUser && !actor.isSuperUser) delete updates.isSuperUser;
+    if (updates.isDistrictAdmin && !actor.isSuperUser) {
+      delete updates.isDistrictAdmin;
+    }
     if (updates.isAdmin && !actor.isSuperUser && !actor.isAdmin) {
       delete updates.isAdmin;
     }
@@ -492,6 +517,16 @@ router.post(
       res
         .status(403)
         .json({ error: "Only a SuperUser can reset a SuperUser's password." });
+      return;
+    }
+    // Same defense-in-depth for the new District Admin tier — without this a
+    // school Admin could quietly take over a DA account by resetting their
+    // password and logging in. The tier-grant gate (above) is necessary but
+    // not sufficient on its own.
+    if (target.isDistrictAdmin && !actor.isSuperUser) {
+      res.status(403).json({
+        error: "Only a SuperUser can reset a District Admin's password.",
+      });
       return;
     }
 

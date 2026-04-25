@@ -1,3 +1,16 @@
+// Predicate used by every district-scoped surface (district CSV imports,
+// district reports, the upcoming Insights cross-school dashboards) to decide
+// whether the caller may operate at the *district* scope rather than the
+// single-school scope. Centralized so the SuperUser ⊇ DistrictAdmin
+// hierarchy stays honest — the route layer should never check
+// `staff.isDistrictAdmin` on its own and accidentally exclude SuperUsers.
+export function canActAsDistrict(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+}): boolean {
+  return Boolean(staff.isSuperUser) || Boolean(staff.isDistrictAdmin);
+}
+
 // Tiny helper to require a resolved school for a request. Most routes call
 // this at the top of each handler so the type narrows from `number | null`
 // to `number` and a 401 is written if the request is unauthenticated.

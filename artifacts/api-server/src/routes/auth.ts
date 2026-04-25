@@ -21,6 +21,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     displayName: row.displayName,
     schoolId: row.schoolId,
     isSuperUser: row.isSuperUser,
+    isDistrictAdmin: row.isDistrictAdmin,
     isAdmin: row.isAdmin,
     isEseCoordinator: row.isEseCoordinator,
     isPbisCoordinator: row.isPbisCoordinator,

@@ -2992,6 +2992,7 @@ function App() {
     email: string;
     displayName: string;
     isSuperUser?: boolean;
+    isDistrictAdmin?: boolean;
     isAdmin: boolean;
     isEseCoordinator: boolean;
     isPbisCoordinator: boolean;
