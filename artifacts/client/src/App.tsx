@@ -20,6 +20,7 @@ import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
+import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import SettingsHub, {
   SettingsBackBar,
   type SettingsTile,
@@ -3038,6 +3039,98 @@ const DISTRICT_ADMIN_CARDS: LandingCard[] = [
   },
 ];
 
+// Phase 2 — Insights tile config. Two tiles ("Plans" and "Interventions")
+// are launchers that route to the existing fully-functional pages
+// (mtssPlans + logIntervention). The other seven are placeholder shells
+// that will become full dashboards in Phase 4. Phase chip on each tile
+// makes the roadmap visible to admins so they don't have to ask "is this
+// real or coming?".
+const INSIGHTS_TILES: InsightsTile[] = [
+  {
+    id: "academics",
+    icon: "📘",
+    title: "Academics",
+    subtitle:
+      "Course grades, assessment trends (iReady, FAST), proficiency by standard. Dashboard ships Phase 4 once district CSV imports land.",
+    phase: "Phase 4",
+    group: "domains",
+  },
+  {
+    id: "attendance",
+    icon: "📅",
+    title: "Attendance",
+    subtitle:
+      "Daily, period, and chronic-absence views with at-risk thresholds and parent-contact triggers.",
+    phase: "Phase 4",
+    group: "domains",
+  },
+  {
+    id: "behavior",
+    icon: "🛡️",
+    title: "Behavior",
+    subtitle:
+      "Office referrals, ISS/OSS, behavior incidents by location/time-of-day with PBIS overlays.",
+    phase: "Phase 4",
+    group: "domains",
+  },
+  {
+    id: "seb",
+    icon: "💚",
+    title: "SEB / SEL",
+    subtitle:
+      "Social-emotional screeners, check-in/check-out trends, counselor caseload and intervention response.",
+    phase: "Phase 4",
+    group: "domains",
+  },
+  {
+    id: "engagement",
+    icon: "✨",
+    title: "Engagement",
+    subtitle:
+      "PBIS points, club/activity participation, and protective-factor indicators.",
+    phase: "Phase 4",
+    group: "domains",
+  },
+  {
+    id: "equity",
+    icon: "⚖️",
+    title: "Equity",
+    subtitle:
+      "Disproportionality lens across discipline, intervention assignment, and academic outcomes by subgroup.",
+    phase: "Phase 4",
+    group: "domains",
+  },
+  {
+    id: "plans",
+    icon: "📋",
+    title: "Plans",
+    subtitle:
+      "MTSS plans, IEP/504 cross-references, plan-review meetings. Live today.",
+    phase: "Today",
+    group: "actions",
+    targetSection: "mtssPlans",
+  },
+  {
+    id: "interventions",
+    icon: "🎯",
+    title: "Interventions",
+    subtitle:
+      "Log interventions, view recent deliveries, manage the intervention catalog. Live today.",
+    phase: "Today",
+    group: "actions",
+    targetSection: "logIntervention",
+  },
+  {
+    id: "earlyWarning",
+    icon: "🚨",
+    title: "Early Warning",
+    subtitle:
+      "Configurable risk thresholds across all six domains; auto-generated at-risk roster + parent notifications.",
+    phase: "Phase 4",
+    group: "monitoring",
+  },
+];
+
 function PlaceholderCard({
   title,
   body,
@@ -3267,6 +3360,7 @@ function App() {
     | "parentAccess"
     | "superUserHome"
     | "districtAdmin"
+    | "insights"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -6366,6 +6460,13 @@ function App() {
     if (!canActAsDistrict && activeSection === "districtAdmin") {
       setActiveSection("hallPasses");
     }
+    // Phase 2: Insights gated on the same canAccessMtssHub predicate that
+    // already governs the legacy MTSS pages. Once district CSV imports
+    // ship in Phase 3 we'll broaden this to anyone who should see the
+    // domain dashboards.
+    if (!canAccessMtssHub && activeSection === "insights") {
+      setActiveSection("hallPasses");
+    }
     // Demote a user who lost edit access while sitting on the editable
     // School Store. Bounce them to the read-only sidebar view rather than
     // hallPasses so they don't lose their place in the catalog.
@@ -6387,6 +6488,15 @@ function App() {
     canEditSchoolStore,
     canManageMtssPlans,
     activeSection,
+    // Phase 1E + Phase 2 bounce-backs added in this same effect body
+    // need their gating predicates in the dep array, otherwise the
+    // bounce only fires when an unrelated dep changes (which is the
+    // classic "stuck on a now-forbidden page" bug).
+    canManageSettings,
+    canManageStaffRoles,
+    canAccessMtssHub,
+    isSuperUser,
+    canActAsDistrict,
   ]);
 
   useEffect(() => {
@@ -6907,6 +7017,16 @@ function App() {
                 })}
               </>
             )}
+            {canAccessMtssHub && (
+              <>
+                <div className="section-label nav-admin-label">Insights</div>
+                {renderNavItem({
+                  key: "insights",
+                  label: "Insights",
+                  icon: IconClipboard,
+                })}
+              </>
+            )}
             {showRecognition && (
               <>
                 <div className="section-label nav-admin-label">Recognition</div>
@@ -6966,14 +7086,11 @@ function App() {
                   })}
               </>
             )}
-            {canAccessMtssHub && (
-              <>
-                <div className="section-label nav-admin-label">
-                  MTSS &amp; Plans
-                </div>
-                {mtssCoordNavSections.map(renderNavItem)}
-              </>
-            )}
+            {/* Phase 2: legacy "MTSS & Plans" sidebar group retired —
+                Plans now lives under Insights → Plans. The mtssCoordinator
+                page itself is still reachable as a target of the Insights
+                Plans tile (via the mtssPlans render branch), so existing
+                deep links keep working. */}
             {showSpecialPrograms && (
               <>
                 <div className="section-label nav-admin-label">
@@ -17007,6 +17124,13 @@ function App() {
             ))}
           </div>
         </div>
+      )}
+
+      {activeSection === "insights" && canAccessMtssHub && (
+        <InsightsHub
+          tiles={INSIGHTS_TILES}
+          onNavigate={(target) => setActiveSection(target as typeof activeSection)}
+        />
       )}
 
       {activeSection === "districtAdmin" && canActAsDistrict && (
