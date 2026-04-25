@@ -6646,40 +6646,93 @@ function App() {
       )}
 
       {(() => {
-        const hasBelowEkg =
-          isEseCoord ||
-          isPbisCoord ||
+        // Phase 1A nav restructure — Hall Pass + Tardy Pass are LOCKED at
+        // the very top (muscle-memory items). Everything else is grouped
+        // into themed sections (Recognition / Behavior Support / MTSS /
+        // Special Programs / Family / People / School Admin). Each group
+        // only renders if at least one item inside is visible to the
+        // current user — no empty headers. activeSection keys are
+        // unchanged, this is a cosmetic regrouping only.
+        const showRecognition =
+          effectiveFeatures.Pbis ||
+          effectiveFeatures.SchoolStore ||
+          canAccessPbisHub;
+        const showBehaviorSupport =
+          effectiveFeatures.LogIntervention ||
+          effectiveFeatures.RequestPullout ||
           isBehaviorSpec ||
-          canManageBehaviorLists ||
           canVerifyPullouts ||
           canViewIssDashboard ||
           canReviewPullouts ||
-          canAccessMtssHub ||
-          isAdmin ||
-          canManageStaffRoles;
+          (canManageBehaviorLists && !isBehaviorSpec);
+        const showSpecialPrograms =
+          effectiveFeatures.Accommodations || isEseCoord;
+        const showSchoolAdmin = canManageBellSchedules || isAdmin;
+        // People (Teacher Roster) is always rendered below the divider, so
+        // the EKG always has content beneath it — render unconditionally.
         return (
           <aside className="sidebar">
-            <div className="section-label">Workspace</div>
-            {baseNavSections.map(renderNavItem)}
-            {hasBelowEkg && (
+            {/* Locked top — never reorder these two */}
+            <div className="section-label">Quick Access</div>
+            {renderNavItem({
+              key: "hallPasses",
+              label: "Hall Passes",
+              icon: IconDoor,
+            })}
+            {renderNavItem({
+              key: "tardies",
+              label: "Tardy Pass",
+              icon: IconClock,
+            })}
+            <div className="nav-admin-divider" aria-hidden="true">
+              <svg
+                className="nav-admin-ekg"
+                viewBox="0 0 220 12"
+                preserveAspectRatio="none"
+              >
+                <path
+                  className="nav-admin-ekg-track"
+                  d="M0 6 H80 L86 3 L90 9 L94 1 L98 11 L102 3 L106 6 H220"
+                />
+              </svg>
+            </div>
+            {showRecognition && (
               <>
-                <div className="nav-admin-divider" aria-hidden="true">
-                  <svg
-                    className="nav-admin-ekg"
-                    viewBox="0 0 220 12"
-                    preserveAspectRatio="none"
-                  >
-                    <path
-                      className="nav-admin-ekg-track"
-                      d="M0 6 H80 L86 3 L90 9 L94 1 L98 11 L102 3 L106 6 H220"
-                    />
-                  </svg>
-                </div>
-                <div className="section-label nav-admin-label">Tools</div>
-                {isEseCoord && eseNavSections.map(renderNavItem)}
+                <div className="section-label nav-admin-label">Recognition</div>
+                {effectiveFeatures.Pbis &&
+                  renderNavItem({
+                    key: "pbis",
+                    label: "PBIS Points",
+                    icon: IconStar,
+                  })}
+                {effectiveFeatures.SchoolStore &&
+                  renderNavItem({
+                    key: "schoolStore",
+                    label: "School Store",
+                    icon: IconStar,
+                  })}
                 {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
-                {isBehaviorSpec && behaviorSpecNavSections.map(renderNavItem)}
-                {canAccessMtssHub && mtssCoordNavSections.map(renderNavItem)}
+              </>
+            )}
+            {showBehaviorSupport && (
+              <>
+                <div className="section-label nav-admin-label">
+                  Behavior Support
+                </div>
+                {effectiveFeatures.LogIntervention &&
+                  renderNavItem({
+                    key: "logIntervention",
+                    label: "Log Intervention",
+                    icon: IconClipboard,
+                  })}
+                {effectiveFeatures.RequestPullout &&
+                  renderNavItem({
+                    key: "requestPullout",
+                    label: "Request Pullout",
+                    icon: IconClipboard,
+                  })}
+                {isBehaviorSpec &&
+                  behaviorSpecNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
                 {canVerifyPullouts &&
@@ -6700,12 +6753,56 @@ function App() {
                     label: "Behavior Review",
                     icon: IconClipboard,
                   })}
+              </>
+            )}
+            {canAccessMtssHub && (
+              <>
+                <div className="section-label nav-admin-label">
+                  MTSS &amp; Plans
+                </div>
+                {mtssCoordNavSections.map(renderNavItem)}
+              </>
+            )}
+            {showSpecialPrograms && (
+              <>
+                <div className="section-label nav-admin-label">
+                  Special Programs
+                </div>
+                {effectiveFeatures.Accommodations &&
+                  renderNavItem({
+                    key: "accommodations",
+                    label: "Accommodations",
+                    icon: IconClipboard,
+                  })}
+                {isEseCoord && eseNavSections.map(renderNavItem)}
+              </>
+            )}
+            {effectiveFeatures.FamilyComm && (
+              <>
+                <div className="section-label nav-admin-label">Family</div>
+                {renderNavItem({
+                  key: "student",
+                  label: "Family Communication",
+                  icon: IconUser,
+                })}
+              </>
+            )}
+            <div className="section-label nav-admin-label">People</div>
+            {renderNavItem({
+              key: "teacherRoster",
+              label: "Teacher Roster",
+              icon: IconUser,
+            })}
+            {(isAdmin || canManageStaffRoles) &&
+              renderNavItem(adminNavSections[0])}
+            {showSchoolAdmin && (
+              <>
+                <div className="section-label nav-admin-label">
+                  School Admin
+                </div>
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
-                {isAdmin
-                  ? adminNavSections.map(renderNavItem)
-                  : canManageStaffRoles &&
-                    renderNavItem(adminNavSections[0])}
+                {isAdmin && renderNavItem(adminNavSections[1])}
               </>
             )}
           </aside>
