@@ -1,4 +1,4 @@
-import { Heart, Activity } from "lucide-react";
+import { Heart } from "lucide-react";
 
 type Branch = {
   id: number;
@@ -8,27 +8,24 @@ type Branch = {
   color: string;
   name: string;
   action: string;
-  detail: string;
   yPct: number;
 };
 
 const branches: Branch[] = [
-  { id: 1, side: "right", intensity: 0.92, initials: "MS", color: "bg-emerald-500", name: "Ms. Patel",   action: "Phone call home", detail: "+ Positive · Riya B.",         yPct: 8 },
-  { id: 2, side: "left",  intensity: 0.55, initials: "JM", color: "bg-amber-500",   name: "Jordan M.",   action: "Bathroom pass",   detail: "14 min out of class",         yPct: 22 },
-  { id: 3, side: "right", intensity: 0.78, initials: "AR", color: "bg-emerald-400", name: "Aliyah R.",   action: "Trusted adult",   detail: "Counselor check-in",          yPct: 36 },
-  { id: 4, side: "left",  intensity: 0.85, initials: "DK", color: "bg-rose-500",    name: "Devon K.",    action: "Pull-out",        detail: "Disruptive · ESE referral",   yPct: 52 },
-  { id: 5, side: "right", intensity: 0.65, initials: "TC", color: "bg-emerald-400", name: "Tomás C.",    action: "+5 PBIS",         detail: "Leadership in PE",            yPct: 68 },
-  { id: 6, side: "left",  intensity: 0.40, initials: "RB", color: "bg-orange-500",  name: "Riya B.",     action: "Tardy",           detail: "Period 4 · 6 min late",       yPct: 84 },
+  { id: 1, side: "right", intensity: 0.95, initials: "MS", color: "bg-emerald-500", name: "Ms. Patel",   action: "Positive call home",  yPct: 14 },
+  { id: 2, side: "left",  intensity: 0.70, initials: "JM", color: "bg-amber-500",   name: "Jordan M.",   action: "Bathroom 14 min",     yPct: 38 },
+  { id: 3, side: "right", intensity: 0.85, initials: "AR", color: "bg-emerald-400", name: "Aliyah R.",   action: "Trusted adult",       yPct: 60 },
+  { id: 4, side: "left",  intensity: 0.55, initials: "DK", color: "bg-rose-500",    name: "Devon K.",    action: "Pull-out · ESE",      yPct: 84 },
 ];
 
-// Build a meandering SVG path: starts dead center at top, deviates left/right at each branch y
+const W = 1280, H = 640, midX = W / 2;
+
 function buildPath(): { d: string; xAt: (y: number) => number } {
-  const W = 1000, H = 520, midX = W / 2;
   const points = branches.map((b) => ({
     y: (b.yPct / 100) * H,
-    x: midX + (b.side === "right" ? 1 : -1) * (40 + b.intensity * 60),
+    x: midX + (b.side === "right" ? 1 : -1) * (180 + b.intensity * 200),
   }));
-  const all = [{ x: midX, y: 0 }, ...points, { x: midX + (points[points.length - 1].x - midX) * 0.6, y: H }];
+  const all = [{ x: midX, y: 0 }, ...points, { x: midX, y: H }];
   let d = `M ${all[0].x} ${all[0].y}`;
   for (let i = 1; i < all.length; i++) {
     const p0 = all[i - 1], p1 = all[i];
@@ -48,68 +45,51 @@ function buildPath(): { d: string; xAt: (y: number) => number } {
   return { d, xAt };
 }
 
-function colorForBranch(side: "left" | "right", intensity: number): string {
-  if (side === "right") {
-    if (intensity > 0.75) return "from-emerald-400/90 to-emerald-300/40";
-    if (intensity > 0.5)  return "from-emerald-500/80 to-lime-300/30";
-    return "from-lime-500/70 to-yellow-200/30";
-  }
-  if (intensity > 0.75) return "from-rose-500/90 to-rose-400/40";
-  if (intensity > 0.5)  return "from-orange-500/80 to-rose-400/30";
-  return "from-amber-500/70 to-rose-300/30";
-}
-
 export function TrunkMeander() {
   const { d, xAt } = buildPath();
-  const W = 1000, H = 520;
-
   return (
-    <div className="min-h-screen w-full bg-gradient-to-b from-[#0a0612] via-[#0d0817] to-[#06030d] text-white overflow-hidden relative">
-      <header className="flex items-center justify-between px-6 pt-5 pb-3 border-b border-white/5 relative z-20">
+    <div className="min-h-screen w-full bg-gradient-to-b from-[#0a0612] via-[#100819] to-[#06030d] text-white overflow-hidden relative">
+      <header className="flex items-center justify-between px-8 pt-6 pb-4 border-b border-white/5">
         <div className="flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-rose-500 to-violet-500 grid place-items-center"><Heart className="h-4 w-4 text-white fill-white" /></div>
+          <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-rose-500 to-violet-500 grid place-items-center"><Heart className="h-5 w-5 text-white fill-white" /></div>
           <div>
-            <div className="text-[10px] uppercase tracking-[0.25em] text-white/50">Trunk variant · Meander</div>
-            <div className="text-base font-bold">Wavy spine · curves to where action happens</div>
+            <div className="text-[11px] uppercase tracking-[0.25em] text-white/50">Trunk variant</div>
+            <div className="text-2xl font-black">MEANDER · trunk curves to every event</div>
           </div>
         </div>
-        <div className="px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-400/30 text-emerald-300 text-[10px] uppercase tracking-widest flex items-center gap-1">
-          <Activity className="h-3 w-3" /> Net trend +
-        </div>
+        <div className="px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-400/30 text-emerald-300 text-xs font-bold">EKG style</div>
       </header>
 
       <div className="relative" style={{ height: H }}>
         <svg className="absolute inset-0 w-full h-full" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
           <defs>
             <linearGradient id="meanderGrad" x1="0" x2="0" y1="0" y2="1">
-              <stop offset="0" stopColor="#fb7185" stopOpacity="0.3" />
-              <stop offset="0.5" stopColor="#ef4444" stopOpacity="0.95" />
-              <stop offset="1" stopColor="#7f1d1d" stopOpacity="0.7" />
+              <stop offset="0" stopColor="#fb7185" stopOpacity="0.7" />
+              <stop offset="0.5" stopColor="#ef4444" stopOpacity="1" />
+              <stop offset="1" stopColor="#7f1d1d" stopOpacity="0.9" />
             </linearGradient>
-            <filter id="meanderGlow"><feGaussianBlur stdDeviation="6" /></filter>
+            <filter id="meanderGlow" x="-20%" y="-20%" width="140%" height="140%">
+              <feGaussianBlur stdDeviation="14" />
+            </filter>
           </defs>
-          <path d={d} stroke="url(#meanderGrad)" strokeWidth="22" fill="none" strokeLinecap="round" filter="url(#meanderGlow)" opacity="0.55" />
-          <path d={d} stroke="url(#meanderGrad)" strokeWidth="10" fill="none" strokeLinecap="round" style={{ animation: "pulse 2.4s ease-in-out infinite" }} />
+          <line x1={midX} y1="0" x2={midX} y2={H} stroke="white" strokeOpacity="0.12" strokeDasharray="6 10" strokeWidth="2" />
+          <text x={midX + 8} y="20" fill="white" fillOpacity="0.3" fontSize="11">center</text>
+          <path d={d} stroke="url(#meanderGrad)" strokeWidth="80" fill="none" strokeLinecap="round" filter="url(#meanderGlow)" opacity="0.5" />
+          <path d={d} stroke="url(#meanderGrad)" strokeWidth="40" fill="none" strokeLinecap="round" style={{ animation: "pulse 2.4s ease-in-out infinite" }} />
         </svg>
 
         {branches.map((b) => {
           const isRight = b.side === "right";
-          const grad = colorForBranch(b.side, b.intensity);
           const yPx = (b.yPct / 100) * H;
           const trunkX = xAt(yPx);
           const leftPct = (trunkX / W) * 100;
-          const length = 22 + b.intensity * 22;
           return (
-            <div key={b.id} className="absolute" style={{ top: yPx - 26, left: `${leftPct}%`, transform: isRight ? "translate(0,0)" : "translate(-100%,0)" }}>
-              <div className={`flex items-center gap-2 ${isRight ? "flex-row" : "flex-row-reverse"}`}>
-                <div className={`h-[3px] bg-gradient-to-${isRight ? "r" : "l"} ${grad} rounded-full`} style={{ width: `${length * 4}px` }} />
-                <div className={`relative px-2 py-1.5 rounded-2xl bg-gradient-to-${isRight ? "r" : "l"} ${grad} border border-white/15 backdrop-blur shadow-xl flex items-center gap-2 min-w-[180px] max-w-[210px]`}>
-                  <div className={`h-7 w-7 rounded-full ${b.color} grid place-items-center font-bold text-[10px] ring-2 ring-white/30 shrink-0`}>{b.initials}</div>
-                  <div className="flex-1 min-w-0">
-                    <div className="text-[11px] font-semibold truncate">{b.name}</div>
-                    <div className="text-[10px] text-white/85 truncate">{b.action}</div>
-                    <div className="text-[9px] text-white/60 truncate">{b.detail}</div>
-                  </div>
+            <div key={b.id} className="absolute" style={{ top: yPx - 36, left: `${leftPct}%`, transform: isRight ? "translate(40px,0)" : "translate(calc(-100% - 40px),0)" }}>
+              <div className={`px-4 py-3 rounded-2xl ${isRight ? "bg-emerald-500/25 border-emerald-300/40" : "bg-rose-500/25 border-rose-300/40"} border-2 backdrop-blur-md flex items-center gap-3 min-w-[260px] shadow-2xl`}>
+                <div className={`h-12 w-12 rounded-full ${b.color} grid place-items-center font-black text-base ring-2 ring-white/40 shrink-0`}>{b.initials}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-base font-bold truncate">{b.name}</div>
+                  <div className="text-sm text-white/85 truncate">{b.action}</div>
                 </div>
               </div>
             </div>
@@ -117,9 +97,9 @@ export function TrunkMeander() {
         })}
       </div>
 
-      <div className="px-6 py-4 border-t border-white/10 text-[11px] text-white/50 text-center bg-black/30">
-        Trunk follows a curve through every entry — left for negative, right for positive. Heart-rate-style EKG.
-      </div>
+      <footer className="px-8 py-4 border-t border-white/10 text-sm text-white/60 text-center bg-black/40">
+        <span className="font-bold text-white/80">Read it like:</span> the trunk swings to where action happens. Big positive = deep right swing. Big negative = deep left swing. Heartbeat from top to bottom.
+      </footer>
     </div>
   );
 }
