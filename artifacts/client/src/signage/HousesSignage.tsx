@@ -146,7 +146,10 @@ export default function HousesSignage() {
             {rows.map((h) => {
               const pct = Math.max(2, Math.min(100, (h.totalPoints / goal) * 100));
               const meterTotal = h.positiveCount + h.negativeCount;
-              const posPct = meterTotal > 0 ? (h.positiveCount / meterTotal) * 100 : 0;
+              // Steady 50/50 resting state when a house has no polarized
+              // signals yet — same convention as the heartbeat / parent /
+              // student-timeline meters.
+              const posPct = meterTotal > 0 ? (h.positiveCount / meterTotal) * 100 : 50;
               const negPct = 100 - posPct;
               const isLeader = leader?.id === h.id;
               return (

@@ -140,7 +140,11 @@ export default function HeartbeatSignage() {
     hb?.mood === "positive" ? "from-emerald-950/30" :
     hb?.mood === "negative" ? "from-rose-950/30" : "from-amber-950/30";
 
-  const positivePct = hb?.today.positivePct ?? 0;
+  // Resting state = 50/50 (steady) when we have no data yet or when the
+  // server reports a quiet day. The server already emits 50 when polarized
+  // counts are zero, but we also fall back to 50 while the first poll is
+  // in flight so the bar never flashes all-red on load.
+  const positivePct = hb?.today.positivePct ?? 50;
   const negativePct = 100 - positivePct;
 
   const TrendIcon = hb?.trendDirection === "down" ? TrendingDown : TrendingUp;

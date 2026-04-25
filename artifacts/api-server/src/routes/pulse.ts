@@ -283,7 +283,10 @@ router.get("/pulse/heartbeat", async (req, res) => {
       concern: neu,
       total,
       netPoints: netPts,
-      positivePct: polarized > 0 ? Math.round((pos / polarized) * 100) : 0,
+      // When there are zero polarized signals (quiet morning, fresh day),
+      // render the bar as a steady 50/50 resting state rather than slamming
+      // it all-red. Matches the parent + student-timeline meters.
+      positivePct: polarized > 0 ? Math.round((pos / polarized) * 100) : 50,
     };
   }
 
