@@ -2969,6 +2969,130 @@ function StudentCombobox({
   );
 }
 
+// Phase 1E placeholder copy for the SuperUser Home + District Overview
+// landing pages. Each card maps to a future capability scheduled in the
+// 5-phase roadmap on the canvas; the `phase` chip lets the viewer see the
+// release order at a glance. Lives at module scope so the JSX render
+// branches stay tidy and so we can extend or reorder without touching
+// the App component body.
+type LandingCard = { title: string; body: string; phase: string };
+
+const SUPER_USER_HOME_CARDS: LandingCard[] = [
+  {
+    title: "District Switcher",
+    body: "Hop between every district you administer. Today: switch school within district from Settings → Tenancy.",
+    phase: "Phase 5",
+  },
+  {
+    title: "Cross-District Reports",
+    body: "Roll up Insights, PBIS, and intervention metrics across every district you operate.",
+    phase: "Phase 5",
+  },
+  {
+    title: "Onboard a District",
+    body: "Stand up a new district + first school + first SuperUser without a SQL session.",
+    phase: "Phase 3",
+  },
+  {
+    title: "Global Feature Flags",
+    body: "Flip a feature on for one district, a school, or the whole platform.",
+    phase: "Phase 5",
+  },
+  {
+    title: "Audit & Health",
+    body: "See login activity, error rates, and tenant health for every district.",
+    phase: "Phase 4",
+  },
+];
+
+const DISTRICT_ADMIN_CARDS: LandingCard[] = [
+  {
+    title: "District Roster Import",
+    body: "Upload one CSV with school_code per row; we route students to the right schools.",
+    phase: "Phase 3",
+  },
+  {
+    title: "District Assessments Import",
+    body: "Push iReady, FAST, or your district benchmark data to every school in one import.",
+    phase: "Phase 3",
+  },
+  {
+    title: "District Insights Dashboards",
+    body: "Academics, Attendance, Behavior, SEB, Engagement, and Equity rolled up across schools.",
+    phase: "Phase 4",
+  },
+  {
+    title: "Early Warning Rules",
+    body: "Configure at-risk thresholds once for the district; schools see the flagged students.",
+    phase: "Phase 4",
+  },
+  {
+    title: "Intervention Effectiveness",
+    body: "Compare intervention outcomes across every school in the district, exportable as PDF.",
+    phase: "Phase 5",
+  },
+  {
+    title: "Manage District Staff",
+    body: "Add, deactivate, and assign roles for any staff member in any of your schools.",
+    phase: "Today",
+  },
+];
+
+function PlaceholderCard({
+  title,
+  body,
+  phase,
+}: {
+  title: string;
+  body: string;
+  phase: string;
+}) {
+  // "Today" → ready now, render in green; everything else is roadmap copy.
+  const isReady = phase === "Today";
+  return (
+    <div
+      style={{
+        border: "1px solid var(--border, #e2e8f0)",
+        borderRadius: "var(--radius-sm, 8px)",
+        padding: "0.75rem",
+        background: "var(--surface, #fff)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.4rem",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 6,
+        }}
+      >
+        <div style={{ fontWeight: 600 }}>{title}</div>
+        <span
+          style={{
+            fontSize: 10,
+            letterSpacing: "0.06em",
+            textTransform: "uppercase",
+            padding: "2px 6px",
+            borderRadius: 999,
+            background: isReady ? "#dcfce7" : "#f1f5f9",
+            color: isReady ? "#166534" : "#475569",
+            border: isReady ? "1px solid #86efac" : "1px solid #cbd5e1",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {phase}
+        </span>
+      </div>
+      <div style={{ fontSize: 13, color: "var(--text-subtle)", lineHeight: 1.4 }}>
+        {body}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Apply per-school branding (header gradient, logo) to the document root
   // so any component reading var(--brand-header-bg) retints automatically.
@@ -3104,6 +3228,8 @@ function App() {
     | "bellSchedule"
     | "activeKiosks"
     | "parentAccess"
+    | "superUserHome"
+    | "districtAdmin"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -6072,6 +6198,14 @@ function App() {
     isMtss ||
     isPbisCoord;
   const isSuperUser = authUser?.isSuperUser === true;
+  // District Admin tier (Phase 1D). Mirrors the server-side
+  // `canActAsDistrict` predicate in artifacts/api-server/src/lib/scope.ts —
+  // SuperUser ⊇ DistrictAdmin so any UI surface gated on "may act at the
+  // district level" must include both. Centralized here so individual
+  // sidebar/section gates don't accidentally check `isDistrictAdmin` alone
+  // and exclude the SuperUser.
+  const isDistrictAdmin = authUser?.isDistrictAdmin === true;
+  const canActAsDistrict = isSuperUser || isDistrictAdmin;
   const canViewIssDashboard =
     isSuperUser ||
     isAdmin ||
@@ -6183,6 +6317,16 @@ function App() {
       setActiveSection("pbisHub");
     }
     if (!canManageBehaviorLists && activeSection === "interventions") {
+      setActiveSection("hallPasses");
+    }
+    // Phase 1E bounce-backs. If a SuperUser is demoted to plain DA mid-session
+    // they shouldn't keep staring at the SU Home page; same for a DA who loses
+    // the flag entirely. Mirrors the JSX gate (SU-only / canActAsDistrict)
+    // exactly so the two never disagree.
+    if (!isSuperUser && activeSection === "superUserHome") {
+      setActiveSection("hallPasses");
+    }
+    if (!canActAsDistrict && activeSection === "districtAdmin") {
       setActiveSection("hallPasses");
     }
     // Demote a user who lost edit access while sitting on the editable
@@ -6708,6 +6852,24 @@ function App() {
                 />
               </svg>
             </div>
+            {canActAsDistrict && (
+              <>
+                <div className="section-label nav-admin-label">
+                  Administration
+                </div>
+                {isSuperUser &&
+                  renderNavItem({
+                    key: "superUserHome",
+                    label: "SuperUser Home",
+                    icon: IconClipboard,
+                  })}
+                {renderNavItem({
+                  key: "districtAdmin",
+                  label: "District Overview",
+                  icon: IconClipboard,
+                })}
+              </>
+            )}
             {showRecognition && (
               <>
                 <div className="section-label nav-admin-label">Recognition</div>
@@ -16785,6 +16947,52 @@ function App() {
 
       {activeSection === "parentAccess" && canManageSettings && (
         <ParentAccess />
+      )}
+
+      {activeSection === "superUserHome" && isSuperUser && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>SuperUser Home</h2>
+          <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+            Cross-district control surface. The full toolset lands in
+            Phases 3–5; this page lists what's coming so you have a single
+            place to bookmark.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gap: "0.75rem",
+              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+              marginTop: "1rem",
+            }}
+          >
+            {SUPER_USER_HOME_CARDS.map((c) => (
+              <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
+            ))}
+          </div>
+        </div>
+      )}
+
+      {activeSection === "districtAdmin" && canActAsDistrict && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>District Overview</h2>
+          <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+            District Admin landing. Tools that act on every school in your
+            district will live here. Today this is a roadmap; the imports
+            and dashboards land in Phases 3–4.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gap: "0.75rem",
+              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+              marginTop: "1rem",
+            }}
+          >
+            {DISTRICT_ADMIN_CARDS.map((c) => (
+              <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
+            ))}
+          </div>
+        </div>
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "signage" && (
