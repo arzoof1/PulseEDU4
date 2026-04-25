@@ -7329,21 +7329,9 @@ function App() {
                   })}
               </NavGroup>
             )}
-            {/* Teacher Roster promoted to Quick Access (above). The
-                People accordion now only carries Staff & Roles, so it's
-                gated on admin/role-manager — non-admins no longer see
-                an empty "People" header. */}
-            {(isAdmin || canManageStaffRoles) && (
-              <NavGroup
-                key={`${sidebarUserId}-people`}
-                id="people"
-                label="People"
-                userId={sidebarUserId}
-                containsActive={groupContainsActive("people", activeSection)}
-              >
-                {renderNavItem(adminNavSections[0])}
-              </NavGroup>
-            )}
+            {/* People accordion removed — Teacher Roster lives in
+                Quick Access and Staff & Roles moved into School Admin
+                below (next to the other admin tools). */}
             {showSchoolAdmin && (
               <NavGroup
                 key={`${sidebarUserId}-schoolAdmin`}
@@ -7355,6 +7343,8 @@ function App() {
                   activeSection,
                 )}
               >
+                {(isAdmin || canManageStaffRoles) &&
+                  renderNavItem(adminNavSections[0])}
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
                 {canManageSettings &&
