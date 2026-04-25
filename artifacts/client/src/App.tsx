@@ -3165,7 +3165,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   specialPrograms: ["accommodations", "ese"],
   family: ["student", "parentAccess"],
   people: ["teacherRoster", "staffRoles"],
-  schoolAdmin: ["bellSchedule", "settings"],
+  schoolAdmin: ["bellSchedule", "activeKiosks", "settings"],
 };
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -7111,12 +7111,9 @@ function App() {
                 label: "Accommodations",
                 icon: IconClipboard,
               })}
-            {canManageSettings &&
-              renderNavItem({
-                key: "activeKiosks",
-                label: "Active Kiosks",
-                icon: IconClipboard,
-              })}
+            {/* Active Kiosks moved out of Quick Access into School Admin
+                (admin-only operational monitoring lives with the other
+                admin tools — Bell Schedule, Settings). */}
             <div className="nav-admin-divider" aria-hidden="true">
               <svg
                 className="nav-admin-ekg"
@@ -7285,6 +7282,12 @@ function App() {
               >
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "activeKiosks",
+                    label: "Active Kiosks",
+                    icon: IconClipboard,
+                  })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
               </NavGroup>
             )}
