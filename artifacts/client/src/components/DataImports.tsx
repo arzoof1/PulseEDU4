@@ -17,6 +17,7 @@ import { authFetch } from "../lib/authToken";
 // ---------------------------------------------------------------------------
 
 type Kind = "assessments";
+type Scope = "school" | "district";
 
 type PreviewResponse = {
   headers: string[];
@@ -33,9 +34,15 @@ type PreviewResponse = {
     scoreLevel: string | null;
     administeredAt: string;
     source: string | null;
+    // District scope only — present when the row was routed by school_code.
+    schoolId?: number;
+    schoolCode?: string;
   }>;
   errors: Array<{ row: number; message: string }>;
   readyToCommit: boolean;
+  // District-scope preview only.
+  perSchool?: Array<{ schoolId: number; schoolName: string; rows: number }>;
+  districtSchoolCount?: number;
 };
 
 type ImportJob = {
@@ -58,12 +65,11 @@ type ImportJob = {
 
 // Target fields the importer recognizes (mirror of HEADER_SYNONYMS in the
 // route file). Marked required if the server rejects the mapping without
-// them.
-const ASSESSMENT_TARGETS: Array<{
-  value: string;
-  label: string;
-  required: boolean;
-}> = [
+// them. The `school_code` target is only required in district scope —
+// see `assessmentTargetsFor()` below.
+type TargetDef = { value: string; label: string; required: boolean };
+
+const ASSESSMENT_TARGETS_BASE: TargetDef[] = [
   { value: "student_id", label: "Student ID (SIS number)", required: true },
   { value: "assessment_name", label: "Assessment name", required: true },
   { value: "administered_at", label: "Administered date", required: true },
@@ -71,6 +77,18 @@ const ASSESSMENT_TARGETS: Array<{
   { value: "score_level", label: "Score level / band", required: false },
   { value: "source", label: "Source / vendor", required: false },
 ];
+
+const SCHOOL_CODE_TARGET: TargetDef = {
+  value: "school_code",
+  label: "School code (state code or school ID)",
+  required: true,
+};
+
+function assessmentTargetsFor(scope: Scope): TargetDef[] {
+  return scope === "district"
+    ? [...ASSESSMENT_TARGETS_BASE, SCHOOL_CODE_TARGET]
+    : ASSESSMENT_TARGETS_BASE;
+}
 
 // Headers list "ignore" as a sentinel — when a CSV column isn't in the
 // mapping at all, it's effectively ignored. We surface "ignore" as a
@@ -127,9 +145,19 @@ const statusPillStyle = (status: string): CSSProperties => {
   };
 };
 
-export default function DataImports() {
+type DataImportsProps = {
+  // Whether the signed-in user can act as a District Admin (DA or SU).
+  // When false, the scope toggle is hidden and every request goes to the
+  // school-scope endpoints.
+  canActAsDistrict?: boolean;
+};
+
+export default function DataImports({
+  canActAsDistrict = false,
+}: DataImportsProps) {
   const [tab, setTab] = useState<"upload" | "history">("upload");
   const [kind] = useState<Kind>("assessments");
+  const [scope, setScope] = useState<Scope>("school");
 
   // Upload state
   const [filename, setFilename] = useState<string>("");
@@ -147,18 +175,39 @@ export default function DataImports() {
     errorRows: number;
   } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  // Monotonically increasing token; only the most recent runPreview()
+  // call is allowed to write to state. Prevents a stale response from
+  // a prior scope/mapping from clobbering the current preview after a
+  // fast scope toggle or rapid mapping edits.
+  const previewTokenRef = useRef(0);
 
   // History state
   const [jobs, setJobs] = useState<ImportJob[]>([]);
   const [jobsLoading, setJobsLoading] = useState(false);
   const [rollbackId, setRollbackId] = useState<number | null>(null);
 
+  // Endpoints + target dictionary depend on scope. Memoized so the
+  // identity is stable across renders inside the same scope.
+  const endpoints = useMemo(() => {
+    if (scope === "district") {
+      return {
+        preview: "/api/data-imports/assessments/preview-district",
+        commit: "/api/data-imports/assessments/commit-district",
+      };
+    }
+    return {
+      preview: "/api/data-imports/assessments/preview",
+      commit: "/api/data-imports/assessments/commit",
+    };
+  }, [scope]);
+  const targets = useMemo(() => assessmentTargetsFor(scope), [scope]);
+
   const loadJobs = async () => {
     setJobsLoading(true);
     try {
-      const r = await authFetch(
-        `/api/data-imports/jobs?kind=${encodeURIComponent(kind)}`,
-      );
+      const params = new URLSearchParams({ kind });
+      if (scope === "district") params.set("scope", "district");
+      const r = await authFetch(`/api/data-imports/jobs?${params.toString()}`);
       if (r.ok) setJobs(await r.json());
     } finally {
       setJobsLoading(false);
@@ -168,15 +217,19 @@ export default function DataImports() {
   useEffect(() => {
     if (tab === "history") void loadJobs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab]);
+  }, [tab, scope]);
 
   const resetUpload = () => {
+    // Bumping the token also cancels any in-flight preview from before
+    // the reset (its response will be ignored on arrival).
+    previewTokenRef.current++;
     setFilename("");
     setCsvText("");
     setPreview(null);
     setMapping({});
     setError("");
     setCommitResult(null);
+    setPreviewing(false);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
@@ -201,14 +254,21 @@ export default function DataImports() {
     text: string,
     overrideMapping: Record<string, string>,
   ) => {
+    // Snapshot the token + scope at call time. After the network round
+    // trip we only commit state if (a) no newer preview has been kicked
+    // off and (b) the scope hasn't been toggled in flight — otherwise a
+    // school-scope response could repopulate a now-district session.
+    const myToken = ++previewTokenRef.current;
+    const callScope = scope;
     setPreviewing(true);
     setError("");
     try {
-      const r = await authFetch("/api/data-imports/assessments/preview", {
+      const r = await authFetch(endpoints.preview, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ csv: text, mapping: overrideMapping }),
       });
+      if (previewTokenRef.current !== myToken || callScope !== scope) return;
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         setError(j.error ?? `Preview failed (HTTP ${r.status})`);
@@ -219,9 +279,10 @@ export default function DataImports() {
       setPreview(data);
       setMapping(data.suggestedMapping);
     } catch (e) {
+      if (previewTokenRef.current !== myToken || callScope !== scope) return;
       setError(`Preview failed: ${(e as Error).message}`);
     } finally {
-      setPreviewing(false);
+      if (previewTokenRef.current === myToken) setPreviewing(false);
     }
   };
 
@@ -247,7 +308,7 @@ export default function DataImports() {
     setCommitting(true);
     setError("");
     try {
-      const r = await authFetch("/api/data-imports/assessments/commit", {
+      const r = await authFetch(endpoints.commit, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ csv: csvText, filename, mapping }),
@@ -296,14 +357,23 @@ export default function DataImports() {
   };
 
   const requiredTargets = useMemo(
-    () => ASSESSMENT_TARGETS.filter((t) => t.required).map((t) => t.value),
-    [],
+    () => targets.filter((t) => t.required).map((t) => t.value),
+    [targets],
   );
   const missingRequired = useMemo(() => {
     if (!preview) return [];
     const have = new Set(Object.values(mapping));
     return requiredTargets.filter((t) => !have.has(t));
   }, [preview, mapping, requiredTargets]);
+
+  // Switching scopes mid-flow would leave a stale preview / mapping
+  // pointing at the wrong endpoint, so wipe upload state on toggle. The
+  // History tab re-fetches via its own useEffect when scope changes.
+  const handleScopeChange = (next: Scope) => {
+    if (next === scope) return;
+    setScope(next);
+    resetUpload();
+  };
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -313,6 +383,70 @@ export default function DataImports() {
         importer auto-detects column names — review the mapping, commit,
         and roll back from History if anything looks wrong.
       </p>
+
+      {canActAsDistrict && (
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            marginTop: "0.75rem",
+            padding: "0.6rem 0.75rem",
+            background: "rgba(59, 130, 246, 0.06)",
+            border: "1px solid var(--border, #2a3447)",
+            borderRadius: 8,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontSize: 13, fontWeight: 600 }}>Scope:</span>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="radio"
+              name="data-imports-scope"
+              checked={scope === "school"}
+              onChange={() => handleScopeChange("school")}
+            />
+            My school only
+          </label>
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="radio"
+              name="data-imports-scope"
+              checked={scope === "district"}
+              onChange={() => handleScopeChange("district")}
+            />
+            District-wide (rows routed by school code)
+          </label>
+          {scope === "district" && (
+            <span
+              style={{
+                fontSize: 12,
+                color: "var(--text-subtle)",
+                marginLeft: "auto",
+              }}
+            >
+              CSV must include a school_code column matching each school's
+              state code or ID.
+            </span>
+          )}
+        </div>
+      )}
 
       <div
         style={{
@@ -499,7 +633,89 @@ export default function DataImports() {
                 <Stat label="Total" value={preview.totalRows} />
                 <Stat label="Will import" value={preview.validRows} accent />
                 <Stat label="Will skip" value={preview.errorRows} warn />
+                {scope === "district" && preview.perSchool && (
+                  <Stat
+                    label="Schools matched"
+                    value={preview.perSchool.length}
+                  />
+                )}
               </div>
+
+              {scope === "district" &&
+                preview.perSchool &&
+                preview.perSchool.length > 0 && (
+                  <details style={{ marginBottom: "1rem" }}>
+                    <summary
+                      style={{ cursor: "pointer", fontWeight: 600 }}
+                    >
+                      Per-school breakdown — {preview.perSchool.length} school
+                      {preview.perSchool.length === 1 ? "" : "s"} matched
+                      {typeof preview.districtSchoolCount === "number" && (
+                        <span
+                          style={{
+                            color: "var(--text-subtle)",
+                            fontWeight: 400,
+                            marginLeft: 6,
+                          }}
+                        >
+                          (of {preview.districtSchoolCount} in district)
+                        </span>
+                      )}
+                    </summary>
+                    <div style={{ marginTop: "0.5rem", overflowX: "auto" }}>
+                      <table
+                        style={{
+                          width: "100%",
+                          borderCollapse: "collapse",
+                          fontSize: 13,
+                        }}
+                      >
+                        <thead>
+                          <tr>
+                            <th
+                              style={{
+                                textAlign: "left",
+                                padding: "0.35rem",
+                                borderBottom:
+                                  "1px solid var(--border, #2a3447)",
+                              }}
+                            >
+                              School
+                            </th>
+                            <th
+                              style={{
+                                textAlign: "right",
+                                padding: "0.35rem",
+                                borderBottom:
+                                  "1px solid var(--border, #2a3447)",
+                              }}
+                            >
+                              Rows
+                            </th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {preview.perSchool.map((s) => (
+                            <tr key={s.schoolId}>
+                              <td style={{ padding: "0.35rem" }}>
+                                {s.schoolName}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "0.35rem",
+                                  textAlign: "right",
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                {s.rows.toLocaleString()}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </details>
+                )}
 
               <h3 style={{ marginTop: "1.25rem", marginBottom: "0.5rem" }}>
                 Column mapping
@@ -561,7 +777,7 @@ export default function DataImports() {
                       }}
                     >
                       <option value={IGNORE_VALUE}>Ignore</option>
-                      {ASSESSMENT_TARGETS.map((t) => (
+                      {targets.map((t) => (
                         <option key={t.value} value={t.value}>
                           {t.label}
                           {t.required ? " *" : ""}
@@ -813,6 +1029,26 @@ export default function DataImports() {
                         }}
                       >
                         {j.filename}
+                        {j.districtId != null && j.schoolId == null && (
+                          <span
+                            style={{
+                              display: "inline-block",
+                              marginLeft: 6,
+                              padding: "0.05rem 0.4rem",
+                              fontSize: 10,
+                              fontWeight: 700,
+                              letterSpacing: "0.05em",
+                              textTransform: "uppercase",
+                              borderRadius: 999,
+                              background: "rgba(59, 130, 246, 0.15)",
+                              color: "#3b82f6",
+                              border: "1px solid #3b82f6",
+                              fontFamily: "inherit",
+                            }}
+                          >
+                            District
+                          </span>
+                        )}
                       </td>
                       <td style={{ padding: "0.5rem" }}>{j.kind}</td>
                       <td style={{ padding: "0.5rem" }}>

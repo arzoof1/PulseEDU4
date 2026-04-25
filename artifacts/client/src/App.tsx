@@ -17329,7 +17329,7 @@ function App() {
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "data-imports" && (
-        <DataImports />
+        <DataImports canActAsDistrict={canActAsDistrict} />
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (
