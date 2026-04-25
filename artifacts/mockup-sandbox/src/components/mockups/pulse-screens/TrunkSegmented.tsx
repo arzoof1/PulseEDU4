@@ -68,35 +68,20 @@ export function TrunkSegmented() {
           {SEGMENTS.map((s, i) => (
             <rect key={`c${i}`} x={s.x - 8} y={s.yStart + 4} width="16" height={s.yEnd - s.yStart - 8} rx="8" fill="url(#segGrad)" style={{ animation: "pulse 2.4s ease-in-out infinite" }} />
           ))}
+          {/* hinge connectors between segments */}
+          {SEGMENTS.slice(0, -1).map((s, i) => {
+            const next = SEGMENTS[i + 1];
+            const x1 = s.x, x2 = next.x;
+            const y = s.yEnd;
+            return (
+              <g key={`hinge${i}`}>
+                <line x1={x1} y1={y} x2={x2} y2={y} stroke="#fbbf24" strokeWidth="6" strokeLinecap="round" opacity="0.85" />
+                <circle cx={x1} cy={y} r="6" fill="#fbbf24" />
+                <circle cx={x2} cy={y} r="6" fill="#fbbf24" />
+              </g>
+            );
+          })}
         </svg>
-
-        {branches.map((b) => {
-          const yPx = (b.yPct / 100) * H;
-          const trunkX = xAt(yPx);
-          const isRight = b.side === "right";
-          const pillInnerX = isRight ? W - PILL_PAD - PILL_W : PILL_PAD + PILL_W;
-          const lineStart = Math.min(trunkX, pillInnerX);
-          const lineWidth = Math.max(0, Math.abs(pillInnerX - trunkX));
-          const branchColor = isRight ? "from-emerald-400/80 to-emerald-300/30" : "from-rose-400/80 to-rose-300/30";
-          return (
-            <div key={b.id}>
-              <div
-                className={`absolute h-[3px] rounded-full bg-gradient-to-${isRight ? "r" : "l"} ${branchColor}`}
-                style={{ top: yPx + 24, left: lineStart, width: lineWidth }}
-              />
-              <div
-                className={`absolute px-3 py-2 rounded-2xl ${isRight ? "bg-emerald-500/20 border-emerald-300/40" : "bg-rose-500/20 border-rose-300/40"} border-2 backdrop-blur-md flex items-center gap-2 shadow-xl`}
-                style={{ top: yPx, [isRight ? "right" : "left"]: PILL_PAD, width: PILL_W } as React.CSSProperties}
-              >
-                <div className={`h-9 w-9 rounded-full ${b.color} grid place-items-center font-black text-xs ring-2 ring-white/40 shrink-0`}>{b.initials}</div>
-                <div className="flex-1 min-w-0">
-                  <div className="text-sm font-bold truncate">{b.name}</div>
-                  <div className="text-xs text-white/85 truncate">{b.action}</div>
-                </div>
-              </div>
-            </div>
-          );
-        })}
       </div>
 
       <footer className="px-8 py-4 border-t border-white/10 text-sm text-white/65 text-center bg-black/40">
