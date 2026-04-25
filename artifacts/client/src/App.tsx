@@ -3165,8 +3165,20 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   specialPrograms: ["accommodations", "ese"],
   family: ["student", "parentAccess"],
   people: ["teacherRoster", "staffRoles"],
-  schoolAdmin: ["bellSchedule", "activeKiosks", "settings"],
+  // hallPassMgmt is reached via the Hall Passes admin tools; it has no
+  // dedicated nav item so we anchor it to School Admin so the sidebar
+  // gives the user *some* group context when they're on that page.
+  schoolAdmin: ["bellSchedule", "activeKiosks", "settings", "hallPassMgmt"],
 };
+// Insights launches mtssPlans/mtssCoordinator/mtssTemplates as sub-pages
+// (via tile launchers in InsightsHub); they have no direct sidebar item,
+// so they belong to the Insights group for force-expand purposes.
+NAV_GROUP_OWNERSHIP.insights = [
+  "insights",
+  "mtssPlans",
+  "mtssCoordinator",
+  "mtssTemplates",
+];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
   return NAV_GROUP_OWNERSHIP[groupId]?.includes(activeSection) ?? false;
@@ -3181,14 +3193,19 @@ function NavGroup({
   id,
   label,
   containsActive,
+  userId,
   children,
 }: {
   id: string;
   label: string;
   containsActive: boolean;
+  // Prefixed into the localStorage key so two staff sharing the same
+  // browser/iPad don't inherit each other's collapse preferences. Falls
+  // back to "anon" if the user object hasn't loaded yet.
+  userId: string;
   children: React.ReactNode;
 }) {
-  const storageKey = `pulseedu.navgroup.${id}`;
+  const storageKey = `pulseedu.navgroup.${userId}.${id}`;
   const [userOpen, setUserOpen] = useState<boolean | null>(() => {
     try {
       const v = localStorage.getItem(storageKey);
@@ -7074,6 +7091,11 @@ function App() {
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
         const showSchoolAdmin = canManageBellSchedules || isAdmin;
+        // Phase 2 polish — per-user namespace for the NavGroup accordion
+        // localStorage so two staff sharing the same browser don't inherit
+        // each other's collapse preferences. "anon" keeps unauthenticated
+        // surfaces from blowing up the storage key.
+        const sidebarUserId = String(authUser?.id ?? "anon");
         // People (Teacher Roster) is always rendered below the divider, so
         // the EKG always has content beneath it — render unconditionally.
         return (
@@ -7128,8 +7150,10 @@ function App() {
             </div>
             {canActAsDistrict && (
               <NavGroup
+                key={`${sidebarUserId}-administration`}
                 id="administration"
                 label="Administration"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "administration",
                   activeSection,
@@ -7150,8 +7174,10 @@ function App() {
             )}
             {canAccessMtssHub && (
               <NavGroup
+                key={`${sidebarUserId}-insights`}
                 id="insights"
                 label="Insights"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive("insights", activeSection)}
               >
                 {renderNavItem({
@@ -7163,8 +7189,10 @@ function App() {
             )}
             {showRecognition && (
               <NavGroup
+                key={`${sidebarUserId}-recognition`}
                 id="recognition"
                 label="Recognition"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive("recognition", activeSection)}
               >
                 {/* PBIS Points was promoted to Quick Access — kept out
@@ -7180,8 +7208,10 @@ function App() {
             )}
             {showBehaviorSupport && (
               <NavGroup
+                key={`${sidebarUserId}-behaviorSupport`}
                 id="behaviorSupport"
                 label="Behavior Support"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "behaviorSupport",
                   activeSection,
@@ -7226,8 +7256,10 @@ function App() {
                 deep links keep working. */}
             {showSpecialPrograms && (
               <NavGroup
+                key={`${sidebarUserId}-specialPrograms`}
                 id="specialPrograms"
                 label="Special Programs"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "specialPrograms",
                   activeSection,
@@ -7240,8 +7272,10 @@ function App() {
             )}
             {(effectiveFeatures.FamilyComm || canManageSettings) && (
               <NavGroup
+                key={`${sidebarUserId}-family`}
                 id="family"
                 label="Family"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive("family", activeSection)}
               >
                 {effectiveFeatures.FamilyComm &&
@@ -7259,8 +7293,10 @@ function App() {
               </NavGroup>
             )}
             <NavGroup
+              key={`${sidebarUserId}-people`}
               id="people"
               label="People"
+              userId={sidebarUserId}
               containsActive={groupContainsActive("people", activeSection)}
             >
               {renderNavItem({
@@ -7273,8 +7309,10 @@ function App() {
             </NavGroup>
             {showSchoolAdmin && (
               <NavGroup
+                key={`${sidebarUserId}-schoolAdmin`}
                 id="schoolAdmin"
                 label="School Admin"
+                userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "schoolAdmin",
                   activeSection,
