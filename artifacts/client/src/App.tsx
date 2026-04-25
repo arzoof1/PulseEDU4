@@ -3049,27 +3049,55 @@ function PlaceholderCard({
 }) {
   // "Today" → ready now, render in green; everything else is roadmap copy.
   const isReady = phase === "Today";
+  // Accordion: collapsed by default so the landing page stays a short
+  // skimmable list. Each row toggles independently — opening one doesn't
+  // close another, since users may want to compare two roadmap items.
+  const [open, setOpen] = useState(false);
   return (
     <div
       style={{
         border: "1px solid var(--border, #e2e8f0)",
         borderRadius: "var(--radius-sm, 8px)",
-        padding: "0.75rem",
         background: "var(--surface, #fff)",
-        display: "flex",
-        flexDirection: "column",
-        gap: "0.4rem",
+        overflow: "hidden",
       }}
     >
-      <div
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
         style={{
+          width: "100%",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          gap: 6,
+          gap: 8,
+          padding: "0.6rem 0.75rem",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+          font: "inherit",
+          color: "inherit",
         }}
       >
-        <div style={{ fontWeight: 600 }}>{title}</div>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-block",
+              width: 10,
+              transition: "transform 120ms ease",
+              transform: open ? "rotate(90deg)" : "rotate(0deg)",
+              color: "var(--text-subtle)",
+              fontSize: 12,
+              lineHeight: 1,
+            }}
+          >
+            ▶
+          </span>
+          <span style={{ fontWeight: 600 }}>{title}</span>
+        </div>
         <span
           style={{
             fontSize: 10,
@@ -3085,10 +3113,19 @@ function PlaceholderCard({
         >
           {phase}
         </span>
-      </div>
-      <div style={{ fontSize: 13, color: "var(--text-subtle)", lineHeight: 1.4 }}>
-        {body}
-      </div>
+      </button>
+      {open && (
+        <div
+          style={{
+            padding: "0 0.75rem 0.75rem 2rem",
+            fontSize: 13,
+            color: "var(--text-subtle)",
+            lineHeight: 1.45,
+          }}
+        >
+          {body}
+        </div>
+      )}
     </div>
   );
 }
