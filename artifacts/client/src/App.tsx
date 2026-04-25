@@ -3131,6 +3131,107 @@ const INSIGHTS_TILES: InsightsTile[] = [
   },
 ];
 
+// Phase 2 polish — sidebar group ownership map for the accordion behavior.
+// When the current activeSection is in a group's ownership list, that
+// group is force-expanded regardless of the user's saved preference; this
+// prevents the "where am I?" UX of being on a page whose nav item is
+// hidden behind a collapsed group. Sub-keys like pbisHub/pbisRecent/
+// pbisReports etc. all live under Recognition because that's where their
+// nav items render. Keep this in sync with the sidebar JSX below.
+const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
+  administration: ["superUserHome", "districtAdmin"],
+  insights: ["insights"],
+  recognition: [
+    "pbis",
+    "schoolStore",
+    "schoolStoreManage",
+    "pbisHub",
+    "pbisRecent",
+    "pbisReports",
+    "pbisReasons",
+    "pbisMilestoneEmails",
+    "pbisLists",
+  ],
+  behaviorSupport: [
+    "logIntervention",
+    "requestPullout",
+    "behaviorSpecialist",
+    "interventions",
+    "trustedAdultInterventions",
+    "verifyPullouts",
+    "issDashboard",
+    "behaviorReview",
+  ],
+  specialPrograms: ["accommodations", "ese"],
+  family: ["student", "parentAccess"],
+  people: ["teacherRoster", "staffRoles"],
+  schoolAdmin: ["bellSchedule", "settings"],
+};
+
+function groupContainsActive(groupId: string, activeSection: string): boolean {
+  return NAV_GROUP_OWNERSHIP[groupId]?.includes(activeSection) ?? false;
+}
+
+// Sidebar themed-group wrapper. Click the header to expand/collapse the
+// items underneath; per-user preference persisted in localStorage so it
+// survives reload. If the active page belongs to this group, the group
+// is force-expanded (saved-closed preference is overridden) — otherwise
+// the user couldn't see which page they were on.
+function NavGroup({
+  id,
+  label,
+  containsActive,
+  children,
+}: {
+  id: string;
+  label: string;
+  containsActive: boolean;
+  children: React.ReactNode;
+}) {
+  const storageKey = `pulseedu.navgroup.${id}`;
+  const [userOpen, setUserOpen] = useState<boolean | null>(() => {
+    try {
+      const v = localStorage.getItem(storageKey);
+      return v === null ? null : v === "true";
+    } catch {
+      return null;
+    }
+  });
+  // Resolution order: contains-active wins (force open), else user
+  // preference, else default-closed. Default-closed gives the compact
+  // sidebar the user asked for; the active group is always visible.
+  const open = containsActive || userOpen === true;
+  const toggle = () => {
+    const next = !open;
+    setUserOpen(next);
+    try {
+      localStorage.setItem(storageKey, String(next));
+    } catch {
+      /* ignore quota / private-mode failures */
+    }
+  };
+  return (
+    <>
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="section-label nav-admin-label nav-group-toggle"
+      >
+        <span>{label}</span>
+        <span
+          className="nav-group-chevron"
+          aria-hidden="true"
+          style={{ transform: open ? "rotate(90deg)" : "rotate(0deg)" }}
+        >
+          ▶
+        </span>
+      </button>
+      {open && children}
+    </>
+  );
+}
+
 function PlaceholderCard({
   title,
   body,
@@ -6337,6 +6438,21 @@ function App() {
   // and exclude the SuperUser.
   const isDistrictAdmin = authUser?.isDistrictAdmin === true;
   const canActAsDistrict = isSuperUser || isDistrictAdmin;
+  // Hoisted above the bounce-back useEffect because that effect's dep
+  // array references both of these. They were originally declared further
+  // down (next to the nav-section arrays) which put them in the temporal
+  // dead zone at dep-array construction time and crashed the App with
+  // "Cannot access X before initialization." Moving the declarations up
+  // is the lowest-risk fix; the duplicates below are removed.
+  const canAccessMtssHub =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isMtss ||
+    isBehaviorSpec;
+  const canManageStaffRoles =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isAdmin) ||
+    Boolean(authUser?.capStaffRoles);
   const canViewIssDashboard =
     isSuperUser ||
     isAdmin ||
@@ -6610,11 +6726,7 @@ function App() {
   const mtssCoordNavSections: NavSection[] = [
     { key: "mtssCoordinator", label: "MTSS Coordinator", icon: IconClipboard },
   ];
-  const canAccessMtssHub =
-    Boolean(authUser?.isSuperUser) ||
-    isAdmin ||
-    isMtss ||
-    isBehaviorSpec;
+  // canAccessMtssHub hoisted above the bounce-back useEffect — see note there.
   const pbisHubNavSections: NavSection[] = [
     { key: "pbisHub", label: "PBIS Hub", icon: IconStar },
   ];
@@ -6630,10 +6742,7 @@ function App() {
     isAdmin ||
     isMtss ||
     isBehaviorSpec;
-  const canManageStaffRoles =
-    Boolean(authUser?.isSuperUser) ||
-    Boolean(authUser?.isAdmin) ||
-    Boolean(authUser?.capStaffRoles);
+  // canManageStaffRoles hoisted above the bounce-back useEffect — see note there.
   const navBadge = (key: typeof activeSection) => {
     const badgeStyle: React.CSSProperties = {
       marginLeft: 6,
@@ -6969,7 +7078,10 @@ function App() {
         // the EKG always has content beneath it — render unconditionally.
         return (
           <aside className="sidebar">
-            {/* Locked top — never reorder these two */}
+            {/* Locked top — Hall Pass + Tardy Pass anchor the sidebar.
+                Request Pullout and PBIS Points were promoted here per
+                user request — they're high-frequency teacher actions
+                so we surface them above the themed accordions. */}
             <div className="section-label">Quick Access</div>
             {renderNavItem({
               key: "hallPasses",
@@ -6981,6 +7093,24 @@ function App() {
               label: "Tardy Pass",
               icon: IconClock,
             })}
+            {effectiveFeatures.RequestPullout &&
+              renderNavItem({
+                key: "requestPullout",
+                label: "Request Pullout",
+                icon: IconClipboard,
+              })}
+            {effectiveFeatures.Pbis &&
+              renderNavItem({
+                key: "pbis",
+                label: "PBIS Points",
+                icon: IconStar,
+              })}
+            {effectiveFeatures.Accommodations &&
+              renderNavItem({
+                key: "accommodations",
+                label: "Accommodations",
+                icon: IconClipboard,
+              })}
             {canManageSettings &&
               renderNavItem({
                 key: "activeKiosks",
@@ -7000,10 +7130,14 @@ function App() {
               </svg>
             </div>
             {canActAsDistrict && (
-              <>
-                <div className="section-label nav-admin-label">
-                  Administration
-                </div>
+              <NavGroup
+                id="administration"
+                label="Administration"
+                containsActive={groupContainsActive(
+                  "administration",
+                  activeSection,
+                )}
+              >
                 {isSuperUser &&
                   renderNavItem({
                     key: "superUserHome",
@@ -7015,27 +7149,29 @@ function App() {
                   label: "District Overview",
                   icon: IconClipboard,
                 })}
-              </>
+              </NavGroup>
             )}
             {canAccessMtssHub && (
-              <>
-                <div className="section-label nav-admin-label">Insights</div>
+              <NavGroup
+                id="insights"
+                label="Insights"
+                containsActive={groupContainsActive("insights", activeSection)}
+              >
                 {renderNavItem({
                   key: "insights",
                   label: "Insights",
                   icon: IconClipboard,
                 })}
-              </>
+              </NavGroup>
             )}
             {showRecognition && (
-              <>
-                <div className="section-label nav-admin-label">Recognition</div>
-                {effectiveFeatures.Pbis &&
-                  renderNavItem({
-                    key: "pbis",
-                    label: "PBIS Points",
-                    icon: IconStar,
-                  })}
+              <NavGroup
+                id="recognition"
+                label="Recognition"
+                containsActive={groupContainsActive("recognition", activeSection)}
+              >
+                {/* PBIS Points was promoted to Quick Access — kept out
+                    of Recognition to avoid duplication. */}
                 {effectiveFeatures.SchoolStore &&
                   renderNavItem({
                     key: "schoolStore",
@@ -7043,25 +7179,25 @@ function App() {
                     icon: IconStar,
                   })}
                 {canAccessPbisHub && pbisHubNavSections.map(renderNavItem)}
-              </>
+              </NavGroup>
             )}
             {showBehaviorSupport && (
-              <>
-                <div className="section-label nav-admin-label">
-                  Behavior Support
-                </div>
+              <NavGroup
+                id="behaviorSupport"
+                label="Behavior Support"
+                containsActive={groupContainsActive(
+                  "behaviorSupport",
+                  activeSection,
+                )}
+              >
                 {effectiveFeatures.LogIntervention &&
                   renderNavItem({
                     key: "logIntervention",
                     label: "Log Intervention",
                     icon: IconClipboard,
                   })}
-                {effectiveFeatures.RequestPullout &&
-                  renderNavItem({
-                    key: "requestPullout",
-                    label: "Request Pullout",
-                    icon: IconClipboard,
-                  })}
+                {/* Request Pullout was promoted to Quick Access — kept
+                    out of Behavior Support to avoid duplication. */}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
                 {canManageBehaviorLists && !isBehaviorSpec &&
@@ -7084,7 +7220,7 @@ function App() {
                     label: "Behavior Review",
                     icon: IconClipboard,
                   })}
-              </>
+              </NavGroup>
             )}
             {/* Phase 2: legacy "MTSS & Plans" sidebar group retired —
                 Plans now lives under Insights → Plans. The mtssCoordinator
@@ -7092,22 +7228,25 @@ function App() {
                 Plans tile (via the mtssPlans render branch), so existing
                 deep links keep working. */}
             {showSpecialPrograms && (
-              <>
-                <div className="section-label nav-admin-label">
-                  Special Programs
-                </div>
-                {effectiveFeatures.Accommodations &&
-                  renderNavItem({
-                    key: "accommodations",
-                    label: "Accommodations",
-                    icon: IconClipboard,
-                  })}
+              <NavGroup
+                id="specialPrograms"
+                label="Special Programs"
+                containsActive={groupContainsActive(
+                  "specialPrograms",
+                  activeSection,
+                )}
+              >
+                {/* Accommodations was promoted to Quick Access — kept
+                    out of Special Programs to avoid duplication. */}
                 {isEseCoord && eseNavSections.map(renderNavItem)}
-              </>
+              </NavGroup>
             )}
             {(effectiveFeatures.FamilyComm || canManageSettings) && (
-              <>
-                <div className="section-label nav-admin-label">Family</div>
+              <NavGroup
+                id="family"
+                label="Family"
+                containsActive={groupContainsActive("family", activeSection)}
+              >
                 {effectiveFeatures.FamilyComm &&
                   renderNavItem({
                     key: "student",
@@ -7120,25 +7259,34 @@ function App() {
                     label: "Parent Access",
                     icon: IconUser,
                   })}
-              </>
+              </NavGroup>
             )}
-            <div className="section-label nav-admin-label">People</div>
-            {renderNavItem({
-              key: "teacherRoster",
-              label: "Teacher Roster",
-              icon: IconUser,
-            })}
-            {(isAdmin || canManageStaffRoles) &&
-              renderNavItem(adminNavSections[0])}
+            <NavGroup
+              id="people"
+              label="People"
+              containsActive={groupContainsActive("people", activeSection)}
+            >
+              {renderNavItem({
+                key: "teacherRoster",
+                label: "Teacher Roster",
+                icon: IconUser,
+              })}
+              {(isAdmin || canManageStaffRoles) &&
+                renderNavItem(adminNavSections[0])}
+            </NavGroup>
             {showSchoolAdmin && (
-              <>
-                <div className="section-label nav-admin-label">
-                  School Admin
-                </div>
+              <NavGroup
+                id="schoolAdmin"
+                label="School Admin"
+                containsActive={groupContainsActive(
+                  "schoolAdmin",
+                  activeSection,
+                )}
+              >
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
                 {isAdmin && renderNavItem(adminNavSections[1])}
-              </>
+              </NavGroup>
             )}
           </aside>
         );
