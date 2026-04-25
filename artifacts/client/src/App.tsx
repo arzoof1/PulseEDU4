@@ -3101,6 +3101,8 @@ function App() {
     | "settings"
     | "staffRoles"
     | "bellSchedule"
+    | "activeKiosks"
+    | "parentAccess"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -6361,6 +6363,9 @@ function App() {
     if (key === "behaviorReview" && unreviewedPulloutCount > 0) {
       return <span style={badgeStyle}>{unreviewedPulloutCount}</span>;
     }
+    if (key === "activeKiosks" && activeKiosks.length > 0) {
+      return <span style={badgeStyle}>{activeKiosks.length}</span>;
+    }
     return null;
   };
   const renderNavItem = (s: NavSection) => (
@@ -6684,6 +6689,12 @@ function App() {
               label: "Tardy Pass",
               icon: IconClock,
             })}
+            {canManageSettings &&
+              renderNavItem({
+                key: "activeKiosks",
+                label: "Active Kiosks",
+                icon: IconClipboard,
+              })}
             <div className="nav-admin-divider" aria-hidden="true">
               <svg
                 className="nav-admin-ekg"
@@ -6777,14 +6788,21 @@ function App() {
                 {isEseCoord && eseNavSections.map(renderNavItem)}
               </>
             )}
-            {effectiveFeatures.FamilyComm && (
+            {(effectiveFeatures.FamilyComm || canManageSettings) && (
               <>
                 <div className="section-label nav-admin-label">Family</div>
-                {renderNavItem({
-                  key: "student",
-                  label: "Family Communication",
-                  icon: IconUser,
-                })}
+                {effectiveFeatures.FamilyComm &&
+                  renderNavItem({
+                    key: "student",
+                    label: "Family Communication",
+                    icon: IconUser,
+                  })}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "parentAccess",
+                    label: "Parent Access",
+                    icon: IconUser,
+                  })}
               </>
             )}
             <div className="section-label nav-admin-label">People</div>
@@ -16640,37 +16658,35 @@ function App() {
                 title: "Admin Notifications",
                 subtitle: "Pending alerts that need a response.",
                 badge: adminNotifications.length,
-              },
-              {
-                id: "kiosks-active",
-                icon: "🖥️",
-                title: "Active Kiosks",
-                subtitle: "Currently checked-in kiosk stations.",
-                badge: activeKiosks.length,
+                group: "admin-tenancy",
               },
               {
                 id: "kiosk-setup",
                 icon: "🔗",
                 title: "Kiosk Setup",
                 subtitle: "URL, PIN, and QR code for kiosk activation.",
+                group: "hall-pass-ops",
               },
               {
                 id: "allowlist",
                 icon: "🚪",
                 title: "Allowed Locations per Teacher",
                 subtitle: `Per-teacher pass destination overrides${allowlistCount ? ` · ${allowlistCount} teachers configured` : ""}.`,
+                group: "hall-pass-ops",
               },
               {
                 id: "locations",
                 icon: "📍",
                 title: "Locations",
                 subtitle: `Rooms, destinations, and pairings${locationsCount ? ` · ${locationsCount} origin rooms` : ""}.`,
+                group: "hall-pass-ops",
               },
               {
                 id: "school",
                 icon: "🏫",
                 title: "School Settings",
                 subtitle: "Branding, sender name, periods, and bell schedule.",
+                group: "school-identity",
               },
               {
                 id: "bell-schedule",
@@ -16678,6 +16694,7 @@ function App() {
                 title: "School Bell Schedule",
                 subtitle:
                   "Manage Regular, Activity, and Early Release bell schedules.",
+                group: "school-identity",
               },
               {
                 id: "pbis-thresholds",
@@ -16685,6 +16702,7 @@ function App() {
                 title: "PBIS Thresholds",
                 subtitle:
                   "Tune the alerts shown in the PBIS Hub Needs Attention panel.",
+                group: "feature-config",
               },
               {
                 id: "staff-defaults",
@@ -16692,6 +16710,7 @@ function App() {
                 title: "Staff Defaults",
                 subtitle: `Default rooms by name${staffDefaultsCount ? ` · ${staffDefaultsCount} configured` : ""}. Replaced by per-staff Default Room.`,
                 legacy: true,
+                group: "feature-config",
               },
             ];
             // School Features — admin + SuperUser. Lets the admin
@@ -16718,13 +16737,7 @@ function App() {
               icon: "🧩",
               title: "School Features",
               subtitle: `Turn major features on or off for this school · ${liveCount}/${featureKeys.length} live.`,
-            });
-            tiles.push({
-              id: "parent-access",
-              icon: "👪",
-              title: "Parent Access",
-              subtitle:
-                "Invite parents to the HeartBEAT Snapshot portal · resend, revoke, multi-parent.",
+              group: "feature-config",
             });
             tiles.push({
               id: "branding",
@@ -16732,6 +16745,7 @@ function App() {
               title: "Branding",
               subtitle:
                 "Header gradient, logo, and school colors for printouts, parent snapshot, and Kiosk.",
+              group: "school-identity",
             });
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV
             // screens (Heartbeat, Houses, Student Timeline). One-click open
@@ -16742,6 +16756,7 @@ function App() {
               title: "Signage",
               subtitle:
                 "Hallway-TV kiosk URLs · Today's Heartbeat, PBIS House Cup, and Student Timeline.",
+              group: "family-signage",
             });
             if (isSuperUser) {
               tiles.push({
@@ -16750,6 +16765,7 @@ function App() {
                 title: "Tenancy",
                 subtitle:
                   "Districts, schools, and per-school data assignment. SuperUser only.",
+                group: "admin-tenancy",
               });
             }
             return tiles;
@@ -16766,7 +16782,7 @@ function App() {
         <TenancyPanel />
       )}
 
-      {activeSection === "settings" && canManageSettings && settingsTile === "parent-access" && (
+      {activeSection === "parentAccess" && canManageSettings && (
         <ParentAccess />
       )}
 
@@ -16861,7 +16877,7 @@ function App() {
         </div>
       )}
 
-      {activeSection === "settings" && canManageSettings && settingsTile === "kiosks-active" && (
+      {activeSection === "activeKiosks" && canManageSettings && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <div
             style={{
