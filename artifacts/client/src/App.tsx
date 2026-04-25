@@ -6713,10 +6713,10 @@ function App() {
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
     { key: "tardies", label: "Tardy Pass", icon: IconClock },
     { key: "student", label: "Family Communication", icon: IconUser },
-    // Teacher Roster lives in the always-visible Workspace section so
-    // every teacher sees their own roster without hunting under Tools.
-    // Cross-teacher access is still gated on the server.
-    { key: "teacherRoster", label: "Teacher Roster", icon: IconUser },
+    // Teacher Roster moved to Quick Access (rendered directly in the
+    // sidebar above the accordions) — kept out of this list to avoid
+    // any chance of duplication if the legacy `baseNavSections` filter
+    // ever gets re-consumed.
     { key: "pbis", label: "PBIS Points", icon: IconStar },
     // Read-only school-wide rewards catalog. Visible to every signed-in
     // staffer so teachers can browse what students can redeem. The
@@ -7128,6 +7128,14 @@ function App() {
               label: "Tardy Pass",
               icon: IconClock,
             })}
+            {/* Teacher Roster promoted to Quick Access — every teacher's
+                daily landing for their students. Always visible (no
+                feature flag); cross-teacher access still gated server-side. */}
+            {renderNavItem({
+              key: "teacherRoster",
+              label: "Teacher Roster",
+              icon: IconUser,
+            })}
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
                 key: "requestPullout",
@@ -7321,21 +7329,21 @@ function App() {
                   })}
               </NavGroup>
             )}
-            <NavGroup
-              key={`${sidebarUserId}-people`}
-              id="people"
-              label="People"
-              userId={sidebarUserId}
-              containsActive={groupContainsActive("people", activeSection)}
-            >
-              {renderNavItem({
-                key: "teacherRoster",
-                label: "Teacher Roster",
-                icon: IconUser,
-              })}
-              {(isAdmin || canManageStaffRoles) &&
-                renderNavItem(adminNavSections[0])}
-            </NavGroup>
+            {/* Teacher Roster promoted to Quick Access (above). The
+                People accordion now only carries Staff & Roles, so it's
+                gated on admin/role-manager — non-admins no longer see
+                an empty "People" header. */}
+            {(isAdmin || canManageStaffRoles) && (
+              <NavGroup
+                key={`${sidebarUserId}-people`}
+                id="people"
+                label="People"
+                userId={sidebarUserId}
+                containsActive={groupContainsActive("people", activeSection)}
+              >
+                {renderNavItem(adminNavSections[0])}
+              </NavGroup>
+            )}
             {showSchoolAdmin && (
               <NavGroup
                 key={`${sidebarUserId}-schoolAdmin`}
