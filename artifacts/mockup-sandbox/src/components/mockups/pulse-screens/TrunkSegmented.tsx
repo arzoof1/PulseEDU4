@@ -1,99 +1,119 @@
-import { Heart, ChevronRight, ChevronLeft } from "lucide-react";
+import { Heart, Activity } from "lucide-react";
 
 type Branch = {
   id: number;
   side: "left" | "right";
-  intensity: number;
   initials: string;
   color: string;
   name: string;
   action: string;
+  yPct: number;
 };
 
 const branches: Branch[] = [
-  { id: 1, side: "right", intensity: 0.85, initials: "MS", color: "bg-emerald-500", name: "Ms. Patel",   action: "Positive call home" },
-  { id: 2, side: "left",  intensity: 0.95, initials: "DK", color: "bg-rose-500",    name: "Devon K.",    action: "Pull-out · ESE" },
-  { id: 3, side: "left",  intensity: 0.50, initials: "JM", color: "bg-amber-500",   name: "Jordan M.",   action: "Bathroom 14 min" },
-  { id: 4, side: "right", intensity: 0.65, initials: "TC", color: "bg-emerald-400", name: "Tomás C.",    action: "+5 PBIS" },
+  { id: 1, side: "right", initials: "MS", color: "bg-emerald-500", name: "Ms. Patel",   action: "Phone call home",      yPct: 8 },
+  { id: 2, side: "left",  initials: "JM", color: "bg-amber-500",   name: "Jordan M.",   action: "Bathroom 14 min",      yPct: 20 },
+  { id: 3, side: "right", initials: "AR", color: "bg-emerald-400", name: "Aliyah R.",   action: "Trusted adult",        yPct: 32 },
+  { id: 4, side: "right", initials: "TC", color: "bg-emerald-400", name: "Tomás C.",    action: "+5 PBIS · Leadership", yPct: 44 },
+  { id: 5, side: "left",  initials: "DK", color: "bg-rose-500",    name: "Devon K.",    action: "Pull-out · ESE",       yPct: 56 },
+  { id: 6, side: "right", initials: "MS", color: "bg-lime-500",    name: "Maya S.",     action: "Email home +",         yPct: 68 },
+  { id: 7, side: "left",  initials: "RB", color: "bg-orange-500",  name: "Riya B.",     action: "Tardy · Period 4",     yPct: 80 },
+  { id: 8, side: "right", initials: "EL", color: "bg-emerald-500", name: "Mr. Lopez",   action: "Restorative circle",   yPct: 92 },
 ];
 
-export function TrunkSegmented() {
-  let cumX = 0;
-  const segs = branches.map((b) => {
-    const dx = (b.side === "right" ? 1 : -1) * (60 + b.intensity * 90);
-    const startX = cumX;
-    cumX += dx;
-    return { ...b, startX, endX: cumX, dx };
-  });
-  const finalDrift = cumX;
+const W = 1280, H = 640, midX = W / 2;
+const PILL_W = 240, PILL_PAD = 24;
+// Four trunk segments, each with its own X offset (cumulative drift visible)
+const SEGMENTS = [
+  { yStart: 0,    yEnd: 160, x: midX + 30 },   // slight right
+  { yStart: 160,  yEnd: 320, x: midX - 70 },   // big left kick
+  { yStart: 320,  yEnd: 480, x: midX + 60 },   // right recovery
+  { yStart: 480,  yEnd: 640, x: midX + 130 },  // ends drifted right
+];
+const xAt = (y: number) => SEGMENTS.find((s) => y >= s.yStart && y <= s.yEnd)?.x ?? midX;
 
+export function TrunkSegmented() {
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-[#0a0612] via-[#100819] to-[#06030d] text-white overflow-hidden relative">
       <header className="flex items-center justify-between px-8 pt-6 pb-4 border-b border-white/5">
         <div className="flex items-center gap-3">
           <div className="h-11 w-11 rounded-xl bg-gradient-to-br from-rose-500 to-violet-500 grid place-items-center"><Heart className="h-5 w-5 text-white fill-white" /></div>
           <div>
-            <div className="text-[11px] uppercase tracking-[0.25em] text-white/50">Trunk variant</div>
-            <div className="text-2xl font-black">HINGED · trunk hinges at every entry</div>
+            <div className="text-[11px] uppercase tracking-[0.25em] text-white/50">Variant B · Hinged</div>
+            <div className="text-xl font-bold">School Pulse — Trunk hinges in chunks</div>
           </div>
         </div>
-        <div className={`px-4 py-1.5 rounded-full text-xs font-bold border ${finalDrift < 0 ? "bg-rose-500/10 border-rose-400/40 text-rose-200" : "bg-emerald-500/10 border-emerald-400/40 text-emerald-200"}`}>
-          Net drift {finalDrift > 0 ? "+" : ""}{Math.round(finalDrift)}px
+        <div className="px-3 py-1 rounded-full bg-amber-500/10 border border-amber-400/30 text-amber-200 text-xs font-bold flex items-center gap-1.5">
+          <Activity className="h-3.5 w-3.5" /> Net drift +130px right
         </div>
       </header>
 
-      <div className="relative" style={{ height: 640 }}>
-        {/* Center reference */}
-        <div className="absolute left-1/2 top-0 bottom-0 w-px border-l-2 border-dashed border-white/15" />
-        <div className="absolute left-1/2 top-2 -translate-x-1/2 text-[10px] uppercase tracking-widest text-white/40 bg-black/40 px-2 rounded">center</div>
-
-        <div className="absolute inset-0 flex flex-col">
-          {segs.map((s) => {
-            const isRight = s.side === "right";
+      <div className="relative" style={{ height: H }}>
+        <svg className="absolute inset-0 w-full h-full pointer-events-none" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none">
+          <defs>
+            <linearGradient id="segGrad" x1="0" x2="0" y1="0" y2="1">
+              <stop offset="0" stopColor="#fb7185" stopOpacity="0.4" />
+              <stop offset="0.5" stopColor="#ef4444" stopOpacity="1" />
+              <stop offset="1" stopColor="#7f1d1d" stopOpacity="0.7" />
+            </linearGradient>
+            <filter id="segGlow" x="-20%" y="-20%" width="140%" height="140%"><feGaussianBlur stdDeviation="6" /></filter>
+          </defs>
+          {/* center reference */}
+          <line x1={midX} y1="0" x2={midX} y2={H} stroke="white" strokeOpacity="0.08" strokeDasharray="4 8" strokeWidth="1" />
+          {/* halo segments */}
+          {SEGMENTS.map((s, i) => (
+            <rect key={`h${i}`} x={s.x - 17} y={s.yStart + 4} width="34" height={s.yEnd - s.yStart - 8} rx="14" fill="url(#segGrad)" filter="url(#segGlow)" opacity="0.55" />
+          ))}
+          {/* core segments */}
+          {SEGMENTS.map((s, i) => (
+            <rect key={`c${i}`} x={s.x - 8} y={s.yStart + 4} width="16" height={s.yEnd - s.yStart - 8} rx="8" fill="url(#segGrad)" style={{ animation: "pulse 2.4s ease-in-out infinite" }} />
+          ))}
+          {/* hinge connectors between segments */}
+          {SEGMENTS.slice(0, -1).map((s, i) => {
+            const next = SEGMENTS[i + 1];
+            const x1 = s.x, x2 = next.x;
+            const y = s.yEnd;
             return (
-              <div key={s.id} className="relative flex-1 flex items-center">
-                {/* Hinge connector showing the lateral shift */}
-                <div
-                  className={`absolute top-0 h-[6px] ${isRight ? "bg-gradient-to-r from-rose-500 to-amber-400" : "bg-gradient-to-l from-rose-500 to-amber-400"} rounded-full shadow-[0_0_20px_rgba(251,113,133,0.6)]`}
-                  style={{
-                    left: `calc(50% + ${Math.min(s.startX, s.endX)}px)`,
-                    width: `${Math.abs(s.dx)}px`,
-                  }}
-                />
-                {/* Trunk segment, fat */}
-                <div
-                  className="absolute top-2 bottom-0 w-[60px] rounded-2xl bg-gradient-to-b from-rose-400 via-red-500 to-rose-700 shadow-[0_0_60px_-10px_rgba(239,68,68,0.9)]"
-                  style={{ left: `calc(50% + ${s.endX}px - 30px)` }}
-                />
-                {/* Direction arrow on the trunk */}
-                <div className="absolute top-3 z-10" style={{ left: `calc(50% + ${s.endX}px - 12px)` }}>
-                  {isRight ? <ChevronRight className="h-6 w-6 text-white" /> : <ChevronLeft className="h-6 w-6 text-white" />}
-                </div>
-
-                {/* Branch pill */}
-                <div
-                  className="absolute top-1/2 -translate-y-1/2 z-20"
-                  style={{
-                    left: isRight ? `calc(50% + ${s.endX + 50}px)` : undefined,
-                    right: isRight ? undefined : `calc(50% - ${s.endX - 50}px)`,
-                  }}
-                >
-                  <div className={`px-4 py-3 rounded-2xl ${isRight ? "bg-emerald-500/25 border-emerald-300/40" : "bg-rose-500/25 border-rose-300/40"} border-2 backdrop-blur-md flex items-center gap-3 min-w-[260px] shadow-2xl`}>
-                    <div className={`h-12 w-12 rounded-full ${s.color} grid place-items-center font-black text-base ring-2 ring-white/40 shrink-0`}>{s.initials}</div>
-                    <div className="flex-1 min-w-0">
-                      <div className="text-base font-bold truncate">{s.name}</div>
-                      <div className="text-sm text-white/85 truncate">{s.action}</div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <g key={`hinge${i}`}>
+                <line x1={x1} y1={y} x2={x2} y2={y} stroke="#fbbf24" strokeWidth="6" strokeLinecap="round" opacity="0.85" />
+                <circle cx={x1} cy={y} r="6" fill="#fbbf24" />
+                <circle cx={x2} cy={y} r="6" fill="#fbbf24" />
+              </g>
             );
           })}
-        </div>
+        </svg>
+
+        {branches.map((b) => {
+          const yPx = (b.yPct / 100) * H;
+          const trunkX = xAt(yPx);
+          const isRight = b.side === "right";
+          const pillInnerX = isRight ? W - PILL_PAD - PILL_W : PILL_PAD + PILL_W;
+          const lineStart = Math.min(trunkX, pillInnerX);
+          const lineWidth = Math.max(0, Math.abs(pillInnerX - trunkX));
+          const branchColor = isRight ? "from-emerald-400/80 to-emerald-300/30" : "from-rose-400/80 to-rose-300/30";
+          return (
+            <div key={b.id}>
+              <div
+                className={`absolute h-[3px] rounded-full bg-gradient-to-${isRight ? "r" : "l"} ${branchColor}`}
+                style={{ top: yPx + 24, left: lineStart, width: lineWidth }}
+              />
+              <div
+                className={`absolute px-3 py-2 rounded-2xl ${isRight ? "bg-emerald-500/20 border-emerald-300/40" : "bg-rose-500/20 border-rose-300/40"} border-2 backdrop-blur-md flex items-center gap-2 shadow-xl`}
+                style={{ top: yPx, [isRight ? "right" : "left"]: PILL_PAD, width: PILL_W } as React.CSSProperties}
+              >
+                <div className={`h-9 w-9 rounded-full ${b.color} grid place-items-center font-black text-xs ring-2 ring-white/40 shrink-0`}>{b.initials}</div>
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm font-bold truncate">{b.name}</div>
+                  <div className="text-xs text-white/85 truncate">{b.action}</div>
+                </div>
+              </div>
+            </div>
+          );
+        })}
       </div>
 
-      <footer className="px-8 py-4 border-t border-white/10 text-sm text-white/60 text-center bg-black/40">
-        <span className="font-bold text-white/80">Read it like:</span> each event physically nudges the trunk left or right. Hinges show the kick direction. Trunk lands wherever the day's net behavior pushed it.
+      <footer className="px-8 py-4 border-t border-white/10 text-sm text-white/65 text-center bg-black/40">
+        <span className="font-bold text-white/90">Read it like:</span> the trunk is broken into chunks. Each <span className="text-amber-300">amber hinge</span> is the school re-correcting after a wave of events. Final position = today's net direction.
       </footer>
     </div>
   );
