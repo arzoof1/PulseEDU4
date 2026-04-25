@@ -13,6 +13,7 @@ export type SettingsTileId =
   | "schoolFeatures"
   | "parent-access"
   | "branding"
+  | "signage"
   | "tenancy";
 
 export interface SettingsTile {

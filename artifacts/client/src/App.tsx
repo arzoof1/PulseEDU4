@@ -3101,7 +3101,6 @@ function App() {
     | "settings"
     | "staffRoles"
     | "bellSchedule"
-    | "signage"
   >("hallPasses");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -6286,10 +6285,6 @@ function App() {
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
-    // Launcher for the hallway-TV signage screens (Heartbeat, Houses,
-    // Student Timeline). Always visible to signed-in staff so anyone can
-    // copy a kiosk URL or pop one open in a new tab.
-    { key: "signage", label: "Signage", icon: IconMonitor },
   ];
   // Sidebar entries that map to a per-school feature flag. Anything not
   // in this map (Hall Passes, Tardy Pass, Teacher Roster) is always on.
@@ -12147,13 +12142,6 @@ function App() {
           hubs. */}
       {activeSection === "schoolStore" && <SchoolStoreView canEdit={false} />}
 
-      {/* Signage launcher — sidebar entry visible to all signed-in staff.
-          Surfaces the three /signage/* URLs (Today's Heartbeat, PBIS House
-          Cup, Student Timeline) with one-click "Open in new tab" + "Copy
-          link" buttons so anyone can fling a kiosk URL onto a hallway TV
-          without remembering the path scheme. */}
-      {activeSection === "signage" && <SignageLauncherView authUser={authUser} />}
-
       {/* Editable School Store — opened from the BS hub or MTSS hub
           tile. canEditSchoolStore mirrors the server's requireWriteAccess
           gate; if a non-eligible user ever lands here we still render
@@ -16648,6 +16636,16 @@ function App() {
               subtitle:
                 "Header gradient, logo, and school colors for printouts, parent snapshot, and Kiosk.",
             });
+            // Signage launcher — kiosk URLs for the three Pulse hallway-TV
+            // screens (Heartbeat, Houses, Student Timeline). One-click open
+            // and copy-link helpers live inside the tile.
+            tiles.push({
+              id: "signage",
+              icon: "📺",
+              title: "Signage",
+              subtitle:
+                "Hallway-TV kiosk URLs · Today's Heartbeat, PBIS House Cup, and Student Timeline.",
+            });
             if (isSuperUser) {
               tiles.push({
                 id: "tenancy",
@@ -16673,6 +16671,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "parent-access" && (
         <ParentAccess />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "signage" && (
+        <SignageLauncherView authUser={authUser} />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "branding" && (
