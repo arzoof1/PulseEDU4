@@ -647,11 +647,34 @@ function RateTrendCard({
   // Map rate (0..1) → percentage points for the chart so the y-axis reads
   // "92" rather than "0.92".
   const series = data.map((d) => ({ date: d.date, pct: d.rate * 100 }));
+  const [hoveredDate, setHoveredDate] = useState<string | null>(null);
+  const hovered = hoveredDate
+    ? series.find((s) => s.date === hoveredDate) ?? null
+    : null;
   return (
     <div style={cardStyle}>
       <CardLabel title={title} windowLabel={windowLabel} />
+      <HoverStrip
+        items={
+          hovered
+            ? [
+                { label: hovered.date, bold: true },
+                { label: "Rate", value: `${hovered.pct.toFixed(1)}%` },
+              ]
+            : null
+        }
+        placeholder="Hover the chart to see daily values"
+      />
       <ResponsiveContainer width="100%" height={140}>
-        <AreaChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <AreaChart
+          data={series}
+          margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+          onMouseMove={(state: { activeLabel?: string | number }) => {
+            const label = state?.activeLabel;
+            setHoveredDate(label != null ? String(label) : null);
+          }}
+          onMouseLeave={() => setHoveredDate(null)}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
             dataKey="date"
@@ -666,10 +689,10 @@ function RateTrendCard({
             tickFormatter={(v: number) => `${v}%`}
             width={36}
           />
+          {/* Cursor line only — values are shown in the hover strip above. */}
           <Tooltip
-            labelFormatter={(d) => d}
-            formatter={(v: number) => [`${v.toFixed(1)}%`, "rate"]}
-            contentStyle={{ fontSize: 12 }}
+            cursor={{ stroke: "#94a3b8", strokeDasharray: "3 3" }}
+            content={() => null}
           />
           <Area
             type="monotone"
@@ -692,11 +715,36 @@ function AbsenceStackCard({
   data: { date: string; excused: number; unexcused: number; tardy: number }[];
   windowLabel?: string;
 }) {
+  const [hoveredDate, setHoveredDate] = useState<string | null>(null);
+  const hovered = hoveredDate
+    ? data.find((d) => d.date === hoveredDate) ?? null
+    : null;
   return (
     <div style={cardStyle}>
       <CardLabel title="Absences by type / day" windowLabel={windowLabel} />
+      <HoverStrip
+        items={
+          hovered
+            ? [
+                { label: hovered.date, bold: true },
+                { label: "Unexcused", value: String(hovered.unexcused) },
+                { label: "Excused", value: String(hovered.excused) },
+                { label: "Tardy", value: String(hovered.tardy) },
+              ]
+            : null
+        }
+        placeholder="Hover the chart to see daily values"
+      />
       <ResponsiveContainer width="100%" height={140}>
-        <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+        <AreaChart
+          data={data}
+          margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+          onMouseMove={(state: { activeLabel?: string | number }) => {
+            const label = state?.activeLabel;
+            setHoveredDate(label != null ? String(label) : null);
+          }}
+          onMouseLeave={() => setHoveredDate(null)}
+        >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
             dataKey="date"
@@ -706,7 +754,11 @@ function AbsenceStackCard({
             minTickGap={20}
           />
           <YAxis tick={{ fontSize: 10 }} allowDecimals={false} width={28} />
-          <Tooltip contentStyle={{ fontSize: 12 }} />
+          {/* Cursor line only — values are shown in the hover strip above. */}
+          <Tooltip
+            cursor={{ stroke: "#94a3b8", strokeDasharray: "3 3" }}
+            content={() => null}
+          />
           <Area
             type="monotone"
             dataKey="unexcused"
@@ -931,26 +983,18 @@ function TopAbsentTable({
 // translucent area on the same temp axis (rescaled into the 80–100°F range
 // just visually — the tooltip still shows the true %).
 
-// Inline strip rendered above the WeatherCard chart that mirrors what a
-// floating tooltip would have shown — date, weather summary, precip, high
-// temp, and the *real* attendance % (not the rescaled one). When nothing is
-// hovered we keep the strip in the DOM with placeholder dashes so the card
-// height is stable.
-function WeatherHoverStrip({
-  hovered,
+// Generic hover strip used by every chart card on this dashboard.
+// Renders a one-line readout above the chart so the values never overlap
+// the data lines. The DOM stays in place when nothing is hovered (a
+// placeholder is shown instead) so the card doesn't reflow.
+type HoverItem = { label: string; value?: string; bold?: boolean };
+function HoverStrip({
+  items,
+  placeholder = "Hover the chart to see daily values",
 }: {
-  hovered: {
-    date: string;
-    summary?: string | null;
-    precip?: number | null;
-    tempHigh?: number | null;
-    attRate?: number | null;
-  } | null;
+  items: HoverItem[] | null;
+  placeholder?: string;
 }) {
-  const labelStyle: React.CSSProperties = {
-    color: "var(--text-subtle, #94a3b8)",
-    marginRight: 4,
-  };
   return (
     <div
       style={{
@@ -964,36 +1008,31 @@ function WeatherHoverStrip({
         color: "var(--text, #1f2937)",
       }}
     >
-      {hovered ? (
-        <>
-          <strong>{hovered.date}</strong>
-          {hovered.summary ? (
-            <span style={{ color: "var(--text-subtle, #64748b)" }}>
-              {hovered.summary}
+      {items && items.length ? (
+        items.map((it, i) =>
+          it.bold ? (
+            <strong key={i}>{it.label}</strong>
+          ) : it.value !== undefined ? (
+            <span key={i}>
+              <span
+                style={{
+                  color: "var(--text-subtle, #94a3b8)",
+                  marginRight: 4,
+                }}
+              >
+                {it.label}
+              </span>
+              {it.value}
             </span>
-          ) : null}
-          <span>
-            <span style={labelStyle}>Precip</span>
-            {hovered.precip != null
-              ? `${hovered.precip.toFixed(2)}"`
-              : "—"}
-          </span>
-          <span>
-            <span style={labelStyle}>High</span>
-            {hovered.tempHigh != null
-              ? `${hovered.tempHigh.toFixed(0)}°F`
-              : "—"}
-          </span>
-          <span>
-            <span style={labelStyle}>Attendance</span>
-            {hovered.attRate != null
-              ? `${(hovered.attRate * 100).toFixed(1)}%`
-              : "—"}
-          </span>
-        </>
+          ) : (
+            <span key={i} style={{ color: "var(--text-subtle, #64748b)" }}>
+              {it.label}
+            </span>
+          ),
+        )
       ) : (
         <span style={{ color: "var(--text-subtle, #94a3b8)" }}>
-          Hover the chart to see daily values
+          {placeholder}
         </span>
       )}
     </div>
@@ -1064,10 +1103,39 @@ function WeatherCard({
     ? series.find((s) => s.date === hoveredDate) ?? null
     : null;
 
+  const hoverItems: HoverItem[] | null = hovered
+    ? [
+        { label: hovered.date, bold: true },
+        ...(hovered.summary
+          ? [{ label: hovered.summary } as HoverItem]
+          : []),
+        {
+          label: "Precip",
+          value:
+            hovered.precip != null
+              ? `${hovered.precip.toFixed(2)}"`
+              : "—",
+        },
+        {
+          label: "High",
+          value:
+            hovered.tempHigh != null
+              ? `${hovered.tempHigh.toFixed(0)}°F`
+              : "—",
+        },
+        {
+          label: "Attendance",
+          value:
+            hovered.attRate != null
+              ? `${(hovered.attRate * 100).toFixed(1)}%`
+              : "—",
+        },
+      ]
+    : null;
   return (
     <div style={cardStyle}>
       <CardLabel title="Weather vs attendance" windowLabel={windowLabel} />
-      <WeatherHoverStrip hovered={hovered} />
+      <HoverStrip items={hoverItems} />
       <ResponsiveContainer width="100%" height={140}>
         <ComposedChart
           data={series}
