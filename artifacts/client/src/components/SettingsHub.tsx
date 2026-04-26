@@ -13,7 +13,8 @@ export type SettingsTileId =
   | "branding"
   | "signage"
   | "tenancy"
-  | "data-imports";
+  | "data-imports"
+  | "parent-portal-sections";
 
 export type SettingsGroupId =
   | "hall-pass-ops"

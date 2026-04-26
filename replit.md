@@ -1643,3 +1643,44 @@ they cannot slip through as we move forward on other work.
    wide, either add a wide-format adapter or document a one-shot
    reshape recipe so admins aren't stuck. Pinged user; awaiting their
    sample header rows. Do NOT close out before getting that answer.
+
+## Parent Portal Sections — admin toggle UI (April 26, 2026)
+
+Closed item #2 from the HeartBEAT "Deferred (revisit later)" list.
+Earlier this session, T13 wired the parent snapshot endpoint to read
+`school_heartbeat_settings.show_*` flags from the DB, but admins still
+had no UI to flip them — defaults baked at row creation were the only
+source of truth in practice.
+
+This change adds the admin surface:
+
+- **Server**: `artifacts/api-server/src/routes/heartbeatSettings.ts`
+  - `GET /api/heartbeat-settings` — returns the row for `req.schoolId`,
+    lazily inserting one with schema defaults if missing.
+  - `PUT /api/heartbeat-settings` — accepts any subset of the 12
+    boolean section keys; admin or SuperUser only (`isAdmin ||
+    isSuperUser`, both gated through `staffTable.active`).
+  - Validates that every supplied value is a boolean before any write
+    is committed; whitelist of keys is centralized in `SECTION_KEYS`.
+- **Client**: `HeartbeatSectionsAdmin.tsx` — one row per section with
+  an inline switch, label, plain-language description, and a
+  "Sensitive" tag on the four off-by-default sections (Interventions,
+  Staff Notes, ISS, MTSS). Optimistic UI rollback on PUT failure;
+  error banner appears at top of card on the rolled-back attempt.
+- **Settings tile**: registered under the **Family & Signage** group
+  with id `parent-portal-sections`, gated `isAdmin || isSuperUser` so
+  the tile is invisible to staff who can't edit it. Branch in App.tsx
+  re-checks the same gate before rendering, mirroring how `tenancy`
+  and `data-imports` defend their tiles.
+
+Behavioral contract (kept consistent with the parent-portal reader at
+`parentSnapshot.ts`): a school OFF flag wins. A parent can never
+override a school OFF to ON via `parent_heartbeat_prefs`; their value
+is ignored at read time. So this admin panel is the school-level
+ceiling — parents only ever sit at or below it.
+
+Open follow-ups still on the deferred list:
+1. ClassLink SSO for students.
+3. Per-parent toggle UI (analogue of this panel for parents).
+4. PDF export of the HeartBEAT Report.
+5. Optional weekly emailed PDF (Resend already wired).

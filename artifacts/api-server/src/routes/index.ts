@@ -49,6 +49,7 @@ import dataImportsRouter from "./dataImports";
 import studentFlagsRouter from "./studentFlags";
 import trustedAdultLinksRouter from "./trustedAdultLinks";
 import insightsRouter from "./insights";
+import heartbeatSettingsRouter from "./heartbeatSettings";
 
 const router: IRouter = Router();
 
@@ -102,5 +103,6 @@ router.use(dataImportsRouter);
 router.use(studentFlagsRouter);
 router.use(trustedAdultLinksRouter);
 router.use(insightsRouter);
+router.use(heartbeatSettingsRouter);
 
 export default router;

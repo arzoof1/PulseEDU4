@@ -15,6 +15,7 @@ import PbisPointsHub, {
 } from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import ParentAccess from "./components/ParentAccess";
+import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
@@ -17341,6 +17342,19 @@ function App() {
                 "Hallway-TV kiosk URLs · Today's Heartbeat, PBIS House Cup, and Student Timeline.",
               group: "family-signage",
             });
+            // Parent portal sections — admin/SuperUser only. Controls
+            // which HeartBEAT sections this school's parents are allowed
+            // to see in their snapshot. Sensitive sections start off.
+            if (isAdmin || isSuperUser) {
+              tiles.push({
+                id: "parent-portal-sections",
+                icon: "👪",
+                title: "Parent portal sections",
+                subtitle:
+                  "Choose which HeartBEAT sections parents can see · sensitive sections off by default.",
+                group: "family-signage",
+              });
+            }
             if (isSuperUser) {
               tiles.push({
                 id: "tenancy",
@@ -17380,6 +17394,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "data-imports" && (
         <DataImports canActAsDistrict={canActAsDistrict} />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "parent-portal-sections" && (isAdmin || isSuperUser) && (
+        <HeartbeatSectionsAdmin />
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (
