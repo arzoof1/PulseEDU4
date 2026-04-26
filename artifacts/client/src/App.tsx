@@ -3501,12 +3501,21 @@ function App() {
     | "trustedAdultsAdmin"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
-  // a row click in InsightsWatchlist; cleared on Back-to-Watchlist. If
-  // the activeSection switches to "studentProfile" with no id set we
-  // bounce back to the watchlist (handled in the guard effect below).
+  // a row click in InsightsWatchlist OR the Spider pill on the Teacher
+  // Roster. Cleared on Back. If the activeSection switches to
+  // "studentProfile" with no id set we bounce back to the watchlist
+  // (handled in the guard effect below).
   const [selectedInsightsStudentId, setSelectedInsightsStudentId] = useState<
     string | null
   >(null);
+  // Where to return when the user clicks Back on the StudentProfile.
+  // Tracks which surface launched the drill-in so we don't always dump
+  // them on the Watchlist. Defaults to "insightsWatchlist" for legacy
+  // callers; the Teacher Roster Spider pill sets it to "teacherRoster"
+  // before navigating.
+  const [studentProfileReturnTo, setStudentProfileReturnTo] = useState<
+    "insightsWatchlist" | "teacherRoster"
+  >("insightsWatchlist");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
     fromName: string;
@@ -14792,6 +14801,11 @@ function App() {
           }
           defaultTeacherId={authUser?.id ?? null}
           onBack={() => setActiveSection("hallPasses")}
+          onOpenSpider={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            setStudentProfileReturnTo("teacherRoster");
+            setActiveSection("studentProfile");
+          }}
         />
       )}
 
@@ -17438,6 +17452,11 @@ function App() {
         <InsightsWatchlist
           onOpenStudent={(studentId) => {
             setSelectedInsightsStudentId(studentId);
+            // Always pin the back-target on launch so we never inherit a
+            // stale value (e.g. "teacherRoster") from an earlier flow
+            // where the user navigated away without clicking Back on the
+            // profile.
+            setStudentProfileReturnTo("insightsWatchlist");
             setActiveSection("studentProfile");
           }}
         />
@@ -17453,8 +17472,10 @@ function App() {
           // authorized actor; canManageMtssPlans matches the server.
           canManage={canManageMtssPlans}
           onBack={() => {
+            const target = studentProfileReturnTo;
             setSelectedInsightsStudentId(null);
-            setActiveSection("insightsWatchlist");
+            setStudentProfileReturnTo("insightsWatchlist");
+            setActiveSection(target);
           }}
         />
       )}

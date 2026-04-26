@@ -73,6 +73,17 @@ interface Props {
   isCoreTeam: boolean;
   defaultTeacherId: number | null;
   onBack?: () => void;
+  // When provided, each row shows a small "Spider" pill next to the
+  // student name that opens the Insights → Student Profile (the
+  // whole-child radar). Safe to show to everyone who can reach this
+  // page: the server endpoint /insights/students/:id/profile accepts
+  // the "core", "roster", and "trusted-adult" visibility paths. Regular
+  // teachers can only view their OWN roster (the teacher-switch
+  // dropdown is gated on isCoreTeam), so every row they see is in
+  // their visibility set by definition. Core team / admins always pass
+  // the visibility check on every row. Caller is responsible for
+  // navigation + back-routing.
+  onOpenSpider?: (studentId: string) => void;
 }
 
 // Level → background color. Per product preference:
@@ -501,6 +512,7 @@ export default function TeacherRosterPage({
   isCoreTeam,
   defaultTeacherId,
   onBack,
+  onOpenSpider,
 }: Props) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [teacherId, setTeacherId] = useState<number | null>(
@@ -1015,7 +1027,42 @@ export default function TeacherRosterPage({
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>
-                    {row.lastName}, {row.firstName}
+                    <span
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 8,
+                      }}
+                    >
+                      <span>
+                        {row.lastName}, {row.firstName}
+                      </span>
+                      {onOpenSpider && (
+                        <button
+                          type="button"
+                          onClick={() => onOpenSpider(row.studentId)}
+                          title={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          aria-label={`Open whole-child radar for ${row.firstName} ${row.lastName}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: 4,
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #c7d2fe",
+                            background: "#eef2ff",
+                            color: "#3730a3",
+                            fontSize: 11,
+                            fontWeight: 600,
+                            lineHeight: 1.2,
+                            cursor: "pointer",
+                          }}
+                        >
+                          <span aria-hidden="true">🕸️</span>
+                          <span>Spider</span>
+                        </button>
+                      )}
+                    </span>
                   </td>
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
                   <SubjectCells
