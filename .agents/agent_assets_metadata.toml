@@ -12,3 +12,9 @@ id = "VgWabmnkj8MIq2e-eFLXT"
 uri = "file://flyer/pulseedu-teacher-flyer.pdf"
 type = "pdf"
 title = "PulseEDU for Teachers — One-Page Flyer (PDF)"
+
+[[outputs]]
+id = "8D-k6Zr0YyADr8GJwQ_2g"
+uri = "file://attached_assets/PulseED_1776744158122.png"
+type = "image"
+title = "PulseEDU Logo (PNG, transparent background)"
