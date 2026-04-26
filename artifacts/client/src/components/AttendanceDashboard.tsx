@@ -1004,6 +1004,12 @@ function WeatherCard({
             tickFormatter={(v: number) => `${v}°`}
           />
           <Tooltip
+            // Pin the tooltip to the top of the chart so it doesn't cover
+            // the lines. X follows the cursor; Y stays at the top edge.
+            position={{ y: -4 }}
+            allowEscapeViewBox={{ x: false, y: true }}
+            wrapperStyle={{ pointerEvents: "none", zIndex: 10 }}
+            offset={12}
             contentStyle={{ fontSize: 12 }}
             formatter={(
               value: number | string,
