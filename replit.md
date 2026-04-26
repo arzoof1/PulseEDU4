@@ -2700,3 +2700,110 @@ best surfaced as a **standalone "Student Profile v2" follow-up
 item** once items #3 (Academics) and #4 (SEB/SEL) ship, since
 those will produce the per-assessment colored-chip components
 this profile would re-use.
+
+---
+
+## Save-for-later: eduCLIMBER "Incident Charting" small-multiples
+
+Eighth "Save for later" screenshot from the user on Apr 26, 2026.
+**Important context:** we already shipped **item #2 (Behavior
+dashboard)** which has KPI strip + dense trends + top-N lists.
+This screenshot is a *forensic / small-multiples* lens on the
+same incident data — different shape, complementary purpose, not
+a replacement for the dashboard we already built.
+
+Reference image: `attached_assets/image_1777213403180.png`
+
+What it is (from the screenshot):
+- Title: **Incident Charting** with a back arrow (so this is a
+  drill-through reachable from the top-level Behavior page).
+- **Severity filter chip** at the top: "Minor" (with an X to
+  remove). Implies the same view exists for Major incidents.
+- **Tab strip**: "Big Five" (selected) / "Range Charts". The
+  Big Five tab is the canonical forensic view; Range Charts is
+  presumably a configurable date-range comparison.
+- Header: a single **"What"** sub-heading suggesting other
+  category tabs (Where / When / Who) might exist as horizontal
+  slices, but in this Big Five layout they're rolled into one
+  scroll.
+- **8-card grid of small-multiple bar charts**, each filtered
+  to the selected year (2020-2021) with a year picker per card:
+  - Row 1: **By Primary Incident Type** (one tall bar — "Minor"
+    only because of the filter), **By Primary Incident Code**
+    (~14 codes ranked by count), **By Response** (~10 response
+    types ranked by count).
+  - Row 2: **By Month** (Jul-Jun school-year axis), **By
+    Weekday** (Mon-Sun), **By Hour** (8AM-3PM).
+  - Row 3: **By Location** (~13 location categories ranked),
+    **By School** (~17 schools ranked).
+- Every card has the same chrome: title left, **pin / expand /
+  kebab** icons right, year picker below the chrome, single
+  legend chip ("● 2020-2021") under the bar. Pin = save to a
+  custom dashboard. Expand = full-screen the chart.
+- All bars use the same blue. The story is "compare counts within
+  a single dimension" — the lack of color encoding is
+  intentional, it keeps the eye on the *shape* of each
+  distribution.
+
+Why it's compelling for our app:
+- **Forensic complement to item #2.** Our behavior dashboard
+  answers "how are we doing this term?"; this view answers "what
+  patterns hide in the data?" — when do incidents cluster, where
+  do they happen, which response is being over-used. PBIS
+  coordinators live in this view between team meetings.
+- The hardest one to skip is **By Hour** + **By Weekday** + **By
+  Location** in combination. Those three bars together
+  immediately surface the "we have a problem at the cafeteria
+  on Wednesday afternoons" pattern that no KPI strip can show.
+- 8 cards, one filter chip, no clicks to read — same density
+  philosophy as the Early Warning dashboard.
+
+What ours already has (so we don't double-build):
+- The underlying `pbisEntries` data with type, reason, response,
+  timestamp, location, school. ✓ (every dimension this view
+  needs we already collect.)
+- The window/grade auth + voided_at filter + empty-cohort
+  fast-path scaffolding from `GET /api/insights/behavior`. ✓
+- The school-days-only seeding so the day-of-week / hour
+  distributions look realistic. ✓ (Important: we already seeded
+  on school days only, so a By Weekday chart wouldn't have fake
+  weekend spikes.)
+
+What we'd add to match this view (gap-list, ranked):
+1. **"By Hour" and "By Weekday" extractions** on the existing
+   incident endpoint. Cheap — a single grouped count per
+   dimension.
+2. **"By Location"** — we have location strings on entries
+   already; needs a normalized location categorical column or a
+   server-side bucketization step.
+3. **Severity filter chip** (Minor / Major). We have a severity
+   field already; just need a filter param.
+4. **Small-multiples component**. A reusable
+   `<DistributionBarCard title dimension data />` — every card
+   on this page is the same component with a different
+   dimension. Ship once, use 8 times.
+5. **Pin-to-dashboard** affordance. Stretch — implies user-saved
+   dashboard configurations (same Stage-2 polish flag as the
+   Early Warning Edit button). Skip for v0.
+
+Not-trivial considerations:
+- This view tempts you to add 8 separate endpoints. Don't —
+  build one endpoint that takes `?by=type|code|response|month|weekday|hour|location|school`
+  and returns `{ buckets: [{label, count}] }`. The frontend
+  fans out 8 calls in parallel. Same parameterized pattern we
+  already use in the engagement and behavior endpoints.
+- Hour-of-day extraction depends on every incident having a
+  recorded *time* (not just a date). We need to verify our
+  seed data has plausible time-of-day stamps; if it's noon-only,
+  the By Hour chart looks fake.
+- Severity filter has to be plumbed into every dimension query —
+  pass through the `?severity=minor|major|all` param.
+- "Range Charts" tab is a separate idea and not a priority.
+
+Status: **idea parked** — this is the natural **drill-through
+from the existing Behavior dashboard** (item #2, already
+shipped). Best surfaced as a "Behavior Dashboard v2 — Forensic
+view" follow-up after the Academics dashboard ships, so the
+small-multiples component we'd build can be reused on the
+Academics page (e.g., score-distribution histograms by school /
+grade / window). Eight saved ideas in the parking lot now.
