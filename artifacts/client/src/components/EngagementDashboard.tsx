@@ -174,6 +174,12 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
         </HowToSection>
 
         <HowToSection title="What the KPIs mean">
+          <p style={{ margin: "0 0 0.5rem" }}>
+            A <strong>KPI</strong> (Key Performance Indicator) is one of the
+            headline numbers at the top of the dashboard — a single value that
+            summarizes one slice of what's happening so you can read the whole
+            picture at a glance.
+          </p>
           <ul style={howtoListStyle}>
             <li>
               <strong>Hall passes</strong> — total hall-pass events logged
