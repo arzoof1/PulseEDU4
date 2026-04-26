@@ -197,6 +197,30 @@ Files: `lib/db/src/schema/{staff,customRoles}.ts`,
 `artifacts/api-server/src/routes/{adminStaff,customRoles}.ts`,
 `artifacts/client/src/components/StaffRolesMatrix.tsx`.
 
+## Working Preferences (April 2026)
+
+### Reference screenshots from other software = concept, not layout
+
+When the user shares a screenshot from another product (eduCLIMBER,
+PowerSchool, Skyward, FastBridge, anything else they're researching),
+treat it as a **concept reference** only. Extract:
+
+- What insight is this trying to deliver?
+- What signal/data is it surfacing?
+- What problem is it solving for the user?
+
+Then design Pulse's version from scratch. **Do not copy the visual
+layout, color palette, or component grouping.** Pulse should look
+distinct from those tools and ideally improve on the underlying
+functionality (better defaults, fewer clicks, more honest empty states,
+catching signals the source product missed).
+
+The reference is a starting point for **what**, never **how**.
+
+If a screenshot's layout choice happens to be objectively the right
+answer for a piece of Pulse, fine — but justify it on its own merits,
+don't default to it because that's how the reference did it.
+
 ## UI Style Conventions (April 2026)
 
 - **Default for all new top-level section pages**: Hub Section Header treatment
