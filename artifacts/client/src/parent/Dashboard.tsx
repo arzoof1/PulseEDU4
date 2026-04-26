@@ -13,6 +13,9 @@ import {
   CheckCircle2,
   TrendingUp,
   TrendingDown,
+  BookOpen,
+  Target,
+  HandHelping,
 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { useSchoolBranding } from "../lib/branding";
@@ -86,6 +89,34 @@ interface Snapshot {
     staffName: string;
     createdAt: string;
   }>;
+  // Insights v2 — gated parent-facing pillars added in T13. Optional
+  // here so an older API server (which doesn't return these keys) still
+  // type-checks; the body uses `?? []` / `?? {tier:1, plans:[]}` to
+  // handle the missing case gracefully.
+  fastScores?: Array<{
+    subject: "ela" | "math";
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+    priorYearScore: number | null;
+    priorYearBq: boolean;
+  }>;
+  interventions?: Array<{
+    interventionType: string;
+    note: string | null;
+    staffName: string;
+    createdAt: string;
+  }>;
+  mtss?: {
+    tier: number;
+    plans: Array<{
+      id: number;
+      title: string;
+      tier: number;
+      openedAt: string;
+      goals: string | null;
+    }>;
+  };
 }
 
 const EkgDivider = () => (
@@ -543,6 +574,80 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
         </Section>
       )}
 
+      {/* Academics — FAST progress monitoring scores. Each subject is a
+          separate tile so families can read ELA and Math independently;
+          we always show all three PMs (PM1=fall, PM2=winter, PM3=spring)
+          even when later ones are null, so the year-long arc is visible.
+          Section is hidden entirely when the school disables it OR when
+          there are simply no rows for this student. */}
+      {sec.fastScores && (snapshot.fastScores ?? []).length > 0 && (
+        <Section
+          title="Academics — FAST Scores"
+          icon={<BookOpen className="h-4 w-4 text-blue-600" />}
+        >
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {(snapshot.fastScores ?? []).map((s) => (
+              <FastScoreCard key={s.subject} score={s} />
+            ))}
+          </div>
+        </Section>
+      )}
+
+      {/* Support Plan — active MTSS plans.
+          INTENTIONAL EXEMPTION from the "flag + presence of data" rule
+          that gates the other new sections. Unlike FAST and
+          interventions (where empty = no information), an empty MTSS
+          state is itself meaningful: it tells the parent the school is
+          tracking MTSS for their child AND there is currently no
+          active intervention plan. Hiding the section in that case
+          would create the worse outcome of the parent wondering whether
+          the school disabled visibility or whether their child simply
+          has no plan. So: render whenever sec.mtss is true, regardless
+          of plan count, and let MtssBlock render the "Tier 1 — no
+          active plan" chip. Goals are intentionally surfaced because
+          the school chose to enable this section. */}
+      {sec.mtss && (
+        <Section
+          title="Support Plan"
+          icon={<Target className="h-4 w-4 text-emerald-600" />}
+        >
+          <MtssBlock mtss={snapshot.mtss ?? { tier: 1, plans: [] }} />
+        </Section>
+      )}
+
+      {/* Recent Support — last 10 redacted intervention entries. Hidden
+          when there's nothing to show so the page doesn't end with an
+          empty block. */}
+      {sec.interventions && (snapshot.interventions ?? []).length > 0 && (
+        <Section
+          title="Recent Support"
+          icon={<HandHelping className="h-4 w-4 text-violet-600" />}
+        >
+          <ul className="divide-y divide-slate-100">
+            {(snapshot.interventions ?? []).map((iv, idx) => (
+              <li key={`${iv.createdAt}-${idx}`} className="py-3">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="text-sm font-medium text-slate-800">
+                    {iv.interventionType}
+                  </div>
+                  <div className="text-xs text-slate-500">
+                    {fmtDate(iv.createdAt)}
+                  </div>
+                </div>
+                {iv.note && (
+                  <div className="text-sm text-slate-600 mt-1">
+                    {iv.note}
+                  </div>
+                )}
+                <div className="text-xs text-slate-400 mt-1">
+                  {iv.staffName}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </Section>
+      )}
+
       <EkgDivider />
       <div className="text-center text-xs text-slate-400 flex items-center justify-center gap-1.5">
         <Heart className="h-3 w-3" fill="currentColor" />
@@ -745,6 +850,144 @@ function Section({
 
 function Empty({ text }: { text: string }) {
   return <p className="text-sm text-slate-400 italic">{text}</p>;
+}
+
+// FastScoreCard — one tile per subject (ELA / Math). Renders the three
+// progress monitoring scores horizontally so the year-long arc is
+// readable at a glance, with a small "needs support" pill when the
+// student was Bottom Quartile last year. We deliberately do NOT show
+// percentile bands or "level" text here — that's eduCLIMBER staff-side
+// terminology and the parent surface stays plain-language.
+function FastScoreCard({
+  score,
+}: {
+  score: {
+    subject: "ela" | "math";
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+    priorYearScore: number | null;
+    priorYearBq: boolean;
+  };
+}) {
+  const subjectLabel = score.subject === "ela" ? "Reading (ELA)" : "Math";
+  const accent = score.subject === "ela" ? "text-blue-700" : "text-amber-700";
+  const accentBg = score.subject === "ela" ? "bg-blue-50" : "bg-amber-50";
+  const pms: Array<{ label: string; value: number | null }> = [
+    { label: "Fall (PM1)", value: score.pm1 },
+    { label: "Winter (PM2)", value: score.pm2 },
+    { label: "Spring (PM3)", value: score.pm3 },
+  ];
+  return (
+    <div className={`rounded-xl border border-slate-200 ${accentBg} p-4`}>
+      <div className="flex items-center justify-between mb-3">
+        <div className={`text-sm font-semibold ${accent}`}>
+          {subjectLabel}
+        </div>
+        {score.priorYearBq && (
+          <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 text-[10px]">
+            Needs support
+          </Badge>
+        )}
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        {pms.map((pm) => (
+          <div
+            key={pm.label}
+            className="bg-white rounded-lg border border-slate-100 p-2 text-center"
+          >
+            <div className="text-[10px] uppercase tracking-wide text-slate-400">
+              {pm.label}
+            </div>
+            <div
+              className={`text-lg font-bold tabular-nums ${
+                pm.value == null ? "text-slate-300" : "text-slate-800"
+              }`}
+            >
+              {pm.value ?? "—"}
+            </div>
+          </div>
+        ))}
+      </div>
+      {score.priorYearScore != null && (
+        <div className="text-xs text-slate-500">
+          Last year's final: {" "}
+          <span className="font-semibold text-slate-700 tabular-nums">
+            {score.priorYearScore}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// MtssBlock — header tier chip + active plan list. The tier chip uses
+// the same color semantics as the staff-side StudentProfile (Tier 2
+// amber, Tier 3 rose) so a parent comparing notes with a teacher sees
+// matching language.
+function MtssBlock({
+  mtss,
+}: {
+  mtss: {
+    tier: number;
+    plans: Array<{
+      id: number;
+      title: string;
+      tier: number;
+      openedAt: string;
+      goals: string | null;
+    }>;
+  };
+}) {
+  const tierChip =
+    mtss.tier === 1
+      ? "bg-slate-100 text-slate-600"
+      : mtss.tier === 2
+        ? "bg-amber-100 text-amber-800"
+        : "bg-rose-100 text-rose-800";
+  const tierLabel =
+    mtss.tier === 1 ? "Tier 1 — no active plan" : `Active Tier ${mtss.tier}`;
+  return (
+    <>
+      <div className="mb-3">
+        <Badge className={`${tierChip} hover:${tierChip}`}>
+          {tierLabel}
+        </Badge>
+      </div>
+      {mtss.plans.length === 0 ? (
+        <Empty text="No active support plans." />
+      ) : (
+        <ul className="divide-y divide-slate-100">
+          {mtss.plans.map((p) => (
+            <li key={p.id} className="py-3">
+              <div className="flex items-center justify-between gap-4">
+                <div className="text-sm font-medium text-slate-800">
+                  {p.title}
+                </div>
+                <Badge
+                  className={
+                    p.tier === 3
+                      ? "bg-rose-100 text-rose-700 hover:bg-rose-100"
+                      : "bg-amber-100 text-amber-700 hover:bg-amber-100"
+                  }
+                >
+                  Tier {p.tier}
+                </Badge>
+              </div>
+              <div className="text-xs text-slate-500 mt-0.5">
+                Opened {fmtDate(p.openedAt)}
+              </div>
+              {p.goals && (
+                <div className="text-sm text-slate-600 mt-2 whitespace-pre-line">
+                  {p.goals}
+                </div>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </>
+  );
 }
 
 function gradeLabel(grade: number): string {
