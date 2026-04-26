@@ -35,7 +35,7 @@ import {
   importJobsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq, sql, and, inArray } from "drizzle-orm";
+import { eq, sql, and, inArray, isNull } from "drizzle-orm";
 import { logger } from "./lib/logger";
 
 // =============================================================================
@@ -1716,6 +1716,281 @@ export async function seedStudentDemographicsIfEmpty() {
         unknownGender: countU,
       },
       "[seed] student demographics seeded (ELL/ESE/504/gender)",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedStudentRaceIfEmpty: populate students.race + students.ethnicity so the
+// Equity dashboard can disaggregate outcomes by race/ethnicity (the headline
+// equity dimension district admins expect to see). Same two-stage idempotency
+// contract as seedStudentDemographicsIfEmpty:
+//   * Stage 1: skip school if any student already has race OR ethnicity set.
+//   * Stage 2: skip school if no demo marker (school_accommodations empty),
+//     so a real SIS-imported school is never overwritten with demo data.
+//
+// 7 race buckets matching K-12 SIS display compatibility (Skyward / Focus
+// expose a single race column that can include Hispanic). The separate
+// `ethnicity` field carries the federally-required Hispanic-origin Y/N flag
+// independent of race per OMB Directive 15.
+//
+// IMPORTANT — DEMO-ONLY CORRELATIONS:
+// Real district equity demos hinge on race-based disparity ratios looking
+// realistic (1.3x–1.7x range). We apply mild perturbations to the base
+// distribution based on existing risk signals (FAST BQ + recent-30d
+// negative PBIS):
+//   * Black students slightly over-represented among chronic-negative-PBIS
+//     cohorts (mirrors documented K-12 discipline disparities).
+//   * Hispanic-race students slightly over-represented among BQ + chronic-
+//     negative cohorts (mirrors language-acquisition academic gap;
+//     intentionally overlapping with the ELL bumps in
+//     seedStudentDemographicsIfEmpty so the same students often carry both
+//     flags — this is what real district data looks like).
+//   * Asian students slightly under-represented in BQ cohorts (mirrors
+//     documented K-12 academic-outcome gap, in the OPPOSITE direction).
+//   * Multi / Native / Pacific kept tiny (<5%) to match real FL school
+//     demographics; they'll often fall below MIN_GROUP_SIZE=10 and the
+//     dashboard's flags table will suppress them.
+//
+// All correlations are *seed* artifacts. Real production data will reflect
+// each district's actual demographics. The Equity dashboard footer carries
+// a disclaimer to that effect.
+// -----------------------------------------------------------------------------
+
+type RaceKey =
+  | "white"
+  | "hispanic"
+  | "black"
+  | "asian"
+  | "multi"
+  | "native"
+  | "pacific";
+
+const RACE_KEYS: RaceKey[] = [
+  "white",
+  "hispanic",
+  "black",
+  "asian",
+  "multi",
+  "native",
+  "pacific",
+];
+
+// FL composite race weights (out of 1000 — finer than percent for less
+// rounding error on the cumulative-pick draw).
+const HERNANDO_RACE_WEIGHTS: Record<RaceKey, number> = {
+  white: 670,
+  hispanic: 200,
+  black: 60,
+  multi: 40,
+  asian: 20,
+  native: 5,
+  pacific: 5,
+};
+const PASCO_RACE_WEIGHTS: Record<RaceKey, number> = {
+  white: 700,
+  hispanic: 170,
+  black: 50,
+  multi: 40,
+  asian: 30,
+  native: 5,
+  pacific: 5,
+};
+
+function pickWeightedRace(
+  rng: () => number,
+  weights: Record<RaceKey, number>,
+): RaceKey {
+  let total = 0;
+  for (const k of RACE_KEYS) total += Math.max(0, weights[k]);
+  if (total <= 0) return "white";
+  let pick = rng() * total;
+  for (const k of RACE_KEYS) {
+    const w = Math.max(0, weights[k]);
+    pick -= w;
+    if (pick <= 0) return k;
+  }
+  return "white";
+}
+
+export async function seedStudentRaceIfEmpty() {
+  const schools = await db
+    .select({ id: schoolsTable.id, districtId: schoolsTable.districtId })
+    .from(schoolsTable);
+  if (schools.length === 0) return;
+
+  // Map districtId → slug so we can pick race weights by district.
+  const districtRows = await db.select().from(districtsTable);
+  const slugByDistrictId = new Map<number, string>();
+  for (const d of districtRows) slugByDistrictId.set(d.id, d.slug);
+
+  const now = Date.now();
+  const dayMs = 86400000;
+  const windowStartIso = new Date(now - 30 * dayMs).toISOString();
+
+  for (const school of schools) {
+    // Stage 2 FIRST: skip schools without the demo marker (real
+    // SIS-imported schools never get demo race/ethnicity). This is the
+    // safety boundary that protects real district data.
+    const [{ c: demoMarker }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM school_accommodations
+            WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (demoMarker === 0) {
+      logger.info(
+        { schoolId: school.id },
+        "[seed] skipping race seed — school has no demo marker (likely a real SIS-imported school)",
+      );
+      continue;
+    }
+
+    // Stage 1 (RESUMABLE — architect-flagged): only target students whose
+    // race IS NULL. This way an interrupted seed (or a partial external
+    // import that left some rows NULL) can be completed on the next boot
+    // without overwriting any already-set values. If every student already
+    // has race set we skip the school entirely (early-out optimization).
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, school.id),
+          isNull(studentsTable.race),
+        ),
+      );
+    if (studentRows.length === 0) {
+      logger.info(
+        { schoolId: school.id },
+        "[seed] skipping race seed — all students in school already have race set",
+      );
+      continue;
+    }
+
+    // Correlation inputs — same shape as seedStudentDemographicsIfEmpty.
+    const fastRows = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        priorYearBq: studentFastScoresTable.priorYearBq,
+      })
+      .from(studentFastScoresTable)
+      .where(eq(studentFastScoresTable.schoolId, school.id));
+    const bqAny = new Set<string>();
+    for (const fs of fastRows) {
+      if (fs.priorYearBq) bqAny.add(fs.studentId);
+    }
+
+    const negRows = (
+      await db.execute(
+        sql`SELECT student_id, COUNT(*)::int AS c
+            FROM pbis_entries
+            WHERE school_id = ${school.id}
+              AND polarity = 'negative'
+              AND voided_at IS NULL
+              AND created_at >= ${windowStartIso}
+            GROUP BY student_id`,
+      )
+    ).rows as { student_id: string; c: number }[];
+    const negCount = new Map<string, number>();
+    for (const r of negRows) negCount.set(r.student_id, r.c);
+
+    // Pick base race distribution by district slug.
+    const districtSlug = slugByDistrictId.get(school.districtId) ?? "";
+    const baseWeights = /pasco/i.test(districtSlug)
+      ? PASCO_RACE_WEIGHTS
+      : HERNANDO_RACE_WEIGHTS;
+
+    const rng = makeRng(0xface00 + school.id * 4099);
+
+    type Combo = { race: RaceKey; ethnicity: "hispanic" | "non_hispanic" };
+    const buckets = new Map<string, { combo: Combo; ids: string[] }>();
+    const counts: Record<RaceKey, number> = {
+      white: 0,
+      hispanic: 0,
+      black: 0,
+      asian: 0,
+      multi: 0,
+      native: 0,
+      pacific: 0,
+    };
+    let ethHisp = 0;
+
+    for (const s of studentRows) {
+      const isBq = bqAny.has(s.studentId);
+      const negs = negCount.get(s.studentId) ?? 0;
+
+      // Apply mild bumps as weight perturbations on a copy of the base
+      // distribution so each student's draw is independently biased.
+      const w: Record<RaceKey, number> = { ...baseWeights };
+      if (negs >= 5) {
+        // Chronic-negative students: shift +30 (3pp) from white to black.
+        w.white -= 30;
+        w.black += 30;
+      }
+      if (isBq && negs >= 3) {
+        // BQ + chronic-negative: shift +30 (3pp) from white to hispanic.
+        w.white -= 30;
+        w.hispanic += 30;
+      }
+      if (isBq) {
+        // Mild Asian under-representation in BQ cohort.
+        const shift = Math.min(5, w.asian);
+        w.asian -= shift;
+        w.white += shift;
+      }
+
+      const race = pickWeightedRace(rng, w);
+      counts[race] += 1;
+
+      // Ethnicity correlated with race: race=hispanic → eth=hispanic ~95%,
+      // else ~2% (matches real-world federal-Q1 variance: a small share of
+      // non-Hispanic-race students still claim Hispanic origin).
+      const ethnicity: "hispanic" | "non_hispanic" =
+        race === "hispanic"
+          ? rng() < 0.95
+            ? "hispanic"
+            : "non_hispanic"
+          : rng() < 0.02
+            ? "hispanic"
+            : "non_hispanic";
+      if (ethnicity === "hispanic") ethHisp += 1;
+
+      const key = `${race}:${ethnicity}`;
+      let bucket = buckets.get(key);
+      if (!bucket) {
+        bucket = { combo: { race, ethnicity }, ids: [] };
+        buckets.set(key, bucket);
+      }
+      bucket.ids.push(s.studentId);
+    }
+
+    // Issue one UPDATE per (race × ethnicity) combination, chunked to keep
+    // the parameter list under DB limits. ~14 combinations max per school.
+    for (const { combo, ids } of buckets.values()) {
+      const CHUNK = 1000;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        await db
+          .update(studentsTable)
+          .set({ race: combo.race, ethnicity: combo.ethnicity })
+          .where(
+            and(
+              eq(studentsTable.schoolId, school.id),
+              inArray(studentsTable.studentId, slice),
+            ),
+          );
+      }
+    }
+
+    logger.info(
+      {
+        schoolId: school.id,
+        cohort: studentRows.length,
+        ...counts,
+        ethnicityHispanic: ethHisp,
+      },
+      "[seed] student race/ethnicity seeded",
     );
   }
 }

@@ -5,9 +5,11 @@
 // first?"
 //
 // Renders the totals, disparity flags top-N, and per-subgroup snapshot
-// grid returned by GET /api/insights/equity. Demographic flags (ELL, IEP,
-// 504, gender) are read from the students table — race + FRL are not yet
-// modeled and are a known followup tied to the SIS import work.
+// grid returned by GET /api/insights/equity. Subgroups: ELL, IEP, 504,
+// gender (Female/Male), 7 race buckets (White/Hispanic/Black/Asian/
+// Multi-Race/Native/Pacific) and a separate Hispanic ethnicity flag
+// (federal-style: race and ethnicity are independent fields per OMB
+// Directive 15). FRL is still a known followup tied to the SIS import.
 //
 // Permission: backend gates this to the core team. The caller (App.tsx)
 // should only mount this when the user passes that bar; we still render
@@ -18,7 +20,20 @@ import { authFetch } from "../lib/authToken";
 
 // ------------------------- API contract types ------------------------------
 
-type SubgroupKey = "ELL" | "IEP" | "504" | "Female" | "Male";
+type SubgroupKey =
+  | "ELL"
+  | "IEP"
+  | "504"
+  | "Female"
+  | "Male"
+  | "White"
+  | "Hispanic"
+  | "Black"
+  | "Asian"
+  | "Multi-Race"
+  | "Native"
+  | "Pacific"
+  | "Hispanic Ethnicity";
 type WorseDirection = "higher" | "lower";
 
 interface DisparityFlag {
@@ -67,6 +82,20 @@ interface EquityResponse {
     malePct: number;
     unknownGenderCount: number;
     unknownGenderPct: number;
+    raceMix: {
+      white: { count: number; pct: number };
+      hispanic: { count: number; pct: number };
+      black: { count: number; pct: number };
+      asian: { count: number; pct: number };
+      multi: { count: number; pct: number };
+      native: { count: number; pct: number };
+      pacific: { count: number; pct: number };
+      unknown: { count: number; pct: number };
+    };
+    ethnicityHispanicCount: number;
+    ethnicityHispanicPct: number;
+    ethnicityUnknownCount: number;
+    ethnicityUnknownPct: number;
     highDisparityFlagCount: number;
     maxRiskRatio: number | null;
   };
@@ -134,11 +163,23 @@ function toneColor(t: Tone): string {
 // Subgroup chip palette so each subgroup reads visually distinct in the
 // disparity flags table at a glance.
 const SUBGROUP_COLORS: Record<SubgroupKey, { bg: string; fg: string }> = {
+  // Demographic flags — warm chip family.
   ELL: { bg: "#fef3c7", fg: "#92400e" }, // amber
   IEP: { bg: "#ede9fe", fg: "#6d28d9" }, // violet
   "504": { bg: "#dbeafe", fg: "#1e40af" }, // blue
   Female: { bg: "#fce7f3", fg: "#9d174d" }, // pink
   Male: { bg: "#cffafe", fg: "#155e75" }, // cyan
+  // Race chips — cool/neutral palette so they read as a distinct family
+  // from the demographic flags above.
+  White: { bg: "#f1f5f9", fg: "#334155" }, // slate
+  Hispanic: { bg: "#fff7ed", fg: "#9a3412" }, // orange
+  Black: { bg: "#f5f3ff", fg: "#5b21b6" }, // deep violet
+  Asian: { bg: "#ecfeff", fg: "#0e7490" }, // teal
+  "Multi-Race": { bg: "#f0fdf4", fg: "#166534" }, // green
+  Native: { bg: "#fef2f2", fg: "#991b1b" }, // muted red
+  Pacific: { bg: "#eff6ff", fg: "#1d4ed8" }, // indigo
+  // Ethnicity — single chip for Hispanic origin Y/N.
+  "Hispanic Ethnicity": { bg: "#fef3c7", fg: "#78350f" }, // dark amber
 };
 
 export default function EquityDashboard({ onOpenProfile: _ }: Props) {

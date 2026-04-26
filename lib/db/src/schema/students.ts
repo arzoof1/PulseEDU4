@@ -29,6 +29,17 @@ export const studentsTable = pgTable("students", {
   is504: boolean("is_504").notNull().default(false),
   ctEla: boolean("ct_ela").notNull().default(false),
   ctMath: boolean("ct_math").notNull().default(false),
+  // ----- Race & Ethnicity (separate fields, federal-reporting style) ------
+  // `race` is the primary single-bucket category (one of: white | hispanic |
+  // black | asian | multi | native | pacific). Note that "hispanic" appears
+  // in the race column for K-12 SIS display compatibility (Skyward / Focus
+  // both expose a single race bucket that can include Hispanic). The
+  // separate `ethnicity` field carries the federally-required "Hispanic
+  // origin Y/N" flag (one of: hispanic | non_hispanic) which is independent
+  // of race per OMB Directive 15. Both nullable so existing rows + roster
+  // imports without these columns remain valid.
+  race: text("race"),
+  ethnicity: text("ethnicity"),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

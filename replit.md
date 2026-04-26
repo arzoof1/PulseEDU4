@@ -2393,6 +2393,87 @@ NOT drop any of these without an explicit user OK**.
      handling, MIN_GROUP_SIZE guard, direction-of-concern
      semantics, and demo-correlation transparency all explicitly
      verified.
+
+   **Item #5 follow-on: Race + Ethnicity (Apr 26, 2026)** — user
+   requested race-based equity disaggregation. Shipped:
+   - Schema: `students.race` (text) + `students.ethnicity` (text)
+     in `lib/db/src/schema/students.ts`. Race uses 7 buckets
+     (white | hispanic | black | asian | multi | native | pacific)
+     for K-12 SIS display compatibility (Skyward / Focus expose a
+     single race column that can include Hispanic). Ethnicity is
+     a separate Hispanic-origin Y/N flag (`hispanic` |
+     `non_hispanic`) per OMB Directive 15. Columns added via
+     direct ALTER TABLE because `db:push` interactively prompted
+     about an unrelated `districts_slug_unique` constraint
+     addition; the additive column change has zero data risk.
+   - **Race seeder** `seedStudentRaceIfEmpty` in
+     `artifacts/api-server/src/seed.ts` (~line 1726). Same
+     two-stage idempotency contract as the demographics seeder:
+     Stage 1 = "any student in this school already has race OR
+     ethnicity set"; Stage 2 = "school_accommodations non-empty"
+     (demo marker, protects real SIS-imported schools). Wired
+     LAST in the boot path in `artifacts/api-server/src/index.ts`
+     (after `seedStudentDemographicsIfEmpty`), so PBIS + FAST
+     correlations are already populated.
+   - **Per-district base weights** (out of 1000 to keep the
+     cumulative-pick draw clean):
+       * **Hernando**: white 670 / hispanic 200 / black 60 /
+         multi 40 / asian 20 / native 5 / pacific 5.
+       * **Pasco**: white 700 / hispanic 170 / black 50 / multi
+         40 / asian 30 / native 5 / pacific 5.
+     District is detected via `districtSlug` regex (`/pasco/i`)
+     so a future district added to the demo seed picks up the
+     Hernando defaults until weights are added.
+   - **Mild correlations** (deliberately small, mirror documented
+     K-12 disparities so the demo dataset shows realistic
+     race-disparity ratios; **all are seed artifacts, not real
+     district data** — dashboard footer carries the disclaimer):
+       * Recent-30d negs ≥ 5 → +30/1000 white→black shift
+         (mirrors documented discipline disparity).
+       * BQ + recent-30d negs ≥ 3 → +30/1000 white→hispanic
+         shift (mirrors language-acquisition academic gap;
+         intentionally overlaps with the ELL bumps in the
+         demographics seeder so the same students often carry
+         both flags — that's what real district data looks like).
+       * BQ → -5/1000 asian under-representation in BQ cohorts
+         (mirrors documented K-12 academic gap, OPPOSITE
+         direction).
+     Multi / Native / Pacific stay tiny (<5%); the Equity
+     dashboard's `MIN_GROUP_SIZE = 10` guard naturally suppresses
+     them when the cohort is too small to make meaningful
+     disparity claims.
+   - **Ethnicity** correlated with race: race=hispanic →
+     ethnicity=hispanic 95% of the time (the 5% non-hispanic
+     captures real-world federal Q1 variance); other races →
+     ethnicity=hispanic 2% of the time (small share of
+     non-Hispanic-race students still claim Hispanic origin).
+   - **Equity endpoint extension** (`routes/insights.ts` ~line
+     2840): `studentRows` SELECT widened with `race + ethnicity`,
+     7 race membership sets + 1 Hispanic-ethnicity set built in
+     a single pass over students, `SubgroupKey` union widened to
+     13 entries, `SUBGROUPS` array extended (5 demographic + 7
+     race + 1 ethnicity = 13 subgroups). Both the empty-cohort
+     fast-path AND the populated `totals` response now include
+     `raceMix` (per-bucket count + pct) and
+     `ethnicityHispanicCount/Pct + ethnicityUnknownCount/Pct`.
+   - **Frontend** (`EquityDashboard.tsx`): `SubgroupKey` union
+     widened to 13 entries, `SUBGROUP_COLORS` palette extended
+     with 8 new chip definitions (cool/neutral race family
+     visually distinct from the warm demographic-flag family;
+     dark-amber chip for the Hispanic ethnicity entry). The
+     `EquityResponse.totals` interface gained `raceMix` and the
+     ethnicity counts so the existing snapshot grid + flags
+     table render the new subgroups automatically — no other UI
+     wiring needed because the components iterate
+     `subgroupSnapshots` and look up colors by key.
+   - **Verified post-restart**: 7 demo schools all have race +
+     ethnicity populated (8500 students). Hernando schools 1, 2,
+     3, 4, 5, 36: ~67% white / ~22% hispanic. Pasco school 220:
+     ~70% white / ~16% hispanic. Per-bucket counts within ±0.5pp
+     of the configured weights. Roster-only schools (no
+     `school_accommodations` marker) correctly skipped — verified
+     by zero race-set count for schools 182-219, 221-277, 391.
+
 6. **Early Warning composite** — single 0-100 risk score per student
    rolling up the pillars (academics + behavior + attendance +
    supports). Depends on items 1–4 for the inputs. STATUS: queued

@@ -11,6 +11,7 @@ import {
   seedPbisCatalogIfEmpty,
   seedPbisEntriesIfEmpty,
   seedStudentDemographicsIfEmpty,
+  seedStudentRaceIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -65,6 +66,12 @@ if (Number.isNaN(port) || port <= 0) {
   // any student already has a flag/gender set, so a real SIS roster import
   // is never overwritten.
   await seedStudentDemographicsIfEmpty();
+  // Race + ethnicity (7 buckets + Hispanic Y/N) for the Equity dashboard's
+  // race disaggregation. Same two-stage idempotency contract as the
+  // demographics seed: skipped when any student in a school already has a
+  // race set, AND skipped for schools without the demo marker. Real SIS
+  // imports remain untouched.
+  await seedStudentRaceIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {

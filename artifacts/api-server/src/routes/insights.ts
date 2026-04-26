@@ -2838,6 +2838,8 @@ router.get("/insights/equity", async (req, res) => {
       ese: studentsTable.ese,
       is504: studentsTable.is504,
       gender: studentsTable.gender,
+      race: studentsTable.race,
+      ethnicity: studentsTable.ethnicity,
     })
     .from(studentsTable)
     .where(
@@ -2855,6 +2857,23 @@ router.get("/insights/equity", async (req, res) => {
   const female = new Set<string>();
   const male = new Set<string>();
   let unknownGenderCount = 0;
+  // Race membership sets (7 buckets matching the seeder's federal-style
+  // categorization). The dashboard's MIN_GROUP_SIZE=10 guard naturally
+  // suppresses any race subgroup whose in-group is too small to make a
+  // meaningful disparity claim.
+  const raceWhite = new Set<string>();
+  const raceHispanic = new Set<string>();
+  const raceBlack = new Set<string>();
+  const raceAsian = new Set<string>();
+  const raceMulti = new Set<string>();
+  const raceNative = new Set<string>();
+  const racePacific = new Set<string>();
+  let unknownRaceCount = 0;
+  // Ethnicity is a separate federal field (Hispanic origin Y/N) independent
+  // of race per OMB Directive 15. Tracked as a single binary subgroup
+  // ("Hispanic Ethnicity" in-group vs everyone else).
+  const ethHispanic = new Set<string>();
+  let unknownEthnicityCount = 0;
   for (const r of studentRows) {
     if (r.ell) ell.add(r.studentId);
     if (r.ese) ese.add(r.studentId);
@@ -2862,16 +2881,50 @@ router.get("/insights/equity", async (req, res) => {
     if (r.gender === "F") female.add(r.studentId);
     else if (r.gender === "M") male.add(r.studentId);
     else unknownGenderCount += 1;
+    switch (r.race) {
+      case "white": raceWhite.add(r.studentId); break;
+      case "hispanic": raceHispanic.add(r.studentId); break;
+      case "black": raceBlack.add(r.studentId); break;
+      case "asian": raceAsian.add(r.studentId); break;
+      case "multi": raceMulti.add(r.studentId); break;
+      case "native": raceNative.add(r.studentId); break;
+      case "pacific": racePacific.add(r.studentId); break;
+      default: unknownRaceCount += 1; break;
+    }
+    if (r.ethnicity === "hispanic") ethHispanic.add(r.studentId);
+    else if (r.ethnicity == null) unknownEthnicityCount += 1;
   }
 
-  // Subgroup definitions in stable display order.
-  type SubgroupKey = "ELL" | "IEP" | "504" | "Female" | "Male";
+  // Subgroup definitions in stable display order. Demographic flags first
+  // (most familiar to district staff), then race buckets, then ethnicity.
+  type SubgroupKey =
+    | "ELL"
+    | "IEP"
+    | "504"
+    | "Female"
+    | "Male"
+    | "White"
+    | "Hispanic"
+    | "Black"
+    | "Asian"
+    | "Multi-Race"
+    | "Native"
+    | "Pacific"
+    | "Hispanic Ethnicity";
   const SUBGROUPS: { key: SubgroupKey; members: Set<string> }[] = [
     { key: "ELL", members: ell },
     { key: "IEP", members: ese },
     { key: "504", members: sec504 },
     { key: "Female", members: female },
     { key: "Male", members: male },
+    { key: "White", members: raceWhite },
+    { key: "Hispanic", members: raceHispanic },
+    { key: "Black", members: raceBlack },
+    { key: "Asian", members: raceAsian },
+    { key: "Multi-Race", members: raceMulti },
+    { key: "Native", members: raceNative },
+    { key: "Pacific", members: racePacific },
+    { key: "Hispanic Ethnicity", members: ethHispanic },
   ];
 
   // Metric definitions. `worseDirection` drives the red/green coloring of
@@ -2915,6 +2968,20 @@ router.get("/insights/equity", async (req, res) => {
         malePct: 0,
         unknownGenderCount: 0,
         unknownGenderPct: 0,
+        raceMix: {
+          white: { count: 0, pct: 0 },
+          hispanic: { count: 0, pct: 0 },
+          black: { count: 0, pct: 0 },
+          asian: { count: 0, pct: 0 },
+          multi: { count: 0, pct: 0 },
+          native: { count: 0, pct: 0 },
+          pacific: { count: 0, pct: 0 },
+          unknown: { count: 0, pct: 0 },
+        },
+        ethnicityHispanicCount: 0,
+        ethnicityHispanicPct: 0,
+        ethnicityUnknownCount: 0,
+        ethnicityUnknownPct: 0,
         highDisparityFlagCount: 0,
         maxRiskRatio: null,
       },
@@ -2923,7 +2990,11 @@ router.get("/insights/equity", async (req, res) => {
         subgroup: sg.key,
         inGroupSize: 0,
         outGroupSize: 0,
+        // Schema must mirror the populated path's metrics exactly
+        // (architect-flagged): include `key` so frontend type contracts
+        // line up between empty-cohort and populated responses.
         metrics: METRICS.map((m) => ({
+          key: m.key,
           name: m.label,
           worseDirection: m.worseDirection,
           inGroupValue: null,
@@ -3280,6 +3351,20 @@ router.get("/insights/equity", async (req, res) => {
       malePct: pct(male.size),
       unknownGenderCount,
       unknownGenderPct: pct(unknownGenderCount),
+      raceMix: {
+        white: { count: raceWhite.size, pct: pct(raceWhite.size) },
+        hispanic: { count: raceHispanic.size, pct: pct(raceHispanic.size) },
+        black: { count: raceBlack.size, pct: pct(raceBlack.size) },
+        asian: { count: raceAsian.size, pct: pct(raceAsian.size) },
+        multi: { count: raceMulti.size, pct: pct(raceMulti.size) },
+        native: { count: raceNative.size, pct: pct(raceNative.size) },
+        pacific: { count: racePacific.size, pct: pct(racePacific.size) },
+        unknown: { count: unknownRaceCount, pct: pct(unknownRaceCount) },
+      },
+      ethnicityHispanicCount: ethHispanic.size,
+      ethnicityHispanicPct: pct(ethHispanic.size),
+      ethnicityUnknownCount: unknownEthnicityCount,
+      ethnicityUnknownPct: pct(unknownEthnicityCount),
       highDisparityFlagCount: disparityFlags.length,
       maxRiskRatio: maxRiskRatioObserved,
     },
