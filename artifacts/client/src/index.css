@@ -919,7 +919,26 @@ ul[style*="listStyle: none"] li button:hover {
     border-right: 0;
     border-bottom: 1px solid var(--border);
   }
-  .sidebar .section-label {
+  /* Only hide the standalone "Quick Access" label — NOT the themed group
+     toggle buttons (Insights / Recognition / Behavior Support / etc.),
+     which share the .section-label class. Hiding those would lock the
+     user out of every nav item below Quick Access on mobile. */
+  .sidebar .section-label:not(.nav-group-toggle) {
+    display: none;
+  }
+  /* In the horizontal mobile strip, group labels still appear inline as
+     dividers, but they're informational only — tapping them would make
+     the strip jump as items collapse/expand. We force them open in JS
+     (see NavGroup), so dim the chevron and disable interaction. */
+  .sidebar .nav-group-toggle {
+    pointer-events: none;
+    color: var(--accent, #ef4444);
+    border-top: none;
+    padding: 0.4rem 0.6rem;
+    flex: 0 0 auto;
+    width: auto;
+  }
+  .sidebar .nav-group-chevron {
     display: none;
   }
   /* The Workspace / Tools EKG separator only makes sense as a horizontal

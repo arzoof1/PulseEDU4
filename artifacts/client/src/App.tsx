@@ -3245,10 +3245,33 @@ function NavGroup({
       return null;
     }
   });
-  // Resolution order: contains-active wins (force open), else user
-  // preference, else default-closed. Default-closed gives the compact
-  // sidebar the user asked for; the active group is always visible.
-  const open = containsActive || userOpen === true;
+  // On mobile the sidebar is a horizontal scroll strip — accordion
+  // collapse/expand would make the strip jump and is awkward to tap.
+  // Force every group open on mobile so all nav items are reachable
+  // by horizontal swipe; the toggle button itself is made
+  // pointer-events:none in the mobile media query so taps are ignored.
+  //
+  // IMPORTANT: this 800px breakpoint must stay in lockstep with the
+  // `@media (max-width: 800px)` rule in index.css that converts the
+  // sidebar to a horizontal strip and applies pointer-events:none to
+  // the toggle. If they drift apart there's a viewport range where CSS
+  // disables the toggle but JS doesn't force it open, locking the user
+  // out of every collapsed group. The shared `useIsMobile` hook uses
+  // 768px for the shadcn sidebar and is intentionally not reused here.
+  const [isMobile, setIsMobile] = useState<boolean>(() =>
+    typeof window !== "undefined" && window.matchMedia("(max-width: 800px)").matches,
+  );
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const mql = window.matchMedia("(max-width: 800px)");
+    const onChange = () => setIsMobile(mql.matches);
+    mql.addEventListener("change", onChange);
+    return () => mql.removeEventListener("change", onChange);
+  }, []);
+  // Resolution order: mobile forces open, else contains-active wins,
+  // else user preference, else default-closed. Default-closed gives the
+  // compact sidebar the user asked for; the active group is always visible.
+  const open = isMobile || containsActive || userOpen === true;
   const toggle = () => {
     const next = !open;
     setUserOpen(next);
