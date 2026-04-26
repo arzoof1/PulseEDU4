@@ -2556,3 +2556,147 @@ common Tier 2 paths, and we'll be touching support-side data
 plumbing anyway. Or as its own follow-up item once the user has
 seen the dashboards and asks "great, now how do we *act* on
 this data?"
+
+---
+
+## Save-for-later: eduCLIMBER "Student Profile" single-pane
+
+Seventh "Save for later" screenshot from the user on Apr 26, 2026.
+**Important context:** we already *have* a Student Profile in our
+app (`artifacts/client/src/components/StudentProfile.tsx`), so
+this screenshot is best read as "what theirs has that ours
+doesn't yet" — a gap-list, not a from-scratch build.
+
+Reference image: `attached_assets/image_1777213380077.png`
+
+What it is (from the screenshot):
+- Top header strip: product logo + breadcrumb scope tabs
+  (District / School / Grade) and the usual icon row top-right
+  (calendar, mail, notifications, app-switcher, account).
+- Left icon rail (vertical) with ~12 entry points: add, favorite,
+  building (school), person (current — Profile), **3D**, photos,
+  briefcase, calendar, target, flag, list, cloud-upload,
+  settings. Implies the profile is one entry in a deep
+  per-student tool palette.
+- **Top KPI strip** — 7 colored tiles spanning the page:
+  - 78% Full Day Rate (blue)
+  - 98.9% SIS Reported Rate (purple)
+  - 24 Forms (teal)
+  - 27 Comments (pink)
+  - 4 Tags (blue)
+  - 2 Observations (orange)
+  - 4 Thresholds (purple)
+  Pure scannability — every important count for this kid in one
+  glance.
+- **Three-column body** below the KPIs:
+  - **Left column — Student Information**: Demographics tab with
+    profile photo, DOB, Gender, Ethnicity chip, School chip,
+    Grade chip, plus Student Data / Attachments (2) / Assigned
+    Staff (2) counters at the bottom.
+  - **Middle column top — Incidents**: small list with one row
+    per incident type and a count (Anecdotal 3, School
+    Psychologist Visit 2, Health Office Visit 1, Outside Agency
+    Contact 2, Minor 1). Plus button to add.
+  - **Middle column bottom — Interventions**: card-per-plan list.
+    Each card shows intervention name, subject + year, **status
+    pill** (red "Not on Track" or green "On Track"), and ROI math
+    (Plan ROI 0.75 / Goal ROI 1.25 / Latest Score 11.00). This is
+    the slope-of-improvement vs goal-line math we currently do
+    inside the MTSS plan detail — surfacing it on the profile
+    card itself is the upgrade.
+  - **Right column — Latest Assessment Scores** (the dominant
+    real estate, ~50% of width): tabbed panel (All / Literacy /
+    Mathematics / SEB / Specials) with one *sub-card per
+    assessment* inside each tab:
+    - Literacy: DnA Benchmarks (Pre 73 / Post 97), FastBridge
+      aReading (Fall 123 / Winter 170), Reading Level (Beg C /
+      Mid D / End G), iReady Overall Reading (Fall 569 / Winter
+      630)
+    - Mathematics: DnA Benchmarks (Fall 216.6 / Winter 232),
+      FastBridge aMath (Pre 73 / Post 97)
+    - Social-Emotional/Behavior: My SAEBRS (Term 2 MP:1
+      87.660 / MP:2 78.630 / MP:3 81.960 / MP:4 81.430)
+    - Combined Performance: Student Engagement (Pre Strength /
+      Inst Average), Parent Engagement (Pre No / Inst Need),
+      Home WiFi/Internet (Pre No / Inst Modem), Participation
+      (Q3 50 / Q4 80) — *this is the engagement screening data
+      we already collect in our SchoolStartScreener!*
+- **Color encoding** is the same color language used elsewhere
+  in the product: each data-point chip is red / yellow / green
+  based on cut-band placement, so a parent or new teacher can
+  read the whole profile without knowing what "232" means on the
+  DnA aMath assessment.
+
+What ours already has (so we don't double-build):
+- Student Information card with photo, demographics, school/grade
+  chips. ✓
+- Interventions list (via `mtssPlans`) with status. ✓ (but the
+  "Plan ROI / Goal ROI / Latest Score" surfacing is *not* on the
+  profile card — it's buried in the plan detail.)
+- Some assessment data (FAST PM scores). ✓ (but rendered as a
+  table, not as the per-assessment colored-chip sub-cards.)
+- Engagement screener data (the "Combined Performance" cluster
+  in their bottom-right is essentially our SchoolStart screener
+  results). ✓
+
+What we'd add to match this pane (gap-list, ranked):
+1. **Top KPI strip.** 5-7 tiles aggregating the most-clicked
+   counts for this kid (Full Day Rate, Forms, Comments, Tags,
+   Thresholds met). High signal for low effort — a few SQL
+   counts wrapped in a colored card.
+2. **Plan ROI on the profile card.** Move the "Plan ROI / Goal
+   ROI / Latest Score" math from the plan detail onto the
+   intervention summary card. We already compute it.
+3. **Per-assessment colored-chip sub-cards** for the assessments
+   panel. This is the biggest visual upgrade — replaces the
+   current table view with scannable card-per-assessment chips.
+   Re-uses existing FAST cut-band placement; needs a generic
+   "ChipCard" component.
+4. **Tabbed assessment categories** (All / Literacy / Math / SEB
+   / Specials) so the panel can hold many years of data without
+   becoming a wall.
+5. **Comments / Tags / Forms counters** — implies we'd need
+   tables for each of those workflows. Out of scope for v0;
+   list as future once we add the Forms feature.
+6. **3D view entry point on the left rail** — that's the
+   Students 3D portrait grid idea we already saved (Save-for-later
+   #1). Worth noting that *eduCLIMBER itself* puts a 3D entry
+   point in the per-student rail, not just the cohort overview.
+
+Why it's compelling for our app:
+- Closes the "I have to click into 5 tabs to see what's
+  happening with this kid" complaint that every MTSS tool gets.
+- Re-uses data we already collect. The work is mostly visual
+  composition — colored-chip cards and a top KPI strip — not
+  new data plumbing.
+- The user already values our existing profile (it's wired up
+  as the `studentProfileReturnTo` target across multiple
+  dashboards), so this is upgrading the most-trafficked page in
+  the app.
+
+Not-trivial considerations:
+- Don't rebuild — *upgrade*. Specifically protect the existing
+  return-to-profile navigation flows that depend on the current
+  component shape and the `studentProfileReturnTo` setting in
+  App.tsx. Any rework needs to leave those entry points stable.
+- Top KPI strip needs cut-thoughtful counts. We don't currently
+  track Forms/Tags/Comments — for v0 the strip should only show
+  KPIs we can compute today (Full Day Rate, Engagement Score,
+  Plan-on-Track Count, Open Thresholds). Skip Forms/Comments
+  until we add those features rather than showing fake zeros.
+- Tab discipline: the "All" tab implies showing every assessment
+  card at once. Easy to make this a wall — limit to most-recent
+  N years per assessment + a "show older" affordance.
+- Assessment chip placement requires every assessment to have a
+  defined cut-band schema. We have that for FAST PM via
+  `placePm3` / `placeOnChart`; we'd need similar for any
+  additional assessments before they get colored chips (or fall
+  back to neutral chips for unscored data).
+
+Status: **idea parked** — this is the *most product-leverage*
+of the seven saved ideas because it upgrades the page the user
+already cares most about. No single ledger item triggers it;
+best surfaced as a **standalone "Student Profile v2" follow-up
+item** once items #3 (Academics) and #4 (SEB/SEL) ship, since
+those will produce the per-assessment colored-chip components
+this profile would re-use.
