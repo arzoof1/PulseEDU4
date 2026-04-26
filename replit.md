@@ -2323,3 +2323,71 @@ Status: **idea parked** — this is the natural hero view for item
 #5 (Equity dashboard). When we get to item #5, propose this widget
 as the centerpiece, with the Students 3D view as the
 "see the actual kids" complement.
+
+---
+
+## Save-for-later: eduCLIMBER "Program Evaluation" multi-panel
+
+Fourth "Save for later" screenshot from the user on Apr 26, 2026.
+
+Reference image: `attached_assets/image_1777213180593.png`
+
+What it is (from the screenshot):
+- A **Program Evaluation** page with a top filter strip (Assessment
+  picker = FAST, Subtest = aReading, Window = 3, Year = 2020-2021,
+  Schools multi-select, Grades multi-select, Filters button, Search
+  button) and **three stacked panels**, each a stacked-bar +
+  overlay-line combo card. All three answer "how is this assessment
+  trending" but at different aggregation levels:
+  1. **FAST - aReading** (top): three bars total — Fall / Winter /
+     Spring — with green (At/Above Benchmark) stacked on red
+     (Below Benchmark) and a teal **Avg Score** line overlaid on a
+     secondary right-side y-axis. The line trends up across the
+     year while the bar shifts from mostly-red to mostly-green —
+     classic "the kids are growing" picture.
+  2. **FAST - aReading by School** (middle): one stacked bar per
+     school per window (so Fall/Winter/Spring × ~7 schools = ~21
+     bars), with the same overlay line per school for Avg Score.
+     Lets a district admin spot which schools are pulling the
+     district up vs lagging.
+  3. **FAST - aReading by Grade** (bottom): one bar per grade per
+     window, with **multiple** overlay lines this time — Avg Score
+     plus two comparison/baseline lines (Aug '19 25%ile, Aug '19
+     Net'l Mean). Adds normative context so a school can see how
+     they sit vs prior cohorts and national benchmarks.
+- Top-right per-panel: Performance dropdown (probably swaps the
+  metric — Performance / Growth / Percentile etc.) plus pin /
+  expand / kebab icons. Implies cards are reorderable / pinnable
+  per user.
+
+Why it's compelling for our app:
+- Highest information density of the four saved screenshots —
+  one page answers "are kids growing on the assessment" at three
+  cuts simultaneously without making the user re-filter.
+- Drops directly onto item #3 (Academics dashboard). The data is
+  exactly what `studentFastScoresTable` already holds; cut-score
+  classification uses our existing `placePm3` / `placeOnChart`.
+- The "comparison lines" pattern (national mean, prior-year
+  percentile) is the differentiator vs a plain stacked bar. Earns
+  trust by showing context, not just a number in isolation.
+
+Not-trivial considerations:
+- We already have the FAST PM data and the cut-score plumbing;
+  the work is mostly the chart composition (recharts ComposedChart
+  with overlaid Bar + Line). Nivo not required for this one.
+- Comparison baselines: we'd need to either ingest national norms
+  (FAST publishes them) or compute prior-year cohort means from
+  our own historical data once we have multiple school years
+  loaded. Stage 1 could ship with just the school's own historical
+  trend line; baselines come later.
+- Window labeling: "Fall / Winter / Spring" assumes a 3-window
+  testing schedule. Schools that test more often (4-6 windows)
+  need a different label convention. Make the window count a
+  per-school setting.
+- Pinning / reordering panels is nice-to-have but not v0.
+
+Status: **idea parked** — this is the most direct mapping to
+the queued items: pull onto the table when we start item #3
+(Academics dashboard) since it could be the dashboard's main
+canvas. Pairs with the Sankey idea (same data, complementary
+lens).
