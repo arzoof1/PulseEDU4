@@ -2007,4 +2007,359 @@ router.get("/insights/behavior", async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/insights/academics
+//
+// School-wide academic-achievement dashboard. Item #3 of the eduCLIMBER
+// Phase Queue. Mirrors engagement + behavior in auth and grade-cohort
+// shape, but **intentionally drops the time-window param** because
+// academic data lives at fixed assessment-window dates (PM1/PM2/PM3,
+// AP1/AP2/AP3) — a per-day trend would just be three spikes. The
+// honest visualization for this domain is a cohort-average score
+// across the three measurement windows, not a daily line.
+//
+// Reads two tables:
+//   - student_fast_scores: PM1/PM2/PM3 + prior-year + BQ flag, with
+//     placement charts in lib/fastCutScores.ts. Drives KPIs, top
+//     lists, and the PM progression line.
+//   - assessments: vendor-tagged time-series scores (iReady, District
+//     SCI, etc.). Used to power the "data sources" panel and a
+//     PM3-distribution stacked bar grouped by source.
+//
+// Auth: same as engagement/behavior — core team only at the active
+// school. Returns 403 otherwise.
+// ---------------------------------------------------------------------------
+
+router.get("/insights/academics", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "Academics dashboard is core-team only" });
+    return;
+  }
+
+  // Same defensive grade parsing as /insights/engagement and /insights/behavior.
+  // students.grade is INTEGER; the UI sends "K" for kindergarten and numeric
+  // strings 1..12 otherwise. Anything we can't map silently becomes "no
+  // filter" rather than crashing the route.
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  // Build the cohort: every student at the school, optionally narrowed
+  // to one grade. We need the grade per student at hand so we can run
+  // grade-aware FAST placement (prior-grade chart for PM3 per the FAST
+  // worked example).
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+      ),
+    );
+
+  // Empty-cohort fast-path (mirrors engagement/behavior). Don't hand
+  // Drizzle an empty inArray below — return zeros instead.
+  if (studentRows.length === 0) {
+    res.json({
+      grade: gradeFilter,
+      totals: {
+        studentsAssessed: 0,
+        elaPm3Average: null,
+        mathPm3Average: null,
+        atOrAboveLevel3Pct: null,
+        bottomQuartilePct: null,
+        growersPct: null,
+      },
+      progression: { ela: [], math: [] },
+      placementDistribution: { ela: [], math: [] },
+      topLists: {
+        topGrowersEla: [],
+        topGrowersMath: [],
+        lowestPm3Ela: [],
+        lowestPm3Math: [],
+      },
+      sources: { fast: 0, iReady: 0, sci: 0 },
+    });
+    return;
+  }
+
+  const studentIds = studentRows.map((r) => r.studentId);
+  const gradeById = new Map<string, number | null>(
+    studentRows.map((r) => [r.studentId, r.grade ?? null]),
+  );
+  const nameById = new Map<string, string>(
+    studentRows.map((r) => [
+      r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+    ]),
+  );
+
+  // ----- Pull all FAST score rows for the cohort --------------------------
+  const fastRows = await db
+    .select({
+      studentId: studentFastScoresTable.studentId,
+      subject: studentFastScoresTable.subject,
+      pm1: studentFastScoresTable.pm1,
+      pm2: studentFastScoresTable.pm2,
+      pm3: studentFastScoresTable.pm3,
+      priorYearBq: studentFastScoresTable.priorYearBq,
+    })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        inArray(studentFastScoresTable.studentId, studentIds),
+      ),
+    );
+
+  // ----- Aggregate FAST in JS --------------------------------------------
+  // Per-subject sums for PM averages, per-subject placement histograms,
+  // per-student deltas for "top growers", and a flat "lowest PM3" list.
+  type Subj = "ela" | "math";
+  const sums = {
+    ela: { pm1: 0, pm1n: 0, pm2: 0, pm2n: 0, pm3: 0, pm3n: 0 },
+    math: { pm1: 0, pm1n: 0, pm2: 0, pm2n: 0, pm3: 0, pm3n: 0 },
+  };
+  const placementCounts: Record<Subj, Record<1 | 2 | 3 | 4 | 5, number>> = {
+    ela: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+    math: { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0 },
+  };
+  // Used to compute "students assessed" and the % growers / % at L3+
+  // metrics. A student counts as "assessed" if they have ANY non-null
+  // PM score in either subject.
+  const studentsAssessed = new Set<string>();
+  let pm3Placements = 0;
+  let pm3AtL3Plus = 0;
+  let pm3HasAny = 0; // count of (student, subject) pairs with pm3
+  let growersCount = 0; // students whose PM3 > PM1 in at least one subject
+  const grewBySubject = new Map<string, boolean>(); // studentId → grew?
+  const bqStudents = new Set<string>();
+
+  type Grower = {
+    studentId: string;
+    studentName: string;
+    pm1: number;
+    pm3: number;
+    delta: number;
+  };
+  const elaGrowers: Grower[] = [];
+  const mathGrowers: Grower[] = [];
+  type LowPm3 = {
+    studentId: string;
+    studentName: string;
+    pm3: number;
+    level: 1 | 2 | 3 | 4 | 5;
+  };
+  const elaLow: LowPm3[] = [];
+  const mathLow: LowPm3[] = [];
+
+  for (const r of fastRows) {
+    const subject = (r.subject === "math" ? "math" : "ela") as Subj;
+    studentsAssessed.add(r.studentId);
+    if (r.priorYearBq) bqStudents.add(r.studentId);
+
+    if (r.pm1 != null) {
+      sums[subject].pm1 += r.pm1;
+      sums[subject].pm1n += 1;
+    }
+    if (r.pm2 != null) {
+      sums[subject].pm2 += r.pm2;
+      sums[subject].pm2n += 1;
+    }
+    if (r.pm3 != null) {
+      sums[subject].pm3 += r.pm3;
+      sums[subject].pm3n += 1;
+      pm3HasAny += 1;
+
+      // Placement: use the FAST worked-example rule (PM3 → prior-grade
+      // chart for placement bookkeeping). Falls back to current grade
+      // for 3rd graders. hasChart() guards against grades outside the
+      // chart range (e.g., K-2, Algebra/Geometry).
+      const grade = gradeById.get(r.studentId) ?? null;
+      if (grade !== null) {
+        const placement = placePm3(r.pm3, subject, grade);
+        if (placement) {
+          placementCounts[subject][placement.level] += 1;
+          pm3Placements += 1;
+          if (placement.level >= 3) pm3AtL3Plus += 1;
+
+          // Lowest-PM3 list: include only L1 placements (the
+          // "biggest gap" cohort the dashboard surfaces).
+          if (placement.level === 1) {
+            const entry: LowPm3 = {
+              studentId: r.studentId,
+              studentName: nameById.get(r.studentId) ?? r.studentId,
+              pm3: r.pm3,
+              level: 1,
+            };
+            if (subject === "ela") elaLow.push(entry);
+            else mathLow.push(entry);
+          }
+        }
+      }
+
+      // Growers: PM3 - PM1 delta. Track per-student "grew at all" too.
+      if (r.pm1 != null) {
+        const delta = r.pm3 - r.pm1;
+        const entry: Grower = {
+          studentId: r.studentId,
+          studentName: nameById.get(r.studentId) ?? r.studentId,
+          pm1: r.pm1,
+          pm3: r.pm3,
+          delta,
+        };
+        if (subject === "ela") elaGrowers.push(entry);
+        else mathGrowers.push(entry);
+
+        if (delta > 0) {
+          if (!grewBySubject.get(r.studentId)) {
+            grewBySubject.set(r.studentId, true);
+            growersCount += 1;
+          }
+        } else if (!grewBySubject.has(r.studentId)) {
+          grewBySubject.set(r.studentId, false);
+        }
+      }
+    }
+  }
+
+  function avg(s: { pm1: number; pm1n: number; pm2: number; pm2n: number; pm3: number; pm3n: number }): {
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+  } {
+    return {
+      pm1: s.pm1n ? Number((s.pm1 / s.pm1n).toFixed(1)) : null,
+      pm2: s.pm2n ? Number((s.pm2 / s.pm2n).toFixed(1)) : null,
+      pm3: s.pm3n ? Number((s.pm3 / s.pm3n).toFixed(1)) : null,
+    };
+  }
+  const elaAvg = avg(sums.ela);
+  const mathAvg = avg(sums.math);
+
+  // Sort top-N lists in JS. 10 each.
+  const TOP_N = 10;
+  const elaGrowersTop = elaGrowers
+    .sort((a, b) => b.delta - a.delta)
+    .slice(0, TOP_N);
+  const mathGrowersTop = mathGrowers
+    .sort((a, b) => b.delta - a.delta)
+    .slice(0, TOP_N);
+  const elaLowTop = elaLow.sort((a, b) => a.pm3 - b.pm3).slice(0, TOP_N);
+  const mathLowTop = mathLow.sort((a, b) => a.pm3 - b.pm3).slice(0, TOP_N);
+
+  // ----- Pull assessment-source counts (data-availability panel) ---------
+  // Three short COUNT(*) queries — schoolId-scoped, optionally narrowed
+  // by cohort. Used to power the "data sources" panel that shows what
+  // additional vendors have data, hinting at future overlay potential.
+  async function sourceCount(source: string): Promise<number> {
+    const [{ c }] = (
+      await db.execute(
+        gradeInt !== null
+          ? sql`SELECT COUNT(*)::int AS c FROM assessments
+                WHERE school_id = ${schoolId}
+                  AND source = ${source}
+                  AND student_id = ANY(${studentIds})`
+          : sql`SELECT COUNT(*)::int AS c FROM assessments
+                WHERE school_id = ${schoolId} AND source = ${source}`,
+      )
+    ).rows as { c: number }[];
+    return c;
+  }
+  const [iReadyCount, sciCount] = await Promise.all([
+    sourceCount("iReady"),
+    sourceCount("District SCI"),
+  ]);
+
+  // ----- Build response --------------------------------------------------
+  const cohortSize = studentRows.length;
+  const studentsWithBothPmsForGrowth = grewBySubject.size;
+
+  res.json({
+    grade: gradeFilter,
+    totals: {
+      studentsAssessed: studentsAssessed.size,
+      // PM3 averages by subject (rounded to 1 dp). null when nothing seen.
+      elaPm3Average: elaAvg.pm3,
+      mathPm3Average: mathAvg.pm3,
+      // % of all PM3 placements landing at L3 or above. null if no
+      // placements were possible (e.g., all-K-2 cohort).
+      atOrAboveLevel3Pct:
+        pm3Placements > 0
+          ? Number(((100 * pm3AtL3Plus) / pm3Placements).toFixed(1))
+          : null,
+      // % of cohort flagged as Bottom Quartile from prior-year final.
+      bottomQuartilePct:
+        cohortSize > 0
+          ? Number(((100 * bqStudents.size) / cohortSize).toFixed(1))
+          : null,
+      // % of students with PM1 + PM3 in at least one subject who grew.
+      growersPct:
+        studentsWithBothPmsForGrowth > 0
+          ? Number(
+              ((100 * growersCount) / studentsWithBothPmsForGrowth).toFixed(1),
+            )
+          : null,
+    },
+    // PM1 → PM2 → PM3 cohort-average progression. Two lines (ELA, Math)
+    // shaped as { window, score } for direct chart consumption. null
+    // entries are dropped; the chart can render gaps as "no data".
+    progression: {
+      ela: [
+        elaAvg.pm1 != null ? { window: "PM1", score: elaAvg.pm1 } : null,
+        elaAvg.pm2 != null ? { window: "PM2", score: elaAvg.pm2 } : null,
+        elaAvg.pm3 != null ? { window: "PM3", score: elaAvg.pm3 } : null,
+      ].filter(Boolean),
+      math: [
+        mathAvg.pm1 != null ? { window: "PM1", score: mathAvg.pm1 } : null,
+        mathAvg.pm2 != null ? { window: "PM2", score: mathAvg.pm2 } : null,
+        mathAvg.pm3 != null ? { window: "PM3", score: mathAvg.pm3 } : null,
+      ].filter(Boolean),
+    },
+    // PM3 placement distribution per subject — feeds the "are kids
+    // landing in proficient bands?" stacked-bar visual.
+    placementDistribution: {
+      ela: [1, 2, 3, 4, 5].map((lvl) => ({
+        level: lvl,
+        count: placementCounts.ela[lvl as 1 | 2 | 3 | 4 | 5],
+      })),
+      math: [1, 2, 3, 4, 5].map((lvl) => ({
+        level: lvl,
+        count: placementCounts.math[lvl as 1 | 2 | 3 | 4 | 5],
+      })),
+    },
+    topLists: {
+      topGrowersEla: elaGrowersTop,
+      topGrowersMath: mathGrowersTop,
+      lowestPm3Ela: elaLowTop,
+      lowestPm3Math: mathLowTop,
+    },
+    sources: {
+      fast: fastRows.length,
+      iReady: iReadyCount,
+      sci: sciCount,
+    },
+  });
+});
+
 export default router;

@@ -2111,7 +2111,67 @@ NOT drop any of these without an explicit user OK**.
    debt; revisit holistically when we touch the navigation model.
 3. **Academics dashboard** — multi-cohort FAST/iReady/SCI breakdowns
    with filters (school × grade × subgroup). Uses the data we just
-   seeded plus existing FAST PM. STATUS: queued.
+   seeded plus existing FAST PM. STATUS: **DONE (Apr 26, 2026)**.
+
+   Shipped:
+   - Backend `GET /api/insights/academics` in `routes/insights.ts`
+     (~line 2036). Same auth as engagement/behavior: `loadStaff` +
+     `isCoreTeam` + `requireSchool` (403 otherwise). **Intentionally
+     drops the `?window=` param** — academic data lives at fixed
+     PM1/PM2/PM3 + AP1/AP2/AP3 dates, so a windowed daily trend
+     would just be three spikes. Keeps the same defensive
+     `?grade=K|0..12` parsing for visual symmetry.
+   - Empty-cohort fast-path returns a fully-zeroed payload before any
+     `inArray()` call (mirrors engagement/behavior).
+   - 6 KPIs from `student_fast_scores`: studentsAssessed (distinct
+     students with any PM), elaPm3Average + mathPm3Average (cohort
+     means rounded to 1 dp, `null` if nothing seen),
+     `atOrAboveLevel3Pct` (% of PM3 placements landing L3/L4/L5 via
+     `placePm3()`), `bottomQuartilePct` (% students flagged
+     `priorYearBq`), `growersPct` (% with PM3 > PM1 in any subject).
+   - Progression series: cohort-average score at PM1 → PM2 → PM3,
+     two parallel arrays (ELA + Math), null entries dropped so a
+     subject without data renders as a gap not a zero.
+   - Placement distribution: 5×2 matrix of PM3 placement counts (L1
+     through L5 × ELA/Math), driving the stacked-bar chart.
+   - 4 top-N (10) lists: top growers ELA, top growers Math (PM3 −
+     PM1 delta), L1 ELA students, L1 Math students (lowest PM3 in
+     L1 placement only — the "biggest gap to close" cohort).
+   - Sources panel: row counts for FAST / iReady / District SCI to
+     hint at vendor coverage and seeded volume. iReady + SCI counts
+     come from two short cohort-scoped raw-SQL `COUNT(*)` queries
+     (parameterized via Drizzle's `sql` template, no injection).
+   - FAST placement uses per-student current grade from
+     `students.grade` and passes it to `placePm3()`, which internally
+     applies the FAST worked-example "PM3 → prior-grade chart" rule.
+     Architect explicitly verified this.
+   - Frontend `AcademicsDashboard.tsx`: 6-tile KPI strip with subject
+     and outcome accent colors (blue=ELA, orange=Math, green=success
+     metrics, red=BQ risk), recharts LineChart for PM progression
+     (two lines), recharts BarChart for placement distribution
+     (grouped bars), 4 top-N tables in a responsive grid. Student
+     names are buttons calling `onOpenProfile` for drill-in.
+   - `App.tsx`: academics tile graduated from "Phase 4" to "Today"
+     with `targetSection: "academicsDashboard"` and a FAST-accurate
+     subtitle. New render block gated by `canAccessMtssHub` sets
+     `studentProfileReturnTo: "academicsDashboard"` so the profile
+     back-button returns here.
+   - Widened `studentProfileReturnTo` union to include the three
+     dashboard return targets (was previously narrow → engagement,
+     behavior, and academics all assigned out-of-union literals).
+     This clears the +6 TS errors that the prior two dashboards +
+     this one would have introduced. `setActiveSection` did NOT
+     cascade as feared — that union was already wider.
+   - Architect review: PASS. Tenant scoping, raw-SQL parameterization,
+     auth parity, defensive grade parsing, empty-cohort handling, and
+     FAST placement correctness all explicitly verified. No
+     HIGH/CRITICAL issues.
+
+   Known pre-existing surface-wide debt (NOT introduced here): 28 TS
+   strict-mode errors in `src/seed.ts` (lines 1300+) — implicit-any
+   on transaction callbacks and array methods. Untouched by this
+   change. The api-server still builds and runs correctly via
+   esbuild; tsc-strict is informational only at this point.
 4. **SEB/SEL dashboard** — surface social-emotional/behavioral signals
    already in the DB (support notes, MTSS plans, accommodations,
    trusted-adult data, parent-engagement signals). STATUS: queued.

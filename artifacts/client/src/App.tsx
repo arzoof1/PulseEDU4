@@ -25,6 +25,7 @@ import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import InsightsWatchlist from "./components/InsightsWatchlist";
 import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
+import AcademicsDashboard from "./components/AcademicsDashboard";
 import StudentProfile from "./components/StudentProfile";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -3058,9 +3059,10 @@ const INSIGHTS_TILES: InsightsTile[] = [
     icon: "📘",
     title: "Academics",
     subtitle:
-      "Course grades, assessment trends (iReady, FAST), proficiency by standard. Dashboard ships Phase 4 once district CSV imports land.",
-    phase: "Phase 4",
+      "FAST PM1→PM2→PM3 progression — top growers, L1 students, % at proficient, and bottom-quartile risk.",
+    phase: "Today",
     group: "domains",
+    targetSection: "academicsDashboard",
   },
   {
     id: "attendance",
@@ -3518,7 +3520,11 @@ function App() {
   // callers; the Teacher Roster Spider pill sets it to "teacherRoster"
   // before navigating.
   const [studentProfileReturnTo, setStudentProfileReturnTo] = useState<
-    "insightsWatchlist" | "teacherRoster"
+    | "insightsWatchlist"
+    | "teacherRoster"
+    | "engagementDashboard"
+    | "behaviorDashboard"
+    | "academicsDashboard"
   >("insightsWatchlist");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -17494,6 +17500,18 @@ function App() {
             // Pin the back-target so the profile's Back button returns
             // to the behavior dashboard.
             setStudentProfileReturnTo("behaviorDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "academicsDashboard" && canAccessMtssHub && (
+        <AcademicsDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // Pin the back-target so the profile's Back button returns
+            // to the academics dashboard.
+            setStudentProfileReturnTo("academicsDashboard");
             setActiveSection("studentProfile");
           }}
         />
