@@ -2807,3 +2807,109 @@ view" follow-up after the Academics dashboard ships, so the
 small-multiples component we'd build can be reused on the
 Academics page (e.g., score-distribution histograms by school /
 grade / window). Eight saved ideas in the parking lot now.
+
+---
+
+## Save-for-later: eduCLIMBER "CICO Point Sheet" Tier 2 monitor
+
+Ninth "Save for later" screenshot from the user on Apr 26, 2026.
+**Important context:** this is a *specific Tier 2 intervention*,
+not a dashboard category. CICO ("Check-In / Check-Out") is one
+of the most widely-used evidence-based Tier 2 behavior
+interventions in K-12 — a student carries a daily point sheet
+that teachers rate at the end of every period across a small set
+of expectations (Be Safe / Be Respectful / Be Responsible / etc.),
+and the kid checks in with a coach in the morning and out in the
+afternoon. This screen is the **per-student progress monitor**
+that the coach uses to decide if the intervention is working.
+
+Reference image: `attached_assets/image_1777213461995.png`
+
+What it is (from the screenshot):
+- Title: **Behavior (Point Sheet): CICO (Dec 31st, 19 to Feb
+  13th, 20)** with a dropdown caret on the title (likely lets
+  the coach swap between this kid's *other* active point sheets,
+  if they have multiple).
+- Pin icon top-right (same pin-to-dashboard pattern as the other
+  eduCLIMBER charts).
+- Filter row: **Date Range** picker + **Quick Ranges** dropdown
+  (Last 7 days, This week, Last month, etc.).
+- **Tab strip**: Summary (selected) / Goal / By Period / By
+  Expectation. Summary is the at-a-glance; the other tabs drill
+  into a single dimension.
+- **Summary card (top-left, ~50% width)**: huge centered KPI
+  block:
+  - "Overall Percentage Earned" → **84.63%**
+  - "Goal 80%" (the threshold for "intervention is working")
+  - "Average Score 3.385294" (mean per-rating score on what
+    looks like a 1-4 scale)
+  This single number is what the MTSS team meeting will open
+  on. Above goal = continue / fade. Below goal = intensify or
+  switch.
+- **By Day of Week card (top-right)**: 5 horizontal blue bars
+  (Mon-Fri) with x-axis "Percentage Earned Toward Goal" 0-100.
+  Surfaces day-pattern issues — e.g., Monday is dragging at 65%
+  while Tue/Thu hit 95%+.
+- **By Expectation card (bottom-left)**: 5 horizontal bars, one
+  per expectation on this kid's specific point sheet (Keep Hands
+  to Self / Raises hand to speak / Respectful / Responsible /
+  Safe). Diagnoses *which* expectation needs explicit teaching
+  vs which is already mastered.
+- **By Period card (bottom-right)**: 8 horizontal bars, one per
+  period in the school day (Morning Meeting / Writing / Math /
+  Science / Lunch/Recess / Specials / Reading / Social Studies).
+  Diagnoses *when* during the day the kid struggles — the most
+  actionable single chart on the page (Math at 60% vs everything
+  else at 85%+ → Math teacher needs the strategy conversation).
+- All four charts use the same blue. Goal line is implicit (the
+  80% number) — could be a vertical reference line on each bar
+  chart for added visual punch.
+
+Why it's compelling for our app:
+- **Plugs directly into our existing MTSS system.** We already
+  have `mtssPlans` for Tier 2/3 intervention tracking. CICO
+  becomes a *typed* MTSS plan (`type: 'cico'`) with structured
+  daily score capture instead of free-text progress notes.
+- Daily point-sheet capture is the only common workflow no part
+  of our app touches yet — the gap between "we identified a kid
+  needs help" (Early Warning / Behavior dashboard / referral
+  form) and "we know if the help is working" (this view).
+- Same data also feeds **fidelity tracking** ("did the teacher
+  actually fill out the point sheet today?") which is its own
+  Tier-2-team meeting question.
+
+Not-trivial considerations:
+- **New data plumbing required.** Need at least:
+  - `cicoPointSheets` (template per kid: list of expectations,
+    list of periods, scoring scale 1-N, goal %, start/end dates)
+  - `cicoPointSheetEntries` (one per period per day per kid:
+    score 1-N or absent, optional teacher comment, who entered)
+  This is the only saved idea that requires schema work
+  meaningful enough to call out before starting.
+- **Daily entry UX.** This view is the *consumer*; the *producer*
+  is a teacher quickly tapping period scores during the day. A
+  teacher-facing entry screen (probably mobile-friendly, one
+  card per kid on their roster, three taps to score and save)
+  is the harder build than this dashboard.
+- **Goal-line reference**: add a vertical 80% line on each bar
+  chart. Tiny visual, big readability win — the eye should
+  immediately see which bars cleared goal and which didn't.
+- **Multi-sheet picker** (the dropdown in the title) — a kid
+  can have CICO for behavior *and* a separate point sheet for
+  academic engagement. Title acts as a switcher between active
+  point sheets for the same student.
+- **Fade-out math.** CICO best practice fades the kid off the
+  intervention after 4 consecutive weeks above goal. The system
+  should surface a "ready to fade" badge automatically, not
+  require the coach to count weeks manually.
+
+Status: **idea parked** — this is a **substantial**
+intervention-tracking feature, not just a chart. The dashboard
+in the screenshot is the easy half; the daily-entry workflow
+and the data model are the real work. Best surfaced as its own
+follow-up item *after* item #4 (SEB/SEL dashboard) ships, since
+the SEB dashboard will identify the kids who *need* CICO and
+this becomes the natural "now what?" workflow that follows.
+Pairs with the Tier 2 Referral Form idea (Save-for-later #6) —
+together they are the full Tier 2 lifecycle. Nine saved ideas
+in the parking lot now.
