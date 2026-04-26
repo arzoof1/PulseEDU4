@@ -2597,6 +2597,426 @@ router.get("/insights/academics/band", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /insights/academics/trajectory
+//
+// Bucket every assessed student into a PM1 -> PM3 "trajectory archetype"
+// for one subject (ELA or Math). Mirrors the Trajectory Archetypes
+// design from the canvas mockup. The 6 archetypes are exhaustive and
+// disjoint -- every (PM1 band, PM3 band) cell of the 4x4 matrix maps to
+// exactly one archetype, so the parent counts sum to the cohort total.
+//
+// Bands (mapped from FAST levels using the existing placement helpers):
+//   well  = L1
+//   below = L2
+//   above = L3 / L4 / L5
+//   na    = no score on file
+//
+// Archetypes:
+//   climbed   - PM3 band strictly above PM1 band (excluding NA)
+//   stayedHi  - above -> above
+//   slipped   - PM3 band strictly below PM1 band (excluding NA)
+//   stuck     - well -> well
+//   stayedLo  - below -> below
+//   untested  - any student missing PM1 or PM3 (or both)
+//
+// Sub-archetypes (also disjoint within each parent -- sub-counts sum
+// to the parent count):
+//   climbed:  bigLeap (well->above) / firstStep (well->below) /
+//             crossedToProf (below->above)
+//   stayedHi: l3 / l4 / l5  (split by PM3 sub-level)
+//   slipped:  slippedToL1 (below->well) / bigDrop (above->well) /
+//             slippedOneBand (above->below)
+//   stuck:    closestToEscape (1.3) / midStuck (1.2) / deeplyStuck (1.1)
+//   stayedLo: wobbled (PM2 placement differs from PM1+PM3) /
+//             edgeOfClimb (PM3 sub "2.2" and not wobbled) /
+//             edgeOfSlip (PM3 sub "2.1" and not wobbled). The wobble
+//             rule is checked first so the splits stay disjoint.
+//   untested: noPm1 / noPm3 / bothMissing
+//
+// Auth: same core-team-only gate as the rest of /insights/academics.
+// ---------------------------------------------------------------------------
+
+type TrajectoryBand = "well" | "below" | "above" | "na";
+type TrajectoryArchetype =
+  | "climbed"
+  | "stayedHi"
+  | "slipped"
+  | "stuck"
+  | "stayedLo"
+  | "untested";
+
+const TRAJ_BAND_ORDER: TrajectoryBand[] = ["above", "below", "well", "na"];
+
+function levelToBand(
+  placement: ReturnType<typeof placeOnChart>,
+): TrajectoryBand {
+  if (!placement) return "na";
+  if (placement.level >= 3) return "above";
+  if (placement.level === 2) return "below";
+  return "well"; // L1
+}
+
+interface TrajectoryStudentRec {
+  studentId: string;
+  studentName: string;
+  grade: number;
+  pm1: number | null;
+  pm2: number | null;
+  pm3: number | null;
+  pm1Band: TrajectoryBand;
+  pm2Band: TrajectoryBand;
+  pm3Band: TrajectoryBand;
+  pm3SubLevel: string | null;
+}
+
+function classifyArchetype(rec: TrajectoryStudentRec): TrajectoryArchetype {
+  const a = rec.pm1Band;
+  const b = rec.pm3Band;
+  if (a === "na" || b === "na") return "untested";
+  if (a === "above" && b === "above") return "stayedHi";
+  if (a === "below" && b === "below") return "stayedLo";
+  if (a === "well" && b === "well") return "stuck";
+  const rank: Record<Exclude<TrajectoryBand, "na">, number> = {
+    above: 2,
+    below: 1,
+    well: 0,
+  };
+  return rank[b] > rank[a] ? "climbed" : "slipped";
+}
+
+function classifySubArchetype(rec: TrajectoryStudentRec): string {
+  const a = classifyArchetype(rec);
+  switch (a) {
+    case "climbed": {
+      if (rec.pm1Band === "well" && rec.pm3Band === "above") return "bigLeap";
+      if (rec.pm1Band === "well" && rec.pm3Band === "below")
+        return "firstStep";
+      return "crossedToProf";
+    }
+    case "stayedHi": {
+      if (rec.pm3SubLevel === "5") return "l5";
+      if (rec.pm3SubLevel === "4") return "l4";
+      return "l3";
+    }
+    case "slipped": {
+      if (rec.pm1Band === "below" && rec.pm3Band === "well")
+        return "slippedToL1";
+      if (rec.pm1Band === "above" && rec.pm3Band === "well") return "bigDrop";
+      return "slippedOneBand";
+    }
+    case "stuck": {
+      if (rec.pm3SubLevel === "1.3") return "closestToEscape";
+      if (rec.pm3SubLevel === "1.2") return "midStuck";
+      return "deeplyStuck";
+    }
+    case "stayedLo": {
+      const wobbled =
+        rec.pm2Band !== "na" &&
+        rec.pm2Band !== rec.pm1Band &&
+        rec.pm2Band !== rec.pm3Band;
+      if (wobbled) return "wobbled";
+      if (rec.pm3SubLevel === "2.2") return "edgeOfClimb";
+      return "edgeOfSlip";
+    }
+    case "untested": {
+      const hasPm1 = rec.pm1Band !== "na";
+      const hasPm3 = rec.pm3Band !== "na";
+      if (!hasPm1 && hasPm3) return "noPm1";
+      if (hasPm1 && !hasPm3) return "noPm3";
+      return "bothMissing";
+    }
+  }
+}
+
+// Build the per-cohort trajectory record set. Shared between the summary
+// endpoint and the drill-in endpoint so the two stay in sync.
+async function loadTrajectoryRecs(
+  schoolId: number,
+  subject: "ela" | "math",
+  gradeInt: number | null,
+  filters: ReturnType<typeof parseInsightsFilters>,
+): Promise<TrajectoryStudentRec[]> {
+  let studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+      ),
+    );
+
+  if (hasAnyInsightsFilter(filters)) {
+    const allowed = await applyInsightsFilters(
+      schoolId,
+      studentRows.map((r) => r.studentId),
+      filters,
+    );
+    studentRows = studentRows.filter((r) => allowed.has(r.studentId));
+  }
+
+  // Drop students whose grade has no FAST chart (K-2, Algebra/Geometry).
+  // Without a chart we cannot place PM scores onto a level -- they cannot
+  // honestly appear in any band, including "untested".
+  studentRows = studentRows.filter(
+    (r) => r.grade != null && hasChart(subject, r.grade),
+  );
+
+  if (studentRows.length === 0) return [];
+
+  const studentIds = studentRows.map((r) => r.studentId);
+  const gradeById = new Map<string, number>(
+    studentRows.map((r) => [r.studentId, r.grade as number]),
+  );
+  const nameById = new Map<string, string>(
+    studentRows.map((r) => [
+      r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+    ]),
+  );
+
+  const fastRows = await db
+    .select({
+      studentId: studentFastScoresTable.studentId,
+      pm1: studentFastScoresTable.pm1,
+      pm2: studentFastScoresTable.pm2,
+      pm3: studentFastScoresTable.pm3,
+    })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        eq(studentFastScoresTable.subject, subject),
+        inArray(studentFastScoresTable.studentId, studentIds),
+      ),
+    );
+  // Explicit Map<K, V> typing -- fastRows flows from a Drizzle .select()
+  // chain that the local TS server resolves to any[] until lib/db is
+  // pre-built, and without this annotation .get() returns unknown and
+  // fr?.pm1 reports "Property pm1 does not exist on type {}".
+  type TrajFastRow = {
+    studentId: string;
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+  };
+  const fastByStudent = new Map<string, TrajFastRow>();
+  for (const r of fastRows as TrajFastRow[]) fastByStudent.set(r.studentId, r);
+
+  const recs: TrajectoryStudentRec[] = [];
+  for (const sr of studentRows) {
+    const grade = gradeById.get(sr.studentId)!;
+    const fr = fastByStudent.get(sr.studentId);
+    const pm1 = fr?.pm1 ?? null;
+    const pm2 = fr?.pm2 ?? null;
+    const pm3 = fr?.pm3 ?? null;
+
+    const pm1Placement =
+      pm1 != null ? placeOnChart(pm1, subject, grade) : null;
+    const pm2Placement =
+      pm2 != null ? placeOnChart(pm2, subject, grade) : null;
+    const pm3Placement = pm3 != null ? placePm3(pm3, subject, grade) : null;
+
+    recs.push({
+      studentId: sr.studentId,
+      studentName: nameById.get(sr.studentId) ?? sr.studentId,
+      grade,
+      pm1,
+      pm2,
+      pm3,
+      pm1Band: levelToBand(pm1Placement),
+      pm2Band: levelToBand(pm2Placement),
+      pm3Band: levelToBand(pm3Placement),
+      pm3SubLevel: pm3Placement?.subLevel ?? null,
+    });
+  }
+  return recs;
+}
+
+router.get("/insights/academics/trajectory", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res
+      .status(403)
+      .json({ error: "Academics trajectory is core-team only" });
+    return;
+  }
+
+  const subjectRaw =
+    typeof req.query.subject === "string"
+      ? req.query.subject.toLowerCase()
+      : "";
+  const subject: "ela" | "math" = subjectRaw === "math" ? "math" : "ela";
+
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+  const filters = parseInsightsFilters(req);
+
+  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInt, filters);
+
+  const matrix: Record<TrajectoryBand, Record<TrajectoryBand, number>> = {
+    above: { above: 0, below: 0, well: 0, na: 0 },
+    below: { above: 0, below: 0, well: 0, na: 0 },
+    well: { above: 0, below: 0, well: 0, na: 0 },
+    na: { above: 0, below: 0, well: 0, na: 0 },
+  };
+  const counts: Record<TrajectoryArchetype, number> = {
+    climbed: 0,
+    stayedHi: 0,
+    slipped: 0,
+    stuck: 0,
+    stayedLo: 0,
+    untested: 0,
+  };
+  const subCounts: Record<TrajectoryArchetype, Record<string, number>> = {
+    climbed: {},
+    stayedHi: {},
+    slipped: {},
+    stuck: {},
+    stayedLo: {},
+    untested: {},
+  };
+
+  for (const r of recs) {
+    matrix[r.pm1Band][r.pm3Band] += 1;
+    const a = classifyArchetype(r);
+    counts[a] += 1;
+    const sub = classifySubArchetype(r);
+    subCounts[a][sub] = (subCounts[a][sub] ?? 0) + 1;
+  }
+
+  res.json({
+    subject,
+    grade: gradeFilter,
+    total: recs.length,
+    bandOrder: TRAJ_BAND_ORDER,
+    matrix,
+    counts,
+    subCounts,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /insights/academics/trajectory/students
+//
+// Drill-in for the trajectory dashboard. Returns the student list for one
+// (archetype) or (archetype, subKey) bucket. Reuses the BandStudentsDrawer
+// shape so the client can reuse the same drawer component.
+// ---------------------------------------------------------------------------
+router.get("/insights/academics/trajectory/students", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res
+      .status(403)
+      .json({ error: "Academics trajectory is core-team only" });
+    return;
+  }
+
+  const subjectRaw =
+    typeof req.query.subject === "string"
+      ? req.query.subject.toLowerCase()
+      : "";
+  const subject: "ela" | "math" | null =
+    subjectRaw === "ela" ? "ela" : subjectRaw === "math" ? "math" : null;
+  if (!subject) {
+    res.status(400).json({ error: "subject (ela|math) required" });
+    return;
+  }
+  const ARCHETYPE_KEYS: TrajectoryArchetype[] = [
+    "climbed",
+    "stayedHi",
+    "slipped",
+    "stuck",
+    "stayedLo",
+    "untested",
+  ];
+  const archetype = req.query.archetype;
+  if (
+    typeof archetype !== "string" ||
+    !ARCHETYPE_KEYS.includes(archetype as TrajectoryArchetype)
+  ) {
+    res.status(400).json({ error: "valid archetype required" });
+    return;
+  }
+  const wantArchetype = archetype as TrajectoryArchetype;
+  const subKey =
+    typeof req.query.subKey === "string" && req.query.subKey.trim()
+      ? req.query.subKey.trim()
+      : null;
+
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+  const filters = parseInsightsFilters(req);
+
+  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInt, filters);
+
+  type Hit = {
+    studentId: string;
+    studentName: string;
+    grade: number | null;
+    pm1: number | null;
+    pm3: number | null;
+  };
+  const hits: Hit[] = [];
+  for (const r of recs) {
+    if (classifyArchetype(r) !== wantArchetype) continue;
+    if (subKey && classifySubArchetype(r) !== subKey) continue;
+    hits.push({
+      studentId: r.studentId,
+      studentName: r.studentName,
+      grade: r.grade,
+      pm1: r.pm1,
+      pm3: r.pm3,
+    });
+  }
+  hits.sort((a, b) => a.studentName.localeCompare(b.studentName));
+
+  const CAP = 200;
+  const truncated = hits.length > CAP;
+  res.json({
+    subject,
+    archetype: wantArchetype,
+    subKey,
+    students: truncated ? hits.slice(0, CAP) : hits,
+    truncated,
+    total: hits.length,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /insights/sebsel — Social-Emotional / Behavioral whole-school view.
 //
 // Item #4 in the eduCLIMBER Phase Queue. Mirrors the engagement / behavior /

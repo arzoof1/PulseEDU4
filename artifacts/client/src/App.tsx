@@ -26,6 +26,7 @@ import InsightsWatchlist from "./components/InsightsWatchlist";
 import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
+import AcademicsTrajectory from "./components/AcademicsTrajectory";
 import AttendanceDashboard from "./components/AttendanceDashboard";
 import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
@@ -3069,6 +3070,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "academicsDashboard",
   },
   {
+    id: "academicsTrajectory",
+    icon: "📈",
+    title: "Academic Trajectories",
+    subtitle:
+      "FAST PM1 → PM3 by journey type — climbed, held the line, slipped, stuck, untested. Drill into each archetype for actionable sub-groups.",
+    phase: "Today",
+    group: "domains",
+    targetSection: "academicsTrajectory",
+  },
+  {
     id: "attendance",
     icon: "📅",
     title: "Attendance",
@@ -3199,6 +3210,7 @@ NAV_GROUP_OWNERSHIP.insights = [
   "mtssPlans",
   "mtssCoordinator",
   "mtssTemplates",
+  "academicsTrajectory",
 ];
 // Trusted Adults admin lives in the School Admin nav group alongside
 // Staff & Roles + Bell Schedule, since it's a per-school admin tool
@@ -3536,6 +3548,7 @@ function App() {
     | "insightsWatchlist"
     | "studentProfile"
     | "attendanceDashboard"
+    | "academicsTrajectory"
     | "trustedAdultsAdmin"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
@@ -3557,6 +3570,7 @@ function App() {
     | "engagementDashboard"
     | "behaviorDashboard"
     | "academicsDashboard"
+    | "academicsTrajectory"
     | "attendanceDashboard"
     | "sebSelDashboard"
     | "equityDashboard"
@@ -17554,6 +17568,18 @@ function App() {
             // Pin the back-target so the profile's Back button returns
             // to the academics dashboard.
             setStudentProfileReturnTo("academicsDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "academicsTrajectory" && canAccessMtssHub && (
+        <AcademicsTrajectory
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // Pin the back-target so the profile's Back button returns
+            // to the trajectory dashboard.
+            setStudentProfileReturnTo("academicsTrajectory");
             setActiveSection("studentProfile");
           }}
         />

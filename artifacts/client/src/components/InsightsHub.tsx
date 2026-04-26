@@ -17,6 +17,7 @@ import { useState, type CSSProperties } from "react";
 
 export type InsightsTileId =
   | "academics"
+  | "academicsTrajectory"
   | "attendance"
   | "behavior"
   | "seb"

@@ -14,7 +14,11 @@ interface Student {
   studentName: string;
   grade?: number | null;
   pm1?: number | null;
-  pm3?: number;
+  // Nullable so the Trajectory drawer can honestly render "—" for the
+  // Untested archetype rather than fabricating a 0 score. The render
+  // path below already null-checks so existing callers that always set
+  // a number remain safe.
+  pm3?: number | null;
 }
 
 interface Props {

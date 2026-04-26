@@ -118,6 +118,24 @@ is a separate task. Sub-archetype counts inside the drill view are
 deterministic ratios of the parent count, so they respond to the
 subject/grade filter chips at the top.
 
+**Update — Trajectory mockup graduated (Apr 26, 2026).** The Trajectory
+screen has been ported into the live `@workspace/client` app at
+`activeSection = "academicsTrajectory"`, surfaced as a new "Academic
+Trajectories" tile in the Insights hub (group: `domains`, sibling of
+Academics). Backed by two new endpoints in
+`artifacts/api-server/src/routes/insights.ts`:
+`GET /insights/academics/trajectory` returns the 4×4 PM1×PM3 band
+matrix, six parent counts, and disjoint sub-archetype counts (3 per
+archetype). `GET /insights/academics/trajectory/students` returns the
+matching student list (capped at 200) for `BandStudentsDrawer`. Both
+share the same auth + filter parsing as `/insights/academics`. The live
+component is `artifacts/client/src/components/AcademicsTrajectory.tsx`;
+the mockup file remains for the Sankey side-by-side review on the
+canvas. Honest-data invariants: parent counts sum to total, sub-counts
+within each parent sum to the parent — verified live against the
+seeded Parrott school (875 students, both subjects). The Sankey screen
+has not yet been graduated.
+
 ## Classroom Store + School Store + Object-storage thumbnails (April 2026)
 
 PbisPointsHub now has two reward catalogs that share a single generic
