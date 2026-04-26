@@ -26,6 +26,7 @@ import {
   studentHallPassLimitsTable,
   pulloutsTable,
   issAttendanceDayTable,
+  studentAttendanceDayTable,
   issRosterTable,
   interventionEntriesTable,
   studentMtssPlansTable,
@@ -1274,6 +1275,129 @@ export async function seedEngagementEventsIfEmpty() {
       }
     }
 
+    // ---- Daily attendance ----
+    // One row per (student, school day). Powers the Attendance dashboard
+    // (ADA, excused vs unexcused, chronic absenteeism > 10%) and feeds
+    // every other surface that mentions attendance.
+    //
+    // Status mix per draw (school-wide background rate):
+    //   present 92% / tardy 5% / excused 2.5% / unexcused 0.5%
+    //
+    // ~7% of students are tagged "chronic" — those students re-roll absent
+    // ~22% of the time so their personal absence rate clears the 10%
+    // threshold. Tardies are also recorded here (in addition to the tardies
+    // table) since FL counts tardies-as-attendance for chronic-absence
+    // accounting, but the Attendance KPI splits them out so the user can
+    // see both.
+    const [{ c: attExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM student_attendance_day WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+
+    if (attExisting <= ENGAGEMENT_SEED_THRESHOLD) {
+      type AttIns = typeof studentAttendanceDayTable.$inferInsert;
+      const inserts: AttIns[] = [];
+
+      // Pick the chronic cohort deterministically from the same RNG so
+      // re-seeding produces the same kids on the chronic list.
+      const chronicSet = new Set<string>();
+      const chronicTarget = Math.max(
+        1,
+        Math.round(studentIds.length * 0.07),
+      );
+      // Sample without replacement.
+      const pool = studentIds.slice();
+      for (let i = 0; i < chronicTarget && pool.length > 0; i++) {
+        const idx = Math.floor(rng() * pool.length);
+        chronicSet.add(pool.splice(idx, 1)[0]);
+      }
+
+      for (let back = 60; back >= 0; back--) {
+        const day = new Date(now.getTime() - back * dayMs);
+        if (!isSchoolDay(day)) continue;
+        const dayStr = day.toISOString().slice(0, 10);
+        for (const sid of studentIds) {
+          const isChronic = chronicSet.has(sid);
+          const r = rng();
+          let status: "present" | "tardy" | "excused" | "unexcused";
+          let absentPeriods: number[] = [];
+          if (isChronic) {
+            // Chronic: ~14% absent (5% unexcused + 9% excused) — comfortably
+            // above the FL >10% chronic-absence threshold while keeping the
+            // school-wide overall mix close to the target ~92/5/2.5/0.5.
+            // ~4% tardy. Rest present.
+            if (r < 0.05) {
+              status = "unexcused";
+              absentPeriods = [1, 2, 3, 4, 5, 6, 7];
+            } else if (r < 0.14) {
+              status = "excused";
+              absentPeriods = [1, 2, 3, 4, 5, 6, 7];
+            } else if (r < 0.18) {
+              status = "tardy";
+              absentPeriods = [1];
+            } else {
+              status = "present";
+            }
+          } else {
+            if (r < 0.005) {
+              status = "unexcused";
+              absentPeriods = [1, 2, 3, 4, 5, 6, 7];
+            } else if (r < 0.03) {
+              status = "excused";
+              absentPeriods = [1, 2, 3, 4, 5, 6, 7];
+            } else if (r < 0.08) {
+              status = "tardy";
+              // Tardies usually only knock out the first period.
+              absentPeriods = [1];
+            } else {
+              status = "present";
+            }
+          }
+          inserts.push({
+            schoolId: school.id,
+            studentId: sid,
+            day: dayStr,
+            status,
+            absentPeriods,
+          });
+        }
+      }
+
+      if (inserts.length > 0) {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < inserts.length; i += 500) {
+            await tx
+              .insert(studentAttendanceDayTable)
+              .values(inserts.slice(i, i + 500))
+              .onConflictDoNothing();
+          }
+        });
+        // Realized distribution from the planned inserts so we can spot
+        // drift from the target ~92/5/2.5/0.5 if the RNG / chronic-cohort
+        // weights are ever retuned.
+        const total = inserts.length;
+        const counts = { present: 0, tardy: 0, excused: 0, unexcused: 0 };
+        for (const row of inserts) counts[row.status as keyof typeof counts]++;
+        const pct = (n: number) => Math.round((n / total) * 1000) / 10;
+        logger.info(
+          {
+            schoolId: school.id,
+            count: total,
+            chronic: chronicSet.size,
+            chronicPct: Math.round((chronicSet.size / studentIds.length) * 1000) / 10,
+            distribution: {
+              presentPct: pct(counts.present),
+              tardyPct: pct(counts.tardy),
+              excusedPct: pct(counts.excused),
+              unexcusedPct: pct(counts.unexcused),
+            },
+          },
+          "[seed] student_attendance_day demo events seeded",
+        );
+      }
+    }
+
     // ---- Pullouts ----
     const [{ c: poExisting }] = (
       await db.execute(
@@ -2041,6 +2165,7 @@ export async function seedIfEmpty() {
   await db.delete(studentHallPassLimitsTable);
   await db.delete(pulloutsTable);
   await db.delete(issAttendanceDayTable);
+  await db.delete(studentAttendanceDayTable);
   await db.delete(issRosterTable);
   await db.delete(interventionEntriesTable);
   await db.delete(sectionRosterTable);

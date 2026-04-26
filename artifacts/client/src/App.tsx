@@ -26,6 +26,7 @@ import InsightsWatchlist from "./components/InsightsWatchlist";
 import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
+import AttendanceDashboard from "./components/AttendanceDashboard";
 import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
 import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
@@ -3073,8 +3074,9 @@ const INSIGHTS_TILES: InsightsTile[] = [
     title: "Attendance",
     subtitle:
       "Daily, period, and chronic-absence views with at-risk thresholds and parent-contact triggers.",
-    phase: "Phase 4",
+    phase: "Today",
     group: "domains",
+    targetSection: "attendanceDashboard",
   },
   {
     id: "behavior",
@@ -3510,6 +3512,7 @@ function App() {
     | "insights"
     | "insightsWatchlist"
     | "studentProfile"
+    | "attendanceDashboard"
     | "trustedAdultsAdmin"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
@@ -3531,6 +3534,7 @@ function App() {
     | "engagementDashboard"
     | "behaviorDashboard"
     | "academicsDashboard"
+    | "attendanceDashboard"
     | "sebSelDashboard"
     | "equityDashboard"
     | "earlyWarningDashboard"
@@ -17521,6 +17525,18 @@ function App() {
             // Pin the back-target so the profile's Back button returns
             // to the academics dashboard.
             setStudentProfileReturnTo("academicsDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "attendanceDashboard" && canAccessMtssHub && (
+        <AttendanceDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // Pin the back-target so the profile's Back button returns
+            // to the attendance dashboard.
+            setStudentProfileReturnTo("attendanceDashboard");
             setActiveSection("studentProfile");
           }}
         />

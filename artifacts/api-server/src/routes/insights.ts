@@ -34,6 +34,7 @@ import {
   supportNotesTable,
   tardiesTable,
   issAttendanceDayTable,
+  studentAttendanceDayTable,
   hallPassesTable,
   pulloutsTable,
   studentAccommodationsTable,
@@ -4069,6 +4070,339 @@ router.get("/insights/early-warning", async (req, res) => {
       issDaysLast30d: issRows.length,
       activePlans: planRows.length,
     },
+  });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/insights/attendance
+//
+// School-level Attendance dashboard. Mirrors the eduCLIMBER "Attendance"
+// domain — daily attendance rate, period absences, excused vs unexcused
+// split, tardies, and chronic absenteeism (FL definition: > 10% absence
+// rate over the window).
+//
+// Query params + auth identical to /insights/engagement above (window,
+// optional grade cohort, full insights filter bar; core team only at the
+// active school).
+// ---------------------------------------------------------------------------
+
+router.get("/insights/attendance", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res
+      .status(403)
+      .json({ error: "Attendance dashboard is core-team only" });
+    return;
+  }
+
+  const window = parseTimeWindow(req);
+  const fromIso = window.from.toISOString();
+  const toIso = window.to.toISOString();
+  const fromDateOnly = fromIso.slice(0, 10);
+  const toDateOnly = toIso.slice(0, 10);
+
+  // Same defensive grade parsing as /insights/engagement.
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  // Empty cohort response shape — used by both the grade fast-path and
+  // the cross-cutting filter narrow.
+  function emptyResponse() {
+    res.json({
+      window: {
+        from: fromIso,
+        to: toIso,
+        label: window.label,
+        days: window.days,
+      },
+      grade: gradeFilter,
+      totals: {
+        cohortStudents: 0,
+        schoolDays: 0,
+        ada: 1,
+        totalAbsences: 0,
+        excusedAbsences: 0,
+        unexcusedAbsences: 0,
+        tardies: 0,
+        chronicAbsentStudents: 0,
+        chronicAbsentPct: 0,
+      },
+      trends: { dailyAttendanceRate: [], dailyAbsencesByType: [] },
+      periodAbsences: [],
+      topLists: { mostAbsent: [], chronicAbsent: [] },
+    });
+  }
+
+  let studentIds: string[] | null = null;
+  if (gradeInt !== null) {
+    const rows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.grade, gradeInt),
+        ),
+      );
+    studentIds = rows.map((r) => r.studentId);
+    if (studentIds.length === 0) {
+      emptyResponse();
+      return;
+    }
+  }
+
+  const filters = parseInsightsFilters(req);
+  const narrowed = await narrowCohort(schoolId, studentIds, filters);
+  studentIds = narrowed.ids;
+  if (narrowed.empty) {
+    emptyResponse();
+    return;
+  }
+
+  // ----- Pull every attendance row in the window for the cohort ----------
+  const attRows = await db
+    .select({
+      studentId: studentAttendanceDayTable.studentId,
+      day: studentAttendanceDayTable.day,
+      status: studentAttendanceDayTable.status,
+      absentPeriods: studentAttendanceDayTable.absentPeriods,
+    })
+    .from(studentAttendanceDayTable)
+    .where(
+      and(
+        eq(studentAttendanceDayTable.schoolId, schoolId),
+        gte(studentAttendanceDayTable.day, fromDateOnly),
+        lte(studentAttendanceDayTable.day, toDateOnly),
+        studentIds
+          ? inArray(studentAttendanceDayTable.studentId, studentIds)
+          : sql`true`,
+      ),
+    );
+
+  if (attRows.length === 0) {
+    emptyResponse();
+    return;
+  }
+
+  // ----- Aggregate -------------------------------------------------------
+  // Per-day totals so we can build the dense trend series.
+  // Per-student totals so we can compute personal absence rate (chronic).
+  type Counts = { present: number; tardy: number; excused: number; unexcused: number };
+  const blank = (): Counts => ({ present: 0, tardy: 0, excused: 0, unexcused: 0 });
+
+  const byDay = new Map<string, Counts>();
+  const byStudent = new Map<string, Counts>();
+  const periodCount = new Map<number, number>();
+  const daySet = new Set<string>();
+  const studentSet = new Set<string>();
+
+  let totalAbsences = 0;
+  let excusedAbsences = 0;
+  let unexcusedAbsences = 0;
+  let tardies = 0;
+  let presentDays = 0; // includes tardies (FL definition for ADA)
+
+  for (const r of attRows) {
+    const dayStr = String(r.day).slice(0, 10);
+    daySet.add(dayStr);
+    studentSet.add(r.studentId);
+
+    const status = r.status as keyof Counts;
+    const dayCounts = byDay.get(dayStr) ?? blank();
+    const studentCounts = byStudent.get(r.studentId) ?? blank();
+    if (status in dayCounts) {
+      dayCounts[status]++;
+      studentCounts[status]++;
+    }
+    byDay.set(dayStr, dayCounts);
+    byStudent.set(r.studentId, studentCounts);
+
+    if (status === "excused") {
+      excusedAbsences++;
+      totalAbsences++;
+    } else if (status === "unexcused") {
+      unexcusedAbsences++;
+      totalAbsences++;
+    } else if (status === "tardy") {
+      tardies++;
+      presentDays++; // tardy = present for ADA
+    } else if (status === "present") {
+      presentDays++;
+    }
+
+    // Period absences: every period in the absentPeriods[] column.
+    const periods = Array.isArray(r.absentPeriods) ? r.absentPeriods : [];
+    for (const p of periods) {
+      if (typeof p === "number" && p > 0) {
+        periodCount.set(p, (periodCount.get(p) ?? 0) + 1);
+      }
+    }
+  }
+
+  const cohortStudents = studentSet.size;
+  const schoolDays = daySet.size;
+  const studentDays = attRows.length;
+  const ada = studentDays > 0 ? presentDays / studentDays : 1;
+
+  // ----- Chronic cohort (>10% personal absence rate) ---------------------
+  // Tardies don't count as absent here (FL chronic-absence accounting).
+  type StudentRollup = {
+    studentId: string;
+    days: number;
+    absences: number;
+    rate: number;
+  };
+  const studentRollups: StudentRollup[] = [];
+  for (const [sid, c] of byStudent.entries()) {
+    const days = c.present + c.tardy + c.excused + c.unexcused;
+    const absences = c.excused + c.unexcused;
+    studentRollups.push({
+      studentId: sid,
+      days,
+      absences,
+      rate: days > 0 ? absences / days : 0,
+    });
+  }
+  const chronicRollups = studentRollups.filter((s) => s.rate > 0.1);
+  const chronicAbsentStudents = chronicRollups.length;
+  const chronicAbsentPct =
+    cohortStudents > 0 ? chronicAbsentStudents / cohortStudents : 0;
+
+  // ----- Resolve student names for top lists -----------------------------
+  const idsForTop = new Set<string>();
+  studentRollups
+    .filter((s) => s.absences > 0)
+    .sort((a, b) => b.absences - a.absences)
+    .slice(0, 10)
+    .forEach((s) => idsForTop.add(s.studentId));
+  chronicRollups
+    .slice()
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, 10)
+    .forEach((s) => idsForTop.add(s.studentId));
+
+  const idsArr = Array.from(idsForTop);
+  const nameRows = idsArr.length
+    ? await db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, idsArr),
+          ),
+        )
+    : [];
+  const nameById = new Map(
+    nameRows.map((s) => [
+      s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+    ]),
+  );
+
+  function rollupRow(s: StudentRollup) {
+    return {
+      studentId: s.studentId,
+      studentName: nameById.get(s.studentId) ?? s.studentId,
+      absences: s.absences,
+      rate: s.rate,
+    };
+  }
+
+  const mostAbsent = studentRollups
+    .filter((s) => s.absences > 0)
+    .sort((a, b) => b.absences - a.absences || b.rate - a.rate)
+    .slice(0, 10)
+    .map(rollupRow);
+
+  const chronicAbsent = chronicRollups
+    .slice()
+    .sort((a, b) => b.rate - a.rate || b.absences - a.absences)
+    .slice(0, 10)
+    .map(rollupRow);
+
+  // ----- Build dense day series ------------------------------------------
+  const dailyAttendanceRate: { date: string; rate: number }[] = [];
+  const dailyAbsencesByType: {
+    date: string;
+    excused: number;
+    unexcused: number;
+    tardy: number;
+  }[] = [];
+  const start = new Date(fromDateOnly + "T00:00:00Z");
+  const end = new Date(toDateOnly + "T00:00:00Z");
+  for (
+    let cur = new Date(start);
+    cur <= end;
+    cur.setUTCDate(cur.getUTCDate() + 1)
+  ) {
+    const d = cur.toISOString().slice(0, 10);
+    const c = byDay.get(d);
+    if (!c) {
+      // Skip days with zero rows entirely (typically weekends / non-school
+      // days); leaving them in would drag the visual rate to "0% on
+      // Saturday".
+      continue;
+    }
+    const total = c.present + c.tardy + c.excused + c.unexcused;
+    const present = c.present + c.tardy;
+    dailyAttendanceRate.push({
+      date: d,
+      rate: total > 0 ? present / total : 1,
+    });
+    dailyAbsencesByType.push({
+      date: d,
+      excused: c.excused,
+      unexcused: c.unexcused,
+      tardy: c.tardy,
+    });
+  }
+
+  // ----- Period absences as sorted array ---------------------------------
+  const periodAbsences = Array.from(periodCount.entries())
+    .map(([period, absences]) => ({ period, absences }))
+    .sort((a, b) => a.period - b.period);
+
+  res.json({
+    window: {
+      from: fromIso,
+      to: toIso,
+      label: window.label,
+      days: window.days,
+    },
+    grade: gradeFilter,
+    totals: {
+      cohortStudents,
+      schoolDays,
+      ada,
+      totalAbsences,
+      excusedAbsences,
+      unexcusedAbsences,
+      tardies,
+      chronicAbsentStudents,
+      chronicAbsentPct,
+    },
+    trends: { dailyAttendanceRate, dailyAbsencesByType },
+    periodAbsences,
+    topLists: { mostAbsent, chronicAbsent },
   });
 });
 
