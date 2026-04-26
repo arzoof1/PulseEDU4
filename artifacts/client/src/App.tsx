@@ -3603,10 +3603,6 @@ function App() {
     superFeatureAccommodations: boolean;
     superFeatureLogIntervention: boolean;
     superFeatureRequestPullout: boolean;
-    // SuperUser-only beta flag — see schoolSettings.ts schema. Defaults
-    // to FALSE because the server defaults the column to FALSE; admins
-    // and teachers see no Trajectories tile until a SuperUser flips it.
-    superFeatureTrajectories: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -3631,7 +3627,6 @@ function App() {
     superFeatureAccommodations: true,
     superFeatureLogIntervention: true,
     superFeatureRequestPullout: true,
-    superFeatureTrajectories: false,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -5180,12 +5175,6 @@ function App() {
           superFeatureRequestPullout: boolOrTrue(
             data.superFeatureRequestPullout,
           ),
-          // Beta flag — server defaults FALSE, so an explicit-false check
-          // (not boolOrTrue) is required to honor "off" correctly.
-          superFeatureTrajectories:
-            typeof data.superFeatureTrajectories === "boolean"
-              ? data.superFeatureTrajectories
-              : false,
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -5253,10 +5242,6 @@ function App() {
           data.superFeatureLogIntervention,
         ),
         superFeatureRequestPullout: boolOrTrue(data.superFeatureRequestPullout),
-        superFeatureTrajectories:
-          typeof data.superFeatureTrajectories === "boolean"
-            ? data.superFeatureTrajectories
-            : false,
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -6728,17 +6713,6 @@ function App() {
     if (!canAccessMtssHub && activeSection === "trustedAdultsAdmin") {
       setActiveSection("hallPasses");
     }
-    // Beta gate for the Trajectories dashboard. Bounces anyone sitting
-    // on the page who loses eligibility — either the SuperUser flips
-    // the school flag back off, or the viewer's role no longer admits
-    // them (admin/super-only). Mirrors the JSX gate on this section.
-    if (
-      activeSection === "academicsTrajectory" &&
-      (schoolSettings.superFeatureTrajectories !== true ||
-        !(isAdmin || isSuperUser))
-    ) {
-      setActiveSection(canAccessMtssHub ? "insights" : "hallPasses");
-    }
     // StudentProfile requires a selected student. If we land on it
     // without one (e.g. direct URL hack, or the previously-selected
     // student went out of scope), fall back to the watchlist.
@@ -6775,10 +6749,6 @@ function App() {
     canAccessMtssHub,
     isSuperUser,
     canActAsDistrict,
-    // Trajectories beta gate — keep this in deps so flipping the flag
-    // off (or losing the role) while sitting on the page actually
-    // re-fires the bounce instead of silently leaving the user there.
-    schoolSettings.superFeatureTrajectories,
   ]);
 
   useEffect(() => {
@@ -17539,19 +17509,7 @@ function App() {
 
       {activeSection === "insights" && canAccessMtssHub && (
         <InsightsHub
-          tiles={INSIGHTS_TILES.filter((t) => {
-            // Beta gate: the Trajectories tile is hidden unless the
-            // SuperUser has flipped on the school-level beta flag AND
-            // the viewer is an admin or SuperUser. Teachers (and even
-            // MTSS coordinators / behavior specialists) never see it.
-            if (t.id === "academicsTrajectory") {
-              return (
-                schoolSettings.superFeatureTrajectories === true &&
-                (isAdmin || isSuperUser)
-              );
-            }
-            return true;
-          })}
+          tiles={INSIGHTS_TILES}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
         />
       )}
@@ -17615,15 +17573,7 @@ function App() {
         />
       )}
 
-      {activeSection === "academicsTrajectory" &&
-        canAccessMtssHub &&
-        // Same beta gate as the tile filter — defense in depth so a
-        // direct setActiveSection("academicsTrajectory") call from
-        // anywhere (back-target, browser back button, future deep link)
-        // can't bypass the SuperUser flag or surface the page to a
-        // role that shouldn't see it (teacher, MTSS coord, behavior).
-        schoolSettings.superFeatureTrajectories === true &&
-        (isAdmin || isSuperUser) && (
+      {activeSection === "academicsTrajectory" && canAccessMtssHub && (
         <AcademicsTrajectory
           onOpenProfile={(studentId) => {
             setSelectedInsightsStudentId(studentId);
@@ -18285,91 +18235,6 @@ function App() {
           </div>
         );
       })()}
-
-      {/* SuperUser-only Beta features. Sits underneath the main School
-          Features card on the same Settings → Features tile. Hidden
-          entirely from admins so they don't even see the section
-          header — admins only get visibility once SuperUser flips a
-          feature on. Save reuses the same saveSchoolSettings() PUT. */}
-      {activeSection === "settings" &&
-        canManageSettings &&
-        settingsTile === "schoolFeatures" &&
-        isSuperUser && (
-          <div className="card" style={{ marginTop: "1rem" }}>
-            <h2 style={{ marginTop: 0 }}>Beta features (SuperUser only)</h2>
-            <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-              Hidden, opt-in dashboards. When you turn one on, only
-              school admins and other SuperUsers will see it — never
-              teachers. Use this to pilot a feature with a single
-              school before we ship it everywhere.
-            </p>
-            <div
-              style={{
-                display: "grid",
-                gridTemplateColumns: "1.6fr auto",
-                gap: "0.5rem 1.25rem",
-                alignItems: "center",
-                maxWidth: 720,
-              }}
-            >
-              <div style={{ fontWeight: 600, color: "var(--text-subtle)" }}>
-                Feature
-              </div>
-              <div
-                style={{
-                  fontWeight: 600,
-                  color: "var(--text-subtle)",
-                  fontSize: 12,
-                }}
-                title="SuperUser-only switch. Visible to admins + SuperUsers when ON."
-              >
-                Allowed
-              </div>
-              <div>
-                <div style={{ fontWeight: 500 }}>Academic Trajectories</div>
-                <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-                  FAST PM1 → PM3 by journey type (climbed, held the
-                  line, slipped, stuck, untested) with archetype
-                  drill-ins. Overlaps with the Academics dashboard, so
-                  it&rsquo;s pilot-only for now.
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={schoolSettings.superFeatureTrajectories}
-                onChange={(e) =>
-                  setSchoolSettings({
-                    ...schoolSettings,
-                    superFeatureTrajectories: e.target.checked,
-                  })
-                }
-                title="SuperUser: turn the Trajectories beta on for this school."
-              />
-            </div>
-            <div
-              style={{
-                marginTop: "1rem",
-                display: "flex",
-                gap: "0.5rem",
-                alignItems: "center",
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => void saveSchoolSettings()}
-                disabled={settingsStatus === "saving"}
-              >
-                {settingsStatus === "saving" ? "Saving…" : "Save Beta Features"}
-              </button>
-              {settingsStatus === "saved" && (
-                <span style={{ color: "#15803d" }}>Saved.</span>
-              )}
-              {settingsStatus === "error" && (
-                <span style={{ color: "#b91c1c" }}>{settingsError}</span>
-              )}
-            </div>
-          </div>
-        )}
 
       {activeSection === "settings" && canManageSettings && (settingsTile === "allowlist" || settingsTile === "locations" || settingsTile === "staff-defaults" || settingsTile === "school") && (
         <>
