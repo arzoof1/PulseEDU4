@@ -43,6 +43,7 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
 
 const router: IRouter = Router();
 
@@ -619,6 +620,118 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     });
   }
 
+  // ----- Whole-child radar -----------------------------------------------
+  // Five-axis 0-100 score across the same pillars as the detail cards
+  // below. Each axis includes a one-line rationale that the client
+  // surfaces as a hover tooltip + sidebar list. Formulas are heuristic
+  // and directional — they're meant to give a fast at-a-glance read,
+  // not a precise measurement.
+  function levelToScore(level: 1 | 2 | 3 | 4 | 5): number {
+    return level === 1 ? 20 : level === 2 ? 40 : level === 3 ? 70 : level === 4 ? 85 : 95;
+  }
+
+  // Academics: per-subject FAST placement. PM3 uses placePm3 which prefers
+  // the prior-grade chart and falls back to current-grade — so PM3 can
+  // still be placed for grades where no current-grade chart exists (e.g.
+  // 9th-grade math via the 8th-grade chart). PM2/PM1 must use the
+  // current-grade chart, so they require hasChart() for the grade.
+  // Maps L1..L5 to 20/40/70/85/95 and averages across subjects.
+  const subjectScores: Array<{ subject: "ela" | "math"; level: number; score: number }> = [];
+  for (const fs of fastScores) {
+    const subj = fs.subject;
+    if (subj !== "ela" && subj !== "math") continue;
+    let placement: ReturnType<typeof placeOnChart> = null;
+    if (fs.pm3 != null) {
+      placement = placePm3(fs.pm3, subj, student.grade);
+    } else if (fs.pm2 != null && hasChart(subj, student.grade)) {
+      placement = placeOnChart(fs.pm2, subj, student.grade);
+    } else if (fs.pm1 != null && hasChart(subj, student.grade)) {
+      placement = placeOnChart(fs.pm1, subj, student.grade);
+    }
+    if (!placement) continue;
+    subjectScores.push({ subject: subj, level: placement.level, score: levelToScore(placement.level) });
+  }
+  const academicsHasData = subjectScores.length > 0;
+  const academicsScore = academicsHasData
+    ? Math.round(subjectScores.reduce((a, b) => a + b.score, 0) / subjectScores.length)
+    : 50;
+  const academicsRationale = academicsHasData
+    ? `${subjectScores
+        .map((s) => `${s.subject.toUpperCase()} L${s.level}`)
+        .join(", ")} (avg level ${(
+        subjectScores.reduce((a, b) => a + b.level, 0) / subjectScores.length
+      ).toFixed(1)})`
+    : "No FAST data with a cut-score chart for this grade";
+
+  // Behavior: PBIS positives lift, PBIS negatives + support notes drag.
+  // Caps prevent a single very-active student from saturating either end.
+  let behaviorScore = 75;
+  behaviorScore += Math.min(pbisPositive * 3, 25);
+  behaviorScore -= Math.min(pbisNegative * 5, 50);
+  behaviorScore -= Math.min(supportNotes.length * 8, 60);
+  behaviorScore = Math.max(0, Math.min(100, behaviorScore));
+  const behaviorRationale =
+    pbisPositive + pbisNegative + supportNotes.length === 0
+      ? `No behavior entries (${window.label.toLowerCase()})`
+      : `${pbisPositive} positive, ${pbisNegative} concerns, ${supportNotes.length} notes (${window.label.toLowerCase()})`;
+
+  // Flow (attendance & transitions): tardies + ISS days + over-average
+  // hall-pass usage drag from a 100 baseline. Hall-pass excess only
+  // counts when the student is materially above their grade peers.
+  let flowScore = 100;
+  flowScore -= tardyRows.length * 5;
+  flowScore -= issRows.length * 15;
+  const hallPassExcess =
+    hallPassSchoolAvg > 0 ? Math.max(0, hallPassCount - hallPassSchoolAvg * 2) : 0;
+  flowScore -= Math.min(hallPassExcess * 5, 25);
+  flowScore = Math.max(0, Math.min(100, flowScore));
+  const flowRationale =
+    tardyRows.length === 0 && issRows.length === 0
+      ? `No tardies or ISS days (${window.label.toLowerCase()})`
+      : `${tardyRows.length} tardies, ${issRows.length} ISS days, ${hallPassCount} hall passes`;
+
+  // Supports in place: this axis is intentionally a "scaffolding meter"
+  // rather than a wellness signal. A high score means the student is
+  // actively receiving wraparound (accommodations, MTSS plan, recent
+  // intervention notes, trusted-adult linkage). The client renders a
+  // small footnote so viewers don't read it as "good = no help needed".
+  let supportsScore = 30;
+  if (accommodations.length > 0) supportsScore += 20;
+  supportsScore += Math.min(activeMtssPlans.length * 25, 25);
+  const recentInterventionThreshold = new Date();
+  recentInterventionThreshold.setDate(recentInterventionThreshold.getDate() - 30);
+  const recentInterventions30d = interventionsAll.filter(
+    (i) => i.createdAt && new Date(i.createdAt) >= recentInterventionThreshold,
+  );
+  if (recentInterventions30d.length > 0) supportsScore += 15;
+  if (trustedAdults.length > 0) supportsScore += 10;
+  supportsScore = Math.max(0, Math.min(100, supportsScore));
+  const supportsTotal =
+    accommodations.length +
+    activeMtssPlans.length +
+    recentInterventions30d.length +
+    trustedAdults.length;
+  const supportsRationale =
+    supportsTotal === 0
+      ? "No active supports on record"
+      : `${accommodations.length} accommodations, ${activeMtssPlans.length} active MTSS plans, ${recentInterventions30d.length} interventions in last 30d, ${trustedAdults.length} trusted adult${trustedAdults.length === 1 ? "" : "s"}`;
+
+  // Family connection: comms channels + linked parent account.
+  let familyScore = 0;
+  if (student.parentEmail) familyScore += 30;
+  if (student.parentPhone) familyScore += 20;
+  if (linkedParents.length > 0) familyScore += 50;
+  familyScore = Math.max(0, Math.min(100, familyScore));
+  const familyParts: string[] = [];
+  if (student.parentEmail) familyParts.push("email on file");
+  if (student.parentPhone) familyParts.push("phone on file");
+  if (linkedParents.length > 0) {
+    familyParts.push(
+      `${linkedParents.length} linked parent account${linkedParents.length === 1 ? "" : "s"}`,
+    );
+  }
+  const familyRationale = familyParts.length === 0 ? "No family contact on file" : familyParts.join(" + ");
+
   res.json({
     header: {
       studentId: student.studentId,
@@ -695,6 +808,48 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       },
     },
     riskFlags: flags,
+    radar: {
+      axes: [
+        {
+          key: "academics",
+          label: "Academics",
+          score: academicsScore,
+          rationale: academicsRationale,
+          hasData: academicsHasData,
+        },
+        {
+          key: "behavior",
+          label: "Behavior",
+          score: behaviorScore,
+          rationale: behaviorRationale,
+          hasData: true,
+        },
+        {
+          key: "flow",
+          label: "Attendance",
+          score: flowScore,
+          rationale: flowRationale,
+          hasData: true,
+        },
+        {
+          key: "supports",
+          label: "Supports",
+          score: supportsScore,
+          rationale: supportsRationale,
+          hasData: true,
+          // Higher = more wraparound active. NOT a wellness signal —
+          // the client renders a footnote so this isn't misread.
+          isResourceAxis: true,
+        },
+        {
+          key: "family",
+          label: "Family",
+          score: familyScore,
+          rationale: familyRationale,
+          hasData: true,
+        },
+      ],
+    },
   });
 });
 

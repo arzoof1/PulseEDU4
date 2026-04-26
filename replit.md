@@ -1591,3 +1591,40 @@ informs the deferred attendance importer design:
 Schema decision to revisit when we start: per-day vs per-period
 attendance, the code dictionary (P / A / T / E / U / ISS / OSS), and
 excused-reason free-text vs enum.
+
+### Whole-child radar on Insights profile (2026-04-26)
+
+Added a five-axis radar to the top of `StudentProfile.tsx` mirroring the
+existing pillar grid (Academics, Behavior, Attendance, Supports,
+Family). Each axis is scored 0–100 server-side in `insights.ts` so the
+formulas live in one place and can be iterated without rebuilding the
+client. The response now carries `radar.axes[]` with `{ key, label,
+score, rationale, hasData, isResourceAxis? }`.
+
+Heuristics (intentionally directional, not definitive):
+- **Academics** — uses `fastCutScores` placement. PM3 prefers prior-grade
+  chart via `placePm3` (so e.g. 9th-grade math can be placed off the
+  8th-grade chart). PM2/PM1 require a current-grade chart. L1..L5 maps
+  to 20/40/70/85/95; averaged across subjects.
+- **Behavior** — 75 base, +PBIS+ (cap 25), −PBIS− (cap 50), −support
+  notes×8 (cap 60).
+- **Attendance** — 100 base, −5/tardy, −15/ISS day, − over-grade-avg
+  hall-pass excess (cap 25).
+- **Supports** — explicitly a *scaffolding meter*, not a wellness
+  signal. 30 base + 20 (any accommodation) + 25 (any active MTSS plan)
+  + 15 (intervention in last 30d) + 10 (any trusted adult). Marked
+  `isResourceAxis: true`; client renders an asterisk + footnote.
+- **Family** — 30 (parent email) + 20 (parent phone) + 50 (linked
+  parent account).
+
+Client (`WholeChildRadar` in `StudentProfile.tsx`) uses recharts
+`RadarChart` inside a 280px-tall `ResponsiveContainer`, paired with a
+sidebar listing each axis score + rationale. No-data axes are plotted
+as `null` (not a synthetic 50) and labeled `(no data)` so the polygon
+honestly drops at that vertex. Polygon stroke color is the lowest
+non-resource axis score (green ≥75, amber ≥50, red <50) so the chart
+"reads" at a glance.
+
+Architect PASS after one revision (fixed: trusted-adult missing from
+supports rationale, no-data plotting as 50 misled viewers, academics
+gate dropped valid PM3-only placements).

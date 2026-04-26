@@ -7,6 +7,14 @@
 // 403 if the caller can't see this student. We surface that gracefully.
 
 import { useEffect, useState } from "react";
+import {
+  Radar,
+  RadarChart,
+  PolarGrid,
+  PolarAngleAxis,
+  PolarRadiusAxis,
+  ResponsiveContainer,
+} from "recharts";
 import { authFetch } from "../lib/authToken";
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
@@ -114,6 +122,16 @@ interface ProfilePayload {
     severity: "info" | "watch" | "high";
     label: string;
   }>;
+  radar: {
+    axes: Array<{
+      key: "academics" | "behavior" | "flow" | "supports" | "family";
+      label: string;
+      score: number;
+      rationale: string;
+      hasData: boolean;
+      isResourceAxis?: boolean;
+    }>;
+  };
 }
 
 const SEVERITY_STYLES: Record<
@@ -181,6 +199,109 @@ function Card({
       ) : (
         children
       )}
+    </div>
+  );
+}
+
+function scoreColor(score: number): string {
+  if (score >= 75) return "#16a34a"; // green
+  if (score >= 50) return "#ca8a04"; // amber
+  return "#dc2626"; // red
+}
+
+function WholeChildRadar({ axes }: { axes: ProfilePayload["radar"]["axes"] }) {
+  // For axes without data, plot null so recharts skips the vertex (and
+  // doesn't fool the viewer with a synthetic 50). Append a "(no data)"
+  // suffix so the axis label still tells you what's missing.
+  const data = axes.map((a) => ({
+    axis: a.hasData ? a.label : `${a.label} (no data)`,
+    score: a.hasData ? a.score : null,
+  }));
+  // Stroke color reflects the lowest non-resource axis (the one most worth
+  // looking at). Supports is excluded because high values there don't mean
+  // wellness — they mean wraparound is in place.
+  const lowest = axes
+    .filter((a) => !a.isResourceAxis && a.hasData)
+    .reduce<number | null>((m, a) => (m == null || a.score < m ? a.score : m), null);
+  const stroke = lowest == null ? "#6b7280" : scoreColor(lowest);
+
+  return (
+    <div
+      className="card"
+      style={{
+        marginBottom: 0,
+        display: "grid",
+        gridTemplateColumns: "minmax(280px, 360px) 1fr",
+        gap: "1rem",
+        alignItems: "center",
+      }}
+    >
+      <div style={{ width: "100%", height: 280 }}>
+        <ResponsiveContainer width="100%" height="100%">
+          <RadarChart data={data} outerRadius="75%">
+            <PolarGrid stroke="#e5e7eb" />
+            <PolarAngleAxis
+              dataKey="axis"
+              tick={{ fontSize: 12, fill: "#374151" }}
+            />
+            <PolarRadiusAxis
+              angle={90}
+              domain={[0, 100]}
+              tick={{ fontSize: 10, fill: "#9ca3af" }}
+              tickCount={5}
+            />
+            <Radar
+              name="Score"
+              dataKey="score"
+              stroke={stroke}
+              fill={stroke}
+              fillOpacity={0.25}
+              isAnimationActive={false}
+            />
+          </RadarChart>
+        </ResponsiveContainer>
+      </div>
+      <div>
+        <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem" }}>
+          Whole-child snapshot
+        </h3>
+        <div style={{ display: "flex", flexDirection: "column", gap: "0.4rem" }}>
+          {axes.map((a) => (
+            <div
+              key={a.key}
+              title={a.rationale}
+              style={{
+                display: "grid",
+                gridTemplateColumns: "110px 36px 1fr",
+                gap: "0.5rem",
+                alignItems: "center",
+                fontSize: "0.85rem",
+              }}
+            >
+              <div style={{ fontWeight: 600, color: "#374151" }}>
+                {a.label}
+                {a.isResourceAxis && (
+                  <span style={{ color: "#9ca3af", fontWeight: 400 }}> *</span>
+                )}
+              </div>
+              <div
+                style={{
+                  fontWeight: 700,
+                  color: a.hasData ? scoreColor(a.score) : "#9ca3af",
+                  textAlign: "right",
+                }}
+              >
+                {a.hasData ? a.score : "—"}
+              </div>
+              <div style={{ color: "#6b7280" }}>{a.rationale}</div>
+            </div>
+          ))}
+        </div>
+        <div style={{ fontSize: "0.7rem", color: "#9ca3af", marginTop: "0.5rem" }}>
+          Heuristic 0–100 scores. * Supports = scaffolding in place, not a
+          wellness signal.
+        </div>
+      </div>
     </div>
   );
 }
@@ -583,6 +704,9 @@ export default function StudentProfile({
           </div>
         </div>
       )}
+
+      {/* Whole-child radar */}
+      <WholeChildRadar axes={data.radar.axes} />
 
       {/* Pillars grid */}
       <div
