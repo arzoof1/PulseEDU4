@@ -732,6 +732,61 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   }
   const familyRationale = familyParts.length === 0 ? "No family contact on file" : familyParts.join(" + ");
 
+  // ----- Daily trends (sparklines) ---------------------------------------
+  // Bucket the already-fetched pbis/tardy rows by UTC day. We use UTC
+  // because the underlying ISO strings are stored as UTC; for sparkline
+  // shape this is sufficient. (A school-tz refinement is a future hook.)
+  // Always include zero days so the sparkline shape is honest about gaps.
+  function utcDayString(iso: string): string {
+    return iso.slice(0, 10); // 'YYYY-MM-DD'
+  }
+  function buildDayBuckets(from: Date, to: Date): string[] {
+    const days: string[] = [];
+    const startUtc = Date.UTC(
+      from.getUTCFullYear(),
+      from.getUTCMonth(),
+      from.getUTCDate(),
+    );
+    const endUtc = Date.UTC(
+      to.getUTCFullYear(),
+      to.getUTCMonth(),
+      to.getUTCDate(),
+    );
+    for (let t = startUtc; t <= endUtc; t += 86_400_000) {
+      days.push(new Date(t).toISOString().slice(0, 10));
+    }
+    return days;
+  }
+  const dayKeys = buildDayBuckets(window.from, window.to);
+
+  const pbisDailyMap = new Map<string, { positive: number; negative: number }>();
+  for (const k of dayKeys) pbisDailyMap.set(k, { positive: 0, negative: 0 });
+  for (const r of pbisRows) {
+    if (r.voidedAt) continue;
+    const day = utcDayString(r.createdAt);
+    const slot = pbisDailyMap.get(day);
+    if (!slot) continue; // out of bucket range (defensive)
+    if (r.polarity === "negative") slot.negative += 1;
+    else slot.positive += 1;
+  }
+  const pbisDaily = dayKeys.map((day) => {
+    const s = pbisDailyMap.get(day)!;
+    return { day, positive: s.positive, negative: s.negative, net: s.positive - s.negative };
+  });
+
+  const tardiesDailyMap = new Map<string, number>();
+  for (const k of dayKeys) tardiesDailyMap.set(k, 0);
+  for (const r of tardyRows) {
+    const day = utcDayString(r.createdAt);
+    if (tardiesDailyMap.has(day)) {
+      tardiesDailyMap.set(day, tardiesDailyMap.get(day)! + 1);
+    }
+  }
+  const tardiesDaily = dayKeys.map((day) => ({
+    day,
+    count: tardiesDailyMap.get(day) ?? 0,
+  }));
+
   res.json({
     header: {
       studentId: student.studentId,
@@ -849,6 +904,10 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           hasData: true,
         },
       ],
+    },
+    trends: {
+      pbisDaily,
+      tardiesDaily,
     },
   });
 });

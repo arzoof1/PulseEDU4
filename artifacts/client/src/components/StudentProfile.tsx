@@ -132,6 +132,15 @@ interface ProfilePayload {
       isResourceAxis?: boolean;
     }>;
   };
+  trends: {
+    pbisDaily: Array<{
+      day: string;
+      positive: number;
+      negative: number;
+      net: number;
+    }>;
+    tardiesDaily: Array<{ day: string; count: number }>;
+  };
 }
 
 const SEVERITY_STYLES: Record<
@@ -207,6 +216,102 @@ function scoreColor(score: number): string {
   if (score >= 75) return "#16a34a"; // green
   if (score >= 50) return "#ca8a04"; // amber
   return "#dc2626"; // red
+}
+
+// Inline SVG sparkline. Renders a small trend line for daily data.
+// Kept dependency-free (no recharts) so it stays light enough to
+// embed inside a pillar Card without layout cost. Caller passes
+// already-bucketed daily values; we just plot them on a fixed-size
+// canvas. tooltip surfaces total + window via the title attr.
+function Sparkline({
+  values,
+  width = 160,
+  height = 32,
+  stroke,
+  fill,
+  baseline = 0,
+  ariaLabel,
+  title,
+}: {
+  values: number[];
+  width?: number;
+  height?: number;
+  stroke: string;
+  fill?: string;
+  baseline?: number;
+  ariaLabel: string;
+  title?: string;
+}) {
+  if (values.length === 0) {
+    return (
+      <div
+        style={{
+          width,
+          height,
+          color: "#9ca3af",
+          fontSize: 11,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+        }}
+      >
+        no data
+      </div>
+    );
+  }
+  const max = Math.max(baseline, ...values);
+  const min = Math.min(baseline, ...values);
+  const range = max - min || 1;
+  const stepX = values.length > 1 ? width / (values.length - 1) : 0;
+  const yFor = (v: number) => height - ((v - min) / range) * height;
+  const points = values
+    .map((v, i) => `${(i * stepX).toFixed(2)},${yFor(v).toFixed(2)}`)
+    .join(" ");
+  // Area path closes back to baseline so positive/negative shading
+  // tells the eye which side of zero we're on.
+  const baselineY = yFor(baseline);
+  const areaPath =
+    values.length > 1
+      ? `M0,${baselineY} L${points.replace(/ /g, " L")} L${(width).toFixed(2)},${baselineY} Z`
+      : "";
+  return (
+    <svg
+      width={width}
+      height={height}
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label={ariaLabel}
+    >
+      {title && <title>{title}</title>}
+      {areaPath && fill && <path d={areaPath} fill={fill} opacity={0.25} />}
+      {/* baseline (often zero) */}
+      <line
+        x1={0}
+        x2={width}
+        y1={baselineY}
+        y2={baselineY}
+        stroke="#e5e7eb"
+        strokeWidth={1}
+      />
+      <polyline
+        points={points}
+        fill="none"
+        stroke={stroke}
+        strokeWidth={1.5}
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      {/* highlight last point so the latest value reads at a glance */}
+      {values.length > 0 && (
+        <circle
+          cx={(values.length - 1) * stepX}
+          cy={yFor(values[values.length - 1]!)}
+          r={2}
+          fill={stroke}
+        />
+      )}
+    </svg>
+  );
 }
 
 function WholeChildRadar({ axes }: { axes: ProfilePayload["radar"]["axes"] }) {
@@ -776,7 +881,8 @@ export default function StudentProfile({
           empty={
             pillars.behavior.pbisPositiveCount === 0 &&
             pillars.behavior.pbisNegativeCount === 0 &&
-            pillars.behavior.supportNoteCount === 0
+            pillars.behavior.supportNoteCount === 0 &&
+            (data.trends?.pbisDaily?.length ?? 0) === 0
           }
         >
           <div style={{ display: "flex", gap: "0.5rem", marginBottom: "0.5rem", flexWrap: "wrap" }}>
@@ -788,6 +894,31 @@ export default function StudentProfile({
               <Chip label={`${pillars.behavior.supportNoteCount} notes`} sev="watch" />
             )}
           </div>
+          {data.trends.pbisDaily.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                marginBottom: "0.6rem",
+                fontSize: "0.75rem",
+                color: "#6b7280",
+              }}
+            >
+              <span style={{ minWidth: 90 }}>PBIS net / day</span>
+              <Sparkline
+                values={data.trends.pbisDaily.map((d) => d.net)}
+                stroke="#0d9488"
+                fill="#14b8a6"
+                ariaLabel="Daily PBIS net (positives minus negatives)"
+                title={`Net PBIS by day in ${data.window.label.toLowerCase()}`}
+              />
+              <span>
+                {data.trends.pbisDaily.reduce((s, d) => s + d.net, 0) >= 0 ? "+" : ""}
+                {data.trends.pbisDaily.reduce((s, d) => s + d.net, 0)} net
+              </span>
+            </div>
+          )}
           {pillars.behavior.recentSupportNotes.length > 0 && (
             <div style={{ marginBottom: "0.5rem" }}>
               <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>Recent notes</div>
@@ -830,7 +961,8 @@ export default function StudentProfile({
             pillars.flow.tardyCount === 0 &&
             pillars.flow.issDayCount === 0 &&
             pillars.flow.hallPassCount === 0 &&
-            pillars.flow.recentPullouts.length === 0
+            pillars.flow.recentPullouts.length === 0 &&
+            (data.trends?.tardiesDaily?.length ?? 0) === 0
           }
         >
           <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.5rem", flexWrap: "wrap" }}>
@@ -852,6 +984,30 @@ export default function StudentProfile({
               />
             )}
           </div>
+          {data.trends.tardiesDaily.length > 0 && (
+            <div
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                marginBottom: "0.6rem",
+                fontSize: "0.75rem",
+                color: "#6b7280",
+              }}
+            >
+              <span style={{ minWidth: 90 }}>Tardies / day</span>
+              <Sparkline
+                values={data.trends.tardiesDaily.map((d) => d.count)}
+                stroke="#dc2626"
+                fill="#fecaca"
+                ariaLabel="Daily tardy count"
+                title={`Tardies by day in ${data.window.label.toLowerCase()}`}
+              />
+              <span>
+                {data.trends.tardiesDaily.reduce((s, d) => s + d.count, 0)} total
+              </span>
+            </div>
+          )}
           {pillars.flow.recentPullouts.length > 0 && (
             <div>
               <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>Recent pullouts</div>

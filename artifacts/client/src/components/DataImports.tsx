@@ -550,6 +550,191 @@ const statusPillStyle = (status: string): CSSProperties => {
   };
 };
 
+// Renders the per-kind directions: description, required + optional
+// columns (with accepted header synonyms), a copy-pasteable sample CSV,
+// and any caveats. Wrapped in <details open> so admins can collapse it
+// after their first successful import without losing the affordance.
+function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
+  const required = kindDef.columns.filter((c) => c.required);
+  const optional = kindDef.columns.filter((c) => !c.required);
+  const [copied, setCopied] = useState(false);
+  // Clear the "Copied!" badge when the user switches kinds — otherwise
+  // the affirmation can briefly appear over a different sample CSV.
+  useEffect(() => {
+    setCopied(false);
+  }, [kindDef]);
+
+  const onCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(kindDef.sampleCsv);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      // Clipboard can fail in restricted contexts; silently no-op so
+      // the user can still select the <pre> contents manually.
+    }
+  };
+
+  // Save the sample CSV to disk as a starter file. The filename is
+  // derived from the kind's machine name so admins know which importer
+  // it lines up with (e.g. fast_scores_starter.csv). Using a Blob +
+  // object URL keeps this fully client-side — no round trip needed.
+  const onDownload = () => {
+    const blob = new Blob([kindDef.sampleCsv], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `${kind}_starter.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    // Release the blob URL on the next tick so the browser has time
+    // to actually start the download before we revoke it.
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  };
+
+  const renderRows = (cols: KindColumnDoc[]) =>
+    cols.map((c) => (
+      <tr key={c.target} style={{ borderTop: "1px solid var(--border, #2a3447)" }}>
+        <td style={{ padding: "0.4rem 0.5rem", fontWeight: 600, verticalAlign: "top" }}>
+          {c.label}
+        </td>
+        <td style={{ padding: "0.4rem 0.5rem", verticalAlign: "top", fontFamily: "monospace", fontSize: 12 }}>
+          {c.acceptedHeaders.join(", ")}
+        </td>
+        <td style={{ padding: "0.4rem 0.5rem", verticalAlign: "top", fontSize: 13, color: "var(--text-subtle)" }}>
+          {c.notes ?? "—"}
+        </td>
+      </tr>
+    ));
+
+  return (
+    <details
+      open
+      style={{
+        background: "var(--surface-1, #0f1729)",
+        border: "1px solid var(--border, #2a3447)",
+        borderRadius: 8,
+        padding: "0.75rem 1rem",
+        marginBottom: "1rem",
+      }}
+    >
+      <summary
+        style={{
+          cursor: "pointer",
+          fontWeight: 600,
+          listStyle: "revert",
+          padding: "0.15rem 0",
+        }}
+      >
+        How to format your {kindDef.label} CSV
+      </summary>
+      <div style={{ marginTop: "0.75rem", fontSize: 14, lineHeight: 1.55 }}>
+        {kindDef.description}
+      </div>
+
+      {required.length > 0 && (
+        <div style={{ marginTop: "1rem" }}>
+          <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: 13 }}>
+            Required columns
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--text-subtle)" }}>
+                <th style={{ padding: "0.3rem 0.5rem", width: "22%" }}>Field</th>
+                <th style={{ padding: "0.3rem 0.5rem", width: "38%" }}>Accepted header names</th>
+                <th style={{ padding: "0.3rem 0.5rem" }}>Notes</th>
+              </tr>
+            </thead>
+            <tbody>{renderRows(required)}</tbody>
+          </table>
+        </div>
+      )}
+
+      {optional.length > 0 && (
+        <div style={{ marginTop: "1rem" }}>
+          <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: 13 }}>
+            Optional columns
+          </div>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ textAlign: "left", color: "var(--text-subtle)" }}>
+                <th style={{ padding: "0.3rem 0.5rem", width: "22%" }}>Field</th>
+                <th style={{ padding: "0.3rem 0.5rem", width: "38%" }}>Accepted header names</th>
+                <th style={{ padding: "0.3rem 0.5rem" }}>Notes</th>
+              </tr>
+            </thead>
+            <tbody>{renderRows(optional)}</tbody>
+          </table>
+        </div>
+      )}
+
+      <div style={{ marginTop: "1rem" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "0.4rem" }}>
+          <span style={{ fontWeight: 600, fontSize: 13 }}>Sample CSV</span>
+          <button
+            type="button"
+            onClick={onCopy}
+            style={{
+              padding: "0.2rem 0.55rem",
+              border: "1px solid var(--border, #2a3447)",
+              borderRadius: 4,
+              background: "transparent",
+              color: "inherit",
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 12,
+            }}
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+          <button
+            type="button"
+            onClick={onDownload}
+            title={`Download ${kind}_starter.csv with headers + example row`}
+            style={{
+              padding: "0.2rem 0.55rem",
+              border: "1px solid var(--border, #2a3447)",
+              borderRadius: 4,
+              background: "transparent",
+              color: "inherit",
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 12,
+            }}
+          >
+            Download starter file
+          </button>
+        </div>
+        <pre
+          style={{
+            margin: 0,
+            padding: "0.6rem 0.75rem",
+            background: "var(--surface-2, #0a1120)",
+            border: "1px solid var(--border, #2a3447)",
+            borderRadius: 6,
+            fontSize: 12,
+            overflowX: "auto",
+            whiteSpace: "pre",
+          }}
+        >
+          {kindDef.sampleCsv}
+        </pre>
+      </div>
+
+      {kindDef.notes.length > 0 && (
+        <ul style={{ marginTop: "0.75rem", marginBottom: 0, paddingLeft: "1.25rem", fontSize: 13, color: "var(--text-subtle)" }}>
+          {kindDef.notes.map((n, i) => (
+            <li key={i} style={{ marginBottom: "0.2rem" }}>{n}</li>
+          ))}
+        </ul>
+      )}
+    </details>
+  );
+}
+
 type DataImportsProps = {
   // Whether the signed-in user can act as a District Admin (DA or SU).
   // When false, the scope toggle is hidden and every request goes to the
@@ -1036,6 +1221,7 @@ export default function DataImports({
 
       {tab === "upload" && (
         <div style={{ marginTop: "1rem" }}>
+          <DirectionsPanel kind={kind} kindDef={kindDef} />
           {commitResult ? (
             <div
               style={{
