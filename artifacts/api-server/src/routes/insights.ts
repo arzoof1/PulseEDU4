@@ -939,6 +939,65 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           priorYearScore: s.priorYearScore,
           priorYearBq: s.priorYearBq,
         })),
+        // Structured iReady AP1/AP2/AP3 grouped by subject. We group from
+        // the in-memory `assessments` list (already fetched, ordered desc)
+        // rather than firing another SQL round-trip. Pattern matches the
+        // names the importer accepts: "iReady Reading AP1", "iReady Math
+        // AP2", etc. Only emit rows for subjects where at least one of
+        // AP1/AP2/AP3 is populated, so the UI can hide the block cleanly
+        // for HS students who don't take iReady.
+        ireadyScores: (() => {
+          const out: Array<{
+            subject: "Reading" | "Math";
+            ap1: number | null;
+            ap2: number | null;
+            ap3: number | null;
+            ap1Level: string | null;
+            ap2Level: string | null;
+            ap3Level: string | null;
+          }> = [];
+          for (const subject of ["Reading", "Math"] as const) {
+            const find = (period: "AP1" | "AP2" | "AP3") =>
+              assessments.find(
+                (a) => a.name === `iReady ${subject} ${period}`,
+              ) ?? null;
+            const ap1 = find("AP1");
+            const ap2 = find("AP2");
+            const ap3 = find("AP3");
+            if (!ap1 && !ap2 && !ap3) continue;
+            out.push({
+              subject,
+              ap1: ap1?.score ?? null,
+              ap2: ap2?.score ?? null,
+              ap3: ap3?.score ?? null,
+              ap1Level: ap1?.scoreLevel ?? null,
+              ap2Level: ap2?.scoreLevel ?? null,
+              ap3Level: ap3?.scoreLevel ?? null,
+            });
+          }
+          return out;
+        })(),
+        // SCI Benchmark 1/2/3 — single subject, so a single nullable
+        // object rather than an array. Same pattern: pull from the
+        // already-fetched assessments list. Returns null when the
+        // student has no SCI data (e.g. K-5 students who don't take it).
+        sciScores: (() => {
+          const find = (period: 1 | 2 | 3) =>
+            assessments.find((a) => a.name === `SCI Benchmark ${period}`) ??
+            null;
+          const b1 = find(1);
+          const b2 = find(2);
+          const b3 = find(3);
+          if (!b1 && !b2 && !b3) return null;
+          return {
+            b1: b1?.score ?? null,
+            b2: b2?.score ?? null,
+            b3: b3?.score ?? null,
+            b1Level: b1?.scoreLevel ?? null,
+            b2Level: b2?.scoreLevel ?? null,
+            b3Level: b3?.scoreLevel ?? null,
+          };
+        })(),
         assessments,
       },
       behavior: {

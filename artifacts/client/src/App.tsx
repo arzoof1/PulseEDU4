@@ -17459,6 +17459,14 @@ function App() {
             setStudentProfileReturnTo("insightsWatchlist");
             setActiveSection("studentProfile");
           }}
+          onOpenSpider={(studentId) => {
+            // Same target as the row click, but exposed as an explicit
+            // affordance next to the student name. Pin the back-target
+            // for symmetry with the row click above.
+            setSelectedInsightsStudentId(studentId);
+            setStudentProfileReturnTo("insightsWatchlist");
+            setActiveSection("studentProfile");
+          }}
         />
       )}
 

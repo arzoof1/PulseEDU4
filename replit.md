@@ -1923,3 +1923,83 @@ parent sees on the dashboard.
   a manual trigger, add a superuser-gated `POST /api/admin/weekly-heartbeat/run`
   that takes an optional `schoolId` filter and respects the same
   `last_weekly_email_at` dedup window.
+
+## iReady AP1/2/3 + SCI Benchmark 1/2/3 — placeholder seed + profile display (Apr 26, 2026)
+
+**What shipped (one bundled change set):**
+1. **Watchlist Spider pill** — added an optional `onOpenSpider` prop to
+   `InsightsWatchlist`. When wired (it is, from `App.tsx`), each row in
+   the watchlist table renders a small "🕸️ Spider" pill next to the
+   student's name that opens the whole-child radar / StudentProfile.
+   The whole row is also clickable, so the pill uses
+   `e.stopPropagation()` to avoid double-fire and to be future-safe if
+   the row click target ever changes. Mirrors the same pill on
+   `TeacherRosterPage` for visual consistency. Visibility check happens
+   server-side on the profile fetch — no client-side gate needed because
+   the row is already navigable.
+2. **iReady AP1/AP2/AP3 + SCI Benchmark 1/2/3 demo seed** —
+   `seedIreadyAndSciIfEmpty()` in `seed.ts`, called from `index.ts`
+   boot after `seedFastScoresIfEmpty()`. Both land in the long-format
+   `assessments` table (same target as the generic CSV importer) so the
+   dashboard treats them identically to uploaded data and rollback
+   (DELETE WHERE import_job_id = X) works as a no-op cleanup. Coverage:
+   * iReady Reading + Math AP1/AP2/AP3 — grades K-8 only (HS doesn't
+     use iReady in either Hernando or Pasco).
+   * SCI Benchmark 1/2/3 (percent-correct, FL achievement bands) —
+     grades 6-12 (district science benchmark; ES doesn't run it).
+   Per-school × per-source skip-if-non-empty guards make re-runs a
+   noop. **Each (school, source) seed runs inside a single
+   `db.transaction(...)` so a mid-run crash rolls back fully and the
+   next boot re-attempts from scratch — no permanently-wedged partial
+   datasets.** The synthetic `import_jobs` row is committed in the
+   same txn with `committedAt = now()` and a `mapping` marker
+   `{_seed: "true", _source: "iReady"|"District SCI"}` so the
+   History UI / support can distinguish seed-generated from real CSV
+   uploads.
+3. **Backend aggregation** — `routes/insights.ts` adds two new
+   structured fields to `pillars.academics`:
+   * `ireadyScores: Array<{subject, ap1, ap2, ap3, ap1Level, ap2Level,
+     ap3Level}>` — only emits a subject if at least one AP is populated,
+     so HS students with no iReady get an empty array and the UI hides
+     the block cleanly.
+   * `sciScores: {b1, b2, b3, b1Level, b2Level, b3Level} | null` —
+     null when the student has no SCI Benchmark data (e.g. K-5).
+   Both computed in-memory from the existing `assessments` query (no
+   extra SQL round-trip). The `assessments` query is already ordered
+   `desc by administeredAt`, so `.find()` returns the most recent row
+   in the unlikely event of duplicates — though the unique index on
+   `(school_id, student_id, assessment_name, administered_at)` plus
+   the importer's `onConflictDoUpdate` make duplicates impossible.
+4. **Frontend display** — `StudentProfile.tsx` Academics card now
+   renders three parallel tables: FAST PM (existing), iReady AP (new),
+   SCI Benchmark (new). All three follow the same shape: subject row +
+   three columns of period scores + a latest-level summary column. SCI
+   row shows "Latest Level" via fallback chain `b3Level → b2Level →
+   b1Level → "—"`. Defensive `?? []` / `?? null` defaults on the new
+   fields so a stale-cache version-skew race (old API response in
+   memory while the new bundle expects the new shape) can't crash the
+   page on the first HMR cycle.
+
+**Boot verification:** seeded 18,750 iReady rows across 3 K-8/middle
+schools (3,125 students × 6 names = Reading × 3 + Math × 3) and 29,250
+SCI Benchmark rows across all 7 schools (9,750 students × 3
+benchmarks). Sample data inspection confirms scores fall in plausible
+per-grade bands, level labels match the band the score falls into, and
+AP1 → AP2 → AP3 shows mild positive drift (consistent with year-over-
+year learning gains). On second boot the per-source guards correctly
+skipped — no log lines, near-zero work.
+
+**Note on K-5 students:** the dev DB currently only has students in
+grades 6-12 (per `seed.ts` line 819 — high school seeder uses 6 + 0..6).
+The K-8 grade gate in the iReady seed is already in place for when
+K-5 students exist; today only grade 6/7/8 students get iReady rows
+and 6-12 students get SCI rows. No code change needed — the gate is
+forward-compatible.
+
+**Files touched:**
+- `artifacts/client/src/components/InsightsWatchlist.tsx` (Spider pill)
+- `artifacts/client/src/App.tsx` (wire `onOpenSpider`)
+- `artifacts/api-server/src/seed.ts` (new `seedIreadyAndSciIfEmpty`)
+- `artifacts/api-server/src/index.ts` (boot wiring)
+- `artifacts/api-server/src/routes/insights.ts` (structured aggregation)
+- `artifacts/client/src/components/StudentProfile.tsx` (UI tables + type)

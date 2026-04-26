@@ -6,6 +6,7 @@ import {
   seedMtssPlansIfEmpty,
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
+  seedIreadyAndSciIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -38,6 +39,10 @@ if (Number.isNaN(port) || port <= 0) {
   // Same pattern: ensure schema + skip-if-non-empty per school. Required
   // before the Teacher Roster API has anything to render.
   await seedFastScoresIfEmpty();
+  // iReady AP1/AP2/AP3 (K-8) + SCI Benchmark 1/2/3 (G6-12) demo data
+  // landed in the generic assessments table. Per-school + per-source
+  // skip-if-non-empty so re-runs are a near-noop.
+  await seedIreadyAndSciIfEmpty();
   // Houses (PBIS teams) + round-robin assign students. Idempotent per school.
   await seedHousesIfEmpty();
 })()

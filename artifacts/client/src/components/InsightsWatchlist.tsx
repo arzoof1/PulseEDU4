@@ -168,9 +168,16 @@ function chip(label: string, sev: "info" | "watch" | "high") {
 
 interface Props {
   onOpenStudent: (studentId: string) => void;
+  // Optional: when set, renders a small "Spider" pill next to each
+  // student's name in the table that opens the whole-child radar
+  // (StudentProfile / Spider) directly. Same pattern as TeacherRosterPage
+  // — visibility is gated server-side, so we always render it when the
+  // caller opts in. Click stops propagation so the row's own onClick
+  // (which also navigates) doesn't double-fire.
+  onOpenSpider?: (studentId: string) => void;
 }
 
-export default function InsightsWatchlist({ onOpenStudent }: Props) {
+export default function InsightsWatchlist({ onOpenStudent, onOpenSpider }: Props) {
   const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
   const [rows, setRows] = useState<Row[]>([]);
   const [windowLabel, setWindowLabel] = useState("");
@@ -888,8 +895,50 @@ export default function InsightsWatchlist({ onOpenStudent }: Props) {
                     }}
                   >
                     <td style={{ padding: "0.5rem" }}>
-                      <div style={{ fontWeight: 600 }}>
-                        {r.lastName}, {r.firstName}
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <span style={{ fontWeight: 600 }}>
+                          {r.lastName}, {r.firstName}
+                        </span>
+                        {onOpenSpider && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              // Row has its own onClick that also navigates
+                              // to the profile — stop propagation so we
+                              // don't double-fire (and so a future change
+                              // to the row click target doesn't silently
+                              // hijack the pill).
+                              e.stopPropagation();
+                              onOpenSpider(r.studentId);
+                            }}
+                            title={`Open whole-child radar for ${r.firstName} ${r.lastName}`}
+                            aria-label={`Open whole-child radar for ${r.firstName} ${r.lastName}`}
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border: "1px solid #c7d2fe",
+                              background: "#eef2ff",
+                              color: "#3730a3",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              lineHeight: 1.2,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span aria-hidden="true">🕸️</span>
+                            <span>Spider</span>
+                          </button>
+                        )}
                       </div>
                       <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
                         {r.studentId}

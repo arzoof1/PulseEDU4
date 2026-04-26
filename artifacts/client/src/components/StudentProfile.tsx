@@ -48,6 +48,23 @@ interface ProfilePayload {
         priorYearScore: number | null;
         priorYearBq: boolean;
       }>;
+      ireadyScores: Array<{
+        subject: "Reading" | "Math";
+        ap1: number | null;
+        ap2: number | null;
+        ap3: number | null;
+        ap1Level: string | null;
+        ap2Level: string | null;
+        ap3Level: string | null;
+      }>;
+      sciScores: {
+        b1: number | null;
+        b2: number | null;
+        b3: number | null;
+        b1Level: string | null;
+        b2Level: string | null;
+        b3Level: string | null;
+      } | null;
       assessments: Array<{
         name: string;
         score: number | null;
@@ -860,7 +877,20 @@ export default function StudentProfile({
           gap: "0.75rem",
         }}
       >
-        <Card title="Academics" empty={pillars.academics.fastScores.length === 0 && pillars.academics.assessments.length === 0}>
+        <Card
+          title="Academics"
+          empty={
+            pillars.academics.fastScores.length === 0 &&
+            // Defensive `?? []` / `?? null` defaults — a stale-cache /
+            // version-skew race (old API response in memory while the new
+            // bundle expects the new shape) would otherwise crash the
+            // whole page on the first HMR cycle. Type says these are
+            // present; runtime trusts but verifies.
+            (pillars.academics.ireadyScores ?? []).length === 0 &&
+            !(pillars.academics.sciScores ?? null) &&
+            pillars.academics.assessments.length === 0
+          }
+        >
           {pillars.academics.fastScores.length > 0 && (
             <div style={{ marginBottom: "0.5rem" }}>
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
@@ -891,6 +921,98 @@ export default function StudentProfile({
                       </td>
                     </tr>
                   ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {(pillars.academics.ireadyScores ?? []).length > 0 && (
+            <div style={{ marginBottom: "0.5rem" }}>
+              <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
+                iReady AP
+              </div>
+              <table style={{ width: "100%", fontSize: "0.85rem" }}>
+                <thead>
+                  <tr style={{ color: "#6b7280" }}>
+                    <th style={{ textAlign: "left" }}>Subject</th>
+                    <th style={{ textAlign: "right" }}>AP1</th>
+                    <th style={{ textAlign: "right" }}>AP2</th>
+                    <th style={{ textAlign: "right" }}>AP3</th>
+                    <th style={{ textAlign: "left", paddingLeft: 8 }}>Latest Level</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(pillars.academics.ireadyScores ?? []).map((s) => {
+                    // Most-recent populated level wins, AP3 → AP2 → AP1.
+                    const latestLevel =
+                      s.ap3Level ?? s.ap2Level ?? s.ap1Level ?? null;
+                    return (
+                      <tr key={s.subject}>
+                        <td>{s.subject}</td>
+                        <td style={{ textAlign: "right" }}>{s.ap1 ?? "—"}</td>
+                        <td style={{ textAlign: "right" }}>{s.ap2 ?? "—"}</td>
+                        <td style={{ textAlign: "right" }}>{s.ap3 ?? "—"}</td>
+                        <td
+                          style={{
+                            paddingLeft: 8,
+                            color: "#6b7280",
+                            fontSize: "0.78rem",
+                          }}
+                        >
+                          {latestLevel ?? "—"}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+          {pillars.academics.sciScores && (
+            <div style={{ marginBottom: "0.5rem" }}>
+              <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
+                SCI Benchmark
+              </div>
+              <table style={{ width: "100%", fontSize: "0.85rem" }}>
+                <thead>
+                  <tr style={{ color: "#6b7280" }}>
+                    <th style={{ textAlign: "left" }}>Subject</th>
+                    <th style={{ textAlign: "right" }}>B1</th>
+                    <th style={{ textAlign: "right" }}>B2</th>
+                    <th style={{ textAlign: "right" }}>B3</th>
+                    <th style={{ textAlign: "left", paddingLeft: 8 }}>Latest Level</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>Science</td>
+                    <td style={{ textAlign: "right" }}>
+                      {pillars.academics.sciScores.b1 != null
+                        ? `${pillars.academics.sciScores.b1}%`
+                        : "—"}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {pillars.academics.sciScores.b2 != null
+                        ? `${pillars.academics.sciScores.b2}%`
+                        : "—"}
+                    </td>
+                    <td style={{ textAlign: "right" }}>
+                      {pillars.academics.sciScores.b3 != null
+                        ? `${pillars.academics.sciScores.b3}%`
+                        : "—"}
+                    </td>
+                    <td
+                      style={{
+                        paddingLeft: 8,
+                        color: "#6b7280",
+                        fontSize: "0.78rem",
+                      }}
+                    >
+                      {pillars.academics.sciScores.b3Level ??
+                        pillars.academics.sciScores.b2Level ??
+                        pillars.academics.sciScores.b1Level ??
+                        "—"}
+                    </td>
+                  </tr>
                 </tbody>
               </table>
             </div>

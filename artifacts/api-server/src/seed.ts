@@ -30,6 +30,8 @@ import {
   studentMtssPlansTable,
   studentFastScoresTable,
   housesTable,
+  assessmentsTable,
+  importJobsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray } from "drizzle-orm";
@@ -655,6 +657,367 @@ export async function seedFastScoresIfEmpty() {
       { schoolId: school.id, count: inserts.length },
       "[seed] FAST scores seeded (placeholder PM1/PM2/PM3 + prior year)",
     );
+  }
+}
+
+// =============================================================================
+// iReady AP1/AP2/AP3 + SCI Benchmark 1/2/3 placeholder seeding
+// =============================================================================
+// Both land in the long-format `assessments` table (one row per
+// student/assessment_name/date). This is the same table the generic CSV
+// importer writes to, so the dashboard treats seeded data exactly like
+// uploaded data — including History → Imports listing the synthetic
+// import_jobs row, and rollback (DELETE WHERE import_job_id = X) wiping
+// the seed cleanly.
+//
+// Coverage:
+//   * iReady Reading + Math AP1/AP2/AP3 — grades K–8 only (HS doesn't
+//     use iReady in either Hernando or Pasco).
+//   * SCI Benchmark 1/2/3              — grades 6–12 (district science
+//     benchmark; ES doesn't run it).
+//
+// Idempotency:
+//   Per-school + per-source skip — if the school already has any rows
+//   for `source = 'iReady'` we skip the iReady block; same for
+//   'District SCI'. Re-running on boot is therefore a near-noop.
+// =============================================================================
+
+// Per-grade plausible iReady scaled-score band (level 1 floor through
+// level 5 ceiling). Modelled on iReady placement-level cut points; not
+// exact vendor cuts but plausible enough for a demo dataset and
+// monotonic across grades. Grade 0 = Kindergarten.
+const IREADY_READING_BANDS: Record<
+  number,
+  { L1: [number, number]; L2: [number, number]; L3: [number, number]; L4: [number, number]; L5: [number, number] }
+> = {
+  0: { L1: [100, 329], L2: [330, 360], L3: [361, 400], L4: [401, 440], L5: [441, 500] },
+  1: { L1: [200, 388], L2: [389, 418], L3: [419, 452], L4: [453, 490], L5: [491, 540] },
+  2: { L1: [250, 425], L2: [426, 456], L3: [457, 488], L4: [489, 520], L5: [521, 570] },
+  3: { L1: [300, 455], L2: [456, 488], L3: [489, 520], L4: [521, 560], L5: [561, 610] },
+  4: { L1: [350, 485], L2: [486, 517], L3: [518, 540], L4: [541, 580], L5: [581, 640] },
+  5: { L1: [380, 510], L2: [511, 541], L3: [542, 565], L4: [566, 605], L5: [606, 665] },
+  6: { L1: [400, 530], L2: [531, 559], L3: [560, 580], L4: [581, 615], L5: [616, 690] },
+  7: { L1: [420, 548], L2: [549, 580], L3: [581, 600], L4: [601, 635], L5: [636, 710] },
+  8: { L1: [440, 565], L2: [566, 595], L3: [596, 615], L4: [616, 650], L5: [651, 730] },
+};
+const IREADY_MATH_BANDS: Record<
+  number,
+  { L1: [number, number]; L2: [number, number]; L3: [number, number]; L4: [number, number]; L5: [number, number] }
+> = {
+  0: { L1: [100, 330], L2: [331, 359], L3: [360, 395], L4: [396, 425], L5: [426, 475] },
+  1: { L1: [200, 388], L2: [389, 418], L3: [419, 447], L4: [448, 485], L5: [486, 535] },
+  2: { L1: [250, 425], L2: [426, 453], L3: [454, 485], L4: [486, 520], L5: [521, 565] },
+  3: { L1: [300, 455], L2: [456, 484], L3: [485, 510], L4: [511, 545], L5: [546, 595] },
+  4: { L1: [350, 478], L2: [479, 506], L3: [507, 530], L4: [531, 562], L5: [563, 610] },
+  5: { L1: [380, 495], L2: [496, 524], L3: [525, 547], L4: [548, 575], L5: [576, 625] },
+  6: { L1: [400, 515], L2: [516, 544], L3: [545, 565], L4: [566, 595], L5: [596, 650] },
+  7: { L1: [420, 528], L2: [529, 557], L3: [558, 580], L4: [581, 610], L5: [611, 665] },
+  8: { L1: [440, 538], L2: [539, 567], L3: [568, 590], L4: [591, 620], L5: [621, 680] },
+};
+const IREADY_LEVEL_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "Two+ Grade Levels Below",
+  2: "One Grade Level Below",
+  3: "Early On Grade Level",
+  4: "Mid On Grade Level",
+  5: "Above Grade Level",
+};
+
+// SCI Benchmark scoring is percent correct (0–100). FL achievement-level
+// rubric used at the district level; identical band shape across G6–12.
+const SCI_BANDS = {
+  L1: [25, 49] as [number, number],
+  L2: [50, 59] as [number, number],
+  L3: [60, 69] as [number, number],
+  L4: [70, 84] as [number, number],
+  L5: [85, 100] as [number, number],
+};
+const SCI_LEVEL_LABELS: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "Below",
+  2: "Approaching",
+  3: "On Track",
+  4: "Mastery",
+  5: "Above",
+};
+
+// 2025–2026 administration windows (matches today = April 2026 so AP3 /
+// Benchmark 3 reads as a recently-completed event in the UI).
+const AP1_DATE = new Date("2025-10-15T14:00:00Z");
+const AP2_DATE = new Date("2026-01-20T14:00:00Z");
+const AP3_DATE = new Date("2026-04-10T14:00:00Z");
+
+// Parse a roster grade string into a number. Numeric strings ("0".."12")
+// pass straight through; "K" / "KG" / "Kindergarten" map to 0; anything
+// else (Pre-K, "TK", malformed) returns null and the caller skips.
+function parseGrade(g: string | null | undefined): number | null {
+  if (g == null) return null;
+  const trimmed = String(g).trim().toUpperCase();
+  if (trimmed === "K" || trimmed === "KG" || trimmed === "KINDERGARTEN") {
+    return 0;
+  }
+  const n = Number(trimmed);
+  return Number.isInteger(n) ? n : null;
+}
+
+// Derive the placement-level (1..5) a score falls into using an
+// already-known per-grade band table.
+function levelForBand(
+  score: number,
+  band: { L1: [number, number]; L2: [number, number]; L3: [number, number]; L4: [number, number]; L5: [number, number] },
+): 1 | 2 | 3 | 4 | 5 {
+  if (score <= band.L1[1]) return 1;
+  if (score <= band.L2[1]) return 2;
+  if (score <= band.L3[1]) return 3;
+  if (score <= band.L4[1]) return 4;
+  return 5;
+}
+
+export async function seedIreadyAndSciIfEmpty() {
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const studentRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+
+    // Synthetic import_jobs.uploaded_by — not a hard FK so any positive
+    // staff id is fine. We pick the first staff in the school so the
+    // History UI can still render a sensible "uploaded by" name.
+    const [firstStaff] = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id))
+      .limit(1);
+    if (!firstStaff) continue;
+
+    // ---- iReady AP1/AP2/AP3 (Reading + Math), grades K–8 -------------
+    const [{ c: iReadyExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM assessments WHERE school_id = ${school.id} AND source = 'iReady'`,
+      )
+    ).rows as { c: number }[];
+
+    if (iReadyExisting === 0) {
+      const k8Students = studentRows.filter((s) => {
+        const g = parseGrade(s.grade);
+        return g !== null && g >= 0 && g <= 8;
+      });
+
+      if (k8Students.length > 0) {
+        // Build all rows first (CPU-only, no I/O), then commit the
+        // import_jobs row + every assessment row + the counter patch
+        // inside a single transaction. If anything fails the txn
+        // rolls back and the source-count guard above still reads
+        // zero on the next boot — we re-attempt from scratch instead
+        // of being permanently wedged with a partial dataset.
+        const rng = makeRng(0x1ead7 + school.id * 1031);
+        const inserts: (typeof assessmentsTable.$inferInsert)[] = [];
+
+        for (const stu of k8Students) {
+          const grade = parseGrade(stu.grade);
+          if (grade === null) continue;
+          for (const subject of ["Reading", "Math"] as const) {
+            const bands =
+              subject === "Reading" ? IREADY_READING_BANDS : IREADY_MATH_BANDS;
+            const band = bands[grade];
+            if (!band) continue;
+
+            const trueLevel = pickLevel(rng);
+            const range = band[`L${trueLevel}` as `L${1 | 2 | 3 | 4 | 5}`];
+            const fullLo = band.L1[0];
+            const fullHi = band.L5[1];
+
+            const ap1 = clamp(
+              randInRange(rng, range[0], range[1]),
+              fullLo,
+              fullHi,
+            );
+            const ap2 = clamp(ap1 + randInRange(rng, -3, 12), fullLo, fullHi);
+            const ap3 = clamp(ap2 + randInRange(rng, -2, 14), fullLo, fullHi);
+
+            // importJobId is set inside the txn once we know the id.
+            // Use 0 as a placeholder; we patch each row's importJobId
+            // before insert.
+            inserts.push(
+              {
+                schoolId: school.id,
+                studentId: stu.studentId,
+                assessmentName: `iReady ${subject} AP1`,
+                score: ap1,
+                scoreLevel: IREADY_LEVEL_LABELS[levelForBand(ap1, band)],
+                administeredAt: AP1_DATE,
+                source: "iReady",
+                importJobId: 0,
+              },
+              {
+                schoolId: school.id,
+                studentId: stu.studentId,
+                assessmentName: `iReady ${subject} AP2`,
+                score: ap2,
+                scoreLevel: IREADY_LEVEL_LABELS[levelForBand(ap2, band)],
+                administeredAt: AP2_DATE,
+                source: "iReady",
+                importJobId: 0,
+              },
+              {
+                schoolId: school.id,
+                studentId: stu.studentId,
+                assessmentName: `iReady ${subject} AP3`,
+                score: ap3,
+                scoreLevel: IREADY_LEVEL_LABELS[levelForBand(ap3, band)],
+                administeredAt: AP3_DATE,
+                source: "iReady",
+                importJobId: 0,
+              },
+            );
+          }
+        }
+
+        if (inserts.length > 0) {
+          await db.transaction(async (tx) => {
+            const now = new Date();
+            const [job] = await tx
+              .insert(importJobsTable)
+              .values({
+                schoolId: school.id,
+                districtId: null,
+                kind: "assessments",
+                filename: "[seed] iReady AP1-AP3 placeholder.csv",
+                objectPath: null,
+                uploadedBy: firstStaff.id,
+                // Land already-committed: counters are correct because
+                // we set them in this same txn just below.
+                status: "committed",
+                totalRows: inserts.length,
+                successRows: inserts.length,
+                errorRows: 0,
+                errorLog: [],
+                // Tag so support / History can tell this row came from
+                // the boot seeder versus a real CSV upload.
+                mapping: { _seed: "true", _source: "iReady" },
+                committedAt: now,
+              })
+              .returning({ id: importJobsTable.id });
+
+            for (const row of inserts) row.importJobId = job.id;
+            for (let i = 0; i < inserts.length; i += 500) {
+              await tx
+                .insert(assessmentsTable)
+                .values(inserts.slice(i, i + 500));
+            }
+          });
+          logger.info(
+            { schoolId: school.id, count: inserts.length },
+            "[seed] iReady AP1-AP3 seeded (K-8 placeholder)",
+          );
+        }
+      }
+    }
+
+    // ---- SCI Benchmark 1/2/3, grades 6–12 ----------------------------
+    const [{ c: sciExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM assessments WHERE school_id = ${school.id} AND source = 'District SCI'`,
+      )
+    ).rows as { c: number }[];
+
+    if (sciExisting === 0) {
+      const sciStudents = studentRows.filter((s) => {
+        const g = parseGrade(s.grade);
+        return g !== null && g >= 6 && g <= 12;
+      });
+
+      if (sciStudents.length > 0) {
+        const rng = makeRng(0x5c1be4 + school.id * 1033);
+        const inserts: (typeof assessmentsTable.$inferInsert)[] = [];
+
+        for (const stu of sciStudents) {
+          const trueLevel = pickLevel(rng);
+          const range = SCI_BANDS[`L${trueLevel}` as `L${1 | 2 | 3 | 4 | 5}`];
+          const fullLo = SCI_BANDS.L1[0];
+          const fullHi = SCI_BANDS.L5[1];
+
+          const b1 = clamp(
+            randInRange(rng, range[0], range[1]),
+            fullLo,
+            fullHi,
+          );
+          const b2 = clamp(b1 + randInRange(rng, -4, 8), fullLo, fullHi);
+          const b3 = clamp(b2 + randInRange(rng, -2, 10), fullLo, fullHi);
+
+          inserts.push(
+            {
+              schoolId: school.id,
+              studentId: stu.studentId,
+              assessmentName: "SCI Benchmark 1",
+              score: b1,
+              scoreLevel: SCI_LEVEL_LABELS[levelForBand(b1, SCI_BANDS)],
+              administeredAt: AP1_DATE,
+              source: "District SCI",
+              importJobId: 0,
+            },
+            {
+              schoolId: school.id,
+              studentId: stu.studentId,
+              assessmentName: "SCI Benchmark 2",
+              score: b2,
+              scoreLevel: SCI_LEVEL_LABELS[levelForBand(b2, SCI_BANDS)],
+              administeredAt: AP2_DATE,
+              source: "District SCI",
+              importJobId: 0,
+            },
+            {
+              schoolId: school.id,
+              studentId: stu.studentId,
+              assessmentName: "SCI Benchmark 3",
+              score: b3,
+              scoreLevel: SCI_LEVEL_LABELS[levelForBand(b3, SCI_BANDS)],
+              administeredAt: AP3_DATE,
+              source: "District SCI",
+              importJobId: 0,
+            },
+          );
+        }
+
+        if (inserts.length > 0) {
+          await db.transaction(async (tx) => {
+            const now = new Date();
+            const [job] = await tx
+              .insert(importJobsTable)
+              .values({
+                schoolId: school.id,
+                districtId: null,
+                kind: "assessments",
+                filename: "[seed] SCI Benchmark 1-3 placeholder.csv",
+                objectPath: null,
+                uploadedBy: firstStaff.id,
+                status: "committed",
+                totalRows: inserts.length,
+                successRows: inserts.length,
+                errorRows: 0,
+                errorLog: [],
+                mapping: { _seed: "true", _source: "District SCI" },
+                committedAt: now,
+              })
+              .returning({ id: importJobsTable.id });
+
+            for (const row of inserts) row.importJobId = job.id;
+            for (let i = 0; i < inserts.length; i += 500) {
+              await tx
+                .insert(assessmentsTable)
+                .values(inserts.slice(i, i + 500));
+            }
+          });
+          logger.info(
+            { schoolId: school.id, count: inserts.length },
+            "[seed] SCI Benchmark 1-3 seeded (G6-12 placeholder)",
+          );
+        }
+      }
+    }
   }
 }
 
