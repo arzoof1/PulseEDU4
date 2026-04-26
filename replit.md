@@ -2255,3 +2255,71 @@ Status: **idea parked** — surface this together with the Students
 3D idea when item #3 (Academics dashboard) lands, since both are
 academics-flavored views and we'll have the cut-score plumbing
 warm at that point.
+
+---
+
+## Save-for-later: eduCLIMBER "Risk Ratio Calculation" (disproportionality)
+
+Third "Save for later" screenshot from the user on Apr 26, 2026.
+Same parking-lot capture pattern as the two above.
+
+Reference image: `attached_assets/image_1777213147558.png`
+
+What it is (from the screenshot):
+- A **Risk Ratio Calculation** view, **By Ethnicity**, with an
+  "Edit Calculation" button top-right (so the educator can swap
+  the cohort axis — by Ethnicity / Gender / Disability / Meal
+  Status / etc., presumably).
+- Top half: a tile grid, one tile per ethnicity bucket (No Value
+  Assigned, American Indian, Asian, Black or African American,
+  Chinese, Filipino, Guamanian, Hawaiian, Hispanic, Japanese,
+  Laotian, Native Hawaiian or Other Pacific Islander, Other
+  Pacific Islander, Refused to Identify, Samoan, Two or More Races,
+  Vietnamese, White). Each tile shows:
+  - The risk ratio in big type ("1.5 to 1", "0.4 to 1", etc.)
+  - The numerator/denominator below ("240 / 725 Students" — i.e.,
+    240 of this group's 725 students were "in the incident set"
+    being measured).
+- Bottom half: horizontal bar chart of the same ratios sorted by
+  the bucket label, with x-axis 0 → 3.25.
+- Right rail: a legend explaining what the ratios *mean* — 1.0 =
+  Equal Risk, 1.25 = 25% higher, 1.5 = 50% higher, 2.0 = 2x, 2.5
+  = 2.5x, 3.0 = 3x. This is the gold-standard interpretation
+  scaffolding educators need; without it the numbers are
+  meaningless to a non-statistician.
+
+Why it's compelling for our app:
+- This is **literally** the calculation behind item #5 (Equity
+  dashboard). The "incident set" is a swap-in slot — could be
+  ODRs, ISS days, suspensions, special-ed referrals, intervention
+  assignments, etc. The same widget answers a dozen "is this
+  proportionate?" questions just by changing the metric.
+- Pairs naturally with the Students 3D idea above — Students 3D
+  is the *people* view of disproportionality, this is the *math*
+  view. They reinforce each other.
+- The legend on the right is itself a teachable artifact; that's
+  the kind of "explain the metric inline" UX that earns trust
+  with skeptical principals.
+
+Not-trivial considerations:
+- Risk ratio formula = (% of group in the set) / (% of all-other
+  groups in the set). Easy to compute server-side once we have
+  the demographic columns + the metric in question.
+- Demographics: we currently store basic student demographics but
+  the breakdown granularity in this screenshot (Chinese / Filipino
+  / Guamanian / Hawaiian as separate buckets, not just "Asian /
+  Pacific Islander") implies a richer code list than we have today.
+  Either we accept the broader buckets we have, or we add finer
+  fields to the SIS importer.
+- Small-N suppression: a "3.0 to 1" tile based on "2 / 3 Students"
+  (Samoan in the screenshot) is statistical noise dressed up as
+  a finding. We must add a min-N suppression rule and a clear
+  "insufficient sample" badge instead of letting the chart shout.
+- Privacy: same concern as Students 3D — surfacing demographic
+  breakdowns to anyone with a role triggers policy. Worth the same
+  conversation with the user.
+
+Status: **idea parked** — this is the natural hero view for item
+#5 (Equity dashboard). When we get to item #5, propose this widget
+as the centerpiece, with the Students 3D view as the
+"see the actual kids" complement.
