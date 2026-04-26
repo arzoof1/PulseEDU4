@@ -3393,3 +3393,48 @@ Replaced the static `SubgroupSnapshotGrid` with `ReorderableSubgroupGrid`.
 empty-array rejection (no API reset; UI never sends empty so moot),
 RMW clobber (documented above), and the active-gate (addressed —
 loadPrefsIfActive checks `staff.active` on every call).
+
+────────────────────────────────────────────────────────────────────────
+SESSION NOTE — Early Warning: collapsible "How to use" help panel
+────────────────────────────────────────────────────────────────────────
+Why: Staff opening Early Warning for the first time had no in-app
+explanation of what the 0-100 score means, how the four pillars are
+calculated, what the bands signal, or how to act on the leaderboard.
+External docs are not where teachers look — they need it on the page.
+
+What shipped:
+- New `HowToUsePanel` component in
+  `artifacts/client/src/components/EarlyWarningDashboard.tsx`,
+  rendered immediately under the dashboard header (above KPI strip).
+- Click-to-toggle button (defaults closed). Uses `aria-expanded` +
+  `aria-controls` for screen readers; chevron rotates 90° on open.
+- Open state intentionally NOT persisted — staff who close it almost
+  always want it closed on next visit. Per-user persistence would just
+  cost a `ui_prefs` round-trip for a one-time read.
+- Sections: "What this dashboard is", "How the score is calculated"
+  (per-pillar 0-25 budget + 30d window + Aca/Beh/Eng/Sup chips),
+  "What the risk bands mean" (5 BandRow chips reusing BAND_COLORS so
+  help text and live data line up), "How to use it day-to-day"
+  (start-at-top, High+Critical headline, Unsupported high-risk pill,
+  grade filter, click-row-to-profile, pillar legend),
+  "A few caveats" (triage not diagnosis, 30d recency, footer source
+  counts).
+- Three small helper components added to keep the section markup
+  consistent: `HowToSection` (subhead wrapper), `PillarSwatch`
+  (inline pillar chip — same colour/abbrev as PillarBar so the user
+  can pattern-match later), `BandRow` (band chip + range + meaning).
+
+Caveats considered:
+- React.CSSProperties / React.ReactNode used without an explicit
+  React import — same pattern as App.tsx and EquityDashboard.tsx.
+  TS `react-jsx` mode + @types/react makes the namespace global.
+- HMR confirmed clean update (`/src/components/EarlyWarningDashboard.tsx`
+  hot updated, no console errors).
+- Pre-existing TS errors in App.tsx are NOT introduced by this change
+  (verified by file path — none match EarlyWarningDashboard.tsx).
+- No backend changes. No schema changes. No new routes.
+
+Follow-ups (not done, not needed):
+- Could add the same pattern to other insights dashboards (Equity,
+  Behavior, Academics, Engagement). Not requested; only Early Warning
+  was raised.

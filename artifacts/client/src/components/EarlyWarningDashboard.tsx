@@ -198,6 +198,8 @@ export function EarlyWarningDashboard({ onOpenProfile }: Props) {
         </div>
       </div>
 
+      <HowToUsePanel />
+
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>
           Loading early warning…
@@ -211,6 +213,379 @@ export function EarlyWarningDashboard({ onOpenProfile }: Props) {
     </div>
   );
 }
+
+// ---------- "How to use" collapsible help panel ---------------------------
+//
+// Renders right below the dashboard header. Defaults to collapsed so it
+// doesn't push the data down the page, but a user who hasn't seen the
+// dashboard before can click once and read a full orientation. The open
+// state is intentionally NOT persisted — staff who close it almost
+// always want it closed again on the next visit.
+
+function HowToUsePanel() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div
+      style={{
+        marginTop: "0.75rem",
+        border: "1px solid #e2e8f0",
+        borderRadius: 8,
+        background: "#f8fafc",
+        overflow: "hidden",
+      }}
+    >
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        aria-controls="ews-howto-body"
+        style={{
+          width: "100%",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.75rem",
+          padding: "0.75rem 1rem",
+          background: "transparent",
+          border: "none",
+          cursor: "pointer",
+          textAlign: "left",
+          font: "inherit",
+          color: "#0f172a",
+        }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <span
+            aria-hidden
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 22,
+              height: 22,
+              borderRadius: "50%",
+              background: "#0f172a",
+              color: "white",
+              fontSize: 12,
+              fontWeight: 700,
+            }}
+          >
+            ?
+          </span>
+          <span style={{ fontWeight: 600, fontSize: 14 }}>
+            How to use Early Warning
+          </span>
+          <span
+            style={{
+              fontSize: 12,
+              color: "#64748b",
+              fontWeight: 400,
+            }}
+          >
+            {open ? "Click to close" : "Click to open"}
+          </span>
+        </span>
+        <span
+          aria-hidden
+          style={{
+            display: "inline-block",
+            transform: open ? "rotate(90deg)" : "rotate(0deg)",
+            transition: "transform 120ms ease",
+            color: "#64748b",
+            fontSize: 14,
+            lineHeight: 1,
+          }}
+        >
+          ▶
+        </span>
+      </button>
+
+      {open && (
+        <div
+          id="ews-howto-body"
+          style={{
+            padding: "0.25rem 1rem 1rem",
+            borderTop: "1px solid #e2e8f0",
+            background: "white",
+            color: "#334155",
+            fontSize: 13,
+            lineHeight: 1.55,
+          }}
+        >
+          <HowToSection title="What this dashboard is">
+            One number per student — a 0-100 risk score that rolls up four
+            areas of student life. The point is to answer “who do we touch
+            first this week?” without making the team scan five separate
+            reports. Sort the leaderboard, work the top, repeat.
+          </HowToSection>
+
+          <HowToSection title="How the score is calculated">
+            <p style={{ margin: "0 0 0.5rem" }}>
+              Each of the four pillars contributes 0-25 points. Add them up
+              for the composite (0-100). Most signals look at the{" "}
+              <strong>last 30 days</strong> so the score reflects what’s
+              happening now, not a kid’s entire history.
+            </p>
+            <ul style={howtoListStyle}>
+              <li>
+                <PillarSwatch color="#0ea5e9" label="Aca" /> &nbsp;
+                <strong>Academics (0-25)</strong> — number of FAST
+                “Below-Benchmark Quartile” subjects on the most recent
+                window. 0 subjects = 0 points, 1 subject = 14 points,
+                2 or more subjects = the full 25.
+              </li>
+              <li>
+                <PillarSwatch color="#dc2626" label="Beh" /> &nbsp;
+                <strong>Behavior (0-25)</strong> — count of negative PBIS
+                entries in the last 30 days (voided entries don’t count).
+                More incidents = a higher pillar score, capped at 25.
+              </li>
+              <li>
+                <PillarSwatch color="#f97316" label="Eng" /> &nbsp;
+                <strong>Engagement (0-25)</strong> — weighted count of
+                time-out-of-class events in the last 30 days. A hall pass
+                or tardy = 1 point each, a pullout = 2, an ISS day = 5.
+                A full day out of class is a much heavier signal than a
+                single tardy.
+              </li>
+              <li>
+                <PillarSwatch color="#7c3aed" label="Sup" /> &nbsp;
+                <strong>Supports (0-25)</strong> — the tier of the student’s
+                most intensive active MTSS plan. No plan = 0, Tier&nbsp;1 =
+                5, Tier&nbsp;2 = 14, Tier&nbsp;3 = 25. An active plan{" "}
+                <em>adds</em> to the score because it confirms the team has
+                already identified real need — see{" "}
+                <strong>Unsupported high-risk</strong> below for the
+                inverse case.
+              </li>
+            </ul>
+          </HowToSection>
+
+          <HowToSection title="What the risk bands mean">
+            <p style={{ margin: "0 0 0.5rem" }}>
+              The composite drops into one of five bands. The colored bar
+              and the legend on the dashboard use these same colors.
+            </p>
+            <div style={{ display: "grid", gap: "0.4rem" }}>
+              <BandRow
+                band="low"
+                range="0-19"
+                meaning="No active concerns. Standard Tier 1 supports are sufficient."
+              />
+              <BandRow
+                band="watch"
+                range="20-39"
+                meaning="One mild signal. Keep an eye on it; no action required yet."
+              />
+              <BandRow
+                band="moderate"
+                range="40-59"
+                meaning="Multiple signals or one strong one. Bring up at the next MTSS meeting."
+              />
+              <BandRow
+                band="high"
+                range="60-79"
+                meaning="Acute risk. If there is no active plan, start a Tier 2 referral this week."
+              />
+              <BandRow
+                band="critical"
+                range="80-100"
+                meaning="Severe risk across pillars. Same-week intervention; loop in admin and family."
+              />
+            </div>
+          </HowToSection>
+
+          <HowToSection title="How to use it day-to-day">
+            <ul style={howtoListStyle}>
+              <li>
+                <strong>Start at the top of the leaderboard.</strong> The
+                dashboard already sorts the highest-risk students first, so
+                the first 5-10 rows are your week’s caseload.
+              </li>
+              <li>
+                <strong>Watch the “High + Critical” headline tile.</strong>{" "}
+                That number is the count of students scoring 60 or higher —
+                the school-wide MTSS triage queue. If it grows week over
+                week, the team is falling behind.
+              </li>
+              <li>
+                <strong>Prioritize “Unsupported high-risk”.</strong> A
+                student scoring ≥ 60 with <em>no</em> active MTSS plan is
+                someone the team hasn’t reached yet. The orange{" "}
+                <span
+                  style={{
+                    background: "#fef3c7",
+                    color: "#92400e",
+                    padding: "1px 6px",
+                    borderRadius: 3,
+                    fontWeight: 600,
+                    fontSize: 10,
+                    letterSpacing: "0.02em",
+                    textTransform: "uppercase",
+                  }}
+                >
+                  unsupported
+                </span>{" "}
+                pill on a row is the strongest action signal on the page.
+              </li>
+              <li>
+                <strong>Use the grade filter</strong> when you want to look
+                at one team’s caseload — e.g. just 6th-grade ELA can sort
+                by grade 6 and see only their kids.
+              </li>
+              <li>
+                <strong>Click any row to open the student profile.</strong>{" "}
+                The pillar breakdown gives you the “why” at a glance; the
+                profile gives you the full record to act on.
+              </li>
+              <li>
+                <strong>Pillar bar legend:</strong>{" "}
+                <PillarSwatch color="#0ea5e9" label="Aca" /> Academics ·{" "}
+                <PillarSwatch color="#dc2626" label="Beh" /> Behavior ·{" "}
+                <PillarSwatch color="#f97316" label="Eng" /> Engagement ·{" "}
+                <PillarSwatch color="#7c3aed" label="Sup" /> Supports.
+                Each chip shows that pillar’s score out of 25. A faded
+                chip means that pillar contributed 0 points.
+              </li>
+            </ul>
+          </HowToSection>
+
+          <HowToSection title="A few caveats">
+            <ul style={howtoListStyle}>
+              <li>
+                The score is a <strong>triage signal, not a diagnosis</strong>.
+                Use it to decide who to look at first; do not use it to
+                decide what services a student receives.
+              </li>
+              <li>
+                Most signals look at the last 30 days. A student with a
+                rough October but a clean November will score lower —
+                that’s intentional.
+              </li>
+              <li>
+                If you don’t see expected data, check the footer at the
+                bottom of the dashboard — it shows how many of each source
+                (FAST scores, PBIS, hall passes, tardies, pullouts, ISS
+                days, plans) the calculation found.
+              </li>
+            </ul>
+          </HowToSection>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Small section wrapper so each subhead in the help panel renders the
+// same way — bolded, slightly larger, with consistent top spacing.
+function HowToSection({
+  title,
+  children,
+}: {
+  title: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div style={{ marginTop: "0.85rem" }}>
+      <div
+        style={{
+          fontWeight: 700,
+          fontSize: 13,
+          color: "#0f172a",
+          marginBottom: "0.35rem",
+          letterSpacing: "0.01em",
+        }}
+      >
+        {title}
+      </div>
+      <div>{children}</div>
+    </div>
+  );
+}
+
+// Tiny version of the leaderboard's pillar chip, used inline in the help
+// text so the abbreviations are recognisable when the user later sees
+// them in the data.
+function PillarSwatch({ color, label }: { color: string; label: string }) {
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        background: color,
+        color: "white",
+        fontSize: 10,
+        fontWeight: 700,
+        letterSpacing: "0.02em",
+        padding: "1px 6px",
+        borderRadius: 3,
+        verticalAlign: "middle",
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+// One row in the bands table — coloured chip + score range + plain-English
+// meaning. Pulls the same BAND_COLORS palette the leaderboard uses, so the
+// help text and the live data line up visually.
+function BandRow({
+  band,
+  range,
+  meaning,
+}: {
+  band: Band;
+  range: string;
+  meaning: string;
+}) {
+  const c = BAND_COLORS[band];
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "auto auto 1fr",
+        gap: "0.6rem",
+        alignItems: "center",
+      }}
+    >
+      <span
+        style={{
+          background: c.bg,
+          color: c.fg,
+          padding: "2px 8px",
+          borderRadius: 4,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: "0.02em",
+          textTransform: "uppercase",
+          minWidth: 64,
+          textAlign: "center",
+        }}
+      >
+        {c.label}
+      </span>
+      <span
+        style={{
+          fontVariantNumeric: "tabular-nums",
+          fontSize: 12,
+          color: "#475569",
+          fontWeight: 600,
+          minWidth: 54,
+        }}
+      >
+        {range}
+      </span>
+      <span style={{ fontSize: 12, color: "#475569" }}>{meaning}</span>
+    </div>
+  );
+}
+
+const howtoListStyle: React.CSSProperties = {
+  margin: 0,
+  paddingLeft: "1.1rem",
+  display: "grid",
+  gap: "0.4rem",
+};
 
 // ---------- Body ----------------------------------------------------------
 
