@@ -198,7 +198,7 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     helpText:
       "Per-assessment scores (FAST PM, iReady AP, SCI Benchmark, MAP, etc.). One row per (student, assessment, date).",
     description:
-      "Generic assessment scores. Each row is one (student, assessment name, administered date). The starter file below shows the expected naming for FAST PM1/PM2/PM3, iReady AP1/AP2/AP3, and SCI Benchmark 1/2/3 — plus any other vendor (MAP, STAR, etc.) is supported as long as you put the assessment's full name in the assessment_name column. NOTE: this importer is APPEND-ONLY — each row gets a fresh history record, and re-uploading the same (student, test, date) row will create a duplicate. That's intentional for raw history (you can see when a record was first reported vs. corrected), but if you want true upsert behavior for FAST PM scores, use the dedicated FAST Scores importer below — it keys on (student, subject) and updates in place, and blank PM columns in a later upload preserve their existing value. Use this generic importer for iReady, SCI, MAP, etc. — and only re-upload Assessments rows that aren't already loaded.",
+      "Generic assessment scores. Each row is one (student, assessment name, administered date). The starter file below shows the expected naming for FAST PM1/PM2/PM3, iReady AP1/AP2/AP3, and SCI Benchmark 1/2/3 — plus any other vendor (MAP, STAR, etc.) is supported as long as you put the assessment's full name in the assessment_name column. Re-uploading the same (student, test name, date) UPDATES the existing record in place rather than creating a duplicate — safe to re-run after corrections. Optional columns (score, score_level, source) left blank in a later upload PRESERVE the existing value rather than wiping it, so a partial follow-up upload can never erase data already recorded. NOTE: FAST PM scores can also be imported through the dedicated FAST Scores importer below, which wires PM1/PM2/PM3 directly into the heartbeat dashboard cut-score chart. Use that one for the headline-FAST scores; use this generic importer for iReady, SCI, MAP, and any other test (or for FAST scores you only want recorded as raw history).",
     columns: [
       {
         target: "student_id",
@@ -276,9 +276,10 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "10235,iReady Reading AP2,2026-01-20,468,Level 1,iReady\n" +
       "10235,SCI Benchmark 2,2026-01-08,61,Approaching,District SCI\n",
     notes: [
-      "Append-only: re-uploading the same (student, test, date) row creates a duplicate, not an update. Only upload rows that aren't already loaded. To remove a bad upload, use the History tab → Roll back to delete every row that came in with that job.",
-      "Optional columns left blank in the CSV (score, score_level, source) are simply not stored — they don't overwrite anything because nothing is being updated in the first place.",
+      "True upsert: re-uploading the same (student, test name, date) row updates the existing record in place — safe to re-run after corrections.",
+      "Optional columns (score, score_level, source) left blank in a re-upload preserve the existing value — partial follow-up uploads cannot wipe data already recorded.",
       "Rows with an unknown student_id are reported as errors and not committed.",
+      "To remove a whole upload, use History → Roll back: it deletes every row whose latest update came from that import job.",
       "Recognized assessment families: FAST PM1/PM2/PM3 (ELA + Math), iReady AP1/AP2/AP3 (Reading + Math), SCI Benchmark 1/2/3. Other vendors (MAP, STAR, district-built tests) also import — use the vendor's official name for assessment_name and the importer keeps it intact.",
     ],
   },
@@ -541,18 +542,24 @@ const dropZoneActiveStyle: CSSProperties = {
   background: "rgba(59, 130, 246, 0.08)",
 };
 
+// Tab buttons sit above a 1px bottom border on the parent container; the
+// active tab paints its own bottom edge with the surface color so it
+// reads as continuous with the panel below it (classic "tab merges into
+// content" pattern). Inactive tabs are transparent so they recede.
 const tabBtnStyle = (active: boolean): CSSProperties => ({
-  padding: "0.55rem 1rem",
-  border: "1px solid var(--border, #2a3447)",
+  padding: "0.55rem 1.1rem",
+  border: "1px solid var(--border)",
   borderBottom: active
-    ? "1px solid var(--card-bg, #0f172a)"
-    : "1px solid var(--border, #2a3447)",
+    ? "1px solid var(--surface)"
+    : "1px solid var(--border)",
   borderRadius: "8px 8px 0 0",
-  background: active ? "var(--card-bg, #0f172a)" : "transparent",
-  color: "inherit",
+  background: active ? "var(--surface)" : "transparent",
+  color: active ? "var(--primary)" : "var(--text-muted)",
   font: "inherit",
+  fontSize: 14,
   cursor: "pointer",
-  fontWeight: active ? 600 : 400,
+  fontWeight: active ? 700 : 500,
+  marginBottom: -1,
 });
 
 const statusPillStyle = (status: string): CSSProperties => {
@@ -623,14 +630,51 @@ function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
 
   const renderRows = (cols: KindColumnDoc[]) =>
     cols.map((c) => (
-      <tr key={c.target} style={{ borderTop: "1px solid var(--border, #2a3447)" }}>
-        <td style={{ padding: "0.4rem 0.5rem", fontWeight: 600, verticalAlign: "top" }}>
+      <tr key={c.target} style={{ borderTop: "1px solid var(--border)" }}>
+        <td
+          style={{
+            padding: "0.5rem 0.6rem",
+            fontWeight: 600,
+            verticalAlign: "top",
+            color: "var(--text)",
+          }}
+        >
           {c.label}
+          {c.required && (
+            <span
+              aria-label="required"
+              title="Required column"
+              style={{
+                marginLeft: 4,
+                color: "#dc2626",
+                fontWeight: 700,
+              }}
+            >
+              *
+            </span>
+          )}
         </td>
-        <td style={{ padding: "0.4rem 0.5rem", verticalAlign: "top", fontFamily: "monospace", fontSize: 12 }}>
+        <td
+          style={{
+            padding: "0.5rem 0.6rem",
+            verticalAlign: "top",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            fontSize: 12,
+            color: "var(--text)",
+          }}
+        >
           {c.acceptedHeaders.join(", ")}
         </td>
-        <td style={{ padding: "0.4rem 0.5rem", verticalAlign: "top", fontSize: 13, color: "var(--text-subtle)" }}>
+        <td
+          style={{
+            padding: "0.5rem 0.6rem",
+            verticalAlign: "top",
+            fontSize: 13,
+            color: "var(--text-muted)",
+            lineHeight: 1.45,
+          }}
+        >
           {c.notes ?? "—"}
         </td>
       </tr>
@@ -640,38 +684,79 @@ function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
     <details
       open
       style={{
-        background: "var(--surface-1, #0f1729)",
-        border: "1px solid var(--border, #2a3447)",
-        borderRadius: 8,
-        padding: "0.75rem 1rem",
+        background: "var(--surface)",
+        border: "1px solid var(--border)",
+        borderRadius: 10,
+        padding: "0.85rem 1.1rem",
         marginBottom: "1rem",
+        color: "var(--text)",
+        boxShadow: "0 1px 2px rgba(15, 23, 42, 0.04)",
       }}
     >
       <summary
         style={{
           cursor: "pointer",
           fontWeight: 600,
-          listStyle: "revert",
+          fontSize: 14,
+          color: "var(--text)",
           padding: "0.15rem 0",
+          // Keep the native disclosure triangle so users know it's collapsible
+          listStyle: "revert",
         }}
       >
         How to format your {kindDef.label} CSV
       </summary>
-      <div style={{ marginTop: "0.75rem", fontSize: 14, lineHeight: 1.55 }}>
+      <div
+        style={{
+          marginTop: "0.75rem",
+          fontSize: 14,
+          lineHeight: 1.55,
+          color: "var(--text)",
+        }}
+      >
         {kindDef.description}
       </div>
 
       {required.length > 0 && (
         <div style={{ marginTop: "1rem" }}>
-          <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: 13 }}>
+          <div
+            style={{
+              fontWeight: 600,
+              marginBottom: "0.45rem",
+              fontSize: 13,
+              color: "var(--text)",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
             Required columns
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 13,
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              overflow: "hidden",
+            }}
+          >
             <thead>
-              <tr style={{ textAlign: "left", color: "var(--text-subtle)" }}>
-                <th style={{ padding: "0.3rem 0.5rem", width: "22%" }}>Field</th>
-                <th style={{ padding: "0.3rem 0.5rem", width: "38%" }}>Accepted header names</th>
-                <th style={{ padding: "0.3rem 0.5rem" }}>Notes</th>
+              <tr
+                style={{
+                  textAlign: "left",
+                  color: "var(--text-muted)",
+                  background: "var(--surface)",
+                }}
+              >
+                <th style={{ padding: "0.45rem 0.6rem", width: "22%" }}>
+                  Field
+                </th>
+                <th style={{ padding: "0.45rem 0.6rem", width: "38%" }}>
+                  Accepted header names
+                </th>
+                <th style={{ padding: "0.45rem 0.6rem" }}>Notes</th>
               </tr>
             </thead>
             <tbody>{renderRows(required)}</tbody>
@@ -681,15 +766,44 @@ function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
 
       {optional.length > 0 && (
         <div style={{ marginTop: "1rem" }}>
-          <div style={{ fontWeight: 600, marginBottom: "0.4rem", fontSize: 13 }}>
+          <div
+            style={{
+              fontWeight: 600,
+              marginBottom: "0.45rem",
+              fontSize: 13,
+              color: "var(--text)",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
+            }}
+          >
             Optional columns
           </div>
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 13,
+              background: "var(--surface-2)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              overflow: "hidden",
+            }}
+          >
             <thead>
-              <tr style={{ textAlign: "left", color: "var(--text-subtle)" }}>
-                <th style={{ padding: "0.3rem 0.5rem", width: "22%" }}>Field</th>
-                <th style={{ padding: "0.3rem 0.5rem", width: "38%" }}>Accepted header names</th>
-                <th style={{ padding: "0.3rem 0.5rem" }}>Notes</th>
+              <tr
+                style={{
+                  textAlign: "left",
+                  color: "var(--text-muted)",
+                  background: "var(--surface)",
+                }}
+              >
+                <th style={{ padding: "0.45rem 0.6rem", width: "22%" }}>
+                  Field
+                </th>
+                <th style={{ padding: "0.45rem 0.6rem", width: "38%" }}>
+                  Accepted header names
+                </th>
+                <th style={{ padding: "0.45rem 0.6rem" }}>Notes</th>
               </tr>
             </thead>
             <tbody>{renderRows(optional)}</tbody>
@@ -697,53 +811,93 @@ function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
         </div>
       )}
 
-      <div style={{ marginTop: "1rem" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: "0.4rem" }}>
-          <span style={{ fontWeight: 600, fontSize: 13 }}>Sample CSV</span>
-          <button
-            type="button"
-            onClick={onCopy}
+      <div style={{ marginTop: "1.1rem" }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 10,
+            marginBottom: "0.5rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <span
             style={{
-              padding: "0.2rem 0.55rem",
-              border: "1px solid var(--border, #2a3447)",
-              borderRadius: 4,
-              background: "transparent",
-              color: "inherit",
-              cursor: "pointer",
-              font: "inherit",
-              fontSize: 12,
+              fontWeight: 600,
+              fontSize: 13,
+              color: "var(--text)",
+              textTransform: "uppercase",
+              letterSpacing: "0.04em",
             }}
           >
-            {copied ? "Copied!" : "Copy"}
-          </button>
+            Sample CSV
+          </span>
+          {/* Primary action: download a ready-to-edit starter file. Filled
+              with the brand primary so the user's eye lands here first. */}
           <button
             type="button"
             onClick={onDownload}
-            title={`Download ${kind}_starter.csv with headers + example row`}
+            title={`Download ${kind}_starter.csv with headers + example rows`}
             style={{
-              padding: "0.2rem 0.55rem",
-              border: "1px solid var(--border, #2a3447)",
-              borderRadius: 4,
-              background: "transparent",
-              color: "inherit",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "0.35rem 0.75rem",
+              border: "1px solid var(--primary)",
+              borderRadius: 6,
+              background: "var(--primary)",
+              color: "#ffffff",
               cursor: "pointer",
               font: "inherit",
               fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1.2,
+              boxShadow: "0 1px 2px rgba(15, 23, 42, 0.08)",
             }}
           >
+            <span aria-hidden>↓</span>
             Download starter file
+          </button>
+          {/* Secondary action: copy the same content to clipboard. Outlined
+              so it reads as the lighter-weight option. */}
+          <button
+            type="button"
+            onClick={onCopy}
+            title="Copy the sample CSV to your clipboard"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "0.35rem 0.75rem",
+              border: "1px solid var(--border-strong)",
+              borderRadius: 6,
+              background: "var(--surface)",
+              color: "var(--text)",
+              cursor: "pointer",
+              font: "inherit",
+              fontSize: 12,
+              fontWeight: 600,
+              lineHeight: 1.2,
+            }}
+          >
+            <span aria-hidden>{copied ? "✓" : "⧉"}</span>
+            {copied ? "Copied" : "Copy CSV"}
           </button>
         </div>
         <pre
           style={{
             margin: 0,
-            padding: "0.6rem 0.75rem",
-            background: "var(--surface-2, #0a1120)",
-            border: "1px solid var(--border, #2a3447)",
+            padding: "0.7rem 0.85rem",
+            background: "var(--surface-2)",
+            border: "1px solid var(--border)",
             borderRadius: 6,
             fontSize: 12,
+            color: "var(--text)",
             overflowX: "auto",
             whiteSpace: "pre",
+            fontFamily:
+              "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+            lineHeight: 1.5,
           }}
         >
           {kindDef.sampleCsv}

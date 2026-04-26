@@ -5,6 +5,7 @@ import {
   integer,
   doublePrecision,
   timestamp,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // ---------------------------------------------------------------------------
@@ -23,29 +24,43 @@ import {
 // Why importJobId NOT NULL?
 //   So rollback is a clean `DELETE WHERE import_job_id = X`. Rows added
 //   manually (UI, not CSV) would create a synthetic job row first.
-export const assessmentsTable = pgTable("assessments", {
-  id: serial("id").primaryKey(),
-  schoolId: integer("school_id").notNull(),
-  // Business key from the SIS (matches students.student_id). Kept as text
-  // so importers don't need a roster lookup before insert.
-  studentId: text("student_id").notNull(),
-  // Free-form name as it appeared on the CSV ("FAST PM2 Reading", "iReady
-  // Math BOY", etc.). Normalization happens in the dashboard layer.
-  assessmentName: text("assessment_name").notNull(),
-  // Numeric score. Nullable because some assessments report a level only.
-  score: doublePrecision("score"),
-  // Optional human-readable level / band ("Level 3", "On Track", etc.).
-  scoreLevel: text("score_level"),
-  // When the assessment was given (per CSV). Falls back to upload time if
-  // the CSV omitted it; the importer warns in the error log when it does.
-  administeredAt: timestamp("administered_at", { withTimezone: true })
-    .notNull(),
-  // Vendor/source string ("FAST", "iReady", "MAP", etc.) for filtering.
-  source: text("source"),
-  importJobId: integer("import_job_id").notNull(),
-  createdAt: timestamp("created_at", { withTimezone: true })
-    .notNull()
-    .defaultNow(),
-});
+export const assessmentsTable = pgTable(
+  "assessments",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    // Business key from the SIS (matches students.student_id). Kept as text
+    // so importers don't need a roster lookup before insert.
+    studentId: text("student_id").notNull(),
+    // Free-form name as it appeared on the CSV ("FAST PM2 Reading", "iReady
+    // Math BOY", etc.). Normalization happens in the dashboard layer.
+    assessmentName: text("assessment_name").notNull(),
+    // Numeric score. Nullable because some assessments report a level only.
+    score: doublePrecision("score"),
+    // Optional human-readable level / band ("Level 3", "On Track", etc.).
+    scoreLevel: text("score_level"),
+    // When the assessment was given (per CSV). Falls back to upload time if
+    // the CSV omitted it; the importer warns in the error log when it does.
+    administeredAt: timestamp("administered_at", { withTimezone: true })
+      .notNull(),
+    // Vendor/source string ("FAST", "iReady", "MAP", etc.) for filtering.
+    source: text("source"),
+    importJobId: integer("import_job_id").notNull(),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => ({
+    // Natural key for upserts. A re-uploaded row with the same
+    // (school, student, assessment, administered_at) updates the existing
+    // record in place rather than creating a duplicate. Importer uses
+    // onConflictDoUpdate against this index. school_id is part of the key
+    // so two schools' rows can never collide and the same key value can
+    // legitimately appear in different schools' data.
+    schoolStudentTestDateUnique: uniqueIndex(
+      "assessments_school_student_test_date_unique",
+    ).on(t.schoolId, t.studentId, t.assessmentName, t.administeredAt),
+  }),
+);
 
 export type AssessmentRow = typeof assessmentsTable.$inferSelect;

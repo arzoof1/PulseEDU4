@@ -647,23 +647,46 @@ router.post(
         })
         .returning({ id: importJobsTable.id });
       if (valid.length > 0) {
-        // Chunked insert to keep parameter count under the pg limit
+        // Chunked upsert to keep parameter count under the pg limit
         // (~65k per query). 500 rows × ~8 cols = 4000 params, safe.
+        // Conflict target = (school_id, student_id, assessment_name,
+        // administered_at) — same as the unique index on the table.
+        // SET clause uses COALESCE so blank columns in the CSV preserve
+        // the existing value (matches the FAST importer's behavior:
+        // partial uploads cannot wipe data already in the row).
+        // importJobId is always set to the latest job so a rollback of
+        // the most recent upload removes the row cleanly.
         const chunkSize = 500;
         for (let i = 0; i < valid.length; i += chunkSize) {
           const chunk = valid.slice(i, i + chunkSize);
-          await tx.insert(assessmentsTable).values(
-            chunk.map((v) => ({
-              schoolId,
-              studentId: v.studentId,
-              assessmentName: v.assessmentName,
-              score: v.score,
-              scoreLevel: v.scoreLevel,
-              administeredAt: v.administeredAt,
-              source: v.source,
-              importJobId: job.id,
-            })),
-          );
+          await tx
+            .insert(assessmentsTable)
+            .values(
+              chunk.map((v) => ({
+                schoolId,
+                studentId: v.studentId,
+                assessmentName: v.assessmentName,
+                score: v.score,
+                scoreLevel: v.scoreLevel,
+                administeredAt: v.administeredAt,
+                source: v.source,
+                importJobId: job.id,
+              })),
+            )
+            .onConflictDoUpdate({
+              target: [
+                assessmentsTable.schoolId,
+                assessmentsTable.studentId,
+                assessmentsTable.assessmentName,
+                assessmentsTable.administeredAt,
+              ],
+              set: {
+                score: sql`COALESCE(EXCLUDED.score, ${assessmentsTable.score})`,
+                scoreLevel: sql`COALESCE(EXCLUDED.score_level, ${assessmentsTable.scoreLevel})`,
+                source: sql`COALESCE(EXCLUDED.source, ${assessmentsTable.source})`,
+                importJobId: sql`EXCLUDED.import_job_id`,
+              },
+            });
         }
       }
       return job.id;
@@ -862,21 +885,41 @@ router.post(
         })
         .returning({ id: importJobsTable.id });
       if (valid.length > 0) {
+        // Same upsert pattern as the school-scope commit. District uploads
+        // can route rows to many schools in a single job, so each row's
+        // own schoolId is the conflict-target dimension — two schools'
+        // identical (student, assessment, date) keys never collide.
         const chunkSize = 500;
         for (let i = 0; i < valid.length; i += chunkSize) {
           const chunk = valid.slice(i, i + chunkSize);
-          await tx.insert(assessmentsTable).values(
-            chunk.map((v) => ({
-              schoolId: v.schoolId,
-              studentId: v.studentId,
-              assessmentName: v.assessmentName,
-              score: v.score,
-              scoreLevel: v.scoreLevel,
-              administeredAt: v.administeredAt,
-              source: v.source,
-              importJobId: job.id,
-            })),
-          );
+          await tx
+            .insert(assessmentsTable)
+            .values(
+              chunk.map((v) => ({
+                schoolId: v.schoolId,
+                studentId: v.studentId,
+                assessmentName: v.assessmentName,
+                score: v.score,
+                scoreLevel: v.scoreLevel,
+                administeredAt: v.administeredAt,
+                source: v.source,
+                importJobId: job.id,
+              })),
+            )
+            .onConflictDoUpdate({
+              target: [
+                assessmentsTable.schoolId,
+                assessmentsTable.studentId,
+                assessmentsTable.assessmentName,
+                assessmentsTable.administeredAt,
+              ],
+              set: {
+                score: sql`COALESCE(EXCLUDED.score, ${assessmentsTable.score})`,
+                scoreLevel: sql`COALESCE(EXCLUDED.score_level, ${assessmentsTable.scoreLevel})`,
+                source: sql`COALESCE(EXCLUDED.source, ${assessmentsTable.source})`,
+                importJobId: sql`EXCLUDED.import_job_id`,
+              },
+            });
         }
       }
       return job.id;
