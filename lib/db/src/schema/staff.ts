@@ -1,4 +1,4 @@
-import { pgTable, serial, text, boolean, timestamp, integer } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, boolean, timestamp, integer, jsonb } from "drizzle-orm/pg-core";
 
 // Staff schema. Two parallel concepts live here:
 //
@@ -93,6 +93,14 @@ export const staffTable = pgTable("staff", {
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),
   active: boolean("active").notNull().default(true),
+  // Per-user UI preferences (jsonb). Free-form key/value bag for
+  // individual UI customizations that should sync across devices —
+  // e.g. dashboard tile orderings, collapsed sections, etc. Each
+  // feature owns its own top-level key (see UiPrefs type).
+  uiPrefs: jsonb("ui_prefs")
+    .$type<Record<string, unknown>>()
+    .notNull()
+    .default({}),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

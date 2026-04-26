@@ -52,6 +52,7 @@ import insightsRouter from "./insights";
 import heartbeatSettingsRouter from "./heartbeatSettings";
 import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
 import parentSnapshotPdfRouter from "./parentSnapshotPdf";
+import uiPrefsRouter from "./uiPrefs";
 
 const router: IRouter = Router();
 
@@ -105,6 +106,7 @@ router.use(dataImportsRouter);
 router.use(studentFlagsRouter);
 router.use(trustedAdultLinksRouter);
 router.use(insightsRouter);
+router.use(uiPrefsRouter);
 router.use(heartbeatSettingsRouter);
 router.use(parentHeartbeatPrefsRouter);
 router.use(parentSnapshotPdfRouter);

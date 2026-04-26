@@ -15,7 +15,7 @@
 // should only mount this when the user passes that bar; we still render
 // a clean error message if the backend rejects.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 // ------------------------- API contract types ------------------------------
@@ -368,7 +368,7 @@ function Body({ data }: { data: EquityResponse }) {
       {!allEmpty && !noDemographics && (
         <>
           <DisparityFlagsPanel flags={data.disparityFlags} />
-          <SubgroupSnapshotGrid snapshots={data.subgroupSnapshots} />
+          <ReorderableSubgroupGrid snapshots={data.subgroupSnapshots} />
         </>
       )}
 
@@ -541,11 +541,149 @@ function DisparityFlagsPanel({ flags }: { flags: DisparityFlag[] }) {
 
 // --------------------- Per-subgroup snapshot grid -------------------------
 
-function SubgroupSnapshotGrid({
+// Apply a saved order to incoming snapshots. Snapshots not present in the
+// saved order land at the end (so a newly-added subgroup shows up without
+// the user having to re-save). Saved entries that don't match any current
+// snapshot are silently dropped.
+function applySavedOrder(
+  snapshots: SubgroupSnapshot[],
+  saved: SubgroupKey[] | null,
+): SubgroupSnapshot[] {
+  if (!saved || saved.length === 0) return snapshots;
+  const bySub = new Map<SubgroupKey, SubgroupSnapshot>();
+  for (const s of snapshots) bySub.set(s.subgroup, s);
+  const out: SubgroupSnapshot[] = [];
+  const used = new Set<SubgroupKey>();
+  for (const k of saved) {
+    const s = bySub.get(k);
+    if (s) {
+      out.push(s);
+      used.add(k);
+    }
+  }
+  for (const s of snapshots) {
+    if (!used.has(s.subgroup)) out.push(s);
+  }
+  return out;
+}
+
+// Reorderable wrapper around SubgroupSnapshotGrid. Owns the order state,
+// loads/saves it via /api/me/ui-prefs/equity-subgroup-order, and wires
+// HTML5 drag-and-drop. Save is debounced (400ms) so a quick sequence of
+// re-arrangements only hits the server once.
+function ReorderableSubgroupGrid({
   snapshots,
 }: {
   snapshots: SubgroupSnapshot[];
 }) {
+  // ordered = the snapshots in their current display order. Source of
+  // truth for what's rendered. Initialised from the server response and
+  // re-derived whenever the parent's `snapshots` prop identity changes.
+  const [ordered, setOrdered] = useState<SubgroupSnapshot[]>(snapshots);
+  // dragKey = which tile is currently being dragged (for opacity cue).
+  const [dragKey, setDragKey] = useState<SubgroupKey | null>(null);
+  // overKey = which tile we're hovering over as a drop target.
+  const [overKey, setOverKey] = useState<SubgroupKey | null>(null);
+  // savedOrder = last order loaded from / saved to the server. Held in a
+  // ref so we don't re-fetch when the parent re-renders.
+  const savedOrderRef = useRef<SubgroupKey[] | null>(null);
+  const loadedRef = useRef(false);
+  const saveTimerRef = useRef<number | null>(null);
+
+  // Load saved order once on mount. We tolerate failure silently: a 401
+  // on this endpoint just means the prefs feature isn't reachable
+  // (signed-out edge case), in which case we use the server's natural
+  // order.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/me/ui-prefs/equity-subgroup-order")
+      .then(async (r) => {
+        if (cancelled) return;
+        if (!r.ok) {
+          loadedRef.current = true;
+          return;
+        }
+        const body = (await r.json().catch(() => ({}))) as {
+          order?: SubgroupKey[] | null;
+        };
+        savedOrderRef.current = body.order ?? null;
+        loadedRef.current = true;
+        // Re-apply the saved order to whatever snapshots prop we have.
+        setOrdered((prev) => applySavedOrder(prev, body.order ?? null));
+      })
+      .catch(() => {
+        loadedRef.current = true;
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Whenever the parent gives us a fresh snapshots array (e.g. user
+  // changed the grade filter), re-apply whatever saved order we have.
+  useEffect(() => {
+    setOrdered(applySavedOrder(snapshots, savedOrderRef.current));
+  }, [snapshots]);
+
+  // Persist the current order to the server, debounced. Updates the ref
+  // optimistically so subsequent applySavedOrder calls (e.g. after a
+  // grade-filter refetch) line up with what the user just chose.
+  function scheduleSave(next: SubgroupSnapshot[]) {
+    const order = next.map((s) => s.subgroup);
+    savedOrderRef.current = order;
+    if (saveTimerRef.current != null) {
+      window.clearTimeout(saveTimerRef.current);
+    }
+    saveTimerRef.current = window.setTimeout(() => {
+      saveTimerRef.current = null;
+      authFetch("/api/me/ui-prefs/equity-subgroup-order", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ order }),
+      }).catch(() => {
+        // Network blip — savedOrderRef still holds the user's choice
+        // for the rest of the session, so the UI feels persistent even
+        // if the server didn't get the write. Next reorder will retry.
+      });
+    }, 400);
+  }
+
+  // Reorder handler: insert `from` immediately before `to` (or after,
+  // if `from` was earlier in the list, so dragging right "pushes past").
+  function reorder(from: SubgroupKey, to: SubgroupKey) {
+    if (from === to) return;
+    setOrdered((prev) => {
+      const fromIdx = prev.findIndex((s) => s.subgroup === from);
+      const toIdx = prev.findIndex((s) => s.subgroup === to);
+      if (fromIdx < 0 || toIdx < 0) return prev;
+      const next = prev.slice();
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved);
+      scheduleSave(next);
+      return next;
+    });
+  }
+
+  // Flush any pending save on unmount so a quick "drag then navigate"
+  // doesn't lose the choice.
+  useEffect(() => {
+    return () => {
+      if (saveTimerRef.current != null) {
+        window.clearTimeout(saveTimerRef.current);
+        saveTimerRef.current = null;
+        const order = savedOrderRef.current;
+        if (order) {
+          // Fire-and-forget; can't await in a cleanup.
+          authFetch("/api/me/ui-prefs/equity-subgroup-order", {
+            method: "PUT",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({ order }),
+          }).catch(() => {});
+        }
+      }
+    };
+  }, []);
+
   return (
     <div
       style={{
@@ -555,9 +693,85 @@ function SubgroupSnapshotGrid({
         marginTop: "1rem",
       }}
     >
-      {snapshots.map((s) => (
-        <SnapshotCard key={s.subgroup} snapshot={s} />
+      {ordered.map((s) => (
+        <DraggableSnapshotCard
+          key={s.subgroup}
+          snapshot={s}
+          isDragging={dragKey === s.subgroup}
+          isDropTarget={overKey === s.subgroup && dragKey !== s.subgroup}
+          onDragStart={() => setDragKey(s.subgroup)}
+          onDragEnd={() => {
+            setDragKey(null);
+            setOverKey(null);
+          }}
+          onDragOver={() => {
+            if (overKey !== s.subgroup) setOverKey(s.subgroup);
+          }}
+          onDrop={(from) => {
+            reorder(from, s.subgroup);
+            setDragKey(null);
+            setOverKey(null);
+          }}
+        />
       ))}
+    </div>
+  );
+}
+
+function DraggableSnapshotCard({
+  snapshot,
+  isDragging,
+  isDropTarget,
+  onDragStart,
+  onDragEnd,
+  onDragOver,
+  onDrop,
+}: {
+  snapshot: SubgroupSnapshot;
+  isDragging: boolean;
+  isDropTarget: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDragOver: () => void;
+  onDrop: (from: SubgroupKey) => void;
+}) {
+  // We use the HTML5 drag-and-drop API. `application/x-equity-subgroup`
+  // is a custom MIME type so we don't pick up text drags from elsewhere
+  // on the page.
+  const MIME = "application/x-equity-subgroup";
+  return (
+    <div
+      draggable
+      onDragStart={(e) => {
+        e.dataTransfer.setData(MIME, snapshot.subgroup);
+        e.dataTransfer.effectAllowed = "move";
+        onDragStart();
+      }}
+      onDragEnd={onDragEnd}
+      onDragOver={(e) => {
+        // Only intercept if this is one of our drags.
+        if (!e.dataTransfer.types.includes(MIME)) return;
+        e.preventDefault();
+        e.dataTransfer.dropEffect = "move";
+        onDragOver();
+      }}
+      onDrop={(e) => {
+        if (!e.dataTransfer.types.includes(MIME)) return;
+        e.preventDefault();
+        const from = e.dataTransfer.getData(MIME) as SubgroupKey;
+        if (from) onDrop(from);
+      }}
+      style={{
+        cursor: "grab",
+        opacity: isDragging ? 0.4 : 1,
+        outline: isDropTarget ? "2px dashed #6366f1" : "none",
+        outlineOffset: 2,
+        borderRadius: 8,
+        transition: "opacity 120ms ease, outline-color 120ms ease",
+      }}
+      title="Drag to reorder"
+    >
+      <SnapshotCard snapshot={snapshot} />
     </div>
   );
 }

@@ -3306,3 +3306,90 @@ this becomes the natural "now what?" workflow that follows.
 Pairs with the Tier 2 Referral Form idea (Save-for-later #6) —
 together they are the full Tier 2 lifecycle. Nine saved ideas
 in the parking lot now.
+
+---
+
+## Jen Merschbach District User created (Apr 26, 2026)
+
+User asked for a District User account for jen.merschbach@hcsb.k12.fl.us
+(Hernando County School District, password "PulseDemo!"). Created staff
+row id=480, displayName "Jen Merschbach", schoolId 1 (D. S. Parrott
+Middle School — cosmetic home; District Admins have access to every
+school in their district), `is_district_admin=true`, all other flags
+default. Verified bcrypt hash via `bcrypt.compare()` round-trip
+(correct password verifies, wrong password rejects).
+
+**Why no `is_admin=true` too**: scope.ts line 30's combined gate is
+`isSuperUser || isDistrictAdmin || isAdmin`, so District Admin alone
+already grants school-admin operations across the district. Only set
+`is_admin` if you want a *district admin* who is also restricted to
+acting as a *school admin* in some other context — not the case here.
+
+**bcryptjs import gotcha** (recurring in the code execution sandbox):
+`import("bcryptjs")` fails with ERR_MODULE_NOT_FOUND because the sandbox
+runs from the workspace root and bcryptjs is hoisted under pnpm's
+.pnpm node_modules. Use the full path:
+`await import("/home/runner/workspace/node_modules/.pnpm/node_modules/bcryptjs/index.js")`.
+
+---
+
+## Equity dashboard — drag-and-drop subgroup tile reorder (Apr 26, 2026)
+
+User wanted to reorder the bottom subgroup-snapshot tiles on the Equity
+dashboard and have the order **persist across devices** (so a District
+Admin who logs in on a laptop at home and a tablet at school sees the
+same arrangement). Scope: Equity dashboard only — other dashboards keep
+their default order.
+
+**Storage model — generic per-user UI prefs.** Added `staff.ui_prefs`
+jsonb column (default `'{}'`, NOT NULL). Each future per-user pref owns
+its own top-level key in the bag. Today's only key:
+`equitySubgroupOrder` → array of SubgroupKey strings. Schema change
+applied via direct `ALTER TABLE staff ADD COLUMN IF NOT EXISTS ui_prefs
+jsonb NOT NULL DEFAULT '{}'::jsonb` (db:push hangs on an unrelated
+districts_slug_unique prompt — direct SQL is the workaround for
+additive schema changes; pattern documented earlier in this doc).
+
+**Endpoints** (`artifacts/api-server/src/routes/uiPrefs.ts`, mounted
+under `/api`):
+- `GET /api/me/ui-prefs/equity-subgroup-order` → `{ order: SubgroupKey[] | null }`
+- `PUT /api/me/ui-prefs/equity-subgroup-order` body `{ order: ... }`
+
+Both gated by `req.staffId` + a fresh `staff.active` check (matches
+heartbeatSettings active-gate pattern — a live session can outlive a
+deactivation, so re-check on every read/write). Validation rejects
+non-arrays, unknown SubgroupKeys, duplicates, and oversized arrays.
+Corrupted stored values surface as `order: null` on read so the client
+falls back to the server's natural order rather than 500ing.
+
+**Frontend** (`artifacts/client/src/components/EquityDashboard.tsx`):
+Replaced the static `SubgroupSnapshotGrid` with `ReorderableSubgroupGrid`.
+- On mount: fetches saved order, applies it via `applySavedOrder()`
+  (unknown subgroups land at the end so a newly-added SubgroupKey shows
+  up without forcing a re-save; saved entries with no matching snapshot
+  are silently dropped).
+- HTML5 drag-and-drop on each tile with a custom MIME
+  (`application/x-equity-subgroup`) so we don't pick up stray text drags.
+  Visual cues: dragged tile drops to opacity 0.4, drop target gets a
+  dashed indigo outline.
+- Save is debounced 400ms via `setTimeout`/`clearTimeout`, plus a
+  cleanup-effect flush on unmount so a quick "drag then navigate"
+  doesn't lose the choice.
+- savedOrderRef holds the order across grade-filter refetches so the
+  user's arrangement survives changing the grade dropdown.
+
+**Known v1 limitations (intentional, deferred):**
+- Mobile/touch: HTML5 dnd doesn't fire touchstart-style drag events on
+  mobile. Touch-drag would need a polyfill or react-dnd-touch-backend.
+- Keyboard a11y: no arrow-key reorder fallback. If we add this, the
+  cleanest path is a "keyboard mode" toggle that turns each tile into
+  an arrow-keyed list item.
+- RMW clobber: if a second pref key lands in `ui_prefs` later and two
+  tabs write different keys at the same time, last-write-wins on the
+  whole bag. With one key today this is moot; switch to `jsonb_set`
+  partial update when adding the second key.
+
+**Architect: PASS.** No CRITICAL/HIGH findings. Three LOW findings:
+empty-array rejection (no API reset; UI never sends empty so moot),
+RMW clobber (documented above), and the active-gate (addressed —
+loadPrefsIfActive checks `staff.active` on every call).
