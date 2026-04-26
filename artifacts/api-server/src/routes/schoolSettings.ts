@@ -366,6 +366,42 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     }
   }
 
+  // -----------------------------------------------------------------
+  // Single-tier SuperUser-only flag for the Trajectories beta. Lives
+  // outside the FEATURE_KEYS loop because it has no admin sibling — the
+  // SuperUser controls visibility directly. Only super-tier users may
+  // change it, and the same unchanged-value escape hatch the loop above
+  // uses lets non-super clients round-trip the field without 403'ing.
+  if (
+    Object.prototype.hasOwnProperty.call(req.body ?? {}, "superFeatureTrajectories")
+  ) {
+    const incoming = (req.body as Record<string, unknown>).superFeatureTrajectories;
+    if (typeof incoming !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "superFeatureTrajectories must be a boolean" });
+      return;
+    }
+    if (incoming !== Boolean(current.superFeatureTrajectories)) {
+      const staffId = req.staffId;
+      let me: typeof staffTable.$inferSelect | undefined;
+      if (staffId) {
+        const [s] = await db
+          .select()
+          .from(staffTable)
+          .where(eq(staffTable.id, staffId));
+        me = s;
+      }
+      if (!(me?.active && me?.isSuperUser)) {
+        res.status(403).json({
+          error: "Only a SuperUser may change superFeatureTrajectories",
+        });
+        return;
+      }
+      updates.superFeatureTrajectories = incoming;
+    }
+  }
+
   if (Object.keys(updates).length === 0) {
     res.json(withEffective(current));
     return;

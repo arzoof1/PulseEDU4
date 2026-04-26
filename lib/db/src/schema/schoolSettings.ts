@@ -62,6 +62,13 @@ export const schoolSettingsTable = pgTable(
   superFeatureAccommodations: boolean("super_feature_accommodations").notNull().default(true),
   superFeatureLogIntervention: boolean("super_feature_log_intervention").notNull().default(true),
   superFeatureRequestPullout: boolean("super_feature_request_pullout").notNull().default(true),
+  // Beta / hidden feature: SuperUser-only toggle for the Academic
+  // Trajectories dashboard. Single-tier (no admin sibling) because the
+  // SuperUser controls visibility directly. Default FALSE — opt-in per
+  // school, since the surface overlaps with the existing Academics
+  // dashboard and isn't ready to ship to every customer yet. When ON,
+  // only admins + SuperUsers see the tile (teachers never do).
+  superFeatureTrajectories: boolean("super_feature_trajectories").notNull().default(false),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(
