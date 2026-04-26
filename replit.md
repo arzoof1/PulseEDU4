@@ -1489,11 +1489,14 @@ render correctly.
 
 **Deferred (revisit later):**
 1. ClassLink SSO for students.
-2. School-level "available sections" admin toggle UI (rows exist,
-   admin UI not built).
-3. Per-parent toggle UI for what's in their HeartBEAT Report.
+2. ~~School-level "available sections" admin toggle UI~~ — DONE Apr 26.
+3. ~~Per-parent toggle UI for what's in their HeartBEAT Report~~ —
+   DONE Apr 26 (see "Parent Portal Sections — per-parent toggle UI"
+   block below).
 4. PDF export of the HeartBEAT Report.
-5. Optional weekly emailed PDF (Resend already wired).
+5. Optional weekly emailed PDF (Resend already wired). NOTE: the
+   per-parent toggle now persists `weekly_email_enabled` per (parent,
+   student); the actual cron + render is the work to do here.
 
 **Mockup files (do not delete — referenced when iterating):**
 - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
@@ -1684,3 +1687,68 @@ Open follow-ups still on the deferred list:
 3. Per-parent toggle UI (analogue of this panel for parents).
 4. PDF export of the HeartBEAT Report.
 5. Optional weekly emailed PDF (Resend already wired).
+
+## Parent Portal Sections — per-parent toggle UI (April 26, 2026)
+
+Closed item #3 from the HeartBEAT "Deferred (revisit later)" list.
+Item #2 (school-level admin toggle) gave admins a knob to turn whole
+sections off across the school. This change gives each PARENT a knob
+to hide individual sections from THEIR view of THEIR child's snapshot
+— without ever being able to reveal a section the school has hidden.
+
+**Server**: `artifacts/api-server/src/routes/parentHeartbeatPrefs.ts`
+- `GET /api/parent/heartbeat-prefs?studentId=N` — returns one row per
+  section with `{ key, schoolEnabled, parentPref }`, plus
+  `weeklyEmailAllowed` (school-side flag), `weeklyEmailEnabled`
+  (parent's choice), and `dateRangeDefault`. parentPref is `null` when
+  the parent hasn't expressed a preference (= inherit school default).
+- `PUT /api/parent/heartbeat-prefs` — body
+  `{ studentId, prefs?: { showFoo: boolean | null, … },
+     weeklyEmailEnabled?, dateRangeDefault? }`. Validates each section
+  value is `boolean | null`; whitelists keys via `SECTION_KEYS`;
+  `dateRangeDefault` constrained to `'semester' | 'month' | 'all'`.
+  Upsert is concurrency-safe — falls back to a re-read if a parallel
+  insert from another tab wins the unique-pair index.
+- Both routes resolve `req.parentId` via the same session-or-Bearer
+  middleware used by `parentSnapshot.ts`, then enforce that the parent
+  is actually linked to `studentId` via `parentStudentsTable`.
+- Parent prefs are NOT re-clipped to the school ceiling on write —
+  storing a parent's "show this if you ever turn it back on" intent
+  across an admin re-enable is friendlier than silently dropping it.
+  The ceiling is enforced at READ time in `parentSnapshot.ts` instead.
+
+**Reader update**: `parentSnapshot.ts` now joins
+`parent_heartbeat_prefs` for the (parentId, studentId) pair in
+parallel with the school settings row. The new `gate()` helper
+implements the contract: section visible iff
+`schoolEnabled AND parentPref !== false`. School OFF wins
+unconditionally; parent's only power is to HIDE.
+
+**Client**: `artifacts/client/src/parent/Preferences.tsx` — full-page
+panel that lists all 11 sections. Each row shows an eye icon, the
+human label, a one-line description, optional `Sensitive` badge for
+the four off-by-default sections, an inline `Switch`, and conditional
+status badges (`Hidden by school` when the school has it off, `You hid
+this` when the parent has it off). Switch is disabled for
+school-disabled rows. Toggling a row sends an optimistic PUT and rolls
+back on failure with an inline error banner. Below the section list,
+a Weekly Email card flips `weekly_email_enabled` (also disabled if the
+school has weekly email off entirely).
+
+**Wiring**: `Dashboard.tsx` adds a `view` state and renders
+`<Preferences />` when set to `prefs`. New "What I see" header button
+flips view. Returning from Preferences bumps a separate
+`snapshotNonce` state which is included in the snapshot effect's
+deps, forcing a fresh `/api/parent/snapshot` call so the dashboard
+reflects new visibility immediately. (A naive `setActiveStudentId(id
+=> id)` doesn't work — React bails out when the next state equals
+the previous.)
+
+**Behavioral contract recap (kept across server + reader + UI):**
+- School OFF, parent any → hidden.
+- School ON, parent null (no row, or row with null) → shown.
+- School ON, parent true → shown.
+- School ON, parent false → hidden.
+- Toggling a hidden-by-parent row back ON sets it to `null` (revert
+  to inherit), not `true`. This means a later admin toggle change
+  won't "lock in" the parent's old preference.

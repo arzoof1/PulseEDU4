@@ -50,6 +50,7 @@ import studentFlagsRouter from "./studentFlags";
 import trustedAdultLinksRouter from "./trustedAdultLinks";
 import insightsRouter from "./insights";
 import heartbeatSettingsRouter from "./heartbeatSettings";
+import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
 
 const router: IRouter = Router();
 
@@ -104,5 +105,6 @@ router.use(studentFlagsRouter);
 router.use(trustedAdultLinksRouter);
 router.use(insightsRouter);
 router.use(heartbeatSettingsRouter);
+router.use(parentHeartbeatPrefsRouter);
 
 export default router;

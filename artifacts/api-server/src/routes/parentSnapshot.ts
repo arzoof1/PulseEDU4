@@ -11,6 +11,7 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   schoolHeartbeatSettingsTable,
+  parentHeartbeatPrefsTable,
   studentFastScoresTable,
   interventionEntriesTable,
   studentMtssPlansTable,
@@ -88,23 +89,50 @@ router.get("/parent/snapshot", async (req, res) => {
     .from(parentsTable)
     .where(eq(parentsTable.id, pid));
 
-  // Pull school heartbeat settings (or sane defaults if no row exists yet).
-  const [settingsRow] = await db
-    .select()
-    .from(schoolHeartbeatSettingsTable)
-    .where(eq(schoolHeartbeatSettingsTable.schoolId, student.schoolId));
+  // Pull school heartbeat settings (or sane defaults if no row exists yet)
+  // and the parent's per-student override prefs in parallel. Effective
+  // visibility is `schoolEnabled AND parentPref !== false`. The school
+  // OFF flag always wins; a parent can only HIDE a section the school
+  // has shown, never reveal one the school has hidden.
+  const [settingsRow, prefsRow] = await Promise.all([
+    db
+      .select()
+      .from(schoolHeartbeatSettingsTable)
+      .where(eq(schoolHeartbeatSettingsTable.schoolId, student.schoolId))
+      .then((rows) => rows[0]),
+    db
+      .select()
+      .from(parentHeartbeatPrefsTable)
+      .where(
+        and(
+          eq(parentHeartbeatPrefsTable.parentId, pid),
+          eq(parentHeartbeatPrefsTable.studentId, requestedStudentId),
+        ),
+      )
+      .then((rows) => rows[0]),
+  ]);
+  const gate = (
+    schoolFlag: boolean | null | undefined,
+    schoolDefault: boolean,
+    parentPref: boolean | null | undefined,
+  ): boolean => {
+    const schoolEnabled = schoolFlag ?? schoolDefault;
+    if (!schoolEnabled) return false;
+    if (parentPref === false) return false;
+    return true;
+  };
   const sectionsAvailable = {
-    recognition: settingsRow?.showRecognition ?? true,
-    attendance: settingsRow?.showAttendance ?? true,
-    hallPasses: settingsRow?.showHallPasses ?? true,
-    accommodations: settingsRow?.showAccommodations ?? true,
-    fastScores: settingsRow?.showFastScores ?? true,
-    commHistory: settingsRow?.showCommHistory ?? true,
-    pullouts: settingsRow?.showPullouts ?? true,
-    interventions: settingsRow?.showInterventions ?? false,
-    staffNotes: settingsRow?.showStaffNotes ?? false,
-    iss: settingsRow?.showIss ?? false,
-    mtss: settingsRow?.showMtss ?? false,
+    recognition: gate(settingsRow?.showRecognition, true, prefsRow?.showRecognition),
+    attendance: gate(settingsRow?.showAttendance, true, prefsRow?.showAttendance),
+    hallPasses: gate(settingsRow?.showHallPasses, true, prefsRow?.showHallPasses),
+    accommodations: gate(settingsRow?.showAccommodations, true, prefsRow?.showAccommodations),
+    fastScores: gate(settingsRow?.showFastScores, true, prefsRow?.showFastScores),
+    commHistory: gate(settingsRow?.showCommHistory, true, prefsRow?.showCommHistory),
+    pullouts: gate(settingsRow?.showPullouts, true, prefsRow?.showPullouts),
+    interventions: gate(settingsRow?.showInterventions, false, prefsRow?.showInterventions),
+    staffNotes: gate(settingsRow?.showStaffNotes, false, prefsRow?.showStaffNotes),
+    iss: gate(settingsRow?.showIss, false, prefsRow?.showIss),
+    mtss: gate(settingsRow?.showMtss, false, prefsRow?.showMtss),
   };
 
   // ----- PBIS -----

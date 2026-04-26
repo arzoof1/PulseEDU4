@@ -16,7 +16,9 @@ import {
   BookOpen,
   Target,
   HandHelping,
+  SlidersHorizontal,
 } from "lucide-react";
+import Preferences from "./Preferences";
 import { Card, CardContent } from "@/components/ui/card";
 import { useSchoolBranding } from "../lib/branding";
 import { Badge } from "@/components/ui/badge";
@@ -170,6 +172,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [view, setView] = useState<"snapshot" | "prefs">("snapshot");
+  // Bumping this nonce forces the snapshot effect to re-run even when
+  // activeStudentId is unchanged — used after returning from the
+  // Preferences panel so toggles take effect immediately.
+  const [snapshotNonce, setSnapshotNonce] = useState(0);
 
   useEffect(() => {
     if (activeStudentId === null) {
@@ -202,7 +209,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     return () => {
       cancelled = true;
     };
-  }, [activeStudentId]);
+  }, [activeStudentId, snapshotNonce]);
 
   async function handleSignOut() {
     try {
@@ -236,6 +243,23 @@ export default function Dashboard({ me }: { me: ParentMe }) {
 
   const activeStudent =
     me.students.find((s) => s.id === activeStudentId) ?? me.students[0];
+
+  if (view === "prefs" && activeStudent) {
+    return (
+      <Preferences
+        studentId={activeStudent.id}
+        studentName={activeStudent.firstName}
+        onBack={() => {
+          setView("snapshot");
+          // Force a snapshot refetch so any toggle changes show up
+          // right away. Bumping a separate nonce (rather than re-setting
+          // activeStudentId to itself) is necessary because React bails
+          // out of state updates that produce the same value.
+          setSnapshotNonce((n) => n + 1);
+        }}
+      />
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 font-sans pb-24">
@@ -299,6 +323,15 @@ export default function Dashboard({ me }: { me: ParentMe }) {
                 {me.displayName}
               </p>
             </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setView("prefs")}
+              className="gap-2"
+            >
+              <SlidersHorizontal className="h-4 w-4" />
+              <span className="hidden sm:inline">What I see</span>
+            </Button>
             <Button
               variant="outline"
               size="sm"
