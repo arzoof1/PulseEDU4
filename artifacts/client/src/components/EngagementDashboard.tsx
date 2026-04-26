@@ -21,6 +21,7 @@ import {
   CartesianGrid,
 } from "recharts";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 type WindowKey = "7" | "15" | "30" | "custom";
 
@@ -154,6 +155,114 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
           setGrade={setGrade}
         />
       </div>
+
+      <HowToUseHelp title="How to use Engagement">
+        <HowToSection title="What this dashboard is">
+          A school-wide read on time-out-of-instruction events: hall passes,
+          tardies, ISS days, and pullouts. The point is to see what's
+          actually pulling students out of class, who's affected most, and
+          whether the trend is getting worse over the chosen window.
+        </HowToSection>
+
+        <HowToSection title="What the KPIs mean">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Hall passes</strong> — total hall-pass events logged
+              in the window.
+            </li>
+            <li>
+              <strong>Tardies</strong> — total period tardies in the window.
+            </li>
+            <li>
+              <strong>ISS days</strong> — student-days in In-School
+              Suspension. Each day a student is in ISS counts once.
+            </li>
+            <li>
+              <strong>Pullouts</strong> — total support / intervention
+              pullout events (counselor visits, MTSS pullouts, related
+              services).
+            </li>
+            <li>
+              <strong>Hall pass minutes lost</strong> — total minutes spent
+              on hall passes (sum of pass durations). This is the single
+              best dollar-cost number on the page: every minute here is a
+              minute not in instruction.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to read the chart and lists">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Daily trend</strong> — overlaid daily counts of hall
+              passes, tardies, and ISS. A spike on a specific weekday is
+              usually a schedule or staffing pattern; a steady climb is a
+              culture issue.
+            </li>
+            <li>
+              <strong>Top hall pass takers / tardy students / ISS list</strong>{" "}
+              — names are clickable, opening the student profile so you
+              can see the full record before reaching out.
+            </li>
+            <li>
+              <strong>Top hall pass destinations</strong> — where students
+              are actually going. Heavy "Bathroom" volume in one period
+              is normal; heavy "Office" or "Nurse" volume is the signal
+              to dig in.
+            </li>
+            <li>
+              <strong>Top tardy periods</strong> — which class periods
+              accumulate the most tardies. Often a transition or schedule
+              issue rather than student behavior.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to use it day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Pick a window.</strong> 7d for "what happened this
+              week", 30d for the monthly MTSS meeting, custom for a
+              specific event window (post-break, after a schedule change,
+              etc.).
+            </li>
+            <li>
+              <strong>Filter by grade</strong> when you want to look at a
+              specific grade-level team's caseload.
+            </li>
+            <li>
+              <strong>Start with the top of each list.</strong> The top 3-5
+              hall pass takers + top tardy students are usually the same
+              names that show up on Early Warning's leaderboard — that's
+              the cohort to triage.
+            </li>
+            <li>
+              <strong>Use destinations + periods together</strong> to spot
+              schedule problems. If "Bathroom" spikes in one period across
+              many students, that's a master-schedule conversation, not a
+              behaviour conversation.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="A few caveats">
+          <ul style={howtoListStyle}>
+            <li>
+              Hall pass <em>minutes lost</em> only counts passes that
+              recorded a duration. A pass without a return time will
+              count as 1 hall pass but contribute 0 minutes.
+            </li>
+            <li>
+              ISS counts in student-days, not incidents. A 3-day ISS for
+              one student adds 3 to the ISS total.
+            </li>
+            <li>
+              All counts and the trend chart respect the window picker —
+              changing the window re-runs everything together.
+            </li>
+          </ul>
+        </HowToSection>
+      </HowToUseHelp>
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>

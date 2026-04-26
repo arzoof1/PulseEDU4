@@ -27,6 +27,7 @@ import {
   LabelList,
 } from "recharts";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 type FlagKey = "plan" | "bq" | "negatives" | "iep504";
 
@@ -210,6 +211,129 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
           </select>
         </div>
       </div>
+
+      <HowToUseHelp title="How to use SEB / SEL">
+        <HowToSection title="What this dashboard is">
+          A whole-child read on social-emotional + behavioral support
+          coverage. It answers two questions at once: "How well are we
+          covering the kids who are already on plans?" and "Where is
+          risk concentrating in kids who <em>aren't</em> on a plan yet?"
+        </HowToSection>
+
+        <HowToSection title="What the KPIs mean">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Cohort students</strong> — total students used as
+              the denominator for every count and percentage on the page
+              (filtered by grade if a grade is selected).
+            </li>
+            <li>
+              <strong>Active MTSS plans</strong> — count of currently
+              active MTSS plans across the cohort. One plan per student.
+            </li>
+            <li>
+              <strong>SEL-flagged plans</strong> — subset of active plans
+              whose primary area is SEL.
+            </li>
+            <li>
+              <strong>IEP / 504 / ELL students</strong> — counts of
+              students carrying each demographic SEL-related flag. These
+              are stateful (no time window).
+            </li>
+            <li>
+              <strong>Multi-risk students</strong> — students who have{" "}
+              <strong>2 or more</strong> of the four risk flags:{" "}
+              <em>active MTSS plan</em>, <em>prior-year FAST bottom
+              quartile</em>, <em>3 or more negative PBIS entries in the
+              last 30 days</em>, or <em>IEP/504</em>. This is the cohort
+              the team should triage first.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to read the charts and lists">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Plan-area mix</strong> — how the active plans break
+              down across Behavior / SEL / Academic / Attendance / Other.
+              A team that runs almost entirely Behavior plans is missing
+              the SEL conversation.
+            </li>
+            <li>
+              <strong>Risk overlap histogram</strong> — bars showing how
+              many students hit 1 flag, 2 flags, 3 flags, or all 4. The
+              right-hand side of the chart is your most acute caseload.
+            </li>
+            <li>
+              <strong>Highest need</strong> — students with the most
+              flags fired, with the flag chips visible inline. Click a
+              name to open the student profile.
+            </li>
+            <li>
+              <strong>At-risk without a plan</strong> — the action list.
+              Students with academic or behavior flags fired but{" "}
+              <em>no</em> active MTSS plan. These are the kids the team
+              hasn't reached yet.
+            </li>
+            <li>
+              <strong>SEL plan roster</strong> — the current SEL caseload,
+              one row per student on an SEL-flagged plan. Useful for
+              counselor / SEL coach caseload audits.
+            </li>
+            <li>
+              <strong>Most accommodated</strong> — students with the most
+              active accommodations on file. Worth a glance to make sure
+              accommodations are being implemented in the classroom.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to use it day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Start with "At-risk without a plan."</strong> Each
+              row is a student the team should consider for a Tier 2
+              referral this week. This is the highest-leverage list on
+              the page.
+            </li>
+            <li>
+              <strong>Watch the multi-risk count.</strong> If it grows
+              week over week, the team is falling behind on plan
+              coverage even if total plans is steady.
+            </li>
+            <li>
+              <strong>Use the plan-area mix to spot blind spots.</strong>{" "}
+              An imbalance toward Behavior with little SEL is a common
+              signal that the team's response is reactive rather than
+              preventive.
+            </li>
+            <li>
+              <strong>Filter by grade</strong> when a grade-level team
+              wants to see only their students.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="A few caveats">
+          <ul style={howtoListStyle}>
+            <li>
+              Most signals are <strong>stateful</strong> — open MTSS
+              plans, active accommodations, IEP/504/ELL flags. There is
+              intentionally no window picker.
+            </li>
+            <li>
+              The one windowed signal is "negative PBIS in the last
+              30 days", which feeds the negatives flag and the
+              at-risk-without-plan list.
+            </li>
+            <li>
+              "FAST BQ" uses the same Bottom Quartile flag as the
+              Academics dashboard and Early Warning, so a student
+              flagged here is flagged everywhere.
+            </li>
+          </ul>
+        </HowToSection>
+      </HowToUseHelp>
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>

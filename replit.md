@@ -3438,3 +3438,78 @@ Follow-ups (not done, not needed):
 - Could add the same pattern to other insights dashboards (Equity,
   Behavior, Academics, Engagement). Not requested; only Early Warning
   was raised.
+
+================================================================
+SESSION NOTE — How-to-use panel rolled out to all 5 sibling
+insights dashboards  (2026-04-26, follow-up to EWS panel)
+================================================================
+
+Goal: Take the click-to-expand "How to use" panel that shipped on
+Early Warning and put the same pattern on every other insights
+dashboard so staff get in-page orientation everywhere — Academics,
+Behavior, Engagement, Equity, SEB/SEL.
+
+What changed:
+- New shared component `artifacts/client/src/components/HowToUseHelp.tsx`
+  exporting `HowToUseHelp` (the collapsible shell), `HowToSection`
+  (subhead wrapper), and `howtoListStyle`. Accepts `title` and any
+  React children. Open state is local, NOT persisted (matches EWS
+  decision — staff who close it want it closed next visit too).
+- `EarlyWarningDashboard.tsx` refactored to consume the shared shell.
+  Its old inline `HowToUsePanel` is now a thin wrapper returning
+  `<HowToUseHelp title="How to use Early Warning">…</HowToUseHelp>`.
+  Local duplicate `HowToSection` and `howtoListStyle` deleted.
+  EWS-specific helpers `PillarSwatch` and `BandRow` stayed local.
+- Each of the 5 sibling dashboards got an import of the shared
+  helpers + a `<HowToUseHelp>` block placed right after the header
+  flex div, before the loading conditional. Sections per panel:
+  "What this dashboard is", "What the KPIs mean", "How to read the
+  charts/lists", "How to use it day-to-day", "A few caveats".
+
+Numeric accuracy (architect already burned us once on EWS — verified
+each claim against insights.ts):
+- Academics: PM3 average is the average raw FAST scale score, NOT
+  an average level (1-5). Backend sums `r.pm3` (raw column) at
+  insights.ts:2189-2190. Help text says "average FAST scale score …
+  scale-score → level cutoff is grade- and subject-specific." Architect
+  missed this; we caught it during verification.
+- Equity: 1.30 risk-ratio threshold confirmed at insights.ts:3224
+  (`RATIO_HIGH = 1.3`).
+- SEB/SEL: multi-risk requires ≥ 2 of 4 flags (insights.ts:2664).
+  The 4 flags: active plan, prior-year FAST BQ
+  (`priorYearBq=true` at line 2611), ≥ 3 negative PBIS in last 30d
+  (line 2599 `if (n >= 3) recentNegatives.add(sid)`), and IEP/504.
+  Help text now spells out the ≥ 3 threshold and the prior-year BQ
+  qualifier explicitly.
+- Behavior: 4:1 positive:negative ratio cited as the standard PBIS
+  Tier-1-healthy benchmark (Cook/Sprick literature). EWS does NOT
+  use this ratio — its Behavior pillar is a count of negatives, and
+  its Supports pillar is plan-tier-based. Architect flagged a "5:1
+  vs 4:1 inconsistency" but that was a confidently-wrong claim:
+  there is no 5:1 anywhere in the codebase.
+
+Architect findings rejected (verified false):
+- "EWS panel placement is in Body" — false; `<HowToUsePanel />` sits
+  before the loading conditional at EarlyWarningDashboard.tsx:202,
+  identical to siblings.
+- "EWS uses 'What to watch out for' heading" — false; EWS used
+  "A few caveats" (matches the new sibling panels).
+
+Caveats considered:
+- HMR confirmed clean update for all six files (workflow logs show
+  `hmr update` lines for each, no errors).
+- Pre-existing TS errors in App.tsx are not introduced by this
+  change (verified — no errors mention any HowTo* or *Dashboard.tsx
+  file).
+- No backend changes. No schema changes. No new routes.
+- Visual screenshot blocked by login (auth required); HMR + tsc
+  signal trusted instead.
+
+Files touched:
+- artifacts/client/src/components/HowToUseHelp.tsx (NEW)
+- artifacts/client/src/components/EarlyWarningDashboard.tsx (refactor)
+- artifacts/client/src/components/AcademicsDashboard.tsx
+- artifacts/client/src/components/BehaviorDashboard.tsx
+- artifacts/client/src/components/EngagementDashboard.tsx
+- artifacts/client/src/components/EquityDashboard.tsx
+- artifacts/client/src/components/SebSelDashboard.tsx

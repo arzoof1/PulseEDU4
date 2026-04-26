@@ -14,6 +14,7 @@
 
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 // ---------- Types (mirror api-server response shape) ----------------------
 
@@ -223,95 +224,8 @@ export function EarlyWarningDashboard({ onOpenProfile }: Props) {
 // always want it closed again on the next visit.
 
 function HowToUsePanel() {
-  const [open, setOpen] = useState(false);
   return (
-    <div
-      style={{
-        marginTop: "0.75rem",
-        border: "1px solid #e2e8f0",
-        borderRadius: 8,
-        background: "#f8fafc",
-        overflow: "hidden",
-      }}
-    >
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-expanded={open}
-        aria-controls="ews-howto-body"
-        style={{
-          width: "100%",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "0.75rem",
-          padding: "0.75rem 1rem",
-          background: "transparent",
-          border: "none",
-          cursor: "pointer",
-          textAlign: "left",
-          font: "inherit",
-          color: "#0f172a",
-        }}
-      >
-        <span style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
-          <span
-            aria-hidden
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              justifyContent: "center",
-              width: 22,
-              height: 22,
-              borderRadius: "50%",
-              background: "#0f172a",
-              color: "white",
-              fontSize: 12,
-              fontWeight: 700,
-            }}
-          >
-            ?
-          </span>
-          <span style={{ fontWeight: 600, fontSize: 14 }}>
-            How to use Early Warning
-          </span>
-          <span
-            style={{
-              fontSize: 12,
-              color: "#64748b",
-              fontWeight: 400,
-            }}
-          >
-            {open ? "Click to close" : "Click to open"}
-          </span>
-        </span>
-        <span
-          aria-hidden
-          style={{
-            display: "inline-block",
-            transform: open ? "rotate(90deg)" : "rotate(0deg)",
-            transition: "transform 120ms ease",
-            color: "#64748b",
-            fontSize: 14,
-            lineHeight: 1,
-          }}
-        >
-          ▶
-        </span>
-      </button>
-
-      {open && (
-        <div
-          id="ews-howto-body"
-          style={{
-            padding: "0.25rem 1rem 1rem",
-            borderTop: "1px solid #e2e8f0",
-            background: "white",
-            color: "#334155",
-            fontSize: 13,
-            lineHeight: 1.55,
-          }}
-        >
+    <HowToUseHelp title="How to use Early Warning">
           <HowToSection title="What this dashboard is">
             One number per student — a 0-100 risk score that rolls up four
             areas of student life. The point is to answer “who do we touch
@@ -470,36 +384,7 @@ function HowToUsePanel() {
               </li>
             </ul>
           </HowToSection>
-        </div>
-      )}
-    </div>
-  );
-}
-
-// Small section wrapper so each subhead in the help panel renders the
-// same way — bolded, slightly larger, with consistent top spacing.
-function HowToSection({
-  title,
-  children,
-}: {
-  title: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div style={{ marginTop: "0.85rem" }}>
-      <div
-        style={{
-          fontWeight: 700,
-          fontSize: 13,
-          color: "#0f172a",
-          marginBottom: "0.35rem",
-          letterSpacing: "0.01em",
-        }}
-      >
-        {title}
-      </div>
-      <div>{children}</div>
-    </div>
+    </HowToUseHelp>
   );
 }
 
@@ -579,13 +464,6 @@ function BandRow({
     </div>
   );
 }
-
-const howtoListStyle: React.CSSProperties = {
-  margin: 0,
-  paddingLeft: "1.1rem",
-  display: "grid",
-  gap: "0.4rem",
-};
 
 // ---------- Body ----------------------------------------------------------
 

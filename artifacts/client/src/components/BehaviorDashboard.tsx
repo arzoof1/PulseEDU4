@@ -20,6 +20,7 @@ import {
   Legend,
 } from "recharts";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 type WindowKey = "7" | "15" | "30" | "custom";
 
@@ -160,6 +161,118 @@ export default function BehaviorDashboard({ onOpenProfile }: Props) {
           setGrade={setGrade}
         />
       </div>
+
+      <HowToUseHelp title="How to use Behavior">
+        <HowToSection title="What this dashboard is">
+          The school-wide PBIS picture for a chosen time window. Positive
+          recognitions on one side, negative incidents on the other, and
+          the trend line that shows whether the ratio is moving in the
+          right direction. The point: spot the kids who need a check-in
+          this week, and the kids who deserve a shout-out.
+        </HowToSection>
+
+        <HowToSection title="What the KPIs mean">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Positives / Negatives</strong> — total PBIS entries of
+              each polarity in the selected window. Voided entries are
+              excluded.
+            </li>
+            <li>
+              <strong>Net points</strong> — positives minus negatives.
+              Positive number = the school issued more recognitions than
+              consequences this window.
+            </li>
+            <li>
+              <strong>Ratio</strong> — positives divided by negatives. The
+              research benchmark is roughly <strong>4-to-1</strong> (Tier 1
+              healthy). Shown as "—" if there were no negatives in the
+              window (the ratio is mathematically undefined).
+            </li>
+            <li>
+              <strong>Students recognized</strong> — unique students who
+              received at least one positive entry in the window.
+            </li>
+            <li>
+              <strong>Students with negatives</strong> — unique students who
+              received at least one negative entry. Compare these two
+              numbers — a healthy month has the recognized count well above
+              the negatives count.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to read the chart and lists">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Trend overlay</strong> — positives in{" "}
+              <span style={{ color: "#16a34a", fontWeight: 700 }}>green</span>,
+              negatives in{" "}
+              <span style={{ color: "#dc2626", fontWeight: 700 }}>red</span>.
+              Watch the gap: when red climbs and green stays flat, the
+              culture is drifting and the team should respond.
+            </li>
+            <li>
+              <strong>Top recognized / concerning students</strong> — names
+              are clickable. Open a profile to see what the entries were
+              actually about before reaching out.
+            </li>
+            <li>
+              <strong>Top reasons</strong> (positive and negative) — the
+              fastest read on what's driving the totals. If "talking out"
+              dominates the negative list, that's a Tier 1 instructional
+              decision, not a Tier 3 referral.
+            </li>
+            <li>
+              <strong>Top staff</strong> — who is recognizing kids the
+              most, and who is logging the most negatives. Useful for
+              coaching and for spreading recognition habits.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to use it day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Pick a window.</strong> 7d for "what happened this
+              week", 30d for the monthly MTSS meeting, custom for a
+              specific event window (post-break, after a schedule change,
+              etc.).
+            </li>
+            <li>
+              <strong>Filter by grade</strong> when you want to look at
+              one grade-level team's caseload.
+            </li>
+            <li>
+              <strong>Work the "Concerning students" list first.</strong>{" "}
+              These are the kids the team should triage at MTSS. Click a
+              row to open the student profile and see the full context.
+            </li>
+            <li>
+              <strong>Use "Recognized students" for shout-outs.</strong>{" "}
+              Same data, opposite intent — these are the kids to celebrate
+              in announcements, newsletters, or staff meetings.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="A few caveats">
+          <ul style={howtoListStyle}>
+            <li>
+              Voided PBIS entries are not counted on either side, so a
+              corrected log won't show up here.
+            </li>
+            <li>
+              The ratio is shown as "—" when negatives = 0 — that's not a
+              missing value, that's a perfect window.
+            </li>
+            <li>
+              All counts respect the window picker, so changing the window
+              re-runs the totals, the chart, and the top-N lists together.
+            </li>
+          </ul>
+        </HowToSection>
+      </HowToUseHelp>
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>

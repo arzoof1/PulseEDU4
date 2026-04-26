@@ -17,6 +17,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 // ------------------------- API contract types ------------------------------
 
@@ -260,6 +261,131 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
           </select>
         </div>
       </div>
+
+      <HowToUseHelp title="How to use Equity">
+        <HowToSection title="What this dashboard is">
+          A district-level read on outcome <strong>disparities</strong>{" "}
+          across demographic subgroups. The headline metric is the{" "}
+          <strong>risk ratio</strong> — how much more (or less) often a
+          subgroup experiences a given outcome compared to everyone else
+          in the cohort. The point is to surface where the biggest gaps
+          are so the team knows which conversations to have first.
+        </HowToSection>
+
+        <HowToSection title="What the KPIs mean">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Cohort students</strong> — total students in the
+              current school (or filtered grade) used as the denominator
+              for every percentage and ratio on the page.
+            </li>
+            <li>
+              <strong>High-disparity flag count</strong> — how many
+              subgroup × metric pairs crossed the "concerning" threshold.
+              Each flag is a row in the table below.
+            </li>
+            <li>
+              <strong>Max risk ratio</strong> — the single largest gap on
+              the page. If it's bright red, click into the disparity
+              flags table to see which subgroup and which metric.
+            </li>
+            <li>
+              <strong>Demographic mix</strong> — counts and percentages of
+              ELL, IEP, 504, gender, race buckets, and Hispanic ethnicity.
+              Race and ethnicity are tracked separately (federal OMB
+              Directive 15) so a Hispanic student is also counted in
+              their race bucket.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How risk ratio works">
+          <p style={{ margin: "0 0 0.5rem" }}>
+            Risk ratio = (in-group rate) ÷ (out-group rate). A ratio of
+            1.0 means the subgroup looks identical to its peers on that
+            metric. A ratio above or below 1.0 means there's a gap.
+          </p>
+          <ul style={howtoListStyle}>
+            <li>
+              <strong style={{ color: "#dc2626" }}>Red ("concerning")</strong>{" "}
+              — gap of <strong>30% or more</strong> in the worse
+              direction (ratio ≥ 1.30 when the metric is bad like
+              negatives, or ratio ≤ 0.77 when the metric is good like
+              proficiency).
+            </li>
+            <li>
+              <strong style={{ color: "#475569" }}>Slate (neutral)</strong>{" "}
+              — gap is smaller than 30% in either direction.
+            </li>
+            <li>
+              <strong style={{ color: "#059669" }}>Green ("better")</strong>{" "}
+              — the subgroup is doing 30%+ <em>better</em> than peers on
+              that metric.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to read the tables">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Disparity flags</strong> — every subgroup × metric
+              pair that crossed the concerning threshold, sorted with the
+              biggest gaps first. The "in-group" / "out-group" columns
+              show the actual rates so you can sanity-check the ratio.
+            </li>
+            <li>
+              <strong>Per-subgroup snapshot grid</strong> — one row per
+              subgroup, one column per metric, color-coded by tone. The
+              fastest way to scan "is this subgroup struggling on
+              everything, or just one thing?"
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to use it day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Scan the disparity flags table first.</strong> The
+              top 3-5 rows are where the team should focus this cycle.
+            </li>
+            <li>
+              <strong>Use the per-subgroup grid to spot patterns.</strong>{" "}
+              A subgroup with red across multiple metrics is a different
+              conversation than one with a single red cell.
+            </li>
+            <li>
+              <strong>Filter by grade</strong> when a building leader
+              wants to look at one grade-level team's equity picture.
+            </li>
+            <li>
+              <strong>Bring numbers, not just colors.</strong> The
+              in-group and out-group rate columns matter as much as the
+              ratio when you're talking with staff or families.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="A few caveats">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Small subgroups produce noisy ratios.</strong> A
+              5-student subgroup with one high-need kid can swing the
+              ratio dramatically. Always glance at the subgroup size
+              before drawing a conclusion.
+            </li>
+            <li>
+              The page is intentionally <strong>aggregate-only</strong>{" "}
+              in v1 — there are no per-student lists here, only rates.
+              Use the SEB/SEL or Early Warning dashboards to drill into
+              individual students.
+            </li>
+            <li>
+              FRL (Free / Reduced Lunch) is a known follow-up tied to the
+              SIS import and is not yet shown.
+            </li>
+          </ul>
+        </HowToSection>
+      </HowToUseHelp>
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>

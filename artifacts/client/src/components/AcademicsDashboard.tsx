@@ -27,6 +27,7 @@ import {
   Legend,
 } from "recharts";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 interface Grower {
   studentId: string;
@@ -164,6 +165,115 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
           </select>
         </div>
       </div>
+
+      <HowToUseHelp title="How to use Academics">
+        <HowToSection title="What this dashboard is">
+          The school-wide read on FAST progress monitoring (PM1 → PM2 → PM3)
+          for ELA and Math. It answers two questions at once: "Is the cohort
+          gaining ground over the year?" and "Which kids are still in the
+          bottom quartile after the most recent window?"
+        </HowToSection>
+
+        <HowToSection title="What the KPIs mean">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Students assessed</strong> — unique students with at
+              least one FAST score in the current school year.
+            </li>
+            <li>
+              <strong>ELA / Math PM3 average</strong> — average FAST scale
+              score on the most recent PM window across all assessed
+              students. The scale-score → level cutoff is grade- and
+              subject-specific (see the placement chart below for how
+              this year's cohort distributes across L1-L5).
+            </li>
+            <li>
+              <strong>% at L3+</strong> — share of students whose PM3
+              placement is Level 3, 4, or 5. Higher is better.
+            </li>
+            <li>
+              <strong>% in BQ (Bottom Quartile)</strong> — share of students
+              placed at <strong>Level 1</strong> on PM3. This is the FAST
+              "below benchmark" flag and the same signal Early Warning's
+              Academics pillar uses. Lower is better.
+            </li>
+            <li>
+              <strong>% growers</strong> — share of students whose PM3 score
+              improved over their PM1 score in at least one subject. Only
+              students with both PM1 and PM3 are included so a missing
+              window doesn't penalise the rate.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to read the charts">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Cohort progression (PM1 → PM2 → PM3)</strong> — two
+              overlaid lines. ELA is{" "}
+              <span style={{ color: "#2563eb", fontWeight: 700 }}>blue</span>,
+              Math is{" "}
+              <span style={{ color: "#ea580c", fontWeight: 700 }}>orange</span>
+              . An upward slope means the cohort is gaining; a flat or
+              downward slope is the conversation to bring to the next
+              data team meeting.
+            </li>
+            <li>
+              <strong>PM3 placement distribution</strong> — bar chart
+              showing how many students landed at each level (L1-L5) on PM3.
+              The L1 bar is the size of the BQ population; the L3+L4+L5
+              bars are the proficient population.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="How to use it day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Filter by grade</strong> when you want to see one
+              team's caseload — e.g. 4th grade ELA can isolate grade 4
+              and see only their kids.
+            </li>
+            <li>
+              <strong>Work the "Lowest PM3" lists.</strong> ELA and Math
+              each have their own — these are the students to discuss
+              first at MTSS. Click any name to open the student profile.
+            </li>
+            <li>
+              <strong>Celebrate the "Top growers" lists.</strong> Sorted
+              by PM1 → PM3 delta, they show who's climbing fastest in
+              each subject — useful for both staff feedback and student
+              recognition.
+            </li>
+            <li>
+              <strong>Watch the % BQ trendline week over week.</strong>{" "}
+              That number is the most direct proxy for how many students
+              the academic Tier 2 / Tier 3 plans need to cover.
+            </li>
+          </ul>
+        </HowToSection>
+
+        <HowToSection title="A few caveats">
+          <ul style={howtoListStyle}>
+            <li>
+              There is intentionally <strong>no time-window picker</strong>{" "}
+              here — academic data lives at fixed assessment dates
+              (PM1/PM2/PM3, AP1/AP2/AP3), so a daily trend wouldn't be
+              meaningful.
+            </li>
+            <li>
+              FAST is the primary source. iReady and SCI counts in the
+              footer are shown for transparency but don't drive the
+              level-based KPIs.
+            </li>
+            <li>
+              "% growers" requires a student to have both a PM1 and PM3
+              score. Students with only one window are excluded from the
+              growers rate — they're not counted as "not growing".
+            </li>
+          </ul>
+        </HowToSection>
+      </HowToUseHelp>
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>
