@@ -46,6 +46,9 @@ import schoolBrandingRouter from "./schoolBranding";
 import pulseRouter from "./pulse";
 import housesRouter from "./houses";
 import dataImportsRouter from "./dataImports";
+import studentFlagsRouter from "./studentFlags";
+import trustedAdultLinksRouter from "./trustedAdultLinks";
+import insightsRouter from "./insights";
 
 const router: IRouter = Router();
 
@@ -96,5 +99,8 @@ router.use(schoolBrandingRouter);
 router.use(pulseRouter);
 router.use(housesRouter);
 router.use(dataImportsRouter);
+router.use(studentFlagsRouter);
+router.use(trustedAdultLinksRouter);
+router.use(insightsRouter);
 
 export default router;

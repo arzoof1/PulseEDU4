@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean } from "drizzle-orm/pg-core";
 
 export const studentsTable = pgTable("students", {
   id: serial("id").primaryKey(),
@@ -18,6 +18,17 @@ export const studentsTable = pgTable("students", {
   // History tab roll back a botched import: DELETE WHERE import_job_id = X.
   // Nullable because UI-created students and pre-importer rows have no job.
   importJobId: integer("import_job_id"),
+  // ----- Whole-child demographic flags (Insights v1) ---------------------
+  // Source of truth: the SIS / roster import for ELL/ESE/504/gender; the
+  // MTSS team for ct_ela / ct_math (Critical Thinking designations are
+  // assigned, not measured). All booleans default false so existing rows
+  // and roster imports without these columns remain valid.
+  gender: text("gender"),
+  ell: boolean("ell").notNull().default(false),
+  ese: boolean("ese").notNull().default(false),
+  is504: boolean("is_504").notNull().default(false),
+  ctEla: boolean("ct_ela").notNull().default(false),
+  ctMath: boolean("ct_math").notNull().default(false),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

@@ -1,0 +1,659 @@
+// Insights Watchlist — filterable group view showing every student the
+// caller can see. Default Insights landing page. Per-row chips
+// summarize tier, BQ flags, behavior + ISS counts, and the top risk.
+// Click a row to drill into the StudentProfile.
+//
+// Backed by GET /api/insights/watchlist. The backend handles visibility
+// scope — a plain teacher's payload only contains roster ∪ trusted-
+// adult students; core team sees the full school.
+
+import { useEffect, useMemo, useState } from "react";
+import { authFetch } from "../lib/authToken";
+
+type WindowKey = "3" | "7" | "15" | "30" | "custom";
+
+interface Row {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  grade: number;
+  gender: string | null;
+  flags: {
+    ell: boolean;
+    ese: boolean;
+    is504: boolean;
+    ctEla: boolean;
+    ctMath: boolean;
+  };
+  mtssTier: number;
+  bqEla: boolean;
+  bqMath: boolean;
+  behaviorCount: number;
+  tardyCount: number;
+  issDayCount: number;
+  topRiskFlag: { code: string; severity: "info" | "watch" | "high"; label: string } | null;
+  riskFlagCount: number;
+}
+
+interface Filters {
+  window: WindowKey;
+  customFrom: string;
+  customTo: string;
+  grade: string;
+  gender: string;
+  ell: "" | "true" | "false";
+  ese: "" | "true" | "false";
+  is504: "" | "true" | "false";
+  ctEla: "" | "true" | "false";
+  ctMath: "" | "true" | "false";
+  tier: "" | "1" | "2" | "3";
+  bqEla: "" | "true" | "false";
+  bqMath: "" | "true" | "false";
+}
+
+const EMPTY_FILTERS: Filters = {
+  window: "30",
+  customFrom: "",
+  customTo: "",
+  grade: "",
+  gender: "",
+  ell: "",
+  ese: "",
+  is504: "",
+  ctEla: "",
+  ctMath: "",
+  tier: "",
+  bqEla: "",
+  bqMath: "",
+};
+
+// Built-in saved-filter presets. Mirror the eduCLIMBER team-meeting
+// rituals: "what should we look at this week" + two common drill-ins.
+// Users can add their own via the "Save current filters" button.
+const BUILTIN_PRESETS: Array<{ name: string; filters: Partial<Filters> }> = [
+  {
+    name: "MTSS Team Weekly Review",
+    filters: { window: "7", tier: "" },
+  },
+  {
+    name: "Tier 2 — needs attention",
+    filters: { window: "30", tier: "2" },
+  },
+  {
+    name: "Tier 3 — needs attention",
+    filters: { window: "30", tier: "3" },
+  },
+  {
+    name: "Bottom Quartile ELA",
+    filters: { window: "30", bqEla: "true" },
+  },
+  {
+    name: "Bottom Quartile Math",
+    filters: { window: "30", bqMath: "true" },
+  },
+];
+
+const PRESETS_STORAGE_KEY = "pulseedu.insights.watchlist.presets";
+
+interface SavedPreset {
+  name: string;
+  filters: Filters;
+}
+
+function loadSavedPresets(): SavedPreset[] {
+  try {
+    const raw = localStorage.getItem(PRESETS_STORAGE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(
+      (p): p is SavedPreset =>
+        p && typeof p.name === "string" && p.filters && typeof p.filters === "object",
+    );
+  } catch {
+    return [];
+  }
+}
+
+function saveSavedPresets(presets: SavedPreset[]) {
+  try {
+    localStorage.setItem(PRESETS_STORAGE_KEY, JSON.stringify(presets));
+  } catch {
+    /* localStorage full / disabled — silent */
+  }
+}
+
+const SEVERITY_STYLES: Record<
+  "info" | "watch" | "high",
+  { background: string; color: string; border: string }
+> = {
+  high: { background: "#fee2e2", color: "#991b1b", border: "#fca5a5" },
+  watch: { background: "#fef3c7", color: "#92400e", border: "#fcd34d" },
+  info: { background: "#e0e7ff", color: "#3730a3", border: "#c7d2fe" },
+};
+
+function chip(label: string, sev: "info" | "watch" | "high") {
+  const s = SEVERITY_STYLES[sev];
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "0.1rem 0.45rem",
+        background: s.background,
+        color: s.color,
+        border: `1px solid ${s.border}`,
+        borderRadius: 999,
+        fontSize: "0.72rem",
+        fontWeight: 600,
+        marginRight: 4,
+        marginBottom: 2,
+      }}
+    >
+      {label}
+    </span>
+  );
+}
+
+interface Props {
+  onOpenStudent: (studentId: string) => void;
+}
+
+export default function InsightsWatchlist({ onOpenStudent }: Props) {
+  const [filters, setFilters] = useState<Filters>(EMPTY_FILTERS);
+  const [rows, setRows] = useState<Row[]>([]);
+  const [windowLabel, setWindowLabel] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState("");
+  const [savedPresets, setSavedPresets] = useState<SavedPreset[]>(() =>
+    loadSavedPresets(),
+  );
+  const [sortBy, setSortBy] = useState<
+    "name" | "grade" | "tier" | "behavior" | "iss" | "tardy" | "risk"
+  >("risk");
+  const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
+
+  // Build the query string from filters. Empty values are dropped so
+  // server-side filter parsing treats them as "no filter."
+  const queryString = useMemo(() => {
+    const p = new URLSearchParams();
+    p.set("window", filters.window);
+    if (filters.window === "custom") {
+      if (filters.customFrom) p.set("from", filters.customFrom);
+      if (filters.customTo) p.set("to", filters.customTo);
+    }
+    if (filters.grade) p.set("grade", filters.grade);
+    if (filters.gender) p.set("gender", filters.gender);
+    if (filters.ell) p.set("ell", filters.ell);
+    if (filters.ese) p.set("ese", filters.ese);
+    if (filters.is504) p.set("is504", filters.is504);
+    if (filters.ctEla) p.set("ctEla", filters.ctEla);
+    if (filters.ctMath) p.set("ctMath", filters.ctMath);
+    if (filters.tier) p.set("tier", filters.tier);
+    if (filters.bqEla) p.set("bqEla", filters.bqEla);
+    if (filters.bqMath) p.set("bqMath", filters.bqMath);
+    return p.toString();
+  }, [filters]);
+
+  useEffect(() => {
+    setLoading(true);
+    setError("");
+    let cancelled = false;
+    authFetch(`/api/insights/watchlist?${queryString}`)
+      .then((r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        return r.json();
+      })
+      .then((data) => {
+        if (cancelled) return;
+        setRows(data.rows ?? []);
+        setWindowLabel(data.window?.label ?? "");
+      })
+      .catch((e) => {
+        if (cancelled) return;
+        setError(e.message ?? "Failed to load watchlist");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [queryString]);
+
+  const sortedRows = useMemo(() => {
+    const copy = [...rows];
+    const dir = sortDir === "asc" ? 1 : -1;
+    const SEV_RANK = { high: 3, watch: 2, info: 1 } as const;
+    copy.sort((a, b) => {
+      let cmp = 0;
+      switch (sortBy) {
+        case "name":
+          cmp = `${a.lastName} ${a.firstName}`.localeCompare(
+            `${b.lastName} ${b.firstName}`,
+          );
+          break;
+        case "grade":
+          cmp = a.grade - b.grade;
+          break;
+        case "tier":
+          cmp = a.mtssTier - b.mtssTier;
+          break;
+        case "behavior":
+          cmp = a.behaviorCount - b.behaviorCount;
+          break;
+        case "iss":
+          cmp = a.issDayCount - b.issDayCount;
+          break;
+        case "tardy":
+          cmp = a.tardyCount - b.tardyCount;
+          break;
+        case "risk": {
+          const ar = a.topRiskFlag ? SEV_RANK[a.topRiskFlag.severity] : 0;
+          const br = b.topRiskFlag ? SEV_RANK[b.topRiskFlag.severity] : 0;
+          cmp = ar - br || a.riskFlagCount - b.riskFlagCount;
+          break;
+        }
+      }
+      return cmp * dir;
+    });
+    return copy;
+  }, [rows, sortBy, sortDir]);
+
+  function applyPreset(p: Partial<Filters>) {
+    setFilters({ ...EMPTY_FILTERS, ...p } as Filters);
+  }
+
+  function saveCurrentAsPreset() {
+    const name = window.prompt(
+      "Name this preset (e.g., 'Friday MTSS huddle')",
+    );
+    if (!name) return;
+    const trimmed = name.trim().slice(0, 60);
+    if (!trimmed) return;
+    const next = [
+      ...savedPresets.filter((p) => p.name !== trimmed),
+      { name: trimmed, filters },
+    ];
+    setSavedPresets(next);
+    saveSavedPresets(next);
+  }
+
+  function deletePreset(name: string) {
+    if (!window.confirm(`Delete preset "${name}"?`)) return;
+    const next = savedPresets.filter((p) => p.name !== name);
+    setSavedPresets(next);
+    saveSavedPresets(next);
+  }
+
+  function setHeader(col: typeof sortBy) {
+    if (sortBy === col) {
+      setSortDir(sortDir === "asc" ? "desc" : "asc");
+    } else {
+      setSortBy(col);
+      setSortDir(col === "name" || col === "grade" ? "asc" : "desc");
+    }
+  }
+
+  function colHeader(col: typeof sortBy, label: string) {
+    const active = sortBy === col;
+    return (
+      <th
+        style={{
+          textAlign: "left",
+          padding: "0.5rem",
+          fontSize: "0.85rem",
+          cursor: "pointer",
+          userSelect: "none",
+          background: active ? "#eff6ff" : "transparent",
+        }}
+        onClick={() => setHeader(col)}
+      >
+        {label} {active ? (sortDir === "asc" ? "▲" : "▼") : ""}
+      </th>
+    );
+  }
+
+  return (
+    <div className="card" style={{ marginBottom: "1rem" }}>
+      <h2 style={{ marginTop: 0 }}>Insights Watchlist</h2>
+      <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+        Filterable view of every student you can see. Use chips to narrow
+        the list, then click a row to open the full profile. Presets
+        save your filter set in this browser only.
+      </p>
+
+      {/* Filter bar — chip-style controls */}
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.5rem",
+          alignItems: "center",
+          marginBottom: "0.75rem",
+          paddingBottom: "0.75rem",
+          borderBottom: "1px solid #e5e7eb",
+        }}
+      >
+        <strong style={{ marginRight: 8 }}>Window:</strong>
+        {(["3", "7", "15", "30", "custom"] as WindowKey[]).map((w) => (
+          <button
+            key={w}
+            type="button"
+            onClick={() => setFilters({ ...filters, window: w })}
+            style={{
+              padding: "0.25rem 0.6rem",
+              border: "1px solid",
+              borderColor: filters.window === w ? "#0d9488" : "#d1d5db",
+              background: filters.window === w ? "#0d9488" : "white",
+              color: filters.window === w ? "white" : "#374151",
+              borderRadius: 999,
+              fontSize: "0.8rem",
+              cursor: "pointer",
+              fontWeight: 600,
+            }}
+          >
+            {w === "custom" ? "Custom" : `${w}d`}
+          </button>
+        ))}
+        {filters.window === "custom" && (
+          <>
+            <input
+              type="date"
+              value={filters.customFrom}
+              onChange={(e) => setFilters({ ...filters, customFrom: e.target.value })}
+              style={{ padding: "0.2rem" }}
+            />
+            <span>→</span>
+            <input
+              type="date"
+              value={filters.customTo}
+              onChange={(e) => setFilters({ ...filters, customTo: e.target.value })}
+              style={{ padding: "0.2rem" }}
+            />
+          </>
+        )}
+        {windowLabel && (
+          <span style={{ color: "#6b7280", fontSize: "0.8rem" }}>({windowLabel})</span>
+        )}
+      </div>
+
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+          gap: "0.5rem",
+          marginBottom: "0.75rem",
+        }}
+      >
+        <select
+          value={filters.grade}
+          onChange={(e) => setFilters({ ...filters, grade: e.target.value })}
+          style={{ padding: "0.3rem" }}
+        >
+          <option value="">Any grade</option>
+          {[0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12].map((g) => (
+            <option key={g} value={g}>
+              Grade {g}
+            </option>
+          ))}
+        </select>
+        <select
+          value={filters.gender}
+          onChange={(e) => setFilters({ ...filters, gender: e.target.value })}
+          style={{ padding: "0.3rem" }}
+        >
+          <option value="">Any gender</option>
+          <option value="Male">Male</option>
+          <option value="Female">Female</option>
+          <option value="Non-binary">Non-binary</option>
+        </select>
+        {(
+          [
+            ["ell", "ELL"],
+            ["ese", "ESE"],
+            ["is504", "504"],
+            ["ctEla", "CT ELA"],
+            ["ctMath", "CT Math"],
+            ["bqEla", "BQ ELA"],
+            ["bqMath", "BQ Math"],
+          ] as const
+        ).map(([key, label]) => (
+          <select
+            key={key}
+            value={filters[key]}
+            onChange={(e) =>
+              setFilters({ ...filters, [key]: e.target.value as "" | "true" | "false" })
+            }
+            style={{ padding: "0.3rem" }}
+          >
+            <option value="">{label}: any</option>
+            <option value="true">{label}: yes</option>
+            <option value="false">{label}: no</option>
+          </select>
+        ))}
+        <select
+          value={filters.tier}
+          onChange={(e) =>
+            setFilters({ ...filters, tier: e.target.value as Filters["tier"] })
+          }
+          style={{ padding: "0.3rem" }}
+        >
+          <option value="">Tier: any</option>
+          <option value="1">Tier 1</option>
+          <option value="2">Tier 2</option>
+          <option value="3">Tier 3</option>
+        </select>
+      </div>
+
+      <div
+        style={{
+          display: "flex",
+          flexWrap: "wrap",
+          gap: "0.5rem",
+          alignItems: "center",
+          marginBottom: "1rem",
+        }}
+      >
+        <strong style={{ marginRight: 4 }}>Presets:</strong>
+        {BUILTIN_PRESETS.map((p) => (
+          <button
+            key={p.name}
+            type="button"
+            onClick={() => applyPreset(p.filters)}
+            style={{
+              padding: "0.2rem 0.55rem",
+              background: "#f3f4f6",
+              border: "1px solid #d1d5db",
+              borderRadius: 999,
+              fontSize: "0.75rem",
+              cursor: "pointer",
+            }}
+          >
+            {p.name}
+          </button>
+        ))}
+        {savedPresets.map((p) => (
+          <span
+            key={p.name}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              background: "#ecfeff",
+              border: "1px solid #a5f3fc",
+              borderRadius: 999,
+              fontSize: "0.75rem",
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => applyPreset(p.filters)}
+              style={{
+                padding: "0.2rem 0.55rem",
+                background: "transparent",
+                border: "none",
+                cursor: "pointer",
+              }}
+            >
+              {p.name}
+            </button>
+            <button
+              type="button"
+              onClick={() => deletePreset(p.name)}
+              title="Delete preset"
+              style={{
+                padding: "0.2rem 0.4rem",
+                background: "transparent",
+                border: "none",
+                color: "#0e7490",
+                cursor: "pointer",
+                borderLeft: "1px solid #a5f3fc",
+              }}
+            >
+              ✕
+            </button>
+          </span>
+        ))}
+        <button
+          type="button"
+          onClick={saveCurrentAsPreset}
+          style={{
+            padding: "0.2rem 0.55rem",
+            background: "white",
+            border: "1px dashed #9ca3af",
+            borderRadius: 999,
+            fontSize: "0.75rem",
+            color: "#374151",
+            cursor: "pointer",
+          }}
+        >
+          + Save current
+        </button>
+        <button
+          type="button"
+          onClick={() => setFilters(EMPTY_FILTERS)}
+          style={{
+            padding: "0.2rem 0.55rem",
+            background: "white",
+            border: "1px solid #d1d5db",
+            borderRadius: 999,
+            fontSize: "0.75rem",
+            color: "#374151",
+            cursor: "pointer",
+            marginLeft: "auto",
+          }}
+        >
+          Reset filters
+        </button>
+      </div>
+
+      {error && (
+        <div
+          style={{
+            background: "#fee2e2",
+            color: "#991b1b",
+            padding: "0.5rem",
+            borderRadius: 6,
+            marginBottom: "0.5rem",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <p style={{ color: "var(--text-subtle)" }}>Loading…</p>
+      ) : sortedRows.length === 0 ? (
+        <p style={{ color: "var(--text-subtle)" }}>
+          No students match these filters. (If you're a teacher, your scope
+          is your roster plus any students you've been linked to as a
+          trusted adult.)
+        </p>
+      ) : (
+        <>
+          <div style={{ marginBottom: "0.5rem", color: "#6b7280", fontSize: "0.85rem" }}>
+            Showing {sortedRows.length} student{sortedRows.length === 1 ? "" : "s"}
+          </div>
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr style={{ borderBottom: "1px solid #e5e7eb" }}>
+                  {colHeader("name", "Student")}
+                  {colHeader("grade", "Gr")}
+                  <th style={{ textAlign: "left", padding: "0.5rem", fontSize: "0.85rem" }}>
+                    Demographics
+                  </th>
+                  {colHeader("tier", "Tier")}
+                  {colHeader("behavior", "Behavior")}
+                  {colHeader("tardy", "Tardies")}
+                  {colHeader("iss", "ISS")}
+                  {colHeader("risk", "Top Risk")}
+                </tr>
+              </thead>
+              <tbody>
+                {sortedRows.map((r) => (
+                  <tr
+                    key={r.studentId}
+                    onClick={() => onOpenStudent(r.studentId)}
+                    style={{
+                      borderBottom: "1px solid #f3f4f6",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <td style={{ padding: "0.5rem" }}>
+                      <div style={{ fontWeight: 600 }}>
+                        {r.lastName}, {r.firstName}
+                      </div>
+                      <div style={{ fontSize: "0.75rem", color: "#9ca3af" }}>
+                        {r.studentId}
+                      </div>
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>{r.grade}</td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {r.flags.ell && chip("ELL", "info")}
+                      {r.flags.ese && chip("ESE", "info")}
+                      {r.flags.is504 && chip("504", "info")}
+                      {r.flags.ctEla && chip("CT ELA", "info")}
+                      {r.flags.ctMath && chip("CT Math", "info")}
+                      {r.bqEla && chip("BQ ELA", "high")}
+                      {r.bqMath && chip("BQ Math", "high")}
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {r.mtssTier === 1 ? (
+                        <span style={{ color: "#6b7280" }}>1</span>
+                      ) : (
+                        chip(`Tier ${r.mtssTier}`, r.mtssTier === 3 ? "high" : "watch")
+                      )}
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {r.behaviorCount > 0
+                        ? chip(
+                            `${r.behaviorCount}`,
+                            r.behaviorCount >= 3 ? "high" : "watch",
+                          )
+                        : <span style={{ color: "#9ca3af" }}>—</span>}
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {r.tardyCount > 0
+                        ? chip(`${r.tardyCount}`, r.tardyCount >= 5 ? "high" : "watch")
+                        : <span style={{ color: "#9ca3af" }}>—</span>}
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {r.issDayCount > 0
+                        ? chip(`${r.issDayCount}`, "high")
+                        : <span style={{ color: "#9ca3af" }}>—</span>}
+                    </td>
+                    <td style={{ padding: "0.5rem" }}>
+                      {r.topRiskFlag
+                        ? chip(r.topRiskFlag.label, r.topRiskFlag.severity)
+                        : <span style={{ color: "#9ca3af" }}>—</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}

@@ -1164,7 +1164,23 @@ type ParsedRoster = {
   parentName: string | null;
   parentEmail: string | null;
   parentPhone: string | null;
+  gender: string | null;
+  ell: boolean | undefined;
+  ese: boolean | undefined;
+  is504: boolean | undefined;
 };
+
+// Boolean coercion for CSV columns. Accepts the conventions actual SIS
+// exports use: Y/N, Yes/No, true/false, 1/0, T/F. Empty / whitespace /
+// anything else → false (the safer default — flagging a non-ELL student as
+// ELL is more harmful than the reverse). Returns false for nullish input
+// so optional() can be wrapped around it.
+function parseBoolFlag(raw: string | null | undefined): boolean {
+  if (raw == null) return false;
+  const v = raw.toString().trim().toLowerCase();
+  if (!v) return false;
+  return v === "y" || v === "yes" || v === "true" || v === "t" || v === "1";
+}
 
 const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
   validTargets: new Set([
@@ -1175,6 +1191,12 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     "parent_name",
     "parent_email",
     "parent_phone",
+    // Insights v1 demographics. CT ELA / CT Math intentionally NOT in
+    // the importer — those are MTSS-assigned via the UI only.
+    "gender",
+    "ell",
+    "ese",
+    "is_504",
   ]),
   requiredFields: ["student_id", "first_name", "last_name", "grade"],
   headerSynonyms: {
@@ -1219,6 +1241,10 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
       "contact_phone",
       "phone",
     ],
+    gender: ["gender", "sex", "gender_identity"],
+    ell: ["ell", "esol", "lep", "ell_flag", "english_learner", "el_status"],
+    ese: ["ese", "sped", "swd", "iep", "ese_flag", "exceptional_student"],
+    is_504: ["504", "is_504", "section_504", "504_plan", "fivezerofour"],
   },
   parseRow(row, mapping) {
     const target: Record<string, string> = {};
@@ -1261,6 +1287,13 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
       const v = (row[col] ?? "").toString().trim();
       return v || null;
     };
+    // Optional flag — only sets the field if the column was mapped.
+    // Unmapped flags fall through to the table default (false).
+    const optionalFlag = (key: string): boolean | undefined => {
+      const col = target[key];
+      if (!col) return undefined;
+      return parseBoolFlag(row[col]?.toString());
+    };
     return {
       ok: true,
       value: {
@@ -1271,6 +1304,10 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         parentName: optional("parent_name"),
         parentEmail: optional("parent_email"),
         parentPhone: optional("parent_phone"),
+        gender: optional("gender"),
+        ell: optionalFlag("ell"),
+        ese: optionalFlag("ese"),
+        is504: optionalFlag("is_504"),
       },
     };
   },
@@ -1282,17 +1319,29 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     const inserted = await tx
       .insert(studentsTable)
       .values(
-        parsed.map((p) => ({
-          schoolId,
-          studentId: p.studentId,
-          firstName: p.firstName,
-          lastName: p.lastName,
-          grade: p.grade,
-          parentName: p.parentName,
-          parentEmail: p.parentEmail,
-          parentPhone: p.parentPhone,
-          importJobId: jobId,
-        })),
+        parsed.map((p) => {
+          const row: Record<string, unknown> = {
+            schoolId,
+            studentId: p.studentId,
+            firstName: p.firstName,
+            lastName: p.lastName,
+            grade: p.grade,
+            parentName: p.parentName,
+            parentEmail: p.parentEmail,
+            parentPhone: p.parentPhone,
+            importJobId: jobId,
+            gender: p.gender,
+          };
+          // Only include flag columns when the importer actually saw a
+          // value; otherwise let the column default fire so we don't
+          // overwrite future-set MTSS values via INSERT (insert is moot
+          // here because of onConflictDoNothing, but the principle
+          // holds for the parsed-row shape).
+          if (p.ell !== undefined) row.ell = p.ell;
+          if (p.ese !== undefined) row.ese = p.ese;
+          if (p.is504 !== undefined) row.is504 = p.is504;
+          return row as typeof studentsTable.$inferInsert;
+        }),
       )
       .onConflictDoNothing({ target: studentsTable.studentId })
       .returning({ id: studentsTable.id });

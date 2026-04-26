@@ -21,6 +21,9 @@ import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
+import InsightsWatchlist from "./components/InsightsWatchlist";
+import StudentProfile from "./components/StudentProfile";
+import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
   SettingsBackBar,
   type SettingsTile,
@@ -3141,7 +3144,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   administration: ["superUserHome", "districtAdmin"],
-  insights: ["insights"],
+  insights: ["insights", "insightsWatchlist", "studentProfile"],
   recognition: [
     "pbis",
     "schoolStore",
@@ -3176,9 +3179,21 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
 // so they belong to the Insights group for force-expand purposes.
 NAV_GROUP_OWNERSHIP.insights = [
   "insights",
+  "insightsWatchlist",
+  "studentProfile",
   "mtssPlans",
   "mtssCoordinator",
   "mtssTemplates",
+];
+// Trusted Adults admin lives in the School Admin nav group alongside
+// Staff & Roles + Bell Schedule, since it's a per-school admin tool
+// gated to the same core-team predicate.
+NAV_GROUP_OWNERSHIP.schoolAdmin = [
+  "bellSchedule",
+  "activeKiosks",
+  "settings",
+  "hallPassMgmt",
+  "trustedAdultsAdmin",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -3480,7 +3495,17 @@ function App() {
     | "superUserHome"
     | "districtAdmin"
     | "insights"
+    | "insightsWatchlist"
+    | "studentProfile"
+    | "trustedAdultsAdmin"
   >("hallPasses");
+  // Selected student for the Insights → StudentProfile drill-in. Set by
+  // a row click in InsightsWatchlist; cleared on Back-to-Watchlist. If
+  // the activeSection switches to "studentProfile" with no id set we
+  // bounce back to the watchlist (handled in the guard effect below).
+  const [selectedInsightsStudentId, setSelectedInsightsStudentId] = useState<
+    string | null
+  >(null);
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
     fromName: string;
@@ -6611,7 +6636,18 @@ function App() {
     // ship in Phase 3 we'll broaden this to anyone who should see the
     // domain dashboards.
     if (!canAccessMtssHub && activeSection === "insights") {
+      setActiveSection("insightsWatchlist");
+    }
+    // Trusted Adults admin is core-team only — bounce anyone who lost
+    // access while sitting on it.
+    if (!canAccessMtssHub && activeSection === "trustedAdultsAdmin") {
       setActiveSection("hallPasses");
+    }
+    // StudentProfile requires a selected student. If we land on it
+    // without one (e.g. direct URL hack, or the previously-selected
+    // student went out of scope), fall back to the watchlist.
+    if (activeSection === "studentProfile" && !selectedInsightsStudentId) {
+      setActiveSection("insightsWatchlist");
     }
     // Demote a user who lost edit access while sitting on the editable
     // School Store. Bounce them to the read-only sidebar view rather than
@@ -7205,21 +7241,29 @@ function App() {
                 })}
               </NavGroup>
             )}
-            {canAccessMtssHub && (
-              <NavGroup
-                key={`${sidebarUserId}-insights`}
-                id="insights"
-                label="Insights"
-                userId={sidebarUserId}
-                containsActive={groupContainsActive("insights", activeSection)}
-              >
-                {renderNavItem({
+            {/* Insights group is visible to anyone signed in — Watchlist
+                is the universal default landing. The legacy InsightsHub
+                (rule-builder + MTSS launcher tiles) stays gated to
+                core-team via canAccessMtssHub. */}
+            <NavGroup
+              key={`${sidebarUserId}-insights`}
+              id="insights"
+              label="Insights"
+              userId={sidebarUserId}
+              containsActive={groupContainsActive("insights", activeSection)}
+            >
+              {renderNavItem({
+                key: "insightsWatchlist",
+                label: "Watchlist",
+                icon: IconClipboard,
+              })}
+              {canAccessMtssHub &&
+                renderNavItem({
                   key: "insights",
-                  label: "Insights",
+                  label: "Insights Hub",
                   icon: IconClipboard,
                 })}
-              </NavGroup>
-            )}
+            </NavGroup>
             {showRecognition && (
               <NavGroup
                 key={`${sidebarUserId}-recognition`}
@@ -7347,6 +7391,12 @@ function App() {
                   renderNavItem(adminNavSections[0])}
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
+                {canAccessMtssHub &&
+                  renderNavItem({
+                    key: "trustedAdultsAdmin",
+                    label: "Trusted Adults",
+                    icon: IconUser,
+                  })}
                 {canManageSettings &&
                   renderNavItem({
                     key: "activeKiosks",
@@ -17364,6 +17414,29 @@ function App() {
           tiles={INSIGHTS_TILES}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
         />
+      )}
+
+      {activeSection === "insightsWatchlist" && (
+        <InsightsWatchlist
+          onOpenStudent={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "studentProfile" && selectedInsightsStudentId && (
+        <StudentProfile
+          studentId={selectedInsightsStudentId}
+          onBack={() => {
+            setSelectedInsightsStudentId(null);
+            setActiveSection("insightsWatchlist");
+          }}
+        />
+      )}
+
+      {activeSection === "trustedAdultsAdmin" && canAccessMtssHub && (
+        <TrustedAdultsAdmin canManage={canAccessMtssHub} />
       )}
 
       {activeSection === "districtAdmin" && canActAsDistrict && (

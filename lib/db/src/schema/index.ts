@@ -38,6 +38,7 @@ export * from "./issAttendanceDay";
 export * from "./classroomStoreItems";
 export * from "./schoolStoreItems";
 export * from "./studentMtssPlans";
+export * from "./studentTrustedAdults";
 export * from "./imports";
 export * from "./assessments";
 export * from "./schoolBranding";
