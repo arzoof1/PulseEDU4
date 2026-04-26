@@ -1528,3 +1528,45 @@ working on HeartBEAT first.
 - What "end of period" means when the school's bell schedule isn't
   fully wired (does it use existing bell schedule, or a per-kiosk
   timer?).
+
+---
+
+## 2026-04-26 — Phase 3: rosters + behavior importers (architect Pass)
+
+Extended the importer beyond assessments. Same `KIND_CONFIGS` registry
+pattern, two new kinds:
+
+- **rosters** writes to `students`. Insert uses `onConflictDoNothing` on
+  `(school_id, student_id)` so re-uploading a roster file is idempotent;
+  the diff between `validRows` and `committedRows` surfaces as
+  `skippedRows` in the response (warnings, not errors).
+- **behavior** writes to `support_notes`. Pure INSERT (no de-dup —
+  every row is a distinct event). Defaults `note_type='concern'`,
+  `staff_name='CSV Import'`, `created_at=now()` when not mapped.
+
+Both kinds are **school-scope only** for now (no district variant).
+Rollback uses `KIND_CONFIGS[kind].rollback(tx, importJobId, schoolId)` —
+the dispatcher in DELETE rollback now routes through the registry, with
+the legacy assessments branch retained for the district-scope case.
+
+Schema additive: `students.import_job_id` and
+`support_notes.import_job_id` (both nullable integer) added via psql
+ALTER + mirrored in `lib/db/src/schema/{students,supportNotes}.ts`. No
+FK — same convention as `assessments.import_job_id`.
+
+Frontend (`DataImports.tsx`):
+- `Kind` widened to `"assessments" | "rosters" | "behavior"`.
+- `KIND_DEFS` metadata table drives the radio selector + targets dict.
+- `effectiveScope` clamps to "school" for kinds without district
+  support; the scope toggle hides for those kinds.
+- `kind` is now a useEffect dep for `loadJobs` / `loadTemplates` so
+  switching kinds refreshes the History list and template dropdown.
+
+Backend `validateTemplateMapping(mapping, kind)` is now kind-aware:
+assessments preserves the legacy `VALID_TARGETS` set; rosters/behavior
+look up `KIND_CONFIGS[kind].validTargets`. This unblocks saving
+templates for the new kinds.
+
+Architect Pass on second review. Attendance importer **deferred** — no
+`daily_attendance` table exists; needs schema discussion before
+proceeding. Next: eduClimber-style Insights module.

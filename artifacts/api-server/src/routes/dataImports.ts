@@ -28,6 +28,8 @@ import {
   importJobsTable,
   importTemplatesTable,
   assessmentsTable,
+  studentsTable,
+  supportNotesTable,
 } from "@workspace/db";
 import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
 import {
@@ -1003,7 +1005,13 @@ router.post(
     }
     const deleted = await db.transaction(async (tx) => {
       let count = 0;
-      if (job.kind === "assessments") {
+      // Multi-kind kinds (rosters, behavior) live in the registry. They
+      // only support school scope; the registry rollback() does the
+      // schoolId-AND defense-in-depth itself.
+      const cfg = KIND_CONFIGS[job.kind];
+      if (cfg && job.schoolId != null) {
+        count = await cfg.rollback(tx, id, job.schoolId);
+      } else if (job.kind === "assessments") {
         if (job.districtId != null && job.schoolId == null) {
           // District-scope rollback: rows span multiple schools. We
           // intentionally DELETE by importJobId alone — re-deriving the
@@ -1045,6 +1053,609 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// ===========================================================================
+// Multi-kind importer registry. Adds rosters + behavior on top of the
+// existing assessments importer. Each kind plugs in its own targets,
+// validators, parser, insert chunker, and rollback predicate; the route
+// handlers below are kind-agnostic and just look the config up by name.
+// School scope only for these kinds — district roster pushes and
+// district-wide behavior feeds aren't a real-world workflow today.
+// ===========================================================================
+
+type KindParseResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; message: string };
+
+interface KindConfig<T = unknown> {
+  validTargets: Set<string>;
+  requiredFields: string[];
+  headerSynonyms: Record<string, string[]>;
+  parseRow: (
+    row: Record<string, string>,
+    mapping: Record<string, string>,
+  ) => KindParseResult<T>;
+  // Insert one chunk inside the caller's transaction. Returns the count
+  // actually written (which may be < parsed.length for upsert-skip kinds
+  // like rosters where duplicate student_ids are no-ops).
+  insertChunk: (
+    tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+    parsed: T[],
+    schoolId: number,
+    jobId: number,
+  ) => Promise<number>;
+  // Rollback: delete every row this job inserted. Returns row count.
+  rollback: (
+    tx: Parameters<Parameters<typeof db.transaction>[0]>[0],
+    jobId: number,
+    schoolId: number,
+  ) => Promise<number>;
+}
+
+// Same shape as autoMapHeaders but reads its synonym table from the
+// passed-in config so each kind can have its own field set.
+function autoMapHeadersForConfig(
+  csvHeaders: string[],
+  config: KindConfig,
+): { mapping: Record<string, string>; unmappedCsv: string[] } {
+  const taken = new Set<string>();
+  const mapping: Record<string, string> = {};
+  const normToOriginal = new Map<string, string>();
+  for (const h of csvHeaders) {
+    if (!normToOriginal.has(normalizeHeader(h))) {
+      normToOriginal.set(normalizeHeader(h), h);
+    }
+  }
+  for (const target of Object.keys(config.headerSynonyms)) {
+    if (taken.has(target)) continue;
+    for (const syn of config.headerSynonyms[target]) {
+      const original = normToOriginal.get(syn);
+      if (original && !mapping[original]) {
+        mapping[original] = target;
+        taken.add(target);
+        break;
+      }
+    }
+  }
+  const unmappedCsv = csvHeaders.filter((h) => !mapping[h]);
+  return { mapping, unmappedCsv };
+}
+
+// Same shape as validateMapping but kind-aware.
+function validateMappingForConfig(
+  mapping: Record<string, string>,
+  csvHeaders: string[],
+  config: KindConfig,
+): string | null {
+  const headerSet = new Set(csvHeaders);
+  const seenTargets = new Set<string>();
+  for (const [csvCol, target] of Object.entries(mapping)) {
+    if (!headerSet.has(csvCol)) {
+      return `Mapping references unknown CSV column: "${csvCol}"`;
+    }
+    if (!config.validTargets.has(target)) {
+      return `Mapping references unknown target field: "${target}"`;
+    }
+    if (seenTargets.has(target)) {
+      return `Two CSV columns map to the same target: "${target}"`;
+    }
+    seenTargets.add(target);
+  }
+  for (const req of config.requiredFields) {
+    if (!seenTargets.has(req)) {
+      return `Mapping missing required field: "${req}"`;
+    }
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// Rosters config — one row per student. Targets the students table.
+// Behavior on conflict: skip (insert-only). The students table has a
+// GLOBAL UNIQUE on student_id, so duplicates across all schools collide.
+// We use onConflictDoNothing and report skipped rows in successRows
+// counts so the school admin sees "98 imported, 12 skipped (already
+// exist)" instead of a hard failure.
+// ---------------------------------------------------------------------------
+type ParsedRoster = {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  grade: number;
+  parentName: string | null;
+  parentEmail: string | null;
+  parentPhone: string | null;
+};
+
+const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
+  validTargets: new Set([
+    "student_id",
+    "first_name",
+    "last_name",
+    "grade",
+    "parent_name",
+    "parent_email",
+    "parent_phone",
+  ]),
+  requiredFields: ["student_id", "first_name", "last_name", "grade"],
+  headerSynonyms: {
+    student_id: [
+      "student_id",
+      "student_number",
+      "student_num",
+      "studentnumber",
+      "sis_id",
+      "sis_number",
+      "id",
+      "studentid",
+    ],
+    first_name: ["first_name", "firstname", "first", "given_name", "fname"],
+    last_name: [
+      "last_name",
+      "lastname",
+      "last",
+      "family_name",
+      "surname",
+      "lname",
+    ],
+    grade: ["grade", "grade_level", "gradelevel", "year", "yr"],
+    parent_name: [
+      "parent_name",
+      "parentname",
+      "guardian_name",
+      "guardianname",
+      "contact_name",
+    ],
+    parent_email: [
+      "parent_email",
+      "parentemail",
+      "guardian_email",
+      "contact_email",
+      "email",
+    ],
+    parent_phone: [
+      "parent_phone",
+      "parentphone",
+      "guardian_phone",
+      "contact_phone",
+      "phone",
+    ],
+  },
+  parseRow(row, mapping) {
+    const target: Record<string, string> = {};
+    for (const [csvCol, tgt] of Object.entries(mapping)) {
+      target[tgt] = csvCol;
+    }
+    for (const req of this.requiredFields) {
+      const csvCol = target[req];
+      if (!csvCol) {
+        return { ok: false, message: `Missing required column: ${req}` };
+      }
+      const raw = (row[csvCol] ?? "").toString().trim();
+      if (!raw) {
+        return { ok: false, message: `Empty value for ${req}` };
+      }
+    }
+    const studentId = row[target.student_id].toString().trim();
+    const firstName = row[target.first_name].toString().trim();
+    const lastName = row[target.last_name].toString().trim();
+    const gradeRaw = row[target.grade].toString().trim();
+    // Accept "K", "k", "kindergarten" → 0 as a convenience.
+    let grade: number;
+    if (/^k(indergarten)?$/i.test(gradeRaw)) {
+      grade = 0;
+    } else {
+      grade = parseInt(gradeRaw.replace(/[^0-9-]/g, ""), 10);
+      if (!Number.isFinite(grade)) {
+        return { ok: false, message: `Invalid grade: "${gradeRaw}"` };
+      }
+    }
+    if (grade < 0 || grade > 12) {
+      return {
+        ok: false,
+        message: `Grade out of range (0-12): "${gradeRaw}"`,
+      };
+    }
+    const optional = (key: string): string | null => {
+      const col = target[key];
+      if (!col) return null;
+      const v = (row[col] ?? "").toString().trim();
+      return v || null;
+    };
+    return {
+      ok: true,
+      value: {
+        studentId,
+        firstName,
+        lastName,
+        grade,
+        parentName: optional("parent_name"),
+        parentEmail: optional("parent_email"),
+        parentPhone: optional("parent_phone"),
+      },
+    };
+  },
+  async insertChunk(tx, parsed, schoolId, jobId) {
+    if (parsed.length === 0) return 0;
+    // Use returning() so we can count how many actually survived the
+    // unique-constraint conflict check. Drizzle's onConflictDoNothing
+    // skips dupes silently; the returned array tells us the truth.
+    const inserted = await tx
+      .insert(studentsTable)
+      .values(
+        parsed.map((p) => ({
+          schoolId,
+          studentId: p.studentId,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          grade: p.grade,
+          parentName: p.parentName,
+          parentEmail: p.parentEmail,
+          parentPhone: p.parentPhone,
+          importJobId: jobId,
+        })),
+      )
+      .onConflictDoNothing({ target: studentsTable.studentId })
+      .returning({ id: studentsTable.id });
+    return inserted.length;
+  },
+  async rollback(tx, jobId, schoolId) {
+    // Defense in depth: AND on schoolId so a malformed job can't nuke
+    // another school's roster.
+    const r = await tx
+      .delete(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.importJobId, jobId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
+    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Behavior config — one row per logged behavior incident / counselor
+// note. Targets the support_notes table. Pure INSERT — no unique
+// constraint, every CSV row creates a new note.
+// ---------------------------------------------------------------------------
+type ParsedBehavior = {
+  studentId: string;
+  noteType: string;
+  noteText: string;
+  staffName: string;
+  createdAt: string;
+};
+
+const BEHAVIOR_CONFIG: KindConfig<ParsedBehavior> = {
+  validTargets: new Set([
+    "student_id",
+    "note_type",
+    "note_text",
+    "staff_name",
+    "created_at",
+  ]),
+  // staff_name and created_at are auto-filled when the column is missing
+  // (CSV exports from the SIS often only have date/text), so they're
+  // optional at the mapping level.
+  requiredFields: ["student_id", "note_text"],
+  headerSynonyms: {
+    student_id: [
+      "student_id",
+      "student_number",
+      "sis_id",
+      "id",
+      "studentid",
+    ],
+    note_type: [
+      "note_type",
+      "type",
+      "category",
+      "incident_type",
+      "behavior_type",
+      "infraction_type",
+    ],
+    note_text: [
+      "note_text",
+      "note",
+      "description",
+      "details",
+      "incident",
+      "narrative",
+      "behavior",
+      "comments",
+    ],
+    staff_name: [
+      "staff_name",
+      "staff",
+      "teacher",
+      "teacher_name",
+      "reported_by",
+      "logged_by",
+      "author",
+    ],
+    created_at: [
+      "created_at",
+      "date",
+      "incident_date",
+      "logged_at",
+      "occurred_at",
+      "timestamp",
+      "when",
+    ],
+  },
+  parseRow(row, mapping) {
+    const target: Record<string, string> = {};
+    for (const [csvCol, tgt] of Object.entries(mapping)) {
+      target[tgt] = csvCol;
+    }
+    for (const req of this.requiredFields) {
+      const csvCol = target[req];
+      if (!csvCol) {
+        return { ok: false, message: `Missing required column: ${req}` };
+      }
+      const raw = (row[csvCol] ?? "").toString().trim();
+      if (!raw) {
+        return { ok: false, message: `Empty value for ${req}` };
+      }
+    }
+    const studentId = row[target.student_id].toString().trim();
+    const noteText = row[target.note_text].toString().trim();
+    // Default note_type → "concern" (most CSVs that omit type are
+    // discipline-style logs). Length-cap at 50 to keep the column tidy.
+    const noteType = target.note_type
+      ? (row[target.note_type] ?? "").toString().trim().slice(0, 50) ||
+        "concern"
+      : "concern";
+    const staffName = target.staff_name
+      ? (row[target.staff_name] ?? "").toString().trim().slice(0, 100) ||
+        "CSV Import"
+      : "CSV Import";
+    // created_at is stored as text in support_notes (legacy choice). If
+    // the CSV provides one we parse-and-normalize to ISO; otherwise we
+    // stamp upload time.
+    let createdAt = new Date().toISOString();
+    if (target.created_at) {
+      const dRaw = (row[target.created_at] ?? "").toString().trim();
+      if (dRaw) {
+        const parsed = new Date(dRaw);
+        if (isNaN(parsed.getTime())) {
+          return { ok: false, message: `Invalid date: "${dRaw}"` };
+        }
+        createdAt = parsed.toISOString();
+      }
+    }
+    return {
+      ok: true,
+      value: { studentId, noteType, noteText, staffName, createdAt },
+    };
+  },
+  async insertChunk(tx, parsed, schoolId, jobId) {
+    if (parsed.length === 0) return 0;
+    await tx.insert(supportNotesTable).values(
+      parsed.map((p) => ({
+        schoolId,
+        studentId: p.studentId,
+        noteType: p.noteType,
+        noteText: p.noteText,
+        staffName: p.staffName,
+        createdAt: p.createdAt,
+        importJobId: jobId,
+      })),
+    );
+    return parsed.length;
+  },
+  async rollback(tx, jobId, schoolId) {
+    const r = await tx
+      .delete(supportNotesTable)
+      .where(
+        and(
+          eq(supportNotesTable.importJobId, jobId),
+          eq(supportNotesTable.schoolId, schoolId),
+        ),
+      );
+    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
+  },
+};
+
+const KIND_CONFIGS: Record<string, KindConfig<any>> = {
+  rosters: ROSTERS_CONFIG,
+  behavior: BEHAVIOR_CONFIG,
+};
+
+// ---------------------------------------------------------------------------
+// Generic preview/commit handlers, parameterized by kind. Same flow as
+// the assessments-specific routes but driven from the registry above.
+// ---------------------------------------------------------------------------
+function makePreviewHandler(kind: string, config: KindConfig) {
+  return async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
+    const { headers, rows, parseError } = parseCsv(csv);
+    if (parseError) {
+      res.status(400).json({ error: parseError, headers });
+      return;
+    }
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
+    const auto = autoMapHeadersForConfig(headers, config);
+    const supplied =
+      req.body?.mapping && typeof req.body.mapping === "object"
+        ? (req.body.mapping as Record<string, string>)
+        : {};
+    const mapping: Record<string, string> = { ...auto.mapping };
+    for (const [csvCol, tgtRaw] of Object.entries(supplied)) {
+      const tgt = String(tgtRaw);
+      if (!headers.includes(csvCol)) continue;
+      if (!config.validTargets.has(tgt)) continue;
+      for (const k of Object.keys(mapping)) {
+        if (mapping[k] === tgt && k !== csvCol) delete mapping[k];
+      }
+      mapping[csvCol] = tgt;
+    }
+    const errors: Array<{ row: number; message: string }> = [];
+    let valid = 0;
+    const sample: unknown[] = [];
+    const mappingOk =
+      validateMappingForConfig(mapping, headers, config) === null;
+    if (mappingOk) {
+      for (let i = 0; i < rows.length; i++) {
+        const parsed = config.parseRow(rows[i], mapping);
+        if (parsed.ok) {
+          valid++;
+          if (sample.length < 10) sample.push(parsed.value);
+        } else if (errors.length < 50) {
+          errors.push({ row: i + 2, message: parsed.message });
+        }
+      }
+    }
+    res.json({
+      kind,
+      headers,
+      autoMapping: auto.mapping,
+      suggestedMapping: mapping,
+      unmappedCsvColumns: auto.unmappedCsv,
+      totalRows: rows.length,
+      validRows: valid,
+      errorRows: rows.length - valid,
+      sampleRows: sample,
+      errors,
+      readyToCommit:
+        rows.length > 0 &&
+        config.requiredFields.every((f) =>
+          Object.values(mapping).includes(f),
+        ),
+    });
+  };
+}
+
+function makeCommitHandler(kind: string, config: KindConfig) {
+  return async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const csv = typeof req.body?.csv === "string" ? req.body.csv : "";
+    const filename =
+      typeof req.body?.filename === "string" && req.body.filename.trim()
+        ? req.body.filename.trim().slice(0, 200)
+        : "upload.csv";
+    const mapping =
+      req.body?.mapping && typeof req.body.mapping === "object"
+        ? (req.body.mapping as Record<string, string>)
+        : {};
+    if (!csv.trim()) {
+      res.status(400).json({ error: "CSV body is required" });
+      return;
+    }
+    const { headers, rows, parseError } = parseCsv(csv);
+    if (parseError) {
+      res.status(400).json({ error: parseError });
+      return;
+    }
+    if (rows.length > MAX_ROWS_PER_IMPORT) {
+      res.status(400).json({
+        error: `CSV exceeds the ${MAX_ROWS_PER_IMPORT}-row limit (got ${rows.length}). Split the file and try again.`,
+      });
+      return;
+    }
+    const mappingError = validateMappingForConfig(mapping, headers, config);
+    if (mappingError) {
+      res.status(400).json({ error: mappingError });
+      return;
+    }
+    const valid: unknown[] = [];
+    const errors: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+    }> = [];
+    for (let i = 0; i < rows.length; i++) {
+      const parsed = config.parseRow(rows[i], mapping);
+      if (parsed.ok) {
+        valid.push(parsed.value);
+      } else if (errors.length < 500) {
+        errors.push({ row: i + 2, message: parsed.message, raw: rows[i] });
+      }
+    }
+    const result = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .insert(importJobsTable)
+        .values({
+          schoolId,
+          districtId: null,
+          kind,
+          filename,
+          uploadedBy: staff.id,
+          status: "committed",
+          totalRows: rows.length,
+          successRows: 0, // patched after insertChunk so we know real count
+          errorRows: rows.length - valid.length,
+          errorLog: errors,
+          mapping,
+          committedAt: new Date(),
+        })
+        .returning({ id: importJobsTable.id });
+      let committedTotal = 0;
+      const chunkSize = 500;
+      for (let i = 0; i < valid.length; i += chunkSize) {
+        const chunk = valid.slice(i, i + chunkSize);
+        committedTotal += await config.insertChunk(
+          tx,
+          chunk,
+          schoolId,
+          job.id,
+        );
+      }
+      // For upsert-skip kinds (rosters), committedTotal can be < valid.length.
+      // The diff is "valid but skipped due to existing row" — we surface
+      // that to the UI as the difference between valid (parsed) and
+      // success (actually inserted).
+      await tx
+        .update(importJobsTable)
+        .set({ successRows: committedTotal })
+        .where(eq(importJobsTable.id, job.id));
+      return { id: job.id, committedTotal };
+    });
+    res.json({
+      jobId: result.id,
+      totalRows: rows.length,
+      validRows: valid.length,
+      successRows: result.committedTotal,
+      skippedRows: valid.length - result.committedTotal,
+      errorRows: rows.length - valid.length,
+    });
+  };
+}
+
+router.post(
+  "/data-imports/rosters/preview",
+  requireImporter(),
+  makePreviewHandler("rosters", ROSTERS_CONFIG),
+);
+router.post(
+  "/data-imports/rosters/commit",
+  requireImporter(),
+  makeCommitHandler("rosters", ROSTERS_CONFIG),
+);
+router.post(
+  "/data-imports/behavior/preview",
+  requireImporter(),
+  makePreviewHandler("behavior", BEHAVIOR_CONFIG),
+);
+router.post(
+  "/data-imports/behavior/commit",
+  requireImporter(),
+  makeCommitHandler("behavior", BEHAVIOR_CONFIG),
+);
+
 // Mapping templates. Once a school admin has correctly mapped a vendor's
 // CSV (FAST, iReady, MAP, …) they can save the mapping as a named
 // template so the next quarter's upload pre-fills every column.
@@ -1068,6 +1679,7 @@ router.post(
 // when they hit the importer).
 function validateTemplateMapping(
   mapping: Record<string, string>,
+  kind: string,
 ): string | null {
   if (
     !mapping ||
@@ -1077,12 +1689,23 @@ function validateTemplateMapping(
   ) {
     return "Template mapping must have at least one column";
   }
+  // Kind-aware target validation: assessments still uses the legacy
+  // VALID_TARGETS set (school + district variants combined); rosters /
+  // behavior look up the registry. Unknown kinds reject all targets.
+  let allowedTargets: Set<string>;
+  if (kind === "assessments") {
+    allowedTargets = VALID_TARGETS;
+  } else {
+    const cfg = KIND_CONFIGS[kind];
+    if (!cfg) return `Unknown import kind: "${kind}"`;
+    allowedTargets = new Set(cfg.validTargets);
+  }
   const seenTargets = new Set<string>();
   for (const [csvCol, target] of Object.entries(mapping)) {
     if (typeof csvCol !== "string" || !csvCol.trim()) {
       return "Template has an empty CSV column name";
     }
-    if (typeof target !== "string" || !VALID_TARGETS.has(target)) {
+    if (typeof target !== "string" || !allowedTargets.has(target)) {
       return `Template references unknown target field: "${target}"`;
     }
     if (seenTargets.has(target)) {
@@ -1202,7 +1825,7 @@ router.post(
       res.status(400).json({ error: "name is required" });
       return;
     }
-    const mappingError = validateTemplateMapping(mapping);
+    const mappingError = validateTemplateMapping(mapping, kind);
     if (mappingError) {
       res.status(400).json({ error: mappingError });
       return;

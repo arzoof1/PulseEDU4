@@ -16,7 +16,7 @@ import { authFetch } from "../lib/authToken";
 // dictionary.
 // ---------------------------------------------------------------------------
 
-type Kind = "assessments";
+type Kind = "assessments" | "rosters" | "behavior";
 type Scope = "school" | "district";
 
 type PreviewResponse = {
@@ -102,6 +102,61 @@ function assessmentTargetsFor(scope: Scope): TargetDef[] {
     : ASSESSMENT_TARGETS_BASE;
 }
 
+// Rosters import targets — write to the students table. school_code isn't
+// supported (rosters import is school-scope only).
+const ROSTER_TARGETS: TargetDef[] = [
+  { value: "student_id", label: "Student ID (SIS number)", required: true },
+  { value: "first_name", label: "First name", required: true },
+  { value: "last_name", label: "Last name", required: true },
+  { value: "grade", label: "Grade (0-12, K accepted)", required: true },
+  { value: "parent_name", label: "Parent / guardian name", required: false },
+  { value: "parent_email", label: "Parent / guardian email", required: false },
+  { value: "parent_phone", label: "Parent / guardian phone", required: false },
+];
+
+// Behavior import targets — write to the support_notes table.
+const BEHAVIOR_TARGETS: TargetDef[] = [
+  { value: "student_id", label: "Student ID (SIS number)", required: true },
+  { value: "note_text", label: "Description / narrative", required: true },
+  { value: "note_type", label: "Category (defaults to 'concern')", required: false },
+  { value: "staff_name", label: "Reported by", required: false },
+  { value: "created_at", label: "Date / timestamp", required: false },
+];
+
+// Per-kind metadata. Each kind exposes a label, the targets dictionary
+// (a function so assessments can vary by scope), and a flag for whether
+// district-scope is supported.
+type KindDef = {
+  label: string;
+  targetsFor: (scope: Scope) => TargetDef[];
+  supportsDistrict: boolean;
+  helpText: string;
+};
+
+const KIND_DEFS: Record<Kind, KindDef> = {
+  assessments: {
+    label: "Assessments",
+    targetsFor: assessmentTargetsFor,
+    supportsDistrict: true,
+    helpText:
+      "Per-assessment scores (FAST, iReady, MAP, etc.). One row per (student, assessment, date).",
+  },
+  rosters: {
+    label: "Rosters",
+    targetsFor: () => ROSTER_TARGETS,
+    supportsDistrict: false,
+    helpText:
+      "One row per student. Existing student IDs are skipped (counted as warnings) — the importer will not overwrite.",
+  },
+  behavior: {
+    label: "Behavior notes",
+    targetsFor: () => BEHAVIOR_TARGETS,
+    supportsDistrict: false,
+    helpText:
+      "One row per behavior log / counselor note. Always inserts (no de-duplication).",
+  },
+};
+
 // Headers list "ignore" as a sentinel — when a CSV column isn't in the
 // mapping at all, it's effectively ignored. We surface "ignore" as a
 // menu option so the admin can explicitly drop a noisy column.
@@ -168,8 +223,13 @@ export default function DataImports({
   canActAsDistrict = false,
 }: DataImportsProps) {
   const [tab, setTab] = useState<"upload" | "history">("upload");
-  const [kind] = useState<Kind>("assessments");
+  const [kind, setKind] = useState<Kind>("assessments");
   const [scope, setScope] = useState<Scope>("school");
+  const kindDef = KIND_DEFS[kind];
+  // Effective scope: rosters/behavior don't support district mode, so
+  // force-clamp to school regardless of what the radio says. The toggle
+  // is also hidden when the kind doesn't support district.
+  const effectiveScope: Scope = kindDef.supportsDistrict ? scope : "school";
 
   // Upload state
   const [filename, setFilename] = useState<string>("");
@@ -203,21 +263,24 @@ export default function DataImports({
   const [templatesLoading, setTemplatesLoading] = useState(false);
   const [savingTemplate, setSavingTemplate] = useState(false);
 
-  // Endpoints + target dictionary depend on scope. Memoized so the
-  // identity is stable across renders inside the same scope.
+  // Endpoints + target dictionary depend on (kind, effectiveScope).
+  // Memoized so the identity is stable across renders.
   const endpoints = useMemo(() => {
-    if (scope === "district") {
+    if (effectiveScope === "district") {
       return {
-        preview: "/api/data-imports/assessments/preview-district",
-        commit: "/api/data-imports/assessments/commit-district",
+        preview: `/api/data-imports/${kind}/preview-district`,
+        commit: `/api/data-imports/${kind}/commit-district`,
       };
     }
     return {
-      preview: "/api/data-imports/assessments/preview",
-      commit: "/api/data-imports/assessments/commit",
+      preview: `/api/data-imports/${kind}/preview`,
+      commit: `/api/data-imports/${kind}/commit`,
     };
-  }, [scope]);
-  const targets = useMemo(() => assessmentTargetsFor(scope), [scope]);
+  }, [kind, effectiveScope]);
+  const targets = useMemo(
+    () => kindDef.targetsFor(effectiveScope),
+    [kindDef, effectiveScope],
+  );
 
   const loadJobs = async () => {
     setJobsLoading(true);
@@ -234,7 +297,7 @@ export default function DataImports({
   useEffect(() => {
     if (tab === "history") void loadJobs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, scope]);
+  }, [tab, scope, kind]);
 
   // Load templates whenever the user lands on the Upload tab in a given
   // scope. Cheap query (one school's worth of rows at most), so always
@@ -256,7 +319,7 @@ export default function DataImports({
   useEffect(() => {
     if (tab === "upload") void loadTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tab, scope]);
+  }, [tab, scope, kind]);
 
   // Apply a template's mapping to the current preview. We only keep the
   // pairs whose CSV column actually exists in this file (the user might
@@ -480,16 +543,72 @@ export default function DataImports({
     resetUpload();
   };
 
+  // Switching kind invalidates the current preview / mapping (different
+  // target schema, different endpoints), so wipe upload state. We also
+  // reset scope to "school" for kinds that don't support district —
+  // avoids the radio looking active while being silently overridden.
+  const handleKindChange = (next: Kind) => {
+    if (next === kind) return;
+    setKind(next);
+    if (!KIND_DEFS[next].supportsDistrict) setScope("school");
+    resetUpload();
+  };
+
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Data Imports</h2>
       <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-        Upload assessment results from FAST, iReady, MAP, or any CSV. The
+        Upload roster, assessment, and behavior data from any CSV. The
         importer auto-detects column names — review the mapping, commit,
         and roll back from History if anything looks wrong.
       </p>
 
-      {canActAsDistrict && (
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: "0.75rem",
+          marginTop: "0.75rem",
+          padding: "0.6rem 0.75rem",
+          background: "rgba(34, 197, 94, 0.06)",
+          border: "1px solid var(--border, #2a3447)",
+          borderRadius: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 13, fontWeight: 600 }}>Data type:</span>
+        {(Object.keys(KIND_DEFS) as Kind[]).map((k) => (
+          <label
+            key={k}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 13,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="radio"
+              name="data-imports-kind"
+              checked={kind === k}
+              onChange={() => handleKindChange(k)}
+            />
+            {KIND_DEFS[k].label}
+          </label>
+        ))}
+        <span
+          style={{
+            color: "var(--text-subtle)",
+            fontSize: 12,
+            marginLeft: "auto",
+          }}
+        >
+          {kindDef.helpText}
+        </span>
+      </div>
+
+      {canActAsDistrict && kindDef.supportsDistrict && (
         <div
           style={{
             display: "flex",
