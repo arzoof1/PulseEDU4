@@ -59,6 +59,13 @@ export const teacherWatchlistEntriesTable = pgTable(
     followupText: text("followup_text"),
     followupDue: date("followup_due"),
     addedAt: timestamp("added_at").notNull().defaultNow(),
+    // Staff id of who actually CREATED this entry. Null = self-added
+    // (the row's owner did it themselves). Non-null = a core-team
+    // member (admin / MTSS coord / behavior specialist / PBIS coord /
+    // SuperUser) seeded the entry on the teacher's behalf, in which
+    // case the UI surfaces a small "Added by X" badge so the teacher
+    // knows the entry didn't appear out of nowhere.
+    addedByStaffId: integer("added_by_staff_id"),
     lastTouchBy: text("last_touch_by"),
     lastTouchWhat: text("last_touch_what"),
     lastTouchAt: timestamp("last_touch_at"),

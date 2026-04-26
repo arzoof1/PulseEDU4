@@ -1,12 +1,21 @@
 // "My Watch List" — teacher-personal hand-curated bookmark list.
 //
-// Five endpoints, all scoped to the authenticated staff member:
+// Six endpoints, all scoped to the authenticated staff member:
 //
 //   GET    /api/insights/my-watchlist
 //          List the caller's entries with hydrated student details.
+//   GET    /api/insights/my-watchlist/staff-directory
+//          (Core team only.) List active staff at the school so the
+//          UI can offer an "add to whose list?" picker when an admin
+//          / MTSS coord / behavior specialist seeds an entry on a
+//          teacher's behalf.
 //   POST   /api/insights/my-watchlist
 //          Add a student. Body: { studentId, groupKey, note?,
-//            followupText?, followupDue? }
+//            followupText?, followupDue?, targetStaffId? }
+//          targetStaffId is core-team-only — when set, the entry
+//          lands on that teacher's list instead of the caller's, and
+//          the row records the caller as `addedByStaffId` so the
+//          target teacher sees an "Added by X" badge.
 //   PATCH  /api/insights/my-watchlist/:id
 //          Edit groupKey / note / followup{Text,Due} on an existing
 //          entry. Touches a non-owned entry → 404 (don't leak existence).
@@ -17,12 +26,11 @@
 //          Hard delete (it's a personal bookmark — soft delete adds no
 //          value here).
 //
-// All writes also validate the studentId is in the caller's visibility
-// scope, mirroring the system watchlist's rule: the teacher can only
-// add students they can already see (their roster ∪ trusted-adult
-// links; core team can add any student at the active school). This
-// prevents a teacher from bookmarking a student they couldn't open
-// anyway, which would just show "no access" cards in the UI.
+// Writes validate visibility against the OWNING teacher (not the
+// caller). For self-adds that's identical; for core-team-on-behalf-of
+// adds it ensures the target teacher actually has visibility to the
+// student — otherwise the entry would just show as "no access" in
+// their UI.
 
 import {
   Router,
@@ -102,11 +110,18 @@ function activeSchoolId(s: typeof staffTable.$inferSelect): number {
   return s.activeSchoolOverride ?? s.schoolId;
 }
 
-function staffDisplayName(s: typeof staffTable.$inferSelect): string {
-  const first = (s.firstName ?? "").trim();
-  const last = (s.lastName ?? "").trim();
-  const combined = `${first} ${last}`.trim();
-  return combined || s.email || `Staff #${s.id}`;
+// The staff table stores a single denormalized `display_name` column
+// (no first/last split), so this is mostly trivial. Email + id are
+// kept as last-resort fallbacks in case a row was inserted without a
+// display name during a partial import.
+function staffDisplayName(s: {
+  id: number;
+  displayName?: string | null;
+  email?: string | null;
+}): string {
+  const dn = (s.displayName ?? "").trim();
+  if (dn) return dn;
+  return s.email || `Staff #${s.id}`;
 }
 
 // Returns the set of student business IDs (text) the caller can add to
@@ -192,11 +207,45 @@ router.get("/insights/my-watchlist", async (req, res) => {
     // Core team bypasses this filter (vis.full === true).
     const vis = await visibleStudentIds(staff, schoolId);
 
+    // Hydrate "added by" display name for entries seeded by a core
+    // team member on this teacher's behalf. Self-added entries (the
+    // overwhelming common case) skip this lookup.
+    const addedByIds = Array.from(
+      new Set(
+        entries
+          .map((e) => e.addedByStaffId)
+          .filter((v): v is number => v != null && v !== staff.id),
+      ),
+    );
+    const addedByMap = new Map<number, string>();
+    if (addedByIds.length > 0) {
+      const addedByRows = await db
+        .select({
+          id: staffTable.id,
+          displayName: staffTable.displayName,
+          email: staffTable.email,
+        })
+        .from(staffTable)
+        .where(inArray(staffTable.id, addedByIds));
+      for (const r of addedByRows) {
+        addedByMap.set(r.id, staffDisplayName(r));
+      }
+    }
+
     const hydrated = entries
       .map((e) => {
         const s = byId.get(e.studentId);
         if (!s || s.schoolId !== schoolId) return null;
         if (!vis.full && !vis.ids.has(e.studentId)) return null;
+        const addedBy =
+          e.addedByStaffId != null && e.addedByStaffId !== staff.id
+            ? {
+                id: e.addedByStaffId,
+                displayName:
+                  addedByMap.get(e.addedByStaffId) ??
+                  `Staff #${e.addedByStaffId}`,
+              }
+            : null;
         return {
           id: e.id,
           studentId: e.studentId,
@@ -208,6 +257,7 @@ router.get("/insights/my-watchlist", async (req, res) => {
           followupText: e.followupText,
           followupDue: e.followupDue,
           addedAt: e.addedAt,
+          addedBy,
           lastTouchBy: e.lastTouchBy,
           lastTouchWhat: e.lastTouchWhat,
           lastTouchAt: e.lastTouchAt,
@@ -220,6 +270,44 @@ router.get("/insights/my-watchlist", async (req, res) => {
     // eslint-disable-next-line no-console
     console.error("[my-watchlist] list failed", e);
     res.status(500).json({ error: "Failed to load watch list" });
+  }
+});
+
+// ---- GET: staff directory (core team only) ---------------------------
+//
+// Powers the "Add to whose watch list?" picker in the Add modal so an
+// admin / MTSS coord / behavior specialist / PBIS coord / SuperUser
+// can seed an entry on a teacher's behalf. Returns active staff at
+// the caller's active school. Defined before any `:id` route to
+// avoid being shadowed by future GET-by-id endpoints.
+router.get("/insights/my-watchlist/staff-directory", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core team only" });
+      return;
+    }
+    const schoolId = activeSchoolId(staff);
+    const rows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        email: staffTable.email,
+      })
+      .from(staffTable)
+      .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)))
+      .orderBy(staffTable.displayName);
+    res.json({
+      staff: rows.map((r) => ({
+        id: r.id,
+        displayName: staffDisplayName(r),
+      })),
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[my-watchlist] staff-directory failed", e);
+    res.status(500).json({ error: "Failed to load staff directory" });
   }
 });
 
@@ -258,8 +346,45 @@ router.post("/insights/my-watchlist", async (req, res) => {
       return;
     }
 
-    // Visibility check.
-    const vis = await visibleStudentIds(staff, schoolId);
+    // Resolve target staff (the person whose list this lands on).
+    // Defaults to the caller (self-add). Core team can specify a
+    // different teacher to seed an entry on their behalf.
+    const rawTarget = req.body?.targetStaffId;
+    let targetStaff: typeof staffTable.$inferSelect = staff;
+    if (rawTarget != null && rawTarget !== staff.id) {
+      const parsed =
+        typeof rawTarget === "number"
+          ? rawTarget
+          : typeof rawTarget === "string"
+          ? parseInt(rawTarget, 10)
+          : NaN;
+      if (!Number.isFinite(parsed)) {
+        res.status(400).json({ error: "Invalid targetStaffId" });
+        return;
+      }
+      if (!isCoreTeam(staff)) {
+        res
+          .status(403)
+          .json({ error: "Only admins / coordinators can add to another teacher's list" });
+        return;
+      }
+      const [target] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, parsed));
+      if (!target || !target.active || target.schoolId !== schoolId) {
+        res.status(404).json({ error: "Target staff not found at this school" });
+        return;
+      }
+      targetStaff = target;
+    }
+    const isOnBehalfOf = targetStaff.id !== staff.id;
+
+    // Visibility check — against the OWNING teacher (target), not the
+    // caller. An admin acts as their own check on which teacher to
+    // pick; what matters is whether the target teacher will actually
+    // be able to open the student's profile from the entry.
+    const vis = await visibleStudentIds(targetStaff, schoolId);
     if (!vis.full && !vis.ids.has(studentId)) {
       // Confirm the student even exists at this school before deciding
       // between 403 and 404. If the student doesn't exist here, return
@@ -302,34 +427,48 @@ router.post("/insights/my-watchlist", async (req, res) => {
       const [inserted] = await db
         .insert(teacherWatchlistEntriesTable)
         .values({
-          staffId: staff.id,
+          staffId: targetStaff.id,
           schoolId,
           studentId,
           groupKey,
           note,
           followupText,
           followupDue,
+          // Only set addedBy when seeded by someone other than the
+          // owner — keeps self-add rows visually clean (no badge).
+          addedByStaffId: isOnBehalfOf ? staff.id : null,
         })
         .returning();
       res.status(201).json({ entry: inserted });
     } catch (err) {
+      // Drizzle wraps the underlying pg error in DrizzleQueryError, so
+      // the constraint name lives at .cause.constraint and the SQLSTATE
+      // at .cause.code. Fall back to substring matching for the rare
+      // case where the wrapper is bypassed (e.g. raw client paths).
       const msg = err instanceof Error ? err.message : String(err);
-      if (
+      const cause = (err as { cause?: { code?: string; constraint?: string } })
+        .cause;
+      const isUniqueViolation =
+        cause?.code === "23505" ||
+        cause?.constraint === "teacher_watchlist_staff_student_uniq" ||
         msg.includes("teacher_watchlist_staff_student_uniq") ||
-        msg.includes("duplicate key")
-      ) {
+        msg.includes("duplicate key");
+      if (isUniqueViolation) {
         const [existing] = await db
           .select()
           .from(teacherWatchlistEntriesTable)
           .where(
             and(
-              eq(teacherWatchlistEntriesTable.staffId, staff.id),
+              eq(teacherWatchlistEntriesTable.staffId, targetStaff.id),
               eq(teacherWatchlistEntriesTable.studentId, studentId),
             ),
           );
-        res
-          .status(409)
-          .json({ error: "Already on your list", entry: existing });
+        res.status(409).json({
+          error: isOnBehalfOf
+            ? "Already on this teacher's list"
+            : "Already on your list",
+          entry: existing,
+        });
         return;
       }
       throw err;

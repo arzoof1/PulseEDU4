@@ -3781,3 +3781,59 @@ to `"myWatchList"` on student drill-in.
 - artifacts/client/src/components/MyWatchList.tsx (NEW)
 - artifacts/client/src/App.tsx (import + activeSection union ×2 +
   NAV_GROUP_OWNERSHIP + sidebar item + render block)
+
+### C. Core team can seed entries on a teacher's behalf (Apr 26, 2026 follow-up)
+
+Plain teachers' "My Watch List" was originally entirely self-curated.
+Added a flow so admins / MTSS coordinators / behavior specialists /
+PBIS coordinators / SuperUsers can drop a student onto a specific
+teacher's list (e.g. after a student is referred to MTSS).
+
+Schema: added nullable `added_by_staff_id integer` to
+`teacher_watchlist_entries` (drizzle push prompt blocks the column
+add — applied via direct `ALTER TABLE … ADD COLUMN IF NOT EXISTS`
+since adding a nullable column is a no-op for existing rows). Null =
+self-added (the row's owner did it themselves). Non-null = a core
+team member seeded the entry on the teacher's behalf.
+
+Backend (`myWatchlist.ts`):
+- POST now accepts optional `targetStaffId`. If set and != caller's
+  id, requires core-team role (else 403); requires target staff to be
+  active at the same active school (else 404); validates visibility
+  against the **target** teacher's roster, not the caller's, so
+  admins can't seed kids the teacher won't be able to open.
+- Sets `addedByStaffId = caller.id` only when on-behalf-of, else null
+  (keeps self-add rows visually clean).
+- New `GET /insights/my-watchlist/staff-directory` (core team only)
+  returns `[{id, displayName}]` to power the picker. Defined before
+  any future `:id` GET to avoid route-shadowing.
+- Fixed a latent unique-violation handler — Drizzle wraps pg errors
+  in `DrizzleQueryError`, so the old substring check on `err.message`
+  never matched. Now also checks `err.cause.code === '23505'` and
+  `err.cause.constraint === 'teacher_watchlist_staff_student_uniq'`.
+  Without this, dup adds returned 500 instead of 409.
+- Replaced `staffDisplayName` helper that was reading nonexistent
+  `firstName`/`lastName` columns; staff table only has `display_name`.
+- GET hydrates `addedBy: { id, displayName } | null` per entry.
+
+Frontend (`MyWatchList.tsx`):
+- `Entry` gained `addedBy: { id, displayName } | null`.
+- New `currentUser` prop carries auth flags + id (App.tsx passes
+  `authUser`).
+- Staff-directory fetched only when `isCoreTeamUser(currentUser)` is
+  true — avoids 403s for plain teachers.
+- `EntryModal` got `staffDirectory`, `allowTargetPicker`,
+  `currentUserId`. In add mode for core team, renders a "Add to
+  whose watch list?" select defaulting to "My list (default)".
+  Edit mode never re-targets (would silently move a row).
+- POST body conditionally adds `targetStaffId` only when picker
+  selected non-self; "" → omit so server defaults to caller.
+- `NoteCard` renders an amber pill "Added by X" only when
+  `entry.addedBy` is set.
+
+App.tsx: passes `currentUser={authUser}` to `<MyWatchList>`.
+
+Smoke-tested: staff-directory 200; on-behalf-of POST 201 with
+`addedByStaffId` stamped; non-roster student for target → 404;
+duplicate → 409 with existing entry returned; self-add path
+unchanged with `addedBy: null`.

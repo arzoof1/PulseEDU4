@@ -17552,6 +17552,12 @@ function App() {
 
       {activeSection === "myWatchList" && (
         <MyWatchList
+          // Pass the signed-in user so MyWatchList can show the
+          // "Add to whose watch list?" picker for core-team roles
+          // (admin / MTSS coord / behavior specialist / PBIS coord /
+          // SuperUser). Plain teachers just see the standard
+          // self-add flow.
+          currentUser={authUser}
           onOpenStudent={(studentId) => {
             // Mirror the InsightsWatchlist drill-in pattern: pin the
             // back-target so the profile's Back button returns here,

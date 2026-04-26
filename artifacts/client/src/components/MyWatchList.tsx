@@ -34,6 +34,10 @@ interface Entry {
   followupText: string | null;
   followupDue: string | null; // YYYY-MM-DD
   addedAt: string;
+  // Set by the server when a core-team member (admin / MTSS coord /
+  // behavior specialist / PBIS coord / SuperUser) added the entry on
+  // this teacher's behalf. Null for self-added entries.
+  addedBy: { id: number; displayName: string } | null;
   lastTouchBy: string | null;
   lastTouchWhat: string | null;
   lastTouchAt: string | null;
@@ -44,6 +48,35 @@ interface StudentLookup {
   firstName: string;
   lastName: string;
   grade: number | string | null;
+}
+
+interface StaffLookup {
+  id: number;
+  displayName: string;
+}
+
+// Subset of authUser the picker needs. App.tsx passes its own authUser
+// state through; we only read what's actually used here so the prop
+// stays decoupled from any future auth shape changes.
+interface CurrentUser {
+  id: number;
+  displayName: string;
+  isSuperUser?: boolean;
+  isAdmin?: boolean;
+  isBehaviorSpecialist?: boolean;
+  isMtssCoordinator?: boolean;
+  isPbisCoordinator?: boolean;
+}
+
+function isCoreTeamUser(u: CurrentUser | null | undefined): boolean {
+  if (!u) return false;
+  return Boolean(
+    u.isSuperUser ||
+      u.isAdmin ||
+      u.isBehaviorSpecialist ||
+      u.isMtssCoordinator ||
+      u.isPbisCoordinator,
+  );
 }
 
 // Group definitions — visual + microcopy contract. Keys must be
@@ -136,9 +169,14 @@ function timeAgo(iso: string | null): string {
 
 interface Props {
   onOpenStudent: (studentId: string) => void;
+  // The signed-in user. When this is a core-team role, the Add modal
+  // exposes an "Add to whose watch list?" picker so admins / MTSS
+  // coords / behavior specialists can seed entries on a teacher's
+  // behalf instead of just on their own list.
+  currentUser?: CurrentUser | null;
 }
 
-export default function MyWatchList({ onOpenStudent }: Props) {
+export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
   const [entries, setEntries] = useState<Entry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -146,6 +184,8 @@ export default function MyWatchList({ onOpenStudent }: Props) {
   const [addOpen, setAddOpen] = useState(false);
   const [editEntry, setEditEntry] = useState<Entry | null>(null);
   const [studentDirectory, setStudentDirectory] = useState<StudentLookup[]>([]);
+  const [staffDirectory, setStaffDirectory] = useState<StaffLookup[]>([]);
+  const isCore = isCoreTeamUser(currentUser);
 
   async function reload() {
     setLoading(true);
@@ -180,6 +220,24 @@ export default function MyWatchList({ onOpenStudent }: Props) {
       cancelled = true;
     };
   }, []);
+
+  // Pull the staff directory only when the caller is core team — the
+  // server returns 403 otherwise, so there's no point asking. Used to
+  // power the "Add to whose watch list?" picker in the Add modal.
+  useEffect(() => {
+    if (!isCore) return;
+    let cancelled = false;
+    authFetch("/api/insights/my-watchlist/staff-directory")
+      .then((r) => (r.ok ? r.json() : { staff: [] }))
+      .then((data: { staff?: StaffLookup[] }) => {
+        if (cancelled) return;
+        setStaffDirectory(Array.isArray(data?.staff) ? data.staff : []);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [isCore]);
 
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = { all: entries.length };
@@ -570,6 +628,9 @@ export default function MyWatchList({ onOpenStudent }: Props) {
         <EntryModal
           mode="add"
           studentDirectory={studentDirectory}
+          staffDirectory={staffDirectory}
+          allowTargetPicker={isCore}
+          currentUserId={currentUser?.id ?? null}
           onClose={() => setAddOpen(false)}
           onSaved={async () => {
             setAddOpen(false);
@@ -582,6 +643,9 @@ export default function MyWatchList({ onOpenStudent }: Props) {
           mode="edit"
           entry={editEntry}
           studentDirectory={studentDirectory}
+          staffDirectory={staffDirectory}
+          allowTargetPicker={false}
+          currentUserId={currentUser?.id ?? null}
           onClose={() => setEditEntry(null)}
           onSaved={async () => {
             setEditEntry(null);
@@ -683,6 +747,31 @@ function NoteCard({
           ✕
         </button>
       </div>
+
+      {/* "Added by X" badge — only present when a core-team member
+          seeded the entry on this teacher's behalf. Self-added entries
+          omit this row entirely so the card stays uncluttered. */}
+      {entry.addedBy && (
+        <div
+          style={{
+            display: "inline-flex",
+            alignSelf: "flex-start",
+            alignItems: "center",
+            gap: 4,
+            padding: "0.15rem 0.45rem",
+            background: "#fef3c7",
+            border: "1px solid #fcd34d",
+            borderRadius: 999,
+            fontSize: "0.7rem",
+            color: "#92400e",
+            fontWeight: 600,
+          }}
+          title={`Added by ${entry.addedBy.displayName}`}
+        >
+          <span aria-hidden="true">＋</span>
+          Added by {entry.addedBy.displayName}
+        </div>
+      )}
 
       {/* The sticky-note "Why I'm watching" body. The label header
           mirrors the original mockup so cards read as "here's why this
@@ -853,12 +942,21 @@ function EntryModal({
   mode,
   entry,
   studentDirectory,
+  staffDirectory,
+  allowTargetPicker,
+  currentUserId,
   onClose,
   onSaved,
 }: {
   mode: "add" | "edit";
   entry?: Entry;
   studentDirectory: StudentLookup[];
+  staffDirectory: StaffLookup[];
+  // True only when caller is core team AND mode === "add". Edit mode
+  // never re-targets — that would silently move a row off the wrong
+  // teacher's list.
+  allowTargetPicker: boolean;
+  currentUserId: number | null;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -874,6 +972,9 @@ function EntryModal({
   const [followupDue, setFollowupDue] = useState(entry?.followupDue ?? "");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState("");
+  // Target staff for the new entry. "" = self (the caller's own list).
+  // Only meaningful in add mode when allowTargetPicker is true.
+  const [targetStaffId, setTargetStaffId] = useState<string>("");
   const studentBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -922,6 +1023,12 @@ function EntryModal({
             note,
             followupText: followupText.trim() || null,
             followupDue: followupDue || null,
+            // Only include when the picker selected a non-default
+            // value. Empty string = "my list" = omit so the server's
+            // default (caller's id) takes over without ambiguity.
+            ...(allowTargetPicker && targetStaffId
+              ? { targetStaffId: Number(targetStaffId) }
+              : {}),
           }),
         });
         if (!r.ok) {
@@ -991,6 +1098,63 @@ function EntryModal({
         <h3 style={{ marginTop: 0, marginBottom: "0.5rem" }}>
           {mode === "add" ? "Add a student" : "Edit watch entry"}
         </h3>
+
+        {/* "Add to whose watch list?" picker — core team only, add
+            mode only. Defaults to "" (= self / the caller's own list).
+            Plain teachers never see this and just add to themselves
+            implicitly. */}
+        {mode === "add" && allowTargetPicker && staffDirectory.length > 0 && (
+          <div style={{ marginBottom: "0.75rem" }}>
+            <label
+              htmlFor="mywatchlist-target-staff"
+              style={{
+                display: "block",
+                fontSize: "0.78rem",
+                fontWeight: 600,
+                marginBottom: 4,
+                color: "#374151",
+              }}
+            >
+              Add to whose watch list?
+            </label>
+            <select
+              id="mywatchlist-target-staff"
+              value={targetStaffId}
+              onChange={(e) => setTargetStaffId(e.target.value)}
+              style={{
+                width: "100%",
+                padding: "0.4rem 0.5rem",
+                border: "1px solid #d1d5db",
+                borderRadius: 6,
+                fontSize: "0.9rem",
+                background: "white",
+              }}
+            >
+              <option value="">My list (default)</option>
+              {staffDirectory
+                .filter((s) => s.id !== currentUserId)
+                .map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.displayName}
+                  </option>
+                ))}
+            </select>
+            {targetStaffId && (
+              <div
+                style={{
+                  marginTop: 4,
+                  fontSize: "0.72rem",
+                  color: "#92400e",
+                  fontStyle: "italic",
+                }}
+              >
+                This will appear on their My Watch List with an
+                "Added by you" badge. They can edit or remove it
+                themselves.
+              </div>
+            )}
+          </div>
+        )}
 
         {mode === "add" ? (
           <div ref={studentBoxRef} style={{ position: "relative", marginBottom: "0.75rem" }}>
