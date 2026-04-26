@@ -684,18 +684,35 @@ function NoteCard({
         </button>
       </div>
 
-      {/* The sticky-note "why I'm watching" body */}
+      {/* The sticky-note "Why I'm watching" body. The label header
+          mirrors the original mockup so cards read as "here's why this
+          kid is on my list" at a glance, instead of just an unlabeled
+          paragraph. */}
       {entry.note ? (
-        <div
-          style={{
-            fontSize: "0.85rem",
-            color: "#374151",
-            lineHeight: 1.45,
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
-          {entry.note}
+        <div>
+          <div
+            style={{
+              fontSize: "0.65rem",
+              fontWeight: 700,
+              letterSpacing: "0.06em",
+              textTransform: "uppercase",
+              color: "#92400e",
+              marginBottom: "0.25rem",
+            }}
+          >
+            Why I'm watching
+          </div>
+          <div
+            style={{
+              fontSize: "0.85rem",
+              color: "#374151",
+              lineHeight: 1.45,
+              whiteSpace: "pre-wrap",
+              wordBreak: "break-word",
+            }}
+          >
+            {entry.note}
+          </div>
         </div>
       ) : (
         <button
