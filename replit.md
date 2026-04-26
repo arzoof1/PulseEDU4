@@ -70,6 +70,28 @@ API endpoints (all in `routes/pulse.ts` + `routes/houses.ts`):
 - `GET /api/pulse/events` — unified event feed; redacted for public callers.
 - `GET /api/pulse/student-timeline` — staff-only per-student timeline.
 
+### Signage visuals (April 2026 update)
+
+`HeartbeatSignage` defaults to a "Trunk" view: a vertical red gradient
+trunk with a CSS pulse animation; each pulse event branches LEFT for
+negative/neutral (concern) and RIGHT for positive, terminating in a pill
+(`PulsePill`) sized for TV viewing distance (text-base / text-xl for
+points, h-12 avatar). Newest events render at the bottom and push older
+events upward; capped at 24 (the events fetch is `limit=24` to match).
+The header has a small Trunk/List toggle so admins can fall back to the
+original list layout.
+
+`HousesSignage` adds two surfaces above the existing bar chart:
+- A horizontal "Live action feed" strip (most recent 6 point-bearing
+  events from `/api/pulse/events?windowMinutes=120&limit=24`).
+- A `FeaturedPopup` card pinned inside the **leading** house's bar.
+  It cycles through the most recent positive PBIS events on a 5-second
+  timer (queue), resetting whenever the underlying event list changes.
+  The popup's vertical position uses
+  `clamp(56px, calc(${100-pct}% + 12px), calc(100% - 88px))` so it
+  always sits at the top of the colored bar fill, regardless of how
+  short or tall the leader's bar is.
+
 ## Classroom Store + School Store + Object-storage thumbnails (April 2026)
 
 PbisPointsHub now has two reward catalogs that share a single generic

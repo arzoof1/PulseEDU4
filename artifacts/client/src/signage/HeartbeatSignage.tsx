@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   Heart,
   TrendingUp,
@@ -96,16 +97,174 @@ function ScreenError({ message }: { message: string }) {
   );
 }
 
+type FeedView = "trunk" | "list";
+
+// =============================================================================
+// PulseTrunk — vertical "school heartbeat" trunk with branching events.
+// -----------------------------------------------------------------------------
+// Renders a centered red gradient trunk. Each pulse event branches off:
+//   • positive  → right side (green branch + pill)
+//   • negative  → left side (red branch + pill)
+//   • neutral   → left side (amber/concern branch + pill)
+// Newest events are at the BOTTOM (so the eye reads top→bottom as time
+// passes upward), matching the spec: "new actions add at the bottom and
+// push previous additions upward toward the top."
+// =============================================================================
+function PulseTrunk({ events, now }: { events: PulseEvent[]; now: number }) {
+  // Newest at the bottom: events come from the API sorted newest-first, so
+  // we reverse to render oldest at the top of the column.
+  const ordered = [...events].slice(0, 24).reverse();
+
+  return (
+    <div className="relative flex-1 min-h-0 overflow-hidden">
+      {/* Soft top fade so events appear to "drop off" the screen as they age */}
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-12 bg-gradient-to-b from-slate-950 to-transparent z-10" />
+
+      {/* Inline-only animation; avoids touching global CSS for one screen */}
+      <style>{`
+        @keyframes pulse-trunk {
+          0%, 100% { opacity: 0.55; box-shadow: 0 0 18px rgba(244,63,94,0.35); }
+          50%      { opacity: 0.95; box-shadow: 0 0 36px rgba(244,63,94,0.65); }
+        }
+        .pulse-trunk-anim { animation: pulse-trunk 2.4s ease-in-out infinite; }
+      `}</style>
+
+      <div className="h-full overflow-y-auto pr-1">
+        <div className="relative pb-2">
+          {/* TRUNK — vertical center line */}
+          <div
+            className="pulse-trunk-anim absolute left-1/2 top-2 bottom-2 w-1.5 -translate-x-1/2 rounded-full bg-gradient-to-b from-rose-700 via-rose-500 to-rose-400"
+          />
+
+          <div className="relative space-y-3 py-2">
+            {ordered.map((e) => (
+              <PulseTrunkRow key={e.id} event={e} now={now} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Pill content — pulled out so the left/right slots stay symmetric and so
+// it's easy to dial up text sizes for TV viewing distance.
+function PulsePill({
+  event: e,
+  tone,
+  Icon,
+  now,
+}: {
+  event: PulseEvent;
+  tone: { pillBg: string; pts: string; avatar: string; iconBg: string };
+  Icon: React.ComponentType<{ className?: string }>;
+  now: number;
+}) {
+  return (
+    <div
+      className={`relative w-full max-w-[420px] rounded-2xl border ${tone.pillBg} backdrop-blur px-4 py-3 flex items-center gap-3 shadow-lg`}
+    >
+      <div className={`h-12 w-12 rounded-full ${tone.avatar} grid place-items-center font-black text-sm ring-2 ring-white/30 shrink-0`}>
+        {e.studentInitials}
+      </div>
+      <div className={`h-9 w-9 rounded-md ${tone.iconBg} grid place-items-center shrink-0`}>
+        <Icon className="h-4 w-4 text-white" />
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="text-base font-bold truncate">{e.studentId}</div>
+        <div className="text-sm text-white/80 truncate">{e.what}</div>
+      </div>
+      <div className="text-right shrink-0">
+        {typeof e.points === "number" && (
+          <div className={`text-xl font-black tabular-nums ${tone.pts}`}>
+            {e.kind === "negative" ? "-" : e.points > 0 ? "+" : ""}
+            {Math.abs(e.points)}
+          </div>
+        )}
+        <div className="text-[11px] text-white/50 uppercase tracking-wider">
+          {relativeTime(e.createdAt, now)}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PulseTrunkRow({ event: e, now }: { event: PulseEvent; now: number }) {
+  // "positive" branches right, everything else (negative, neutral) branches
+  // left. Negative uses rose; neutral uses amber so concerns are visually
+  // distinct from outright negatives.
+  const side: "left" | "right" = e.kind === "positive" ? "right" : "left";
+
+  const tone =
+    e.kind === "positive"
+      ? {
+          branch: "bg-gradient-to-r from-rose-500/30 via-emerald-400/60 to-emerald-300",
+          pillBg: "bg-emerald-950/60 border-emerald-400/40",
+          pts: "text-emerald-300",
+          avatar: "bg-emerald-500",
+          iconBg: "bg-emerald-500/20",
+        }
+      : e.kind === "negative"
+        ? {
+            branch: "bg-gradient-to-l from-rose-400/30 via-rose-500/60 to-rose-400",
+            pillBg: "bg-rose-950/60 border-rose-400/40",
+            pts: "text-rose-300",
+            avatar: "bg-rose-500",
+            iconBg: "bg-rose-500/20",
+          }
+        : {
+            branch: "bg-gradient-to-l from-rose-400/30 via-amber-500/60 to-amber-400",
+            pillBg: "bg-amber-950/60 border-amber-400/40",
+            pts: "text-amber-300",
+            avatar: "bg-amber-500",
+            iconBg: "bg-amber-500/20",
+          };
+
+  const Icon = iconForEvent(e);
+
+  // Layout: a 3-column grid (pill | trunk | pill). The pill renders in the
+  // appropriate side column; the other side stays empty. The branch line is
+  // an absolute-positioned bar that connects the trunk dot out to the pill.
+  return (
+    <div className="relative grid grid-cols-2 items-center min-h-[64px]">
+      {/* LEFT PILL SLOT */}
+      <div className="flex justify-end pr-10">
+        {side === "left" && <PulsePill event={e} tone={tone} Icon={Icon} now={now} />}
+      </div>
+
+      {/* RIGHT PILL SLOT */}
+      <div className="flex justify-start pl-10">
+        {side === "right" && <PulsePill event={e} tone={tone} Icon={Icon} now={now} />}
+      </div>
+
+      {/* BRANCH LINE — connects center trunk out to the pill */}
+      <div
+        className={`absolute top-1/2 -translate-y-1/2 h-[3px] rounded-full ${tone.branch} ${
+          side === "left" ? "right-1/2 mr-2 w-[28%]" : "left-1/2 ml-2 w-[28%]"
+        }`}
+      />
+
+      {/* TRUNK DOT — sits over the trunk at this row's vertical center */}
+      <div
+        className={`absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 h-3 w-3 rounded-full ring-2 ring-white/30 ${tone.avatar}`}
+      />
+    </div>
+  );
+}
+
 export default function HeartbeatSignage() {
   const schoolId = schoolIdFromUrl();
   const validSchool = Number.isFinite(schoolId) && schoolId > 0;
+  const [feedView, setFeedView] = useState<FeedView>("trunk");
 
   const heartbeat = usePolling<Heartbeat>(
     validSchool ? `/api/pulse/heartbeat?schoolId=${schoolId}&windowMinutes=35` : null,
     30_000,
   );
   const events = usePolling<EventsPayload>(
-    validSchool ? `/api/pulse/events?schoolId=${schoolId}&windowMinutes=35&limit=20` : null,
+    // limit matches the trunk view's max-rendered cap so the API never
+    // shorts the UI when activity spikes.
+    validSchool ? `/api/pulse/events?schoolId=${schoolId}&windowMinutes=35&limit=24` : null,
     30_000,
   );
 
@@ -240,13 +399,35 @@ export default function HeartbeatSignage() {
       </section>
 
       {/* LIVE FEED */}
-      <section className="flex-1 px-8 py-5 overflow-hidden">
-        <div className="flex items-center justify-between mb-4">
+      <section className="flex-1 px-8 py-5 overflow-hidden flex flex-col">
+        <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
           <div className="text-[10px] uppercase tracking-[0.3em] text-white/40 font-bold">
-            Live event feed · most recent first
+            {feedView === "trunk" ? "School pulse · branching by polarity" : "Live event feed · most recent first"}
           </div>
-          <div className="text-[11px] text-white/40">
-            Last {hb?.windowMinutes ?? 35} minutes · {evs.length} events
+          <div className="flex items-center gap-3">
+            <div className="text-[11px] text-white/40">
+              Last {hb?.windowMinutes ?? 35} minutes · {evs.length} events
+            </div>
+            <div className="flex items-center rounded-lg border border-white/10 bg-white/5 p-0.5 text-[10px] font-bold uppercase tracking-wider">
+              <button
+                type="button"
+                onClick={() => setFeedView("trunk")}
+                className={`px-2.5 py-1 rounded-md transition ${
+                  feedView === "trunk" ? "bg-white/15 text-white" : "text-white/50 hover:text-white/80"
+                }`}
+              >
+                Trunk
+              </button>
+              <button
+                type="button"
+                onClick={() => setFeedView("list")}
+                className={`px-2.5 py-1 rounded-md transition ${
+                  feedView === "list" ? "bg-white/15 text-white" : "text-white/50 hover:text-white/80"
+                }`}
+              >
+                List
+              </button>
+            </div>
           </div>
         </div>
 
@@ -255,6 +436,8 @@ export default function HeartbeatSignage() {
             <div className="text-3xl mb-2">🌙</div>
             All quiet on campus.
           </div>
+        ) : feedView === "trunk" ? (
+          <PulseTrunk events={evs} now={now} />
         ) : (
           <div className="space-y-2 max-h-[calc(100vh-360px)] overflow-y-auto pr-1">
             {evs.map((e) => {

@@ -1,4 +1,5 @@
-import { Activity, Trophy, Filter, Users } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Activity, Trophy, Filter, Users, Sparkles, Star } from "lucide-react";
 import { usePolling, schoolIdFromUrl } from "./usePolling";
 
 // =============================================================================
@@ -28,6 +29,35 @@ interface HousesPayload {
   houses: HouseRow[];
 }
 
+// Subset of the pulse-events payload — only what the houses screen needs.
+interface PulseEventLite {
+  id: string;
+  kind: "positive" | "negative" | "neutral";
+  source: "pbis" | "tardy" | "pullout" | "intervention";
+  studentId: string;
+  studentInitials: string;
+  what: string;
+  points: number | null;
+  createdAt: string;
+}
+
+interface EventsPayload {
+  windowMinutes: number;
+  events: PulseEventLite[];
+}
+
+function relativeTime(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (Number.isNaN(t)) return "";
+  const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+  if (sec < 30) return "just now";
+  if (sec < 60) return `${sec}s`;
+  const min = Math.floor(sec / 60);
+  if (min < 60) return `${min}m`;
+  const hr = Math.floor(min / 60);
+  return `${hr}h`;
+}
+
 function ScreenError({ message }: { message: string }) {
   return (
     <div className="min-h-screen w-full bg-slate-950 text-white grid place-items-center p-8">
@@ -49,12 +79,96 @@ function gradientFromColor(hex: string): string {
   return `linear-gradient(to top, ${hex} 0%, ${hex}cc 60%, ${hex}88 100%)`;
 }
 
+// =============================================================================
+// FeaturedPopup — celebratory card pinned inside the leading house's bar.
+// -----------------------------------------------------------------------------
+// Spec: when multiple awards arrive at once we queue them and hold each one
+// for ~5 seconds before swapping to the next. Resets cleanly when the queue
+// shrinks (e.g. when the underlying poll returns fewer recent positives).
+// =============================================================================
+const FEATURED_HOLD_MS = 5_000;
+
+function FeaturedPopup({
+  events,
+  barPct,
+}: {
+  events: PulseEventLite[];
+  // Height (in %) of the leading house's bar fill. We use this to keep the
+  // popup visually attached to the TOP of the bar rather than the top of
+  // the frame — otherwise the popup floats in empty space when the leader's
+  // bar is short (early in a school year, or first day after rollout).
+  barPct: number;
+}) {
+  const [idx, setIdx] = useState(0);
+
+  useEffect(() => {
+    // Snap back to the head of the queue whenever the underlying list
+    // changes — that way "newest first" stays true even if the previously-
+    // featured event scrolled off after a poll.
+    setIdx(0);
+  }, [events.map((e) => e.id).join("|")]);
+
+  useEffect(() => {
+    if (events.length <= 1) return;
+    const t = window.setInterval(() => {
+      setIdx((i) => (i + 1) % events.length);
+    }, FEATURED_HOLD_MS);
+    return () => window.clearInterval(t);
+  }, [events.length]);
+
+  if (events.length === 0) return null;
+  const e = events[idx % events.length];
+
+  // Bar fill top edge in % from frame top. We sit the popup ~12px below
+  // that edge so it visually overlaps the top of the colored bar. If the
+  // bar is very tall the popup must still leave room for the points label
+  // (top-2 + top-8 = ~48px), so clamp the minimum.  And keep it well clear
+  // of the frame bottom so the card never gets cut off.
+  const barTopPct = Math.max(0, Math.min(100, 100 - barPct));
+  const popupTop = `clamp(56px, calc(${barTopPct}% + 12px), calc(100% - 88px))`;
+
+  return (
+    <div
+      key={e.id}
+      className="absolute inset-x-3 rounded-2xl bg-white/95 text-slate-900 shadow-2xl ring-2 ring-amber-300 px-3 py-2 flex items-center gap-3 z-20 animate-[fadeIn_0.3s_ease-out]"
+      style={{ top: popupTop, backdropFilter: "blur(6px)" }}
+    >
+      <div className="h-11 w-11 rounded-full bg-gradient-to-br from-violet-500 to-fuchsia-500 grid place-items-center font-black text-white text-sm ring-2 ring-white/80 shrink-0">
+        {e.studentInitials}
+      </div>
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-amber-600 font-bold">
+          <Sparkles className="h-3 w-3" />
+          Now celebrating
+        </div>
+        <div className="text-sm font-bold truncate text-slate-900">{e.studentId}</div>
+        <div className="text-[11px] text-slate-600 truncate">{e.what}</div>
+      </div>
+      <div className="text-right shrink-0">
+        <div className="flex items-center gap-1 text-emerald-600">
+          <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-500" />
+          <span className="text-lg font-black tabular-nums">+{e.points ?? 0}</span>
+        </div>
+        <div className="text-[9px] text-slate-400 uppercase tracking-wider">
+          {relativeTime(e.createdAt)} ago
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function HousesSignage() {
   const schoolId = schoolIdFromUrl();
   const validSchool = Number.isFinite(schoolId) && schoolId > 0;
 
   const houses = usePolling<HousesPayload>(
     validSchool ? `/api/houses?schoolId=${schoolId}&windowDays=7` : null,
+    30_000,
+  );
+  // Polled separately from /houses so the action feed and featured-popup
+  // queue refresh independently of the leaderboard math.
+  const events = usePolling<EventsPayload>(
+    validSchool ? `/api/pulse/events?schoolId=${schoolId}&windowMinutes=120&limit=24` : null,
     30_000,
   );
 
@@ -84,6 +198,19 @@ export default function HousesSignage() {
   const topPoints = rows.length > 0 ? rows[0].totalPoints : 0;
   const goal = Math.max(100, Math.ceil((topPoints * 1.25) / 50) * 50);
   const leader = rows[0] ?? null;
+
+  // Action feed = most recent point-bearing events. We show positives AND
+  // negatives in the strip so the screen reflects the whole house economy,
+  // not just wins.
+  const allEvents = events.data?.events ?? [];
+  const recentForFeed = allEvents
+    .filter((e) => typeof e.points === "number" && e.points !== 0)
+    .slice(0, 6);
+  // Featured popup queue = positive PBIS only — that's the celebratory
+  // moment we want to broadcast on the leading bar.
+  const featuredQueue = allEvents
+    .filter((e) => e.kind === "positive" && e.source === "pbis" && (e.points ?? 0) > 0)
+    .slice(0, 8);
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white overflow-hidden relative">
@@ -124,7 +251,65 @@ export default function HousesSignage() {
           No houses configured for this school yet.
         </div>
       ) : (
-        <section className="px-8 pt-6 pb-8 relative">
+        <section className="px-8 pt-5 pb-8 relative">
+          {/* LIVE ACTION FEED — most recent point-bearing events */}
+          <div className="mb-5">
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2 text-[10px] text-white/50 uppercase tracking-[0.25em] font-bold">
+                <Sparkles className="h-3 w-3 text-amber-300" />
+                Live action feed · last {events.data?.windowMinutes ?? 120} min
+              </div>
+              <div className="text-[10px] text-white/40">
+                {recentForFeed.length} recent {recentForFeed.length === 1 ? "award" : "awards"}
+              </div>
+            </div>
+            {recentForFeed.length === 0 ? (
+              <div className="rounded-xl border border-white/5 bg-white/[0.02] px-4 py-2 text-xs text-white/40">
+                Quiet on the boards — awards will appear here as they're logged.
+              </div>
+            ) : (
+              <div className="relative">
+                {/* Top fade so older items "drop off" the strip */}
+                <div className="pointer-events-none absolute inset-y-0 left-0 w-12 bg-gradient-to-r from-slate-950 to-transparent z-10" />
+                <div className="pointer-events-none absolute inset-y-0 right-0 w-12 bg-gradient-to-l from-slate-950 to-transparent z-10" />
+                <div className="flex items-stretch gap-2 overflow-x-auto pb-1 -mx-1 px-1 scrollbar-none">
+                  {recentForFeed.map((e) => {
+                    const isPos = e.kind === "positive";
+                    const isConcern = e.kind === "neutral";
+                    const tone = isPos
+                      ? { bg: "from-emerald-500/15 to-emerald-500/5", border: "border-emerald-400/40", pts: "text-emerald-300", avatar: "bg-emerald-500" }
+                      : isConcern
+                        ? { bg: "from-amber-500/15 to-amber-500/5", border: "border-amber-400/40", pts: "text-amber-300", avatar: "bg-amber-500" }
+                        : { bg: "from-rose-500/15 to-rose-500/5", border: "border-rose-400/40", pts: "text-rose-300", avatar: "bg-rose-500" };
+                    return (
+                      <div
+                        key={e.id}
+                        className={`shrink-0 min-w-[220px] rounded-xl bg-gradient-to-r ${tone.bg} border ${tone.border} px-3 py-2 flex items-center gap-3`}
+                      >
+                        <div className={`h-8 w-8 rounded-full ${tone.avatar} grid place-items-center font-black text-[11px] ring-2 ring-white/30 shrink-0`}>
+                          {e.studentInitials}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="text-xs font-bold truncate">{e.studentId}</div>
+                          <div className="text-[10px] text-white/60 truncate">{e.what}</div>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <div className={`text-base font-black tabular-nums ${tone.pts}`}>
+                            {(e.points ?? 0) > 0 ? "+" : ""}
+                            {e.points ?? 0}
+                          </div>
+                          <div className="text-[9px] text-white/40 uppercase tracking-wider">
+                            {relativeTime(e.createdAt)}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center justify-between mb-4">
             <div className="flex items-center gap-2 text-xs text-white/50 uppercase tracking-widest">
               <Trophy className="h-3.5 w-3.5" />
@@ -140,7 +325,7 @@ export default function HousesSignage() {
 
           {/* Fixed-height frame; bars fill % of frame */}
           <div
-            className={`grid gap-6 h-[460px]`}
+            className={`grid gap-6 h-[400px]`}
             style={{ gridTemplateColumns: `repeat(${rows.length}, minmax(0, 1fr))` }}
           >
             {rows.map((h) => {
@@ -177,6 +362,8 @@ export default function HousesSignage() {
                         </div>
                       )}
                     </div>
+                    {/* Featured popup rotates 5s per item — only on the leading bar */}
+                    {isLeader && <FeaturedPopup events={featuredQueue} barPct={pct} />}
                   </div>
 
                   {/* Label + member count */}
