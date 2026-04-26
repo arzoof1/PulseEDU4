@@ -931,6 +931,75 @@ function TopAbsentTable({
 // translucent area on the same temp axis (rescaled into the 80–100°F range
 // just visually — the tooltip still shows the true %).
 
+// Inline strip rendered above the WeatherCard chart that mirrors what a
+// floating tooltip would have shown — date, weather summary, precip, high
+// temp, and the *real* attendance % (not the rescaled one). When nothing is
+// hovered we keep the strip in the DOM with placeholder dashes so the card
+// height is stable.
+function WeatherHoverStrip({
+  hovered,
+}: {
+  hovered: {
+    date: string;
+    summary?: string | null;
+    precip?: number | null;
+    tempHigh?: number | null;
+    attRate?: number | null;
+  } | null;
+}) {
+  const labelStyle: React.CSSProperties = {
+    color: "var(--text-subtle, #94a3b8)",
+    marginRight: 4,
+  };
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        gap: "0.65rem",
+        alignItems: "baseline",
+        fontSize: 12,
+        minHeight: 18,
+        marginBottom: "0.35rem",
+        color: "var(--text, #1f2937)",
+      }}
+    >
+      {hovered ? (
+        <>
+          <strong>{hovered.date}</strong>
+          {hovered.summary ? (
+            <span style={{ color: "var(--text-subtle, #64748b)" }}>
+              {hovered.summary}
+            </span>
+          ) : null}
+          <span>
+            <span style={labelStyle}>Precip</span>
+            {hovered.precip != null
+              ? `${hovered.precip.toFixed(2)}"`
+              : "—"}
+          </span>
+          <span>
+            <span style={labelStyle}>High</span>
+            {hovered.tempHigh != null
+              ? `${hovered.tempHigh.toFixed(0)}°F`
+              : "—"}
+          </span>
+          <span>
+            <span style={labelStyle}>Attendance</span>
+            {hovered.attRate != null
+              ? `${(hovered.attRate * 100).toFixed(1)}%`
+              : "—"}
+          </span>
+        </>
+      ) : (
+        <span style={{ color: "var(--text-subtle, #94a3b8)" }}>
+          Hover the chart to see daily values
+        </span>
+      )}
+    </div>
+  );
+}
+
 function WeatherCard({
   weather,
   attendance,
@@ -987,13 +1056,27 @@ function WeatherCard({
   const totalPrecip = precipVals.reduce((a, b) => a + b, 0);
   const wetDays = precipVals.filter((p) => p >= 0.1).length;
 
+  // Track which day the user is hovering. Render the hovered values in an
+  // inline strip ABOVE the chart instead of as a floating tooltip popup —
+  // floating popups always end up covering the lines on a compact chart.
+  const [hoveredDate, setHoveredDate] = useState<string | null>(null);
+  const hovered = hoveredDate
+    ? series.find((s) => s.date === hoveredDate) ?? null
+    : null;
+
   return (
     <div style={cardStyle}>
       <CardLabel title="Weather vs attendance" windowLabel={windowLabel} />
+      <WeatherHoverStrip hovered={hovered} />
       <ResponsiveContainer width="100%" height={140}>
         <ComposedChart
           data={series}
           margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+          onMouseMove={(state: { activeLabel?: string | number }) => {
+            const label = state?.activeLabel;
+            setHoveredDate(label != null ? String(label) : null);
+          }}
+          onMouseLeave={() => setHoveredDate(null)}
         >
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
           <XAxis
@@ -1019,37 +1102,14 @@ function WeatherCard({
             domain={[40, 100]}
             tickFormatter={(v: number) => `${v}°`}
           />
+          {/*
+            Render only the vertical cursor line on hover — the values
+            themselves are shown in the inline strip above the chart so the
+            popup never covers the data.
+          */}
           <Tooltip
-            // Pin the tooltip to the top of the chart so it doesn't cover
-            // the lines. X follows the cursor; Y stays at the top edge.
-            position={{ y: -4 }}
-            allowEscapeViewBox={{ x: false, y: true }}
-            wrapperStyle={{ pointerEvents: "none", zIndex: 10 }}
-            offset={12}
-            contentStyle={{ fontSize: 12 }}
-            formatter={(
-              value: number | string,
-              name: string,
-              item: { payload?: (typeof series)[number] },
-            ) => {
-              if (name === "Precip")
-                return [`${Number(value).toFixed(2)}"`, name];
-              if (name === "High")
-                return [`${Number(value).toFixed(0)}°F`, name];
-              if (name === "Attendance") {
-                // attRateScaled is rescaled for the temp axis, so always
-                // resolve the real attendance rate from the row payload.
-                const real = item?.payload?.attRate;
-                return real != null
-                  ? [`${(real * 100).toFixed(1)}%`, name]
-                  : ["—", name];
-              }
-              return [value, name];
-            }}
-            labelFormatter={(d: string) => {
-              const row = series.find((s) => s.date === d);
-              return row?.summary ? `${d} · ${row.summary}` : d;
-            }}
+            cursor={{ stroke: "#94a3b8", strokeDasharray: "3 3" }}
+            content={() => null}
           />
           <Bar
             yAxisId="precip"
