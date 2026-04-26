@@ -9,6 +9,7 @@ import {
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
+import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 
 const rawPort = process.env["PORT"];
 
@@ -83,6 +84,63 @@ if (Number.isNaN(port) || port <= 0) {
           logger.info({ expr, tz }, "Daily digest scheduled");
         } catch (schedErr) {
           logger.error({ err: schedErr }, "Failed to schedule daily digest");
+        }
+
+        // Weekly HeartBEAT email. Default Friday 16:00 school local time —
+        // late enough that the day's events have been logged, early enough
+        // that families can read it over the weekend. Override with
+        // WEEKLY_HEARTBEAT_CRON / WEEKLY_HEARTBEAT_TZ. Skip in test.
+        const wExpr =
+          process.env.WEEKLY_HEARTBEAT_CRON ?? "0 16 * * 5";
+        const wTz = process.env.WEEKLY_HEARTBEAT_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            wExpr,
+            async () => {
+              try {
+                const results = await sendWeeklyHeartbeatEmails(new Date());
+                const sent = results.filter((r) => r.status === "sent").length;
+                const failed = results.filter(
+                  (r) => r.status === "failed",
+                ).length;
+                const skipped = results.filter(
+                  (r) => r.status === "skipped_school_disallowed",
+                ).length;
+                logger.info(
+                  { total: results.length, sent, failed, skipped },
+                  "Weekly HeartBEAT email fired",
+                );
+                for (const r of results) {
+                  if (r.status === "failed") {
+                    logger.warn(
+                      {
+                        parentId: r.parentId,
+                        studentId: r.studentId,
+                        email: r.email,
+                        errorMsg: r.errorMsg,
+                      },
+                      "Weekly HeartBEAT email failed for row",
+                    );
+                  }
+                }
+              } catch (cronErr) {
+                logger.error(
+                  { err: cronErr },
+                  "Weekly HeartBEAT email send failed",
+                );
+              }
+            },
+            { timezone: wTz },
+          );
+          logger.info(
+            { expr: wExpr, tz: wTz },
+            "Weekly HeartBEAT email scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule weekly HeartBEAT email",
+          );
         }
       }
     });

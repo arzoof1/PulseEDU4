@@ -1495,11 +1495,8 @@ render correctly.
    block below).
 4. ~~PDF export of the HeartBEAT Report~~ — DONE Apr 26 (see
    "HeartBEAT PDF export" block below).
-5. Optional weekly emailed PDF (Resend already wired). NOTE: the
-   per-parent toggle now persists `weekly_email_enabled` per (parent,
-   student); the cron + email-with-attachment is what's left. The PDF
-   renderer from #4 (`lib/parentSnapshotPdf.ts`) is the engine to
-   reuse — no new layout work needed.
+5. ~~Optional weekly emailed PDF~~ — DONE Apr 26 (see "HeartBEAT
+   weekly email" block below).
 
 **Mockup files (do not delete — referenced when iterating):**
 - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
@@ -1830,3 +1827,91 @@ or attaching to outside provider records.
   byte-identical PDFs, useful when we eventually attach these to
   emails for #5 (won't trigger spam filters that hate
   every-message-different attachments).
+
+## HeartBEAT weekly email (April 26, 2026)
+
+Closed item #5 from the HeartBEAT "Deferred (revisit later)" list.
+
+**Goal**: Each Friday afternoon, every parent who opted in (per
+student) gets a HeartBEAT PDF emailed to them. Reuses the same
+shared snapshot builder (`lib/parentSnapshot.ts`) and the pdfkit
+renderer (`lib/parentSnapshotPdf.ts`) the on-demand "Download PDF"
+button uses, so the mailed report is byte-identical to what the
+parent sees on the dashboard.
+
+**New helper — `artifacts/api-server/src/lib/weeklyHeartbeatEmail.ts`**:
+- `sendWeeklyHeartbeatEmails(now: Date): Promise<WeeklyEmailResult[]>`
+- One join query pulls every eligible (parent, student) tuple:
+  - `parent_heartbeat_prefs.weekly_email_enabled = true`
+  - `parents.active = true` AND `parents.password_hash IS NOT NULL`
+    (so we never email parents who never accepted the invite)
+  - `parent_heartbeat_prefs.last_weekly_email_at IS NULL` OR older
+    than `DEDUP_WINDOW_DAYS` (6 days). 6, not 7, absorbs a half-day
+    clock drift if the cron fires slightly early.
+- Per-school `school_heartbeat_settings.allow_weekly_email = false`
+  is honored at send time (not in the candidate query) so a single
+  school flipping it off doesn't require a query rewrite. Cached in
+  a Map so we don't re-query per parent.
+- School name + `school_settings.from_name` for the From header are
+  cached the same way.
+- Resend client is initialized once. If init throws (no API key
+  configured), every row gets a `failed` result with the init
+  error — the cron log explains why everything was skipped, instead
+  of silently aborting.
+- Per row: `buildParentSnapshot()` → `renderSnapshotPdf()` → Resend
+  `client.emails.send({ ..., attachments: [{ filename, content }] })`.
+  Filename is `HeartBEAT-{First}-{Last}-{YYYY-MM-DD}.pdf`,
+  sanitized the same way the on-demand PDF route does it.
+- Email body is a small text + HTML pair with a plain-English
+  unsubscribe instruction ("sign in and turn off Weekly email under
+  What I see"). v1 keeps it simple — no per-parent unsubscribe
+  token. If we want one-click unsubscribe later, generate a signed
+  token in this helper and mount a public `GET /api/parent/unsub?t=…`
+  route that flips `weekly_email_enabled = false`.
+- `lastWeeklyEmailAt` is stamped to `now` ONLY on a successful send.
+  A failed send leaves it untouched so the next cron run retries.
+  The stamp update is wrapped in its own try/catch — a stamp failure
+  logs loudly but does not abort the whole cron run.
+- 200ms `SEND_THROTTLE_MS` between Resend calls (Resend free tier is
+  2/sec, standard 10/sec — 5/sec is safe for both). Throttle runs
+  after every Resend call regardless of outcome so a 5xx storm
+  doesn't retry-storm the provider.
+
+**Schema change — `parent_heartbeat_prefs.last_weekly_email_at`**:
+- New nullable `timestamp with time zone` column. Added via direct
+  `ALTER TABLE … ADD COLUMN IF NOT EXISTS` (drizzle-kit push hung on
+  an unrelated `districts_slug_unique` interactive prompt — the
+  column add itself is non-destructive so the SQL path was safe).
+  Schema in `lib/db/src/schema/parents.ts` is the source of truth
+  going forward.
+
+**Cron wiring — `artifacts/api-server/src/index.ts`**:
+- Mirrors the existing daily-digest pattern. Default expression
+  `0 16 * * 5` (Friday 16:00 school local time — after the day's
+  events have been logged, before the weekend so families have time
+  to read it). Default timezone `America/New_York`. Both
+  override-able via `WEEKLY_HEARTBEAT_CRON` and
+  `WEEKLY_HEARTBEAT_TZ`. Skipped entirely when `NODE_ENV === "test"`,
+  same as the daily digest.
+- Logs a structured summary (`{ total, sent, failed, skipped }`) at
+  INFO and emits a per-row WARN for each failure with parentId,
+  studentId, email, and errorMsg. No PII beyond what's already in
+  the DB.
+
+**Verification**:
+- `Weekly HeartBEAT email scheduled` line appears in api-server logs
+  at boot alongside `Daily digest scheduled`.
+- Candidate-query smoke test (synthetic insert → run query →
+  verify pickup → set `last_weekly_email_at = now() - 2 days` →
+  verify NOT picked up → cleanup): all four assertions pass.
+- Dev DB has zero parent accounts with accepted invites, so the
+  cron will fire on Friday and log `total:0` until parents actually
+  subscribe — no risk of accidental sends in dev.
+
+**Why no admin "Send now" button (yet)**:
+- Manual send requires per-school plumbing (admin UI, scope check)
+  and risks accidentally double-mailing a school's parents during
+  testing. The cron-only design is safer for v1. If/when ops needs
+  a manual trigger, add a superuser-gated `POST /api/admin/weekly-heartbeat/run`
+  that takes an optional `schoolId` filter and respects the same
+  `last_weekly_email_at` dedup window.

@@ -195,6 +195,12 @@ export const parentHeartbeatPrefsTable = pgTable(
     // Weekly email opt-in (independent per student so a parent can subscribe
     // for one kid but not another).
     weeklyEmailEnabled: boolean("weekly_email_enabled").notNull().default(false),
+    // Set to NOW() on each successful weekly email send. The weekly cron
+    // uses this as a dedup window (skip rows sent in the last 6 days) so
+    // a re-run on the same day doesn't double-mail. NULL = never sent.
+    // Only updated on success — a failure leaves this NULL/old so the
+    // next cron run retries.
+    lastWeeklyEmailAt: timestamp("last_weekly_email_at", { withTimezone: true }),
     // 'semester' | 'month' | 'all' — default range for the report.
     dateRangeDefault: text("date_range_default").notNull().default("semester"),
     updatedAt: timestamp("updated_at", { withTimezone: true })
