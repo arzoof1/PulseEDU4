@@ -23,6 +23,7 @@ import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import InsightsWatchlist from "./components/InsightsWatchlist";
+import MyWatchList from "./components/MyWatchList";
 import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
@@ -3170,7 +3171,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   administration: ["superUserHome", "districtAdmin"],
-  insights: ["insights", "insightsWatchlist", "studentProfile"],
+  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile"],
   recognition: [
     "pbis",
     "schoolStore",
@@ -3206,6 +3207,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
 NAV_GROUP_OWNERSHIP.insights = [
   "insights",
   "insightsWatchlist",
+  "myWatchList",
   "studentProfile",
   "mtssPlans",
   "mtssCoordinator",
@@ -3546,6 +3548,7 @@ function App() {
     | "districtAdmin"
     | "insights"
     | "insightsWatchlist"
+    | "myWatchList"
     | "studentProfile"
     | "attendanceDashboard"
     | "academicsTrajectory"
@@ -3566,6 +3569,7 @@ function App() {
   // before navigating.
   const [studentProfileReturnTo, setStudentProfileReturnTo] = useState<
     | "insightsWatchlist"
+    | "myWatchList"
     | "teacherRoster"
     | "engagementDashboard"
     | "behaviorDashboard"
@@ -7324,7 +7328,17 @@ function App() {
             >
               {renderNavItem({
                 key: "insightsWatchlist",
-                label: "Watchlist",
+                label: "Watch List",
+                icon: IconClipboard,
+              })}
+              {/* Personal "kids on my mind" list — separate from the
+                  data-driven system Watch List above. Visible to anyone
+                  who can see the system list (same student-visibility
+                  scope governs both); the server scopes entries to the
+                  caller. */}
+              {renderNavItem({
+                key: "myWatchList",
+                label: "My Watch List",
                 icon: IconClipboard,
               })}
               {canAccessMtssHub &&
@@ -17531,6 +17545,19 @@ function App() {
             // for symmetry with the row click above.
             setSelectedInsightsStudentId(studentId);
             setStudentProfileReturnTo("insightsWatchlist");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "myWatchList" && (
+        <MyWatchList
+          onOpenStudent={(studentId) => {
+            // Mirror the InsightsWatchlist drill-in pattern: pin the
+            // back-target so the profile's Back button returns here,
+            // not to the system Watch List.
+            setSelectedInsightsStudentId(studentId);
+            setStudentProfileReturnTo("myWatchList");
             setActiveSection("studentProfile");
           }}
         />

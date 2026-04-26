@@ -3693,3 +3693,91 @@ Files touched:
 - artifacts/api-server/src/seed.ts (weather seed block + truncate)
 - artifacts/api-server/src/routes/insights.ts (route augmentation)
 - artifacts/client/src/components/AttendanceDashboard.tsx (UI)
+
+## Watch List graduations — system Watch List card-grid + new "My Watch List" (Apr 26, 2026)
+
+**Two parallel graduations from the mockup-sandbox canvas to the live app:**
+
+### A. System Watch List → card-grid view
+
+**`artifacts/client/src/components/InsightsWatchlist.tsx`** rewritten:
+the existing table view is replaced by a card grid (severity stripe,
+avatar, signal chips capped at 5+overflow, mini pillar grid for
+Acad/Beh/Att/MTSS), KPI tile strip, saved-view pill row, and a
+"More filters" collapsible. **All existing filter / sort / preset /
+quick-lookup logic is preserved**, and the same `/api/insights/watchlist`
+data drives both. `onOpenStudent` + `onOpenSpider` props are unchanged
+so the StudentProfile drill-in keeps working from `App.tsx` with no
+caller-side changes. Title relabeled "Watch List" (was "Watchlist").
+Mockup elements deferred to follow-ups: trend microcopy and "new this
+week" badges (current API doesn't expose deltas).
+
+### B. New "My Watch List" — teacher-personal hand-curated list
+
+**Schema** — `lib/db/src/schema/teacherWatchlistEntries.ts` defines
+`teacher_watchlist_entries` (id serial PK, staff_id int → staff.id,
+school_id int, student_id text → students.student_id, group_key text,
+note text, followup_text text null, followup_due date null,
+added_at timestamp, last_touch_by/what/at). UNIQUE(staff_id, student_id)
+so a kid is on the list at most once per teacher. Exported from the
+schema barrel. Created via direct `CREATE TABLE` because drizzle-kit
+push-force was blocked on an unrelated interactive rename prompt for
+orphan tables (`user_sessions`, `check_in_with_options`); raw create on
+a brand-new table is safe (no data loss risk).
+
+**Backend** — `artifacts/api-server/src/routes/myWatchlist.ts` exposes
+five endpoints (mounted via `routes/index.ts` as `myWatchlistRouter`,
+**relative paths under the `/api` mount** — that's the convention here,
+absolute paths like `/api/...` get double-prefixed and 404):
+* `GET    /insights/my-watchlist` — list caller's entries with
+  hydrated student name/grade. **Re-applies visibility scope at
+  hydration time** (roster ∪ trusted-adult, with core-team bypass) so
+  if a teacher loses access to a student after bookmarking them, that
+  entry's PII is filtered out of the response. Stale entries stay in
+  the DB (a future "view archive" affordance benefits from that) but
+  aren't surfaced.
+* `POST   /insights/my-watchlist` — add `{studentId, groupKey, note?,
+  followupText?, followupDue?}`. Server validates studentId is in the
+  caller's visibility scope before insert.
+* `PATCH  /insights/my-watchlist/:id` — edit `note` / `groupKey` /
+  `followupText` / `followupDue`. Non-owner → 404 (don't leak
+  existence).
+* `POST   /insights/my-watchlist/:id/touch` — log a touch
+  `{what}` ("Touched base" / "Called home" / "Pulled aside" or
+  free-form ≤80 chars). Server stamps `lastTouchBy` from session +
+  `lastTouchAt = now()`.
+* `DELETE /insights/my-watchlist/:id` — hard delete (it's a personal
+  bookmark; soft delete adds no value).
+
+Auth pattern mirrors `insights.ts`: inline `loadStaff` helper +
+`req.staffId` from the cookie/Bearer middleware in `app.ts`. Visibility
+helper `visibleStudentIds(staff, schoolId)` is the canonical
+roster ∪ trusted-adult check, with a `full: true` shortcut for core
+team (SuperUser / Admin / BehaviorSpecialist / MtssCoordinator /
+PbisCoordinator).
+
+**Frontend** — `artifacts/client/src/components/MyWatchList.tsx`
+renders four hardcoded built-in groups (reading, behavior, family,
+shine) as sticky-note cards with quick-action buttons that fire the
+touch endpoint, an add+edit modal with student picker (reuses the
+same student directory as the system Watch List), follow-up reminder
+display, and a stale-touch nudge (>14 days). Custom groups deferred
+to a follow-up.
+
+**App.tsx wiring** — added `MyWatchList` import; `"myWatchList"` to
+the activeSection union AND the narrower `studentProfileReturnTo`
+union (back-target tracking); included in `NAV_GROUP_OWNERSHIP.insights`
+so the Insights nav group force-expands for it; sidebar item "My Watch
+List" rendered under the Insights group right beneath "Watch List";
+render block alongside `insightsWatchlist` that pins the back-target
+to `"myWatchList"` on student drill-in.
+
+**Files:**
+- lib/db/src/schema/teacherWatchlistEntries.ts (NEW)
+- lib/db/src/schema/index.ts (barrel export)
+- artifacts/api-server/src/routes/myWatchlist.ts (NEW — 5 endpoints)
+- artifacts/api-server/src/routes/index.ts (mounted myWatchlistRouter)
+- artifacts/client/src/components/InsightsWatchlist.tsx (table → card grid)
+- artifacts/client/src/components/MyWatchList.tsx (NEW)
+- artifacts/client/src/App.tsx (import + activeSection union ×2 +
+  NAV_GROUP_OWNERSHIP + sidebar item + render block)

@@ -47,3 +47,4 @@ export * from "./schoolBranding";
 export * from "./studentFastScores";
 export * from "./parents";
 export * from "./houses";
+export * from "./teacherWatchlistEntries";
