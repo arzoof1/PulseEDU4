@@ -1502,6 +1502,14 @@ render correctly.
 - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
 - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/ReportToggle.tsx`
 
+**Pending reminders (surface at the gated moment, don't act early):**
+- *After item #7 in this list ships:* ask the user about adding view
+  features for the uploaded data (browse/filter/inspect what's been
+  imported). Captured Apr 26, 2026. Do NOT bring this up before #7 is
+  closed — the user explicitly gated it. Once #7 is marked done, prompt
+  the user with: "You wanted to revisit view features for uploaded data
+  after #7 — ready to scope that now?"
+
 ## Parked: Bathroom Queue (kiosk station)
 
 User wants a kiosk-style "bathroom queue" tied to the existing kiosk
