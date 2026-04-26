@@ -18,3 +18,9 @@ id = "8D-k6Zr0YyADr8GJwQ_2g"
 uri = "file://attached_assets/PulseED_1776744158122.png"
 type = "image"
 title = "PulseEDU Logo (PNG, transparent background)"
+
+[[outputs]]
+id = "_caJ4S1d63_b3K2hHqG6i"
+uri = "file://attached_assets/pulseedu-logo-animated.svg"
+type = "image"
+title = "PulseEDU Animated Logo (SVG, EKG sweep)"
