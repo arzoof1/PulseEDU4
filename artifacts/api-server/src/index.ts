@@ -35,7 +35,12 @@ if (Number.isNaN(port) || port <= 0) {
 // schools table that seedTenancy() populates, so on a fresh prod
 // database the order matters — running them in parallel can race
 // and leave the seed with zero schools to attach data to.
-(async () => {
+//
+// Each step is idempotent (skip-if-non-empty per school) so it's safe
+// to run AFTER the HTTP listener opens. We do exactly that in production
+// because the full seed (60-day demo data × 7 schools) takes well over
+// the platform's port-open timeout on a fresh DB.
+async function runSeed(): Promise<void> {
   await seedTenancy();
   await seedIfEmpty();
   // Runs after the main seed so studentsTable is populated. Idempotent
@@ -72,9 +77,18 @@ if (Number.isNaN(port) || port <= 0) {
   // race set, AND skipped for schools without the demo marker. Real SIS
   // imports remain untouched.
   await seedStudentRaceIfEmpty();
-})()
-  .catch((err) => logger.error({ err }, "Seed failed"))
-  .finally(() => {
+}
+
+// In production we MUST open the port within the platform's health-check
+// window, otherwise the deploy is killed. Because the seed is idempotent
+// and the routes already handle empty data gracefully, we open the
+// listener first and run the seed in the background. In development we
+// keep the original sequential behavior so a `pnpm dev` restart blocks
+// until the seed is ready (clearer logs, no stale-data confusion while
+// iterating).
+const seedInBackground = process.env.NODE_ENV === "production";
+
+function startListening(): void {
     app.listen(port, (err) => {
       if (err) {
         logger.error({ err }, "Error listening on port");
@@ -82,6 +96,15 @@ if (Number.isNaN(port) || port <= 0) {
       }
 
       logger.info({ port }, "Server listening");
+
+      if (seedInBackground) {
+        logger.info("Starting seed in background (post-listen)");
+        runSeed()
+          .then(() => logger.info("Background seed complete"))
+          .catch((err) =>
+            logger.error({ err }, "Background seed failed"),
+          );
+      }
 
       // Daily pullout digest. Defaults to 16:00 (4pm) school local time.
       // Override with DIGEST_CRON / DIGEST_TZ env vars. Skip in test.
@@ -176,4 +199,16 @@ if (Number.isNaN(port) || port <= 0) {
         }
       }
     });
-  });
+}
+
+// Boot. In dev we keep the original "seed first, then listen" flow so
+// the workflow logs read top-to-bottom and a `pnpm dev` restart waits
+// for data to be ready. In production we listen immediately and run
+// the (idempotent) seed in the background — see startListening().
+if (seedInBackground) {
+  startListening();
+} else {
+  runSeed()
+    .catch((err) => logger.error({ err }, "Seed failed"))
+    .finally(() => startListening());
+}
