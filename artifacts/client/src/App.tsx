@@ -26,6 +26,7 @@ import InsightsWatchlist from "./components/InsightsWatchlist";
 import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
+import SebSelDashboard from "./components/SebSelDashboard";
 import StudentProfile from "./components/StudentProfile";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -3088,9 +3089,10 @@ const INSIGHTS_TILES: InsightsTile[] = [
     icon: "💚",
     title: "SEB / SEL",
     subtitle:
-      "Social-emotional screeners, check-in/check-out trends, counselor caseload and intervention response.",
-    phase: "Phase 4",
+      "MTSS plan coverage, IEP/504/ELL flags, and where risk is stacking up — including kids slipping without a plan.",
+    phase: "Today",
     group: "domains",
+    targetSection: "sebSelDashboard",
   },
   {
     id: "engagement",
@@ -3525,6 +3527,7 @@ function App() {
     | "engagementDashboard"
     | "behaviorDashboard"
     | "academicsDashboard"
+    | "sebSelDashboard"
   >("insightsWatchlist");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -17512,6 +17515,18 @@ function App() {
             // Pin the back-target so the profile's Back button returns
             // to the academics dashboard.
             setStudentProfileReturnTo("academicsDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "sebSelDashboard" && canAccessMtssHub && (
+        <SebSelDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // Pin the back-target so the profile's Back button returns
+            // to the SEB/SEL dashboard.
+            setStudentProfileReturnTo("sebSelDashboard");
             setActiveSection("studentProfile");
           }}
         />

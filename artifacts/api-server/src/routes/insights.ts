@@ -2362,4 +2362,416 @@ router.get("/insights/academics", async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /insights/sebsel — Social-Emotional / Behavioral whole-school view.
+//
+// Item #4 in the eduCLIMBER Phase Queue. Mirrors the engagement / behavior /
+// academics pattern: same auth (core team only), same defensive grade
+// parsing, same KPI strip + viz + top-N envelope shape.
+//
+// Data this endpoint pulls together (all seeded in dev):
+//   * student_mtss_plans   — active when closed_at IS NULL. Title text is
+//                            bucketed into 5 plan-area categories so the UI
+//                            can show "what kind of support is going out".
+//   * students.ese / .is504 / .ell — demographic SEL flags.
+//   * pbis_entries (negative, last 30d) — "active concern" behavioral signal.
+//   * student_fast_scores.priorYearBq — academic-risk SEL signal.
+//   * student_accommodations (active = removed_at IS NULL) — support footprint.
+//
+// Time window is fixed at 30 days for the negative-PBIS signal — every other
+// signal is stateful, so a window param would be misleading.
+// ---------------------------------------------------------------------------
+router.get("/insights/sebsel", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "SEB/SEL dashboard is core-team only" });
+    return;
+  }
+
+  // Same defensive grade parsing as the prior three dashboards. students.grade
+  // is INTEGER; UI sends "K" for kindergarten and numeric strings 1..12.
+  // Anything we can't map silently becomes "no filter" rather than crashing.
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  // Build the cohort: every student at the school, optionally narrowed
+  // to one grade.
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+      ell: studentsTable.ell,
+      ese: studentsTable.ese,
+      is504: studentsTable.is504,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+      ),
+    );
+
+  // Empty-cohort fast-path. Don't hand Drizzle an empty inArray below.
+  if (studentRows.length === 0) {
+    res.json({
+      grade: gradeFilter,
+      windowDays: 30,
+      totals: {
+        cohortStudents: 0,
+        activeMtssPlans: 0,
+        selFlaggedPlans: 0,
+        iepStudents: 0,
+        students504: 0,
+        ellStudents: 0,
+        multiRiskStudents: 0,
+      },
+      planAreaMix: [],
+      riskOverlap: [
+        { flagCount: 1, students: 0 },
+        { flagCount: 2, students: 0 },
+        { flagCount: 3, students: 0 },
+        { flagCount: 4, students: 0 },
+      ],
+      topLists: {
+        highestNeed: [],
+        atRiskWithoutPlan: [],
+        selPlanRoster: [],
+        mostAccommodated: [],
+      },
+      sources: {
+        plans: 0,
+        accommodations: 0,
+        negativePbisLast30d: 0,
+        fastBq: 0,
+      },
+    });
+    return;
+  }
+
+  const studentIds = studentRows.map((r) => r.studentId);
+  const nameById = new Map<string, string>(
+    studentRows.map((r) => [
+      r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+    ]),
+  );
+  const gradeById = new Map<string, number | null>(
+    studentRows.map((r) => [r.studentId, r.grade ?? null]),
+  );
+  // Per-student demographic SEL flags for the chip display + risk math.
+  const iep = new Set<string>();
+  const sec504 = new Set<string>();
+  const ell = new Set<string>();
+  for (const r of studentRows) {
+    if (r.ese) iep.add(r.studentId);
+    if (r.is504) sec504.add(r.studentId);
+    if (r.ell) ell.add(r.studentId);
+  }
+  const iep504 = new Set<string>([...iep, ...sec504]);
+
+  // ----- Pull active MTSS plans for the cohort ----------------------------
+  // Active = closed_at IS NULL. We fetch title so we can bucket into
+  // plan-area categories below.
+  const planRows = await db
+    .select({
+      studentId: studentMtssPlansTable.studentId,
+      title: studentMtssPlansTable.title,
+      tier: studentMtssPlansTable.tier,
+      openedAt: studentMtssPlansTable.openedAt,
+    })
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        isNull(studentMtssPlansTable.closedAt),
+        inArray(studentMtssPlansTable.studentId, studentIds),
+      ),
+    );
+
+  // Bucket plan titles into 5 plan-area categories. The seed currently uses
+  // the six titles in MTSS_SEED_TITLES (see seed.ts ~line 373); real-world
+  // plan titles are free-text, so we use case-insensitive substring matching
+  // and fall back to "Other" to stay robust.
+  type PlanArea = "Behavior" | "SEL" | "Academic" | "Attendance" | "Other";
+  const PLAN_AREA_ORDER: PlanArea[] = [
+    "Behavior",
+    "SEL",
+    "Academic",
+    "Attendance",
+    "Other",
+  ];
+  function bucketPlanTitle(title: string): PlanArea {
+    const t = title.toLowerCase();
+    if (t.includes("behavior")) return "Behavior";
+    if (
+      t.includes("social") ||
+      t.includes("emotional") ||
+      t.includes("check-in") ||
+      t.includes("check in") ||
+      t.includes("engagement") ||
+      t.includes("sel")
+    ) {
+      return "SEL";
+    }
+    if (
+      t.includes("reading") ||
+      t.includes("math") ||
+      t.includes("academic") ||
+      t.includes("ela") ||
+      t.includes("literacy") ||
+      t.includes("intervention")
+    ) {
+      return "Academic";
+    }
+    if (t.includes("attendance") || t.includes("tardy")) return "Attendance";
+    return "Other";
+  }
+  const planAreaCounts: Record<PlanArea, number> = {
+    Behavior: 0,
+    SEL: 0,
+    Academic: 0,
+    Attendance: 0,
+    Other: 0,
+  };
+  // active-plan-having students, plus their first SEL-bucket plan title for
+  // the SEL roster top-N.
+  const studentsWithActivePlan = new Set<string>();
+  const selPlanByStudent = new Map<string, string>();
+  let selFlaggedPlans = 0;
+  for (const p of planRows) {
+    studentsWithActivePlan.add(p.studentId);
+    const area = bucketPlanTitle(p.title);
+    planAreaCounts[area] += 1;
+    if (area === "Behavior" || area === "SEL") {
+      selFlaggedPlans += 1;
+      if (!selPlanByStudent.has(p.studentId)) {
+        selPlanByStudent.set(p.studentId, p.title);
+      }
+    }
+  }
+
+  // ----- Recent negative PBIS (last 30d) — "active concern" signal -------
+  // pbis_entries.created_at is stored as an ISO text column; lexicographic
+  // gte works correctly. We only need negatives — count per student.
+  const now = Date.now();
+  const windowDays = 30;
+  const fromIso = new Date(now - windowDays * 86_400_000).toISOString();
+  const negPbisRows = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        eq(pbisEntriesTable.polarity, "negative"),
+        gte(pbisEntriesTable.createdAt, fromIso),
+        inArray(pbisEntriesTable.studentId, studentIds),
+      ),
+    );
+  const negPbisByStudent = new Map<string, number>();
+  for (const r of negPbisRows) {
+    negPbisByStudent.set(
+      r.studentId,
+      (negPbisByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+  // "Recent negatives" risk flag fires at >= 3 negatives in the window.
+  const recentNegatives = new Set<string>();
+  for (const [sid, n] of negPbisByStudent) {
+    if (n >= 3) recentNegatives.add(sid);
+  }
+
+  // ----- FAST priorYearBq (academic-risk SEL signal) ---------------------
+  const bqRows = await db
+    .select({
+      studentId: studentFastScoresTable.studentId,
+    })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        eq(studentFastScoresTable.priorYearBq, true),
+        inArray(studentFastScoresTable.studentId, studentIds),
+      ),
+    );
+  const bqStudents = new Set<string>();
+  for (const r of bqRows) bqStudents.add(r.studentId);
+
+  // ----- Accommodations (active = removed_at IS NULL) --------------------
+  // We need per-student counts for the most-accommodated top-N. Category
+  // is on school_accommodations, but for the v1 dashboard we just need the
+  // count per student.
+  const accomRows = await db
+    .select({
+      studentId: studentAccommodationsTable.studentId,
+    })
+    .from(studentAccommodationsTable)
+    .where(
+      and(
+        eq(studentAccommodationsTable.schoolId, schoolId),
+        isNull(studentAccommodationsTable.removedAt),
+        inArray(studentAccommodationsTable.studentId, studentIds),
+      ),
+    );
+  const accomByStudent = new Map<string, number>();
+  for (const r of accomRows) {
+    accomByStudent.set(
+      r.studentId,
+      (accomByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+
+  // ----- Per-student risk-flag computation -------------------------------
+  // Four binary flags. multiRisk = >= 2 flags fired.
+  type FlagKey = "plan" | "bq" | "negatives" | "iep504";
+  type StudentRisk = {
+    studentId: string;
+    studentName: string;
+    grade: number | null;
+    flags: FlagKey[];
+  };
+  const perStudentRisk: StudentRisk[] = [];
+  let multiRiskStudents = 0;
+  // Histogram of risk-flag counts (0/1/2/3/4) for the riskOverlap chart.
+  // We expose 1..4 in the response — flagCount=0 students are not "at risk"
+  // at all and would dwarf every other bar.
+  const riskHist: Record<number, number> = { 0: 0, 1: 0, 2: 0, 3: 0, 4: 0 };
+  for (const sid of studentIds) {
+    const flags: FlagKey[] = [];
+    if (studentsWithActivePlan.has(sid)) flags.push("plan");
+    if (bqStudents.has(sid)) flags.push("bq");
+    if (recentNegatives.has(sid)) flags.push("negatives");
+    if (iep504.has(sid)) flags.push("iep504");
+    riskHist[flags.length] += 1;
+    if (flags.length >= 2) multiRiskStudents += 1;
+    if (flags.length > 0) {
+      perStudentRisk.push({
+        studentId: sid,
+        studentName: nameById.get(sid) ?? sid,
+        grade: gradeById.get(sid) ?? null,
+        flags,
+      });
+    }
+  }
+
+  // ----- Top-N lists ------------------------------------------------------
+  // 1) Highest need — sort by flag count desc, then by name asc as a stable
+  //    deterministic tiebreaker. Cap at 15.
+  const highestNeed = [...perStudentRisk]
+    .sort((a, b) => {
+      if (b.flags.length !== a.flags.length) {
+        return b.flags.length - a.flags.length;
+      }
+      return a.studentName.localeCompare(b.studentName);
+    })
+    .slice(0, 15);
+
+  // 2) At-risk WITHOUT a plan — has BQ or recent negatives, but no active
+  //    MTSS plan. The "kids who are slipping that nobody's tracking" list.
+  //    Sort by (negatives desc, bq desc, name asc) for stable ordering.
+  const atRiskWithoutPlan = perStudentRisk
+    .filter(
+      (s) =>
+        !s.flags.includes("plan") &&
+        (s.flags.includes("bq") || s.flags.includes("negatives")),
+    )
+    .map((s) => ({
+      studentId: s.studentId,
+      studentName: s.studentName,
+      grade: s.grade,
+      bq: s.flags.includes("bq"),
+      negatives: negPbisByStudent.get(s.studentId) ?? 0,
+    }))
+    .sort((a, b) => {
+      if (b.negatives !== a.negatives) return b.negatives - a.negatives;
+      if (a.bq !== b.bq) return a.bq ? -1 : 1;
+      return a.studentName.localeCompare(b.studentName);
+    })
+    .slice(0, 15);
+
+  // 3) SEL plan roster — every student with an active SEL- or Behavior-
+  //    bucketed plan. Sort by name. Cap at 15.
+  const selPlanRoster = [...selPlanByStudent.entries()]
+    .map(([sid, planTitle]) => ({
+      studentId: sid,
+      studentName: nameById.get(sid) ?? sid,
+      grade: gradeById.get(sid) ?? null,
+      planTitle,
+    }))
+    .sort((a, b) => a.studentName.localeCompare(b.studentName))
+    .slice(0, 15);
+
+  // 4) Most accommodated — heaviest support footprint, useful for case
+  //    conferencing. Sort by count desc, name asc. Cap at 15.
+  const mostAccommodated = [...accomByStudent.entries()]
+    .map(([sid, n]) => ({
+      studentId: sid,
+      studentName: nameById.get(sid) ?? sid,
+      grade: gradeById.get(sid) ?? null,
+      accommodationCount: n,
+    }))
+    .sort((a, b) => {
+      if (b.accommodationCount !== a.accommodationCount) {
+        return b.accommodationCount - a.accommodationCount;
+      }
+      return a.studentName.localeCompare(b.studentName);
+    })
+    .slice(0, 15);
+
+  res.json({
+    grade: gradeFilter,
+    windowDays,
+    totals: {
+      cohortStudents: studentRows.length,
+      activeMtssPlans: planRows.length,
+      selFlaggedPlans,
+      iepStudents: iep.size,
+      students504: sec504.size,
+      ellStudents: ell.size,
+      multiRiskStudents,
+    },
+    // Plan-area mix in a stable, fixed order so the UI doesn't have to sort.
+    planAreaMix: PLAN_AREA_ORDER.map((area) => ({
+      area,
+      count: planAreaCounts[area],
+    })),
+    // Risk-overlap histogram (1..4 flags). flagCount=0 is intentionally
+    // excluded — see comment above.
+    riskOverlap: [1, 2, 3, 4].map((k) => ({
+      flagCount: k,
+      students: riskHist[k],
+    })),
+    topLists: {
+      highestNeed,
+      atRiskWithoutPlan,
+      selPlanRoster,
+      mostAccommodated,
+    },
+    sources: {
+      plans: planRows.length,
+      accommodations: accomRows.length,
+      negativePbisLast30d: negPbisRows.length,
+      fastBq: bqRows.length,
+    },
+  });
+});
+
 export default router;

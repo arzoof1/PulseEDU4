@@ -2174,7 +2174,88 @@ NOT drop any of these without an explicit user OK**.
    esbuild; tsc-strict is informational only at this point.
 4. **SEB/SEL dashboard** — surface social-emotional/behavioral signals
    already in the DB (support notes, MTSS plans, accommodations,
-   trusted-adult data, parent-engagement signals). STATUS: queued.
+   trusted-adult data, parent-engagement signals). STATUS: **DONE
+   (Apr 26, 2026)**.
+
+   Shipped:
+   - Backend `GET /api/insights/sebsel` in `routes/insights.ts`
+     (~line 2387). Same auth as the prior three dashboards:
+     `loadStaff` + `isCoreTeam` + `requireSchool` (403 otherwise).
+     Same defensive `?grade=K|0..12` parsing. **Intentionally drops
+     the `?window=` param** — most SEB/SEL signals are stateful
+     (active plans, accommodations, IEP/504/ELL flags), so a
+     windowed daily trend would be misleading. The one windowed
+     signal — recent negative PBIS — is hard-coded to a fixed 30-day
+     "active concern" window and surfaced in the page footer.
+   - Empty-cohort fast-path returns a fully-zeroed payload before
+     any `inArray()` call (mirrors the prior three dashboards).
+   - 6 KPIs: `activeMtssPlans` (open `student_mtss_plans` for cohort),
+     `selFlaggedPlans` (active plans whose title bucket is "Behavior"
+     or "SEL" via case-insensitive substring matching against the
+     seeded titles in `seed.ts` ~line 373), `iepStudents`
+     (`students.ese=true`), `students504` (`students.is504=true`),
+     `ellStudents` (`students.ell=true`), and `multiRiskStudents`
+     (count of students with ≥2 of {plan, BQ, ≥3 negatives in last
+     30d, IEP-or-504}).
+   - Plan-area mix: 5-bucket categorization of every active plan
+     (Behavior / SEL / Academic / Attendance / Other) by title
+     regex. Returned in stable `PLAN_AREA_ORDER` so the UI doesn't
+     resort.
+   - Risk-overlap histogram: count of students by number of risk
+     flags (1 / 2 / 3 / 4). flagCount=0 is intentionally excluded
+     from the response — would dwarf every other bar.
+   - 4 top-N (15) lists:
+     - **Highest need** — sorted by flag count desc, name asc
+       tiebreak. Each entry carries the full `flags[]` so the UI
+       can render risk chips inline.
+     - **At risk without a plan** — students with BQ or
+       ≥3 recent negatives AND no active MTSS plan ("missed kids");
+       sorted by (negatives desc, BQ desc, name asc).
+     - **SEL plan roster** — students with active SEL- or Behavior-
+       bucketed plans (deduped per student via `Map.has()` guard so
+       a student with two SEL plans appears once); sorted by name.
+     - **Most accommodated** — heaviest support footprint, sorted by
+       active accommodation count desc.
+   - Sources panel: counts of active plans, active accommodations,
+     last-30d negative PBIS rows, and FAST BQ flags consumed.
+   - Frontend `SebSelDashboard.tsx`: 6-tile KPI strip with a fresh
+     palette to distinguish from the prior three dashboards (purple
+     for plan-related KPIs, blue for IEP/504/ELL demographic flags,
+     red for the multi-risk concentration KPI). Recharts horizontal
+     `BarChart` for plan-area mix with per-bar `Cell` colors and
+     right-aligned value labels; recharts vertical `BarChart` for
+     risk overlap with per-bar `Cell` colors (yellow→red gradient as
+     flag count grows) and top-aligned labels. 4 top-N tables in a
+     responsive grid, with `FlagChip` rendering each student's risk
+     flags inline on the highest-need rows and a small grade chip on
+     every student name. Two distinct empty states: `allEmpty` (no
+     students in cohort) vs `noSignal` (cohort exists but no flags
+     fire).
+   - `App.tsx`: SEB tile graduated from "Phase 4" to "Today" with
+     `targetSection: "sebSelDashboard"` and a sharper subtitle.
+     `SebSelDashboard` imported next to `AcademicsDashboard`. New
+     render block gated by `canAccessMtssHub` mirrors the academics
+     block and sets `studentProfileReturnTo: "sebSelDashboard"` so
+     the profile back-button returns here. Widened the
+     `studentProfileReturnTo` union to include `"sebSelDashboard"`
+     (clean +1 entry — that union was already widened to hold the
+     three dashboard targets in item #3).
+   - Architect review: PASS. Tenant scoping (every query AND-filters
+     on `schoolId` AND `inArray(studentId, cohort)`), defensive grade
+     parsing, empty-cohort handling, multi-risk threshold (>=2),
+     plan-bucket title matching against the seeded titles, dedupe
+     via `Map.has()`, active-only accommodations filter, and viz
+     parity with the sibling dashboards all explicitly verified. No
+     HIGH/CRITICAL issues.
+
+   Data NOT used in v1 (deferred until those tables actually get
+   seeded/populated): `support_notes`, `intervention_entries`,
+   `student_trusted_adults`, `parent_students`. The dashboard works
+   off the data the seed actually produces today (~278 MTSS plans,
+   accommodations, IEP/504/ELL flags, ~1050 PBIS entries from item
+   #2's seeder, and FAST BQ from item #3). Adding the deferred data
+   sources later is purely additive — KPIs and top-N lists can grow
+   without breaking the envelope shape.
 5. **Equity dashboard** — disaggregate every existing pillar by
    race/ELL/SpEd/FRL. Depends on items 1–4 producing the underlying
    metrics. STATUS: queued (dependent on 1–4).
