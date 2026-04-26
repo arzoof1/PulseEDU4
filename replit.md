@@ -2003,3 +2003,89 @@ forward-compatible.
 - `artifacts/api-server/src/index.ts` (boot wiring)
 - `artifacts/api-server/src/routes/insights.ts` (structured aggregation)
 - `artifacts/client/src/components/StudentProfile.tsx` (UI tables + type)
+
+## eduCLIMBER Ledger — Phase Queue (committed Apr 26, 2026)
+
+User explicitly asked for ALL seven of the following items, in any
+order I prefer. Working through them lowest-effort-first so we ship
+visible wins quickly. Mark each one DONE inline as it ships; **do
+NOT drop any of these without an explicit user OK**.
+
+1. **Engagement dashboard** — attendance + hall-pass + tardy + ISS
+   patterns aggregated across school/grade/teacher/time. Uses data
+   already in the DB (`hallPassEvents`, `issAttendanceDay`,
+   `tardyEvents`/equivalent). No new importer needed. STATUS: **DONE
+   (Apr 26, 2026)**.
+
+   Shipped:
+   - Backend `GET /api/insights/engagement` in `routes/insights.ts`
+     (~line 1411). Auth: `loadStaff` + `isCoreTeam` + `requireSchool`.
+     Filters: `?window=7d|30d|60d|90d` + `?grade=K|0..12`. Aggregates
+     hall passes, tardies, ISS days, pullouts → 5 KPIs (incl.
+     `hallPassMinutesLost` capped at 8h per pass for safety), dense
+     per-day trend series, top-N student/destination/period tables
+     with batched name lookup.
+   - Grade param parses defensively: K → 0, numeric strings → int
+     (validated 0–12), anything else → no filter (the students.grade
+     column is integer; passing the raw "K" string crashed Drizzle).
+   - Empty-cohort fast-path returns zeros instead of `inArray([])`.
+   - Frontend `EngagementDashboard.tsx`: KPI strip + 3 recharts
+     AreaCharts + 5 top-N tables, eduCLIMBER-clean style matching
+     `InsightsWatchlist`. Student names are buttons calling
+     `onOpenProfile` so users can drill into the StudentProfile.
+   - `InsightsHub.tsx` engagement tile graduated from "Phase 4"
+     placeholder to "Today" with `targetSection: "engagementDashboard"`.
+   - `App.tsx` adds `engagementDashboard` section gated by
+     `canAccessMtssHub`, sets `studentProfileReturnTo` so profile
+     back-button returns here.
+   - `seedEngagementEventsIfEmpty()` in `seed.ts` populates ~520 hall
+     passes / ~270 tardies / ~40 ISS days / ~110 pullouts per school
+     spread over the last 60 days (school-days only, Pareto-distributed
+     across students for realistic top-N tables). Skip-guard is
+     strictly "table empty for this school" — non-zero thresholds
+     caused deterministic re-seed crashes against the
+     `(student_id, day, school_id)` ISS unique index. Wired into
+     `index.ts` boot sequence after `seedHousesIfEmpty`.
+
+   Known pre-existing surface-wide issue (NOT introduced here):
+   backend `isCoreTeam` includes PBIS Coordinator; frontend
+   `canAccessMtssHub` does not. Affects all of `/api/insights/*`,
+   not just this endpoint. Out of scope for this item; revisit when
+   we re-evaluate the Insights Hub gating model.
+2. **Behavior dashboard** — tile-based PBIS+/PBIS−/incident analytics
+   across grade/teacher/time, eduCLIMBER-style. Uses existing
+   `pbisEvents` + `behaviorIncidents`. STATUS: queued.
+3. **Academics dashboard** — multi-cohort FAST/iReady/SCI breakdowns
+   with filters (school × grade × subgroup). Uses the data we just
+   seeded plus existing FAST PM. STATUS: queued.
+4. **SEB/SEL dashboard** — surface social-emotional/behavioral signals
+   already in the DB (support notes, MTSS plans, accommodations,
+   trusted-adult data, parent-engagement signals). STATUS: queued.
+5. **Equity dashboard** — disaggregate every existing pillar by
+   race/ELL/SpEd/FRL. Depends on items 1–4 producing the underlying
+   metrics. STATUS: queued (dependent on 1–4).
+6. **Early Warning composite** — single 0-100 risk score per student
+   rolling up the pillars (academics + behavior + attendance +
+   supports). Depends on items 1–4 for the inputs. STATUS: queued
+   (dependent on 1–4).
+7. **Attendance importer schema decision** — needs user input on
+   per-day vs per-period attendance, the code dictionary
+   (P/A/T/E/U/ISS/OSS), and excused-reason free-text vs enum.
+   Currently blocked on user. Will ping user for the decision once
+   items 1–4 are done so they have context for what data shapes we're
+   working with. STATUS: blocked on user (will surface at the right
+   moment).
+
+**Why this order:** Engagement, Behavior, and Academics dashboards
+each work with data already in the DB and produce immediately useful
+visualizations. SEB/SEL aggregates support-side data we already
+collect. Equity and Early Warning are roll-ups that depend on the
+first four producing per-student metrics. Attendance schema decision
+is parked until last because it needs the user and doesn't block the
+other six.
+
+**Reminder still active**: after item #7 from the *HeartBEAT*
+Deferred list ships (separate list — search "*After item #7 in this
+list ships*" earlier in this file), ask the user about adding view
+features for the uploaded data. That reminder is unrelated to this
+phase queue.

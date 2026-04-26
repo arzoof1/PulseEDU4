@@ -23,6 +23,7 @@ import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import InsightsWatchlist from "./components/InsightsWatchlist";
+import EngagementDashboard from "./components/EngagementDashboard";
 import StudentProfile from "./components/StudentProfile";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -3092,9 +3093,10 @@ const INSIGHTS_TILES: InsightsTile[] = [
     icon: "✨",
     title: "Engagement",
     subtitle:
-      "PBIS points, club/activity participation, and protective-factor indicators.",
-    phase: "Phase 4",
+      "Hall passes, tardies, ISS days, pullouts — what's pulling students out of instruction.",
+    phase: "Today",
     group: "domains",
+    targetSection: "engagementDashboard",
   },
   {
     id: "equity",
@@ -17465,6 +17467,19 @@ function App() {
             // for symmetry with the row click above.
             setSelectedInsightsStudentId(studentId);
             setStudentProfileReturnTo("insightsWatchlist");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "engagementDashboard" && canAccessMtssHub && (
+        <EngagementDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // Pin the back-target so the profile's Back button returns
+            // to the engagement dashboard (not the watchlist or
+            // wherever the user was before).
+            setStudentProfileReturnTo("engagementDashboard");
             setActiveSection("studentProfile");
           }}
         />

@@ -7,6 +7,7 @@ import {
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
+  seedEngagementEventsIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -45,6 +46,10 @@ if (Number.isNaN(port) || port <= 0) {
   await seedIreadyAndSciIfEmpty();
   // Houses (PBIS teams) + round-robin assign students. Idempotent per school.
   await seedHousesIfEmpty();
+  // Demo engagement events (hall passes, tardies, ISS, pullouts) over the
+  // last 60 days so the new Engagement dashboard renders something on first
+  // launch. Skip-if-already-populated per school + per table.
+  await seedEngagementEventsIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {

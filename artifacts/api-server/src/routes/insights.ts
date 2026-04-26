@@ -1383,4 +1383,346 @@ router.get("/insights/watchlist", async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/insights/engagement
+//
+// School-level Engagement dashboard. Surfaces hall-pass / tardy / ISS /
+// pullout patterns aggregated across an optional grade filter and a
+// time window. Mirrors the eduCLIMBER "Engagement" domain — what's
+// pulling kids out of instruction and where the friction is concentrated.
+//
+// Query params:
+//   ?window=3|7|15|30|month|custom
+//   ?from=YYYY-MM-DD&to=YYYY-MM-DD  (when window=custom)
+//   ?grade=K|1|...|12   (optional cohort filter)
+//
+// Auth: any signed-in core team member at the active school
+// (Admin / SuperUser / Behavior Specialist / MTSS Coord / PBIS Coord).
+// Engagement is a school-wide lens, not a per-student visibility check —
+// the existing roster / trusted-adult plumbing for individual profiles
+// stays in place. Non-core staff can still drill into individual student
+// profiles via the watchlist (which honors the visibility check), so they
+// don't lose access to anything they had before.
+// ---------------------------------------------------------------------------
+
+router.get("/insights/engagement", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res
+      .status(403)
+      .json({ error: "Engagement dashboard is core-team only" });
+    return;
+  }
+
+  const window = parseTimeWindow(req);
+  const fromIso = window.from.toISOString();
+  const toIso = window.to.toISOString();
+  const fromDateOnly = fromIso.slice(0, 10);
+  const toDateOnly = toIso.slice(0, 10);
+
+  // Optional grade cohort filter. Apply by joining on studentsTable so we
+  // can scope tardies/passes/ISS/pullouts (none of which carry a grade
+  // column themselves). Empty / "all" / unrecognized → no filter.
+  //
+  // students.grade is an INTEGER (K=0, 1=1, …, 12=12). The UI sends "K"
+  // for kindergarten; everything else comes through as a numeric string.
+  // We parse to int defensively — anything we can't map to 0-12 silently
+  // becomes "no filter" rather than crashing the route on a type mismatch
+  // or silently returning zero results.
+  const gradeRaw = typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  // Pull the grade-cohort student id set up front so every per-source
+  // query can use the same filter without re-joining studentsTable. When
+  // no cohort filter is set (or input was unparseable), leave
+  // studentIds = null (full school).
+  let studentIds: string[] | null = null;
+  if (gradeInt !== null) {
+    const rows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.grade, gradeInt),
+        ),
+      );
+    studentIds = rows.map((r) => r.studentId);
+    // Empty cohort → fast-path zero response so we don't have to special-
+    // case every aggregation below for "0 ids would mean inArray ([]) and
+    // Drizzle would generate an always-false predicate".
+    if (studentIds.length === 0) {
+      res.json({
+        window: {
+          from: fromIso,
+          to: toIso,
+          label: window.label,
+          days: window.days,
+        },
+        grade: gradeFilter,
+        totals: {
+          hallPasses: 0,
+          tardies: 0,
+          issDays: 0,
+          pullouts: 0,
+          hallPassMinutesLost: 0,
+        },
+        trends: { hallPassesByDay: [], tardiesByDay: [], issDaysByDay: [] },
+        topLists: {
+          hallPassTakers: [],
+          hallPassDestinations: [],
+          tardyStudents: [],
+          tardyPeriods: [],
+          issStudents: [],
+        },
+      });
+      return;
+    }
+  }
+
+  // ----- Hall passes -----------------------------------------------------
+  const hallPassRows = await db
+    .select({
+      studentId: hallPassesTable.studentId,
+      destination: hallPassesTable.destination,
+      createdAt: hallPassesTable.createdAt,
+      endedAt: hallPassesTable.endedAt,
+      maxDurationMinutes: hallPassesTable.maxDurationMinutes,
+    })
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        gte(hallPassesTable.createdAt, fromIso),
+        lte(hallPassesTable.createdAt, toIso),
+        studentIds ? inArray(hallPassesTable.studentId, studentIds) : sql`true`,
+      ),
+    );
+
+  // ----- Tardies ---------------------------------------------------------
+  const tardyRows = await db
+    .select({
+      studentId: tardiesTable.studentId,
+      period: tardiesTable.period,
+      createdAt: tardiesTable.createdAt,
+    })
+    .from(tardiesTable)
+    .where(
+      and(
+        eq(tardiesTable.schoolId, schoolId),
+        gte(tardiesTable.createdAt, fromIso),
+        lte(tardiesTable.createdAt, toIso),
+        studentIds ? inArray(tardiesTable.studentId, studentIds) : sql`true`,
+      ),
+    );
+
+  // ----- ISS days --------------------------------------------------------
+  const issRows = await db
+    .select({
+      studentId: issAttendanceDayTable.studentId,
+      day: issAttendanceDayTable.day,
+    })
+    .from(issAttendanceDayTable)
+    .where(
+      and(
+        eq(issAttendanceDayTable.schoolId, schoolId),
+        gte(issAttendanceDayTable.day, fromDateOnly),
+        lte(issAttendanceDayTable.day, toDateOnly),
+        studentIds
+          ? inArray(issAttendanceDayTable.studentId, studentIds)
+          : sql`true`,
+      ),
+    );
+
+  // ----- Pullouts (count only — single number on the KPI strip) ----------
+  const pulloutRows = await db
+    .select({ id: pulloutsTable.id })
+    .from(pulloutsTable)
+    .where(
+      and(
+        eq(pulloutsTable.schoolId, schoolId),
+        gte(pulloutsTable.requestedAt, fromIso),
+        lte(pulloutsTable.requestedAt, toIso),
+        studentIds ? inArray(pulloutsTable.studentId, studentIds) : sql`true`,
+      ),
+    );
+
+  // ----- Aggregate in JS -------------------------------------------------
+  // Match the 8h safety cap used by /reports/hall-passes so a forgotten
+  // active pass doesn't poison the totals.
+  const SAFETY_CAP_MIN = 480;
+  const nowMs = Date.now();
+  function passMinutes(p: {
+    createdAt: string;
+    endedAt: string | null;
+    maxDurationMinutes: number | null;
+  }): number {
+    const start = Date.parse(p.createdAt);
+    if (Number.isNaN(start)) return 0;
+    const endRef = p.endedAt ? Date.parse(p.endedAt) : nowMs;
+    if (Number.isNaN(endRef)) return 0;
+    const mins = Math.max(0, (endRef - start) / 60000);
+    return Math.min(mins, SAFETY_CAP_MIN);
+  }
+
+  let totalLost = 0;
+  const hallPassTakerCount = new Map<string, number>();
+  const hallPassDestCount = new Map<string, number>();
+  const hallPassByDay = new Map<string, number>();
+  for (const p of hallPassRows) {
+    totalLost += passMinutes(p);
+    hallPassTakerCount.set(
+      p.studentId,
+      (hallPassTakerCount.get(p.studentId) ?? 0) + 1,
+    );
+    hallPassDestCount.set(
+      p.destination,
+      (hallPassDestCount.get(p.destination) ?? 0) + 1,
+    );
+    const d = p.createdAt.slice(0, 10);
+    hallPassByDay.set(d, (hallPassByDay.get(d) ?? 0) + 1);
+  }
+
+  const tardyStudentCount = new Map<string, number>();
+  const tardyPeriodCount = new Map<string, number>();
+  const tardyByDay = new Map<string, number>();
+  for (const t of tardyRows) {
+    tardyStudentCount.set(
+      t.studentId,
+      (tardyStudentCount.get(t.studentId) ?? 0) + 1,
+    );
+    tardyPeriodCount.set(
+      t.period,
+      (tardyPeriodCount.get(t.period) ?? 0) + 1,
+    );
+    const d = t.createdAt.slice(0, 10);
+    tardyByDay.set(d, (tardyByDay.get(d) ?? 0) + 1);
+  }
+
+  const issStudentDayCount = new Map<string, number>();
+  const issByDay = new Map<string, number>();
+  for (const r of issRows) {
+    issStudentDayCount.set(
+      r.studentId,
+      (issStudentDayCount.get(r.studentId) ?? 0) + 1,
+    );
+    // r.day is a YYYY-MM-DD string from the date column (drizzle returns
+    // pg `date` as string by default).
+    const d = String(r.day).slice(0, 10);
+    issByDay.set(d, (issByDay.get(d) ?? 0) + 1);
+  }
+
+  // ----- Resolve student names for top lists (single batched query) ------
+  const idsNeeded = Array.from(
+    new Set<string>([
+      ...hallPassTakerCount.keys(),
+      ...tardyStudentCount.keys(),
+      ...issStudentDayCount.keys(),
+    ]),
+  );
+  const nameRows = idsNeeded.length
+    ? await db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, idsNeeded),
+          ),
+        )
+    : [];
+  const nameById = new Map(
+    nameRows.map((s) => [
+      s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+    ]),
+  );
+
+  function topN<K>(m: Map<K, number>, n = 10): Array<[K, number]> {
+    return Array.from(m.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n);
+  }
+
+  // ----- Build dense day series ------------------------------------------
+  // The raw maps only have entries for days with events. The chart needs a
+  // dense series so the line reads "real zero" on quiet days instead of a
+  // visual gap that implies missing data.
+  function denseSeries(m: Map<string, number>): { date: string; count: number }[] {
+    // Walk fromDateOnly → toDateOnly inclusive in 1-day steps.
+    const out: { date: string; count: number }[] = [];
+    const start = new Date(fromDateOnly + "T00:00:00Z");
+    const end = new Date(toDateOnly + "T00:00:00Z");
+    for (let cur = new Date(start); cur <= end; cur.setUTCDate(cur.getUTCDate() + 1)) {
+      const d = cur.toISOString().slice(0, 10);
+      out.push({ date: d, count: m.get(d) ?? 0 });
+    }
+    return out;
+  }
+
+  res.json({
+    window: {
+      from: fromIso,
+      to: toIso,
+      label: window.label,
+      days: window.days,
+    },
+    grade: gradeFilter,
+    totals: {
+      hallPasses: hallPassRows.length,
+      tardies: tardyRows.length,
+      issDays: issRows.length,
+      pullouts: pulloutRows.length,
+      hallPassMinutesLost: Math.round(totalLost),
+    },
+    trends: {
+      hallPassesByDay: denseSeries(hallPassByDay),
+      tardiesByDay: denseSeries(tardyByDay),
+      issDaysByDay: denseSeries(issByDay),
+    },
+    topLists: {
+      hallPassTakers: topN(hallPassTakerCount).map(([id, count]) => ({
+        studentId: id,
+        studentName: nameById.get(id) ?? id,
+        count,
+      })),
+      hallPassDestinations: topN(hallPassDestCount).map(([destination, count]) => ({
+        destination,
+        count,
+      })),
+      tardyStudents: topN(tardyStudentCount).map(([id, count]) => ({
+        studentId: id,
+        studentName: nameById.get(id) ?? id,
+        count,
+      })),
+      tardyPeriods: topN(tardyPeriodCount).map(([period, count]) => ({
+        period,
+        count,
+      })),
+      issStudents: topN(issStudentDayCount).map(([id, dayCount]) => ({
+        studentId: id,
+        studentName: nameById.get(id) ?? id,
+        dayCount,
+      })),
+    },
+  });
+});
+
 export default router;

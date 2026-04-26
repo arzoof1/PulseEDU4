@@ -1022,6 +1022,312 @@ export async function seedIreadyAndSciIfEmpty() {
 }
 
 // -----------------------------------------------------------------------------
+// seedEngagementEventsIfEmpty: populate hall_passes / tardies / iss /
+// pullouts with realistic-looking demo events spread over the last 60 days,
+// so the new Engagement dashboard renders something on first launch instead
+// of a sea of zeros. These tables don't have a `source` column to mark seed
+// rows, so the skip guard is strictly "table is empty for this school" — any
+// existing row (real or seeded) means we leave it alone. A previous version
+// used a "skip if > 50 rows" threshold, but the seeded ISS volume is ~40 per
+// school, which kept the guard open and caused deterministic re-seed
+// attempts to crash on the (student_id, day, school_id) unique index.
+// Each per-school per-table seed runs in its own transaction so a partial
+// crash rolls back fully (same idempotency contract as the iReady/SCI seed).
+// -----------------------------------------------------------------------------
+
+const HALL_DESTINATIONS = [
+  "Restroom",
+  "Office",
+  "Nurse",
+  "Counselor",
+  "Library",
+  "Front Desk",
+  "Water",
+];
+const TARDY_REASONS = [
+  "Bus delay",
+  "Locker",
+  "Late to class",
+  "Talking",
+  "No reason given",
+  "Bathroom",
+];
+const PULLOUT_REASONS = [
+  "Disruptive behavior",
+  "Refusal",
+  "Crisis support",
+  "Behavior plan check-in",
+  "Counselor request",
+];
+const ISS_SOURCES = ["assigned", "scheduled"];
+// Strictly empty-only — see the comment block at the top of
+// seedEngagementEventsIfEmpty for why a non-zero threshold is unsafe.
+const ENGAGEMENT_SEED_THRESHOLD = 0;
+
+// School-day filter — Mon-Fri only. Sat/Sun yield zero events so the trend
+// charts honestly drop on weekends instead of showing a flat fake baseline.
+function isSchoolDay(d: Date): boolean {
+  const dow = d.getUTCDay(); // 0=Sun, 6=Sat
+  return dow >= 1 && dow <= 5;
+}
+
+// Build a Pareto-ish weight distribution over student ids: top 10% of
+// students get ~50% of the events, mimicking real-world distribution.
+function buildWeightedSampler(
+  rng: () => number,
+  ids: string[],
+): () => string {
+  const sorted = shuffle(rng, ids); // randomize who's "top"
+  const weights = sorted.map((_, i) => {
+    const rank = i / sorted.length;
+    // Higher weight for low rank (top of list). Drops off smoothly.
+    return Math.exp(-3 * rank);
+  });
+  const totalW = weights.reduce((a, b) => a + b, 0);
+  return () => {
+    let r = rng() * totalW;
+    for (let i = 0; i < sorted.length; i++) {
+      r -= weights[i];
+      if (r <= 0) return sorted[i];
+    }
+    return sorted[sorted.length - 1];
+  };
+}
+
+export async function seedEngagementEventsIfEmpty() {
+  const schools = await db.select().from(schoolsTable);
+  if (schools.length === 0) return;
+
+  const now = new Date();
+  const dayMs = 86400000;
+
+  for (const school of schools) {
+    // We need the student roster + at least one staff name per school.
+    const studentRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+    const studentIds = studentRows.map((s) => s.studentId);
+
+    const [firstStaff] = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id))
+      .limit(1);
+    if (!firstStaff) continue;
+    const teacherName = firstStaff.displayName?.trim() || "Demo Teacher";
+
+    const rng = makeRng(0xe11ace + school.id * 1009);
+    const samplePareto = buildWeightedSampler(rng, studentIds);
+
+    // ---- Hall passes ----
+    const [{ c: hpExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM hall_passes WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+
+    if (hpExisting <= ENGAGEMENT_SEED_THRESHOLD) {
+      const inserts: (typeof hallPassesTable.$inferInsert)[] = [];
+      // Walk 60 days back → today, school days only, ~12 passes per school day.
+      for (let back = 60; back >= 0; back--) {
+        const day = new Date(now.getTime() - back * dayMs);
+        if (!isSchoolDay(day)) continue;
+        const count = 8 + Math.floor(rng() * 10); // 8–17 per school day
+        for (let i = 0; i < count; i++) {
+          // Hours 8–14 (school day), random minute.
+          const hour = 8 + Math.floor(rng() * 7);
+          const min = Math.floor(rng() * 60);
+          const start = new Date(day);
+          start.setUTCHours(hour, min, 0, 0);
+          const durationMin = 5 + Math.floor(rng() * 25); // 5–29 min
+          const ended = new Date(start.getTime() + durationMin * 60000);
+          inserts.push({
+            schoolId: school.id,
+            studentId: samplePareto(),
+            destination:
+              HALL_DESTINATIONS[
+                Math.floor(rng() * HALL_DESTINATIONS.length)
+              ],
+            originRoom: `Room ${100 + Math.floor(rng() * 30)}`,
+            teacherName,
+            status: "ended",
+            createdAt: start.toISOString(),
+            maxDurationMinutes: 10,
+            endedAt: ended.toISOString(),
+          });
+        }
+      }
+      if (inserts.length > 0) {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < inserts.length; i += 500) {
+            await tx
+              .insert(hallPassesTable)
+              .values(inserts.slice(i, i + 500));
+          }
+        });
+        logger.info(
+          { schoolId: school.id, count: inserts.length },
+          "[seed] hall_passes demo events seeded",
+        );
+      }
+    }
+
+    // ---- Tardies ----
+    const [{ c: tdExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM tardies WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+
+    if (tdExisting <= ENGAGEMENT_SEED_THRESHOLD) {
+      const inserts: (typeof tardiesTable.$inferInsert)[] = [];
+      for (let back = 60; back >= 0; back--) {
+        const day = new Date(now.getTime() - back * dayMs);
+        if (!isSchoolDay(day)) continue;
+        const count = 4 + Math.floor(rng() * 5); // 4–8 per school day
+        for (let i = 0; i < count; i++) {
+          // Tardies cluster at hour 8 (start of day) + period changes.
+          const periodNum = 1 + Math.floor(rng() * 7);
+          const hour = 7 + periodNum;
+          const min = Math.floor(rng() * 15);
+          const ts = new Date(day);
+          ts.setUTCHours(hour, min, 0, 0);
+          inserts.push({
+            schoolId: school.id,
+            studentId: samplePareto(),
+            teacherName,
+            period: String(periodNum),
+            reason: TARDY_REASONS[Math.floor(rng() * TARDY_REASONS.length)],
+            entryType: "tardy",
+            notes: "",
+            createdAt: ts.toISOString(),
+          });
+        }
+      }
+      if (inserts.length > 0) {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < inserts.length; i += 500) {
+            await tx
+              .insert(tardiesTable)
+              .values(inserts.slice(i, i + 500));
+          }
+        });
+        logger.info(
+          { schoolId: school.id, count: inserts.length },
+          "[seed] tardies demo events seeded",
+        );
+      }
+    }
+
+    // ---- ISS days ----
+    const [{ c: issExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM iss_attendance_day WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+
+    if (issExisting <= ENGAGEMENT_SEED_THRESHOLD) {
+      const inserts: (typeof issAttendanceDayTable.$inferInsert)[] = [];
+      // Track (studentId, day) so we don't violate the unique index
+      // (student_id, day, school_id). Same student can have ISS multiple
+      // days in the period but never two on the same day.
+      const taken = new Set<string>();
+      for (let back = 60; back >= 0; back--) {
+        const day = new Date(now.getTime() - back * dayMs);
+        if (!isSchoolDay(day)) continue;
+        const count = Math.floor(rng() * 3); // 0–2 per school day
+        for (let i = 0; i < count; i++) {
+          const sid = samplePareto();
+          const dayStr = day.toISOString().slice(0, 10);
+          const key = `${sid}|${dayStr}`;
+          if (taken.has(key)) continue;
+          taken.add(key);
+          inserts.push({
+            schoolId: school.id,
+            studentId: sid,
+            day: dayStr,
+            source: ISS_SOURCES[Math.floor(rng() * ISS_SOURCES.length)],
+            presentPeriods: [1, 2, 3, 4, 5, 6, 7],
+          });
+        }
+      }
+      if (inserts.length > 0) {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < inserts.length; i += 500) {
+            await tx
+              .insert(issAttendanceDayTable)
+              .values(inserts.slice(i, i + 500));
+          }
+        });
+        logger.info(
+          { schoolId: school.id, count: inserts.length },
+          "[seed] iss_attendance_day demo events seeded",
+        );
+      }
+    }
+
+    // ---- Pullouts ----
+    const [{ c: poExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM pullouts WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+
+    if (poExisting <= ENGAGEMENT_SEED_THRESHOLD) {
+      const inserts: (typeof pulloutsTable.$inferInsert)[] = [];
+      for (let back = 60; back >= 0; back--) {
+        const day = new Date(now.getTime() - back * dayMs);
+        if (!isSchoolDay(day)) continue;
+        const count = 1 + Math.floor(rng() * 4); // 1–4 per school day
+        for (let i = 0; i < count; i++) {
+          const periodNum = 1 + Math.floor(rng() * 7);
+          const hour = 8 + periodNum;
+          const min = Math.floor(rng() * 60);
+          const ts = new Date(day);
+          ts.setUTCHours(hour, min, 0, 0);
+          inserts.push({
+            schoolId: school.id,
+            studentId: samplePareto(),
+            requestedById: firstStaff.id,
+            requestedByName: teacherName,
+            requestedAt: ts.toISOString(),
+            referringTeacherStaffId: firstStaff.id,
+            referringTeacherName: teacherName,
+            period: periodNum,
+            reason:
+              PULLOUT_REASONS[Math.floor(rng() * PULLOUT_REASONS.length)],
+            status: "closed",
+            arrivedAt: new Date(ts.getTime() + 5 * 60000).toISOString(),
+            returnedAt: new Date(ts.getTime() + 25 * 60000).toISOString(),
+            closedAt: new Date(ts.getTime() + 30 * 60000).toISOString(),
+          });
+        }
+      }
+      if (inserts.length > 0) {
+        await db.transaction(async (tx) => {
+          for (let i = 0; i < inserts.length; i += 500) {
+            await tx
+              .insert(pulloutsTable)
+              .values(inserts.slice(i, i + 500));
+          }
+        });
+        logger.info(
+          { schoolId: school.id, count: inserts.length },
+          "[seed] pullouts demo events seeded",
+        );
+      }
+    }
+  }
+}
+
+// -----------------------------------------------------------------------------
 // seedIfEmpty: only runs when school_accommodations is empty (fresh DB).
 // -----------------------------------------------------------------------------
 export async function seedIfEmpty() {
