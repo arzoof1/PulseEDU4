@@ -35,6 +35,7 @@ import {
   tardiesTable,
   issAttendanceDayTable,
   studentAttendanceDayTable,
+  weatherDayTable,
   hallPassesTable,
   pulloutsTable,
   studentAccommodationsTable,
@@ -4144,6 +4145,8 @@ router.get("/insights/attendance", async (req, res) => {
       trends: { dailyAttendanceRate: [], dailyAbsencesByType: [] },
       periodAbsences: [],
       topLists: { mostAbsent: [], chronicAbsent: [] },
+      weather: [],
+      recentAbsences: [],
     });
   }
 
@@ -4381,6 +4384,100 @@ router.get("/insights/attendance", async (req, res) => {
     .map(([period, absences]) => ({ period, absences }))
     .sort((a, b) => a.period - b.period);
 
+  // ----- Weather (window-scoped) -----------------------------------------
+  // Joined client-side with the daily attendance trend for the Weather card.
+  // School-wide (no cohort narrowing) — weather is the same for everyone.
+  const weatherRows = await db
+    .select({
+      day: weatherDayTable.day,
+      tempHighF: weatherDayTable.tempHighF,
+      tempLowF: weatherDayTable.tempLowF,
+      precipInches: weatherDayTable.precipInches,
+      weatherCode: weatherDayTable.weatherCode,
+      summary: weatherDayTable.summary,
+    })
+    .from(weatherDayTable)
+    .where(
+      and(
+        eq(weatherDayTable.schoolId, schoolId),
+        gte(weatherDayTable.day, fromDateOnly),
+        lte(weatherDayTable.day, toDateOnly),
+      ),
+    );
+  const weather = weatherRows
+    .map((w) => ({
+      date: String(w.day).slice(0, 10),
+      tempHighF: w.tempHighF,
+      tempLowF: w.tempLowF,
+      precipInches: w.precipInches,
+      weatherCode: w.weatherCode,
+      summary: w.summary,
+    }))
+    .sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
+
+  // ----- Recent absences (PBIS-style "Recent events" list) ---------------
+  // Last 25 absence/tardy entries in the window, newest first, with the
+  // student name resolved. Uses the same cohort narrowing as the rest of
+  // the dashboard so filters don't lie.
+  const recentRows = await db
+    .select({
+      studentId: studentAttendanceDayTable.studentId,
+      day: studentAttendanceDayTable.day,
+      status: studentAttendanceDayTable.status,
+      absentPeriods: studentAttendanceDayTable.absentPeriods,
+      createdAt: studentAttendanceDayTable.createdAt,
+    })
+    .from(studentAttendanceDayTable)
+    .where(
+      and(
+        eq(studentAttendanceDayTable.schoolId, schoolId),
+        gte(studentAttendanceDayTable.day, fromDateOnly),
+        lte(studentAttendanceDayTable.day, toDateOnly),
+        inArray(studentAttendanceDayTable.status, [
+          "excused",
+          "unexcused",
+          "tardy",
+        ]),
+        studentIds
+          ? inArray(studentAttendanceDayTable.studentId, studentIds)
+          : sql`true`,
+      ),
+    )
+    .orderBy(desc(studentAttendanceDayTable.day))
+    .limit(25);
+
+  const recentNameIds = Array.from(new Set(recentRows.map((r) => r.studentId)));
+  const missingNameIds = recentNameIds.filter((id) => !nameById.has(id));
+  if (missingNameIds.length > 0) {
+    const moreNames = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, missingNameIds),
+        ),
+      );
+    for (const s of moreNames) {
+      nameById.set(
+        s.studentId,
+        `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+      );
+    }
+  }
+
+  const recentAbsences = recentRows.map((r) => ({
+    studentId: r.studentId,
+    studentName: nameById.get(r.studentId) ?? r.studentId,
+    date: String(r.day).slice(0, 10),
+    status: r.status,
+    periods: Array.isArray(r.absentPeriods) ? r.absentPeriods : [],
+  }));
+
   res.json({
     window: {
       from: fromIso,
@@ -4403,6 +4500,8 @@ router.get("/insights/attendance", async (req, res) => {
     trends: { dailyAttendanceRate, dailyAbsencesByType },
     periodAbsences,
     topLists: { mostAbsent, chronicAbsent },
+    weather,
+    recentAbsences,
   });
 });
 

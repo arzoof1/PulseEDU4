@@ -36,6 +36,7 @@ export * from "./bellSchedules";
 export * from "./issRoster";
 export * from "./issAttendanceDay";
 export * from "./studentAttendanceDay";
+export * from "./weatherDay";
 export * from "./classroomStoreItems";
 export * from "./schoolStoreItems";
 export * from "./studentMtssPlans";

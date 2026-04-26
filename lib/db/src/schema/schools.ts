@@ -6,6 +6,7 @@ import {
   boolean,
   timestamp,
   uniqueIndex,
+  doublePrecision,
 } from "drizzle-orm/pg-core";
 import { districtsTable } from "./districts";
 
@@ -33,6 +34,12 @@ export const schoolsTable = pgTable(
     // digest cron. Defaults to America/New_York for the first district
     // (Hernando County, FL).
     timezone: text("timezone").notNull().default("America/New_York"),
+    // Geographic coordinates used for the daily weather lookup that
+    // backs the Attendance dashboard's Weather card. Nullable because
+    // SIS-imported schools won't have these set out of the gate;
+    // weather is simply skipped for schools without coordinates.
+    latitude: doublePrecision("latitude"),
+    longitude: doublePrecision("longitude"),
     active: boolean("active").notNull().default(true),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()

@@ -27,6 +27,7 @@ import {
   pulloutsTable,
   issAttendanceDayTable,
   studentAttendanceDayTable,
+  weatherDayTable,
   issRosterTable,
   interventionEntriesTable,
   studentMtssPlansTable,
@@ -38,6 +39,7 @@ import {
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
 import { logger } from "./lib/logger";
+import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -1398,6 +1400,60 @@ export async function seedEngagementEventsIfEmpty() {
       }
     }
 
+    // ---- Weather ----
+    // Pull ~62 days of daily weather (matches the attendance window) for
+    // any school that has lat/lon set. Cached in weather_day so we don't
+    // re-hit Open-Meteo on every restart. Network failures are treated
+    // as "skip silently" — the dashboard just won't show a weather card
+    // until the next restart that succeeds.
+    if (school.latitude != null && school.longitude != null) {
+      const [{ c: wxExisting }] = (
+        await db.execute(
+          sql`SELECT COUNT(*)::int AS c FROM weather_day WHERE school_id = ${school.id}`,
+        )
+      ).rows as { c: number }[];
+      if (wxExisting <= ENGAGEMENT_SEED_THRESHOLD) {
+        try {
+          const wx = await fetchWeatherForLocation({
+            latitude: school.latitude,
+            longitude: school.longitude,
+            pastDays: 62,
+            timezone: school.timezone,
+          });
+          if (wx.length > 0) {
+            type WxIns = typeof weatherDayTable.$inferInsert;
+            const wxInserts: WxIns[] = wx.map((d) => ({
+              schoolId: school.id,
+              day: d.day,
+              tempHighF: d.tempHighF,
+              tempLowF: d.tempLowF,
+              precipInches: d.precipInches,
+              weatherCode: d.weatherCode,
+              summary: d.summary,
+            }));
+            await db
+              .insert(weatherDayTable)
+              .values(wxInserts)
+              .onConflictDoNothing();
+            logger.info(
+              { schoolId: school.id, count: wxInserts.length },
+              "[seed] weather_day demo events seeded",
+            );
+          } else {
+            logger.warn(
+              { schoolId: school.id },
+              "[seed] weather fetch returned empty — skipping (dashboard will show 'no data')",
+            );
+          }
+        } catch (err) {
+          logger.warn(
+            { schoolId: school.id, err: String(err) },
+            "[seed] weather fetch threw — skipping",
+          );
+        }
+      }
+    }
+
     // ---- Pullouts ----
     const [{ c: poExisting }] = (
       await db.execute(
@@ -2166,6 +2222,7 @@ export async function seedIfEmpty() {
   await db.delete(pulloutsTable);
   await db.delete(issAttendanceDayTable);
   await db.delete(studentAttendanceDayTable);
+  await db.delete(weatherDayTable);
   await db.delete(issRosterTable);
   await db.delete(interventionEntriesTable);
   await db.delete(sectionRosterTable);

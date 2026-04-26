@@ -3513,3 +3513,86 @@ Files touched:
 - artifacts/client/src/components/EngagementDashboard.tsx
 - artifacts/client/src/components/EquityDashboard.tsx
 - artifacts/client/src/components/SebSelDashboard.tsx
+
+## Phase 4 Final · Attendance dashboard — Weather + Recent events (2026-04-26)
+
+Three improvements to the existing Attendance dashboard. All scoped to
+`/api/insights/attendance` and `AttendanceDashboard.tsx`:
+
+1. **Weather module** — for attendance-correlation insight ("did rain
+   knock attendance down?"). Real Open-Meteo data (no API key needed).
+2. **Recent events table** — PBIS-style log of the 25 most-recent
+   absence/tardy entries at the bottom of the dashboard, newest first,
+   with clickable student names.
+3. **"Recent (7d)" pill** — relabeled the existing 7-day window button
+   from "7d" to "Recent (7d)" so the meaning is obvious at a glance.
+
+### Data layer
+- Added `latitude`, `longitude` (doublePrecision, nullable) to
+  `lib/db/src/schema/schools.ts`. Backfilled the 7 demo Hernando County
+  schools with Brooksville FL coords (28.5544, -82.3885).
+- New `lib/db/src/schema/weatherDay.ts` — one row per (school, day) with
+  `tempHighF`, `tempLowF`, `precipInches`, `weatherCode` (WMO), `summary`
+  (short label). Unique idx on (schoolId, day).
+
+### Backend
+- New `artifacts/api-server/src/lib/weatherFetcher.ts` — wraps
+  Open-Meteo `/v1/forecast` with `past_days=62`. 8s AbortController
+  timeout, returns `[]` on any failure (no key required, no fallback
+  synthetic data — empty array → "no data" UI state). Includes
+  `summarizeWeatherCode()` for WMO → short label mapping.
+- `artifacts/api-server/src/seed.ts` — added per-school weather seed
+  block (~line 1405) gated by `wxExisting <= ENGAGEMENT_SEED_THRESHOLD`
+  (=0). Idempotent via `.onConflictDoNothing()` on the unique idx.
+  Network failure logs a warning and continues (does not block seed).
+  Added `weatherDayTable` to the truncate list.
+- `artifacts/api-server/src/routes/insights.ts` — augmented the
+  attendance route response with two new arrays:
+  - `weather: WeatherDay[]` — window-scoped, school-wide (no cohort
+    narrowing — weather is the same for everyone), sorted ascending.
+  - `recentAbsences: RecentAbsenceRow[]` — last 25 absence/tardy
+    entries in the window for the cohort, newest first, with student
+    name resolved (reuses the existing `nameById` map and only
+    queries Postgres for missing IDs).
+  Both are also returned as `[]` in the `emptyResponse()` path so the
+  client never has to defend against `undefined`.
+
+### Client
+- `artifacts/client/src/components/AttendanceDashboard.tsx`:
+  - Imported `ComposedChart`, `Bar`, `Line` from recharts.
+  - Added `WeatherDay` and `RecentAbsenceRow` types to
+    `AttendanceResponse`.
+  - Renamed the "7d" pill label to **"Recent (7d)"**.
+  - New `WeatherCard` — composed chart with precip bars (left axis,
+    inches) + high-temp line (right axis, °F) + dashed attendance-rate
+    line (rescaled into the temp axis for visual comparison; tooltip
+    resolves the real % from row payload). Below the chart: avg high,
+    total rainfall, count of wet days (≥0.1"). Empty state prints a
+    friendly message instead of an empty card.
+  - New `RecentAbsencesTable` — Date / Student (clickable, opens
+    profile) / Status pill (color-coded excused/unexcused/tardy) /
+    Periods ("All day" or "Periods 1, 3, 5"). Lives in its own row
+    below the top-N tables.
+  - Two new HowToSection blocks: "Weather vs attendance" and
+    "Recent events".
+
+### Validation
+- DB sanity: 6 schools have 63 weather rows each (real data: 83.7°F
+  highs, "Cloudy" labels, etc.). Hit endpoint as super-user (Chris
+  Clifford / @Leopards) and confirmed: 31 weather rows + 25 recent
+  absences over 30d window for school 1 (cohort 875 students,
+  ADA 96.02%).
+- Architect code review passed — no blocking issues. Verified no
+  cross-school leakage, FK safety, idempotency, tooltip-math
+  correctness, and query performance for the cohort `inArray`.
+- Pre-existing TS errors in App.tsx (HubKey narrowing) and seed.ts
+  (any inference) are NOT regressions — none touch the new code paths.
+
+Files touched:
+- lib/db/src/schema/schools.ts (added lat/lon)
+- lib/db/src/schema/weatherDay.ts (NEW)
+- lib/db/src/schema/index.ts (barrel export)
+- artifacts/api-server/src/lib/weatherFetcher.ts (NEW)
+- artifacts/api-server/src/seed.ts (weather seed block + truncate)
+- artifacts/api-server/src/routes/insights.ts (route augmentation)
+- artifacts/client/src/components/AttendanceDashboard.tsx (UI)

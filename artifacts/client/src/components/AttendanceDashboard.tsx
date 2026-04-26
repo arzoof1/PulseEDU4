@@ -15,6 +15,9 @@ import {
   ResponsiveContainer,
   AreaChart,
   Area,
+  ComposedChart,
+  Bar,
+  Line,
   XAxis,
   YAxis,
   Tooltip,
@@ -35,6 +38,23 @@ interface TopAbsentRow {
   studentName: string;
   absences: number;
   rate: number; // 0..1
+}
+
+interface WeatherDay {
+  date: string;
+  tempHighF: number | null;
+  tempLowF: number | null;
+  precipInches: number | null;
+  weatherCode: number | null;
+  summary: string | null;
+}
+
+interface RecentAbsenceRow {
+  studentId: string;
+  studentName: string;
+  date: string;
+  status: "excused" | "unexcused" | "tardy" | string;
+  periods: number[];
 }
 
 interface AttendanceResponse {
@@ -65,6 +85,8 @@ interface AttendanceResponse {
     mostAbsent: TopAbsentRow[];
     chronicAbsent: TopAbsentRow[];
   };
+  weather: WeatherDay[];
+  recentAbsences: RecentAbsenceRow[];
 }
 
 interface Props {
@@ -268,6 +290,33 @@ export default function AttendanceDashboard({ onOpenProfile }: Props) {
           </ul>
         </HowToSection>
 
+        <HowToSection title="Weather vs attendance">
+          <p style={{ margin: "0 0 0.5rem" }}>
+            The weather card overlays the daily attendance rate on top of
+            high temperature and rainfall for the same window. Use it to
+            sanity-check whether a dip on the line was a real attendance
+            event or just a thunderstorm day. Below the chart you'll see
+            the average high and total rainfall for the window, plus the
+            count of days with measurable rain (≥0.1").
+          </p>
+          <p style={{ margin: 0 }}>
+            The dashed teal line is the attendance rate, visually rescaled
+            to sit alongside the temperature axis — hover any day to see
+            the true percentage.
+          </p>
+        </HowToSection>
+
+        <HowToSection title="Recent events">
+          <p style={{ margin: 0 }}>
+            The table at the bottom is the PBIS-style log: the 25 most
+            recent absence and tardy entries in the window, newest first.
+            Each row shows the date, student (clickable), the kind of
+            absence, and which periods were missed. Use it to drill from
+            the dashboard summary down to the specific incident — e.g.
+            "Thursday's dip — who actually missed?"
+          </p>
+        </HowToSection>
+
         <HowToSection title="A few caveats">
           <ul style={howtoListStyle}>
             <li>
@@ -350,7 +399,11 @@ function Filters({
             borderColor: w === windowKey ? "#1d4ed8" : "#cbd5e1",
           }}
         >
-          {w === "custom" ? "Custom" : `${w}d`}
+          {w === "custom"
+          ? "Custom"
+          : w === "7"
+            ? "Recent (7d)"
+            : `${w}d`}
         </button>
       ))}
       {windowKey === "custom" && (
@@ -455,6 +508,10 @@ function Body({
           />
           <AbsenceStackCard data={data.trends.dailyAbsencesByType} />
           <PeriodAbsenceCard data={data.periodAbsences} />
+          <WeatherCard
+            weather={data.weather}
+            attendance={data.trends.dailyAttendanceRate}
+          />
         </div>
       )}
 
@@ -476,6 +533,14 @@ function Body({
           title="Chronic absent (>10% rate)"
           rows={data.topLists.chronicAbsent}
           rankBy="rate"
+          onOpenProfile={onOpenProfile}
+        />
+      </div>
+
+      {/* Recent events — PBIS-style log of the most recent absence entries */}
+      <div style={{ marginTop: "0.75rem" }}>
+        <RecentAbsencesTable
+          rows={data.recentAbsences}
           onOpenProfile={onOpenProfile}
         />
       </div>
@@ -838,6 +903,358 @@ function TopAbsentTable({
             })}
           </tbody>
         </table>
+      )}
+    </div>
+  );
+}
+
+// ---------- Weather card ----------------------------------------------------
+//
+// Joins per-day temperature / precipitation against the daily attendance
+// rate so a coach can eyeball "did rain knock attendance down on Thursday?"
+// We use a composed chart: precip as bars (left axis, inches), high temp
+// as a thin line (right axis, °F). The attendance rate is shown as a
+// translucent area on the same temp axis (rescaled into the 80–100°F range
+// just visually — the tooltip still shows the true %).
+
+function WeatherCard({
+  weather,
+  attendance,
+}: {
+  weather: WeatherDay[];
+  attendance: { date: string; rate: number }[];
+}) {
+  if (weather.length === 0) {
+    return (
+      <div style={cardStyle}>
+        <div style={cardLabelStyle}>Weather vs attendance</div>
+        <p style={{ color: "var(--text-subtle)", fontSize: 13, margin: 0 }}>
+          No weather data for this window yet. (We pull a few weeks of
+          history when the school is restarted.)
+        </p>
+      </div>
+    );
+  }
+
+  // Index attendance by date so we can stitch the two series together
+  // without assuming they're the same length (weather covers every
+  // calendar day; attendance only school days).
+  const attByDate = new Map(attendance.map((d) => [d.date, d.rate]));
+
+  // We rescale attendance rate (0..1 → 80..100) into the temp axis so it
+  // sits visually next to the high-temp line. Tooltip still reports the
+  // actual %.
+  const series = weather.map((w) => {
+    const rate = attByDate.get(w.date);
+    return {
+      date: w.date,
+      precip: w.precipInches ?? 0,
+      tempHigh: w.tempHighF,
+      tempLow: w.tempLowF,
+      summary: w.summary,
+      attRate: rate ?? null,
+      attRateScaled:
+        rate != null ? Math.max(80, Math.min(100, rate * 100)) : null,
+    };
+  });
+
+  // Window summary — useful for a quick "this week was wet" read.
+  const tempVals = weather
+    .map((w) => w.tempHighF)
+    .filter((v): v is number => v != null);
+  const precipVals = weather
+    .map((w) => w.precipInches)
+    .filter((v): v is number => v != null);
+  const avgHigh = tempVals.length
+    ? tempVals.reduce((a, b) => a + b, 0) / tempVals.length
+    : null;
+  const totalPrecip = precipVals.reduce((a, b) => a + b, 0);
+  const wetDays = precipVals.filter((p) => p >= 0.1).length;
+
+  return (
+    <div style={cardStyle}>
+      <div style={cardLabelStyle}>Weather vs attendance</div>
+      <ResponsiveContainer width="100%" height={140}>
+        <ComposedChart
+          data={series}
+          margin={{ top: 4, right: 8, left: 0, bottom: 0 }}
+        >
+          <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
+          <XAxis
+            dataKey="date"
+            tick={{ fontSize: 10 }}
+            tickFormatter={(d: string) => d.slice(5)}
+            interval="preserveStartEnd"
+            minTickGap={20}
+          />
+          <YAxis
+            yAxisId="precip"
+            orientation="left"
+            tick={{ fontSize: 10 }}
+            width={28}
+            tickFormatter={(v: number) => `${v.toFixed(1)}"`}
+            allowDecimals
+          />
+          <YAxis
+            yAxisId="temp"
+            orientation="right"
+            tick={{ fontSize: 10 }}
+            width={32}
+            domain={[40, 100]}
+            tickFormatter={(v: number) => `${v}°`}
+          />
+          <Tooltip
+            contentStyle={{ fontSize: 12 }}
+            formatter={(
+              value: number | string,
+              name: string,
+              item: { payload?: (typeof series)[number] },
+            ) => {
+              if (name === "Precip")
+                return [`${Number(value).toFixed(2)}"`, name];
+              if (name === "High")
+                return [`${Number(value).toFixed(0)}°F`, name];
+              if (name === "Attendance") {
+                // attRateScaled is rescaled for the temp axis, so always
+                // resolve the real attendance rate from the row payload.
+                const real = item?.payload?.attRate;
+                return real != null
+                  ? [`${(real * 100).toFixed(1)}%`, name]
+                  : ["—", name];
+              }
+              return [value, name];
+            }}
+            labelFormatter={(d: string) => {
+              const row = series.find((s) => s.date === d);
+              return row?.summary ? `${d} · ${row.summary}` : d;
+            }}
+          />
+          <Bar
+            yAxisId="precip"
+            dataKey="precip"
+            fill="#60a5fa"
+            fillOpacity={0.55}
+            name="Precip"
+          />
+          <Line
+            yAxisId="temp"
+            type="monotone"
+            dataKey="tempHigh"
+            stroke="#f97316"
+            strokeWidth={2}
+            dot={false}
+            name="High"
+          />
+          <Line
+            yAxisId="temp"
+            type="monotone"
+            dataKey="attRateScaled"
+            stroke={ACCENT}
+            strokeWidth={2}
+            strokeDasharray="4 3"
+            dot={false}
+            name="Attendance"
+            connectNulls
+          />
+        </ComposedChart>
+      </ResponsiveContainer>
+      <div
+        style={{
+          display: "flex",
+          gap: "0.75rem",
+          fontSize: 11,
+          color: "var(--text-subtle, #64748b)",
+          marginTop: "0.25rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <Legend color="#60a5fa" label="Precip (in)" />
+        <Legend color="#f97316" label="High °F" />
+        <Legend color={ACCENT} label="Attendance (scaled)" />
+      </div>
+      <div
+        style={{
+          fontSize: 12,
+          color: "var(--text-subtle, #64748b)",
+          marginTop: "0.4rem",
+          lineHeight: 1.4,
+        }}
+      >
+        {avgHigh != null && (
+          <span>
+            Avg high <strong>{avgHigh.toFixed(0)}°F</strong>
+          </span>
+        )}
+        {totalPrecip > 0 && (
+          <>
+            {" · "}
+            <span>
+              <strong>{totalPrecip.toFixed(1)}"</strong> rain · {wetDays}{" "}
+              wet day{wetDays === 1 ? "" : "s"}
+            </span>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------- Recent absences (PBIS-style "Recent events" list) ---------------
+
+const STATUS_TONE: Record<string, { bg: string; fg: string; label: string }> = {
+  unexcused: { bg: "#fee2e2", fg: "#991b1b", label: "Unexcused" },
+  excused: { bg: "#fef3c7", fg: "#92400e", label: "Excused" },
+  tardy: { bg: "#cffafe", fg: "#155e75", label: "Tardy" },
+};
+
+function StatusPill({ status }: { status: string }) {
+  const tone = STATUS_TONE[status] ?? {
+    bg: "#e5e7eb",
+    fg: "#1f2937",
+    label: status,
+  };
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "0.1rem 0.5rem",
+        borderRadius: 999,
+        background: tone.bg,
+        color: tone.fg,
+        fontSize: 11,
+        fontWeight: 600,
+      }}
+    >
+      {tone.label}
+    </span>
+  );
+}
+
+function periodSummary(periods: number[]): string {
+  if (!periods || periods.length === 0) return "All day";
+  if (periods.length === 1) return `Period ${periods[0]}`;
+  const sorted = [...periods].sort((a, b) => a - b);
+  return `Periods ${sorted.join(", ")}`;
+}
+
+function RecentAbsencesTable({
+  rows,
+  onOpenProfile,
+}: {
+  rows: RecentAbsenceRow[];
+  onOpenProfile: (id: string) => void;
+}) {
+  return (
+    <div style={cardStyle}>
+      <div style={cardLabelStyle}>Recent events</div>
+      <p
+        style={{
+          fontSize: 12,
+          color: "var(--text-subtle, #64748b)",
+          margin: "0 0 0.5rem",
+        }}
+      >
+        The most recent absence and tardy entries in the window — newest
+        first. Click a name to open that student's profile.
+      </p>
+      {rows.length === 0 ? (
+        <p style={{ color: "var(--text-subtle)", fontSize: 13, margin: 0 }}>
+          No absence events recorded in this window.
+        </p>
+      ) : (
+        <div style={{ overflowX: "auto" }}>
+          <table
+            style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
+          >
+            <thead>
+              <tr style={{ color: "var(--text-subtle, #64748b)", fontSize: 11 }}>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "0 0.5rem 0.25rem 0",
+                    fontWeight: 500,
+                  }}
+                >
+                  Date
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "0 0.5rem 0.25rem 0",
+                    fontWeight: 500,
+                  }}
+                >
+                  Student
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "0 0.5rem 0.25rem 0",
+                    fontWeight: 500,
+                  }}
+                >
+                  Status
+                </th>
+                <th
+                  style={{
+                    textAlign: "left",
+                    padding: "0 0 0.25rem",
+                    fontWeight: 500,
+                  }}
+                >
+                  Periods
+                </th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((r, i) => (
+                <tr
+                  key={`${r.studentId}-${r.date}-${i}`}
+                  style={{ borderBottom: "1px solid #f1f5f9" }}
+                >
+                  <td
+                    style={{
+                      padding: "0.4rem 0.5rem 0.4rem 0",
+                      whiteSpace: "nowrap",
+                      fontVariantNumeric: "tabular-nums",
+                      color: "var(--text-subtle, #475569)",
+                    }}
+                  >
+                    {r.date}
+                  </td>
+                  <td style={{ padding: "0.4rem 0.5rem 0.4rem 0" }}>
+                    <button
+                      type="button"
+                      onClick={() => onOpenProfile(r.studentId)}
+                      style={{
+                        background: "transparent",
+                        border: "none",
+                        color: "#1d4ed8",
+                        cursor: "pointer",
+                        padding: 0,
+                        font: "inherit",
+                        textAlign: "left",
+                      }}
+                    >
+                      {r.studentName}
+                    </button>
+                  </td>
+                  <td style={{ padding: "0.4rem 0.5rem 0.4rem 0" }}>
+                    <StatusPill status={r.status} />
+                  </td>
+                  <td
+                    style={{
+                      padding: "0.4rem 0",
+                      color: "var(--text-subtle, #475569)",
+                    }}
+                  >
+                    {periodSummary(r.periods)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       )}
     </div>
   );
