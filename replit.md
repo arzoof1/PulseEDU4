@@ -2617,6 +2617,37 @@ comes up, since this could *be* the equity dashboard's hero view.
 
 ---
 
+## Program Effectiveness Sankey — mockup built (Apr 26, 2026)
+
+Status: **mockup live in mockup-sandbox + on the canvas**, not yet
+graduated to the main client.
+
+- File: `artifacts/mockup-sandbox/src/components/mockups/pulse-screens/ProgramEffectivenessSankey.tsx`
+- Preview: `/__mockup/preview/pulse-screens/ProgramEffectivenessSankey`
+- Canvas shape id: `pulse-program-effectiveness-sankey` (1280x800 at x=12720, y=-540)
+- Renders recharts `<Sankey>` with custom node + link render functions:
+  4 left nodes (PM1) → 4 right nodes (PM3), bands `at-or-above`,
+  `below`, `well-below`, `na`. Ribbons are colored by the **end** band
+  (matches the screenshot's read direction).
+- Filters (visual + interactive against a deterministic synthetic
+  matrix): subject toggle (ELA / Math), grade dropdown (All / K–10),
+  PM-window dropdown (PM1→PM3 / PM1→PM2 / PM2→PM3).
+- Lessons learned for any future recharts Sankey work in this repo:
+  1. ResponsiveContainer **must** sit inside a parent with an explicit
+     pixel `height` — `min-h` alone collapses to 0 and the chart goes
+     blank silently.
+  2. Recharts hands `sourceY/targetY` to the link renderer
+     **pre-centered** for the link thickness; do not add `linkWidth/2`
+     again or the ribbon detaches from the node bar.
+  3. The Sankey tooltip's active item lives at `payload[0].payload`,
+     not `payload[0].payload.payload`. Both link and node hovers use
+     the same shape — branch on whether `fromBand`/`toBand` exist.
+
+Original "save for later" notes from the inspiration screenshot are
+preserved below.
+
+---
+
 ## Save-for-later: eduCLIMBER "Program Effectiveness" Sankey
 
 User dropped in a second screenshot on Apr 26, 2026 with the same
