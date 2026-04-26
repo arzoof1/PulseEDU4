@@ -17,6 +17,7 @@ import {
   Target,
   HandHelping,
   SlidersHorizontal,
+  Download,
 } from "lucide-react";
 import Preferences from "./Preferences";
 import { Card, CardContent } from "@/components/ui/card";
@@ -143,6 +144,16 @@ const EkgDivider = () => (
   </div>
 );
 
+// Pulls the suggested filename out of a Content-Disposition header so
+// downloaded files keep the server-chosen name instead of an opaque
+// blob:UUID. Handles both quoted and unquoted forms; returns null when
+// the header is missing or unparseable.
+function parseFilenameFromCD(cd: string | null): string | null {
+  if (!cd) return null;
+  const match = cd.match(/filename\*?=(?:UTF-8'')?"?([^";]+)"?/i);
+  return match?.[1] ?? null;
+}
+
 function initials(first: string, last: string): string {
   return (first.charAt(0) + last.charAt(0)).toUpperCase();
 }
@@ -177,6 +188,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   // activeStudentId is unchanged — used after returning from the
   // Preferences panel so toggles take effect immediately.
   const [snapshotNonce, setSnapshotNonce] = useState(0);
+  // Tracks whether a PDF download is in flight so we can disable the
+  // button + show a "Downloading…" label and avoid double-clicks
+  // hitting the server twice.
+  const [pdfDownloading, setPdfDownloading] = useState(false);
+  const [pdfError, setPdfError] = useState("");
 
   useEffect(() => {
     if (activeStudentId === null) {
@@ -222,6 +238,50 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     }
     setParentToken(null);
     navigate("/parent/login");
+  }
+
+  // Triggers the server-rendered PDF for the active student. We fetch
+  // the file as a blob (so parentFetch can attach the Bearer token if
+  // the cookie session has expired) and then synthesize an invisible
+  // <a download> click. Object URL is revoked on the next tick so we
+  // don't leak memory after a long parent session with many downloads.
+  async function handleDownloadPdf() {
+    if (!activeStudentId) return;
+    // Early-return guard against rapid double-clicks. The button has
+    // `disabled={pdfDownloading}`, but React only applies that on the
+    // next render tick — two clicks in the same frame would otherwise
+    // fire two server requests.
+    if (pdfDownloading) return;
+    setPdfDownloading(true);
+    setPdfError("");
+    try {
+      const res = await parentFetch(
+        `/api/parent/snapshot.pdf?studentId=${activeStudentId}`,
+      );
+      if (!res.ok) {
+        const msg =
+          (await res.json().catch(() => null))?.error ??
+          `Could not download report (${res.status})`;
+        setPdfError(msg);
+        return;
+      }
+      const blob = await res.blob();
+      const filename =
+        parseFilenameFromCD(res.headers.get("Content-Disposition")) ??
+        "HeartBEAT-Snapshot.pdf";
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+    } catch (e) {
+      setPdfError(e instanceof Error ? e.message : "Could not download report");
+    } finally {
+      setPdfDownloading(false);
+    }
   }
 
   if (me.students.length === 0) {
@@ -326,6 +386,19 @@ export default function Dashboard({ me }: { me: ParentMe }) {
             <Button
               variant="outline"
               size="sm"
+              onClick={handleDownloadPdf}
+              disabled={pdfDownloading || !snapshot}
+              className="gap-2"
+              title="Download a PDF copy of this report"
+            >
+              <Download className="h-4 w-4" />
+              <span className="hidden sm:inline">
+                {pdfDownloading ? "Preparing…" : "Download PDF"}
+              </span>
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
               onClick={() => setView("prefs")}
               className="gap-2"
             >
@@ -343,6 +416,12 @@ export default function Dashboard({ me }: { me: ParentMe }) {
             </Button>
           </div>
         </div>
+
+        {pdfError && (
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-3 text-sm">
+            {pdfError}
+          </div>
+        )}
 
         {loading && (
           <div className="text-sm text-slate-500 text-center py-12">

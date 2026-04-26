@@ -1493,10 +1493,13 @@ render correctly.
 3. ~~Per-parent toggle UI for what's in their HeartBEAT Report~~ —
    DONE Apr 26 (see "Parent Portal Sections — per-parent toggle UI"
    block below).
-4. PDF export of the HeartBEAT Report.
+4. ~~PDF export of the HeartBEAT Report~~ — DONE Apr 26 (see
+   "HeartBEAT PDF export" block below).
 5. Optional weekly emailed PDF (Resend already wired). NOTE: the
    per-parent toggle now persists `weekly_email_enabled` per (parent,
-   student); the actual cron + render is the work to do here.
+   student); the cron + email-with-attachment is what's left. The PDF
+   renderer from #4 (`lib/parentSnapshotPdf.ts`) is the engine to
+   reuse — no new layout work needed.
 
 **Mockup files (do not delete — referenced when iterating):**
 - `artifacts/mockup-sandbox/src/components/mockups/heartbeat/Snapshot.tsx`
@@ -1752,3 +1755,78 @@ the previous.)
 - Toggling a hidden-by-parent row back ON sets it to `null` (revert
   to inherit), not `true`. This means a later admin toggle change
   won't "lock in" the parent's old preference.
+
+## HeartBEAT PDF export (April 26, 2026)
+
+Closed item #4 from the HeartBEAT "Deferred (revisit later)" list.
+Parents can now download a paper-friendly PDF copy of their student's
+snapshot — useful for IEP meetings, sharing with the other guardian,
+or attaching to outside provider records.
+
+**Server**:
+- `artifacts/api-server/src/lib/parentSnapshot.ts` — extracted
+  `buildParentSnapshot(parentId, studentId)` from the JSON route. This
+  is the single source of truth for the snapshot data shape AND the
+  visibility contract (school OFF wins; parent can only HIDE). Returns
+  a `SnapshotResult` discriminated union — `{ ok: true, data }` or
+  `{ ok: false, status, error }` — so both routes handle 403/404
+  identically.
+- `artifacts/api-server/src/routes/parentSnapshot.ts` — refactored
+  down to ~40 lines; just resolves the parent id (cookie or Bearer)
+  and delegates to the helper.
+- `artifacts/api-server/src/lib/parentSnapshotPdf.ts` — pdfkit-based
+  renderer. Returns `Promise<Buffer>` (not a stream) so the route can
+  set `Content-Length` upfront. Sections are rendered in the same
+  order as the on-screen Dashboard (Recognition → Attendance/Hall
+  passes → Accommodations → FAST → MTSS → Interventions → Staff
+  notes) so a parent can match the printout to what they see in the
+  app row-for-row. Honors `snapshot.sectionsAvailable` — sections
+  hidden by school OR by parent prefs are omitted entirely (never
+  rendered as empty placeholders). Footer on every page shows page
+  numbers + a confidentiality notice with the parent's name.
+- `artifacts/api-server/src/routes/parentSnapshotPdf.ts` — `GET
+  /api/parent/snapshot.pdf?studentId=N`. Same auth pattern as the
+  JSON snapshot route. Sets `Content-Type: application/pdf`,
+  `Content-Disposition: attachment; filename="HeartBEAT-{first}-
+  {last}.pdf"` (filename sanitized to `[A-Za-z0-9._-]`), and
+  `Cache-Control: private, no-store` so the per-parent confidential
+  document never lands in a shared proxy cache. Best-effort lookup
+  of the school name for the header strip — failure is swallowed
+  (header just renders "PulseEDU" instead).
+
+**Client** (`artifacts/client/src/parent/Dashboard.tsx`):
+- "Download PDF" button next to "What I see" / "Sign out". Disabled
+  while a download is in flight or before the snapshot has loaded
+  (so parents can't request a PDF for a student they haven't even
+  seen the on-screen version of yet).
+- Uses `parentFetch` + blob + invisible `<a download>` so the
+  Authorization header (Bearer fallback for expired cookie sessions)
+  is attached. Object URL is revoked on the next tick to avoid memory
+  growth across many downloads. Errors render in a small red banner
+  at the top of the dashboard, distinct from snapshot-load errors.
+- `parseFilenameFromCD()` lifts the server-suggested filename out of
+  the `Content-Disposition` header so the file lands as
+  `HeartBEAT-Mia-Rodriguez.pdf` instead of `download.pdf`.
+
+**Build / packaging notes**:
+- Added `pdfkit` (runtime) + `@types/pdfkit` (dev) + `@swc/helpers`
+  to `artifacts/api-server`. The last one is needed because pdfkit
+  pulls in `fontkit`, which has a bundled CJS dep on
+  `@swc/helpers/cjs/_define_property.cjs`. esbuild externalizes
+  `@swc/*` (correct — it's CJS-only and contains numeric-property
+  edge cases bundlers mangle), and pnpm only exposes hoisted
+  packages that are direct deps. Adding `@swc/helpers` as a direct
+  dep gives node a resolvable path at runtime. If a future package
+  upgrade still fails with `Cannot find module '@swc/helpers/...'`
+  the same pattern applies — add it as a direct dep, don't try to
+  un-externalize it in `build.mjs`.
+
+**Why pdfkit (not puppeteer / @react-pdf):**
+- No headless chromium download (would have added ~300MB to the
+  image and slowed cold starts).
+- No React in the api-server (keeps the runtime + bundle tight; the
+  React → CSS → print pipeline is overkill for a 1-page report).
+- Deterministic vector output — the same snapshot always produces
+  byte-identical PDFs, useful when we eventually attach these to
+  emails for #5 (won't trigger spam filters that hate
+  every-message-different attachments).

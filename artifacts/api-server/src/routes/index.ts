@@ -51,6 +51,7 @@ import trustedAdultLinksRouter from "./trustedAdultLinks";
 import insightsRouter from "./insights";
 import heartbeatSettingsRouter from "./heartbeatSettings";
 import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
+import parentSnapshotPdfRouter from "./parentSnapshotPdf";
 
 const router: IRouter = Router();
 
@@ -106,5 +107,6 @@ router.use(trustedAdultLinksRouter);
 router.use(insightsRouter);
 router.use(heartbeatSettingsRouter);
 router.use(parentHeartbeatPrefsRouter);
+router.use(parentSnapshotPdfRouter);
 
 export default router;
