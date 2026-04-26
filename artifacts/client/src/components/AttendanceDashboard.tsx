@@ -505,12 +505,20 @@ function Body({
             title="Daily attendance rate"
             color={ACCENT}
             data={data.trends.dailyAttendanceRate}
+            windowLabel={data.window.label}
           />
-          <AbsenceStackCard data={data.trends.dailyAbsencesByType} />
-          <PeriodAbsenceCard data={data.periodAbsences} />
+          <AbsenceStackCard
+            data={data.trends.dailyAbsencesByType}
+            windowLabel={data.window.label}
+          />
+          <PeriodAbsenceCard
+            data={data.periodAbsences}
+            windowLabel={data.window.label}
+          />
           <WeatherCard
             weather={data.weather}
             attendance={data.trends.dailyAttendanceRate}
+            windowLabel={data.window.label}
           />
         </div>
       )}
@@ -629,17 +637,19 @@ function RateTrendCard({
   title,
   color,
   data,
+  windowLabel,
 }: {
   title: string;
   color: string;
   data: { date: string; rate: number }[];
+  windowLabel?: string;
 }) {
   // Map rate (0..1) → percentage points for the chart so the y-axis reads
   // "92" rather than "0.92".
   const series = data.map((d) => ({ date: d.date, pct: d.rate * 100 }));
   return (
     <div style={cardStyle}>
-      <div style={cardLabelStyle}>{title}</div>
+      <CardLabel title={title} windowLabel={windowLabel} />
       <ResponsiveContainer width="100%" height={140}>
         <AreaChart data={series} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -677,12 +687,14 @@ function RateTrendCard({
 
 function AbsenceStackCard({
   data,
+  windowLabel,
 }: {
   data: { date: string; excused: number; unexcused: number; tardy: number }[];
+  windowLabel?: string;
 }) {
   return (
     <div style={cardStyle}>
-      <div style={cardLabelStyle}>Absences by type / day</div>
+      <CardLabel title="Absences by type / day" windowLabel={windowLabel} />
       <ResponsiveContainer width="100%" height={140}>
         <AreaChart data={data} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
           <CartesianGrid strokeDasharray="3 3" stroke="#e5e7eb" />
@@ -760,13 +772,15 @@ function Legend({ color, label }: { color: string; label: string }) {
 
 function PeriodAbsenceCard({
   data,
+  windowLabel,
 }: {
   data: { period: number; absences: number }[];
+  windowLabel?: string;
 }) {
   const max = data.reduce((m, d) => Math.max(m, d.absences), 0);
   return (
     <div style={cardStyle}>
-      <div style={cardLabelStyle}>Period absences</div>
+      <CardLabel title="Period absences" windowLabel={windowLabel} />
       {data.length === 0 || max === 0 ? (
         <p style={{ color: "var(--text-subtle)", fontSize: 13, margin: 0 }}>
           No period-level absences in this window.
@@ -920,14 +934,16 @@ function TopAbsentTable({
 function WeatherCard({
   weather,
   attendance,
+  windowLabel,
 }: {
   weather: WeatherDay[];
   attendance: { date: string; rate: number }[];
+  windowLabel?: string;
 }) {
   if (weather.length === 0) {
     return (
       <div style={cardStyle}>
-        <div style={cardLabelStyle}>Weather vs attendance</div>
+        <CardLabel title="Weather vs attendance" windowLabel={windowLabel} />
         <p style={{ color: "var(--text-subtle)", fontSize: 13, margin: 0 }}>
           No weather data for this window yet. (We pull a few weeks of
           history when the school is restarted.)
@@ -973,7 +989,7 @@ function WeatherCard({
 
   return (
     <div style={cardStyle}>
-      <div style={cardLabelStyle}>Weather vs attendance</div>
+      <CardLabel title="Weather vs attendance" windowLabel={windowLabel} />
       <ResponsiveContainer width="100%" height={140}>
         <ComposedChart
           data={series}
@@ -1280,6 +1296,42 @@ const cardLabelStyle: React.CSSProperties = {
   color: "var(--text-subtle, #64748b)",
   marginBottom: "0.5rem",
 };
+
+function CardLabel({
+  title,
+  windowLabel,
+}: {
+  title: string;
+  windowLabel?: string;
+}) {
+  return (
+    <div
+      style={{
+        ...cardLabelStyle,
+        display: "flex",
+        justifyContent: "space-between",
+        alignItems: "baseline",
+        gap: "0.5rem",
+        flexWrap: "wrap",
+      }}
+    >
+      <span>{title}</span>
+      {windowLabel ? (
+        <span
+          style={{
+            textTransform: "none",
+            letterSpacing: 0,
+            fontWeight: 400,
+            color: "var(--text-subtle, #94a3b8)",
+            fontSize: 11,
+          }}
+        >
+          {windowLabel}
+        </span>
+      ) : null}
+    </div>
+  );
+}
 
 const selectStyle: React.CSSProperties = {
   padding: "0.4rem 0.6rem",
