@@ -7,8 +7,20 @@
 // scope — a plain teacher's payload only contains roster ∪ trusted-
 // adult students; core team sees the full school.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+
+// Minimal shape for the quick student-lookup combobox. Pulled from
+// /api/students which the watchlist already has visibility into (the
+// endpoint scopes its response the same way the watchlist itself does
+// — roster ∪ trusted-adult for plain teachers, full school for core
+// team).
+interface StudentLookup {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  grade: number | string | null;
+}
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
 
@@ -172,6 +184,66 @@ export default function InsightsWatchlist({ onOpenStudent }: Props) {
   >("risk");
   const [sortDir, setSortDir] = useState<"asc" | "desc">("desc");
 
+  // Quick-lookup combobox state. Independent of the filter bar — picking
+  // a student here jumps straight to the StudentProfile drill-in.
+  const [studentDirectory, setStudentDirectory] = useState<StudentLookup[]>([]);
+  const [studentQuery, setStudentQuery] = useState("");
+  const [studentDropdownOpen, setStudentDropdownOpen] = useState(false);
+  const studentBoxRef = useRef<HTMLDivElement | null>(null);
+
+  // Pull the visible-to-actor student list once on mount. /api/students
+  // already enforces the same visibility scope as the watchlist, so the
+  // dropdown can never surface a student the caller couldn't open.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/students")
+      .then((r) => (r.ok ? r.json() : []))
+      .then((rows: StudentLookup[]) => {
+        if (cancelled) return;
+        setStudentDirectory(Array.isArray(rows) ? rows : []);
+      })
+      .catch(() => {
+        /* silent — dropdown just stays empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Close the dropdown when the user clicks outside the combobox.
+  useEffect(() => {
+    if (!studentDropdownOpen) return;
+    function onDocClick(e: MouseEvent) {
+      if (
+        studentBoxRef.current &&
+        !studentBoxRef.current.contains(e.target as Node)
+      ) {
+        setStudentDropdownOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onDocClick);
+    return () => document.removeEventListener("mousedown", onDocClick);
+  }, [studentDropdownOpen]);
+
+  // Narrow the dropdown by typed query — match on first/last name or
+  // student ID. Cap to 12 results so the menu stays usable on full
+  // rosters; the user can keep typing to narrow further.
+  const studentMatches = useMemo(() => {
+    const q = studentQuery.trim().toLowerCase();
+    if (!q) return studentDirectory.slice(0, 12);
+    return studentDirectory
+      .filter((s) => {
+        const name = `${s.firstName} ${s.lastName}`.toLowerCase();
+        const flipped = `${s.lastName} ${s.firstName}`.toLowerCase();
+        return (
+          name.includes(q) ||
+          flipped.includes(q) ||
+          (s.studentId ?? "").toLowerCase().includes(q)
+        );
+      })
+      .slice(0, 12);
+  }, [studentQuery, studentDirectory]);
+
   // Build the query string from filters. Empty values are dropped so
   // server-side filter parsing treats them as "no filter."
   const queryString = useMemo(() => {
@@ -321,6 +393,126 @@ export default function InsightsWatchlist({ onOpenStudent }: Props) {
         the list, then click a row to open the full profile. Presets
         save your filter set in this browser only.
       </p>
+
+      {/* Quick student lookup — bypasses the filter bar entirely.
+          Useful for "I just want to check on Maria" without rebuilding
+          a preset. Results scoped to the same visibility set the
+          watchlist itself uses. */}
+      <div
+        ref={studentBoxRef}
+        style={{
+          position: "relative",
+          marginBottom: "0.75rem",
+          paddingBottom: "0.75rem",
+          borderBottom: "1px solid #e5e7eb",
+          maxWidth: 460,
+        }}
+      >
+        <label
+          htmlFor="watchlist-student-lookup"
+          style={{
+            display: "block",
+            fontSize: "0.78rem",
+            fontWeight: 600,
+            color: "#374151",
+            marginBottom: 4,
+          }}
+        >
+          Look up an individual student
+        </label>
+        <input
+          id="watchlist-student-lookup"
+          type="text"
+          value={studentQuery}
+          placeholder="Search by name or student ID…"
+          onFocus={() => setStudentDropdownOpen(true)}
+          onChange={(e) => {
+            setStudentQuery(e.target.value);
+            setStudentDropdownOpen(true);
+          }}
+          style={{
+            width: "100%",
+            padding: "0.4rem 0.5rem",
+            border: "1px solid #d1d5db",
+            borderRadius: 6,
+            fontSize: "0.9rem",
+          }}
+        />
+        {studentDropdownOpen && studentMatches.length > 0 && (
+          <div
+            style={{
+              position: "absolute",
+              top: "100%",
+              left: 0,
+              right: 0,
+              background: "white",
+              border: "1px solid #d1d5db",
+              borderRadius: 6,
+              marginTop: 2,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+              maxHeight: 280,
+              overflowY: "auto",
+              zIndex: 20,
+            }}
+          >
+            {studentMatches.map((s) => (
+              <button
+                key={s.studentId}
+                type="button"
+                onClick={() => {
+                  setStudentDropdownOpen(false);
+                  setStudentQuery("");
+                  onOpenStudent(s.studentId);
+                }}
+                style={{
+                  display: "block",
+                  width: "100%",
+                  textAlign: "left",
+                  padding: "0.4rem 0.6rem",
+                  background: "white",
+                  border: "none",
+                  borderBottom: "1px solid #f3f4f6",
+                  cursor: "pointer",
+                  fontSize: "0.85rem",
+                }}
+                onMouseDown={(e) => e.preventDefault()}
+              >
+                <div style={{ fontWeight: 600 }}>
+                  {s.lastName}, {s.firstName}
+                </div>
+                <div style={{ fontSize: "0.72rem", color: "#9ca3af" }}>
+                  {s.studentId}
+                  {s.grade !== null && s.grade !== undefined && s.grade !== ""
+                    ? ` · Grade ${s.grade}`
+                    : ""}
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+        {studentDropdownOpen &&
+          studentQuery.trim() &&
+          studentMatches.length === 0 && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                right: 0,
+                background: "white",
+                border: "1px solid #d1d5db",
+                borderRadius: 6,
+                marginTop: 2,
+                padding: "0.5rem 0.6rem",
+                fontSize: "0.8rem",
+                color: "#6b7280",
+                zIndex: 20,
+              }}
+            >
+              No students match "{studentQuery}".
+            </div>
+          )}
+      </div>
 
       {/* Filter bar — chip-style controls */}
       <div
