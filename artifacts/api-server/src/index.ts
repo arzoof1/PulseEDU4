@@ -10,6 +10,7 @@ import {
   seedEngagementEventsIfEmpty,
   seedPbisCatalogIfEmpty,
   seedPbisEntriesIfEmpty,
+  seedStudentDemographicsIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -57,6 +58,13 @@ if (Number.isNaN(port) || port <= 0) {
   // seed runs first because the entries seed reads pbis_reasons live.
   await seedPbisCatalogIfEmpty();
   await seedPbisEntriesIfEmpty();
+  // Demographic flags (ELL/ESE/504/gender) for the SEB/SEL + Equity
+  // dashboards. Runs LAST because it correlates demographics to existing
+  // FAST BQ + recent-30d negative PBIS counts so the demo dataset surfaces
+  // realistic disparity ratios. Idempotent per-school: skipped the moment
+  // any student already has a flag/gender set, so a real SIS roster import
+  // is never overwritten.
+  await seedStudentDemographicsIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {

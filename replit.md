@@ -2280,9 +2280,123 @@ NOT drop any of these without an explicit user OK**.
    #2's seeder, and FAST BQ from item #3). Adding the deferred data
    sources later is purely additive — KPIs and top-N lists can grow
    without breaking the envelope shape.
+
+   **Retroactive update (Apr 26, 2026 — same day, after item #5
+   shipped):** the SEB/SEL dashboard's IEP / 504 / ELL KPIs were
+   silently zero on Apr 26 morning because `students.ese`,
+   `students.is_504`, and `students.ell` were `false` for all 9750
+   seeded students (the columns existed but no seeder populated
+   them). Item #5's `seedStudentDemographicsIfEmpty` (see item #5
+   below) now backfills those flags with realistic FL-school
+   proportions on every demo school, so this dashboard's IEP / 504
+   / ELL tiles now light up: ELL ~14%, IEP ~16%, 504 ~4%. **No
+   code changes were needed in the SEB/SEL dashboard itself** — the
+   queries were always correct, they just had nothing to count.
 5. **Equity dashboard** — disaggregate every existing pillar by
-   race/ELL/SpEd/FRL. Depends on items 1–4 producing the underlying
-   metrics. STATUS: queued (dependent on 1–4).
+   demographic subgroup (ELL, IEP, 504, Female, Male) with **risk
+   ratio** as the headline metric for district-level conversations.
+   STATUS: **DONE (Apr 26, 2026)**.
+
+   Shipped:
+   - **Demographic seeder** `seedStudentDemographicsIfEmpty` in
+     `artifacts/api-server/src/seed.ts` (~line 1536). Wired into
+     `seedIfEmpty()` boot path AFTER the FAST + PBIS seeders so
+     correlation lookups have data. **Two-stage idempotency
+     check** (architect-hardened):
+       * Stage 1: skip school if any student already has `ell=true`,
+         `ese=true`, `is_504=true`, or non-NULL `gender`.
+       * Stage 2: skip school if `school_accommodations` is empty
+         for that school — that table is populated exclusively by
+         `seedIfEmpty()` on the demo schools, so any real SIS-
+         imported school (which has no `school_accommodations`
+         rows) skips even on a fresh boot. Without Stage 2 a real
+         SIS roster with all-false demographic booleans + NULL
+         gender (a valid "no demographics imported yet" state)
+         would get overwritten by demo correlations.
+     Stage 2 logs each skip at INFO so the boot log is auditable.
+     On the current 7 demo schools, Stage 1 fires (silently
+     skips) — verified post-restart that all 9750 students retain
+     the originally seeded demographics.
+   - **Demo correlation patterns** — deliberately mild so the
+     dataset shows realistic 1.3x–1.7x risk ratios without
+     looking obviously synthetic. **These are intentional, NOT
+     bugs** — documented in seeder comments and called out in the
+     dashboard footer:
+       * **ELL**: base 12% + 8 pts if BQ in any subject + 6 pts if
+         recent-30d negs ≥ 3.
+       * **ESE (IEP)**: base 14% + 12 pts if recent-30d negs ≥ 5
+         + 5 pts if BQ.
+       * **504**: base 4% + 3 pts if math-specific BQ.
+       * **Gender**: M ~49.5% / F ~49.5% / NULL ~1% (no risk
+         correlation — gender disparities are noise on demo data
+         by design, so when real data shows real gender disparities
+         it isn't drowned out).
+     Verified post-seed: ELL 14.2%, ESE 15.6%, 504 3.9%, gender
+     ~49.7 / 49.4 / 1.0%.
+   - **Backend** `GET /api/insights/equity` in
+     `routes/insights.ts` (~line 2810). Same auth pattern as the
+     prior 4 dashboards (`requireSchool` + `loadStaff` +
+     `isCoreTeam` → 403) and same defensive `?grade=K|0..12`
+     parsing. Empty-cohort fast-path returns a fully-zeroed
+     envelope before any `inArray()` call.
+   - **5 subgroups × 5 metrics** matrix:
+       * Subgroups: ELL, IEP (ese), 504, Female, Male.
+       * Metrics: % on active MTSS plan, avg negative PBIS / student
+         (last 30d), pos:neg PBIS ratio, % flagged BQ (any subject),
+         avg out-of-class events / student (passes + tardies, 30d).
+   - **Risk ratio** = `inGroupValue / outGroupValue`. In-group vs
+     out-group (NOT vs school avg) for cleaner ratio math. Safety
+     fallbacks: denom 0 → null, both 0 → 1.0. Pos:neg ratio
+     returns null when in-group neg=0 (no sentinel value).
+   - **Direction-of-concern** semantics: each metric carries a
+     `worseDirection: "higher" | "lower"` so the UI colors red /
+     green correctly (avg negs being higher in a subgroup is BAD;
+     pos:neg ratio being higher is GOOD).
+   - **High-disparity flag threshold**: ratio ≥ 1.30 OR ≤ 0.77
+     (i.e., ≥30% gap in either direction), AND in-group size ≥ 10
+     (`MIN_GROUP_SIZE` constant, prevents small-n noise from
+     producing false alarms).
+   - **PBIS query excludes voided rows** (`isNull(voidedAt)`) to
+     match the rest of the codebase's behavior semantics —
+     architect caught this gap in review and it's now fixed.
+   - **Frontend** `EquityDashboard.tsx`: 6-tile KPI strip with
+     teal accents for the 3 demographic counts, **rose accent +
+     extra-large value font** on the max-risk-ratio tile so it
+     reads as the visual headline, amber accent on the high-
+     disparity flag count. Disparity flags top-12 panel with HUGE
+     ratio numbers + sample-size chips, sorted by `|log(ratio)|`
+     desc. Per-subgroup snapshot grid (5 cards, one per subgroup)
+     for drill-down after the headline grabs attention.
+     **Demo-data disclaimer footer** explicitly tells district
+     staff the seeded correlations are illustrative.
+   - **Two distinct empty states**: cohort empty ("Select a grade
+     to load equity insights") vs cohort exists but no
+     demographics imported ("No demographic data yet — import a
+     SIS roster with ELL/ESE/504/gender fields").
+   - `App.tsx`: equity tile graduated from "Phase 4" to "Today"
+     with `targetSection: "equityDashboard"`. `EquityDashboard`
+     imported next to `SebSelDashboard`. New render block gated
+     by `canAccessMtssHub` mirrors the SEB/SEL block and sets
+     `studentProfileReturnTo: "equityDashboard"` (union widened
+     by 1 entry — that union was already widened to hold the
+     prior 4 dashboard targets).
+   - **UI nit fix in same session**: bumped `gradeChipStyle` left
+     margin from 6→10px, added a 1px slate border, bumped font
+     weight to 600. Previously the chip "G8" could visually run
+     into the trailing letters of a student's name (e.g.
+     "...lker G8" → "lkerG8"). Affects all 4 places the chip
+     renders in `SebSelDashboard.tsx`.
+   - Architect review: PASS after 2 fixes. Architect initially
+     flagged: (1) seeder Stage 2 missing — fixed via
+     `school_accommodations` marker check; (2) PBIS query missing
+     `voidedAt IS NULL` — fixed. Tenant scoping, risk-ratio edge
+     handling, MIN_GROUP_SIZE guard, direction-of-concern
+     semantics, and demo-correlation transparency all explicitly
+     verified.
+6. **Early Warning composite** — single 0-100 risk score per student
+   rolling up the pillars (academics + behavior + attendance +
+   supports). Depends on items 1–4 for the inputs. STATUS: queued
+   (dependent on 1–4, item #5 is independent of item #6).
 6. **Early Warning composite** — single 0-100 risk score per student
    rolling up the pillars (academics + behavior + attendance +
    supports). Depends on items 1–4 for the inputs. STATUS: queued

@@ -876,12 +876,18 @@ const linkButtonStyle: React.CSSProperties = {
 };
 
 const gradeChipStyle: React.CSSProperties = {
+  // Slight bump in left margin + a thin border so the chip reads as a
+  // visually distinct token rather than running into the trailing letters
+  // of the student's name (e.g. "...lker G8" no longer looks like "lkerG8").
   display: "inline-block",
-  marginLeft: 6,
+  marginLeft: 10,
   fontSize: 10,
-  background: "#f1f5f9",
-  color: "#475569",
-  padding: "1px 5px",
+  fontWeight: 600,
+  background: "#e2e8f0",
+  color: "#334155",
+  padding: "1px 6px",
   borderRadius: 4,
+  border: "1px solid #cbd5e1",
   verticalAlign: "middle",
+  letterSpacing: "0.02em",
 };

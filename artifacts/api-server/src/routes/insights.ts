@@ -2774,4 +2774,526 @@ router.get("/insights/sebsel", async (req, res) => {
   });
 });
 
+// ============================================================================
+// GET /api/insights/equity — Phase 5 of the eduCLIMBER Insights ledger.
+//
+// Disaggregates the four pillars (Engagement / Behavior / Academics / SEB) by
+// demographic subgroups and surfaces **risk ratios** as the headline metric.
+// "Risk ratio" = inGroupRate / outGroupRate. The dashboard uses the out-group
+// (everyone NOT in the subgroup) as the denominator rather than school-wide
+// average so the ratio cleanly answers "how does this subgroup compare to its
+// peers?" — which is the question district staff actually ask.
+//
+// Subgroups (5): ELL, IEP (ese), 504, Female, Male. Race + FRL are NOT yet
+// modeled on the students table; they're a known followup tied to the SIS
+// import work.
+//
+// Metrics (5):
+//   1. % on active MTSS plan
+//   2. Avg negative PBIS / student (last 30d)
+//   3. Pos:neg PBIS ratio
+//   4. % flagged BQ (any subject)
+//   5. Avg out-of-class events / student (passes + tardies, 30d)
+//
+// Each metric carries a `worseDirection` ("higher" | "lower") so the UI can
+// color disparities red vs green correctly — e.g., a higher-than-peers
+// pos:neg ratio is GOOD news, while a higher-than-peers neg-PBIS average is a
+// concern.
+//
+// High-disparity threshold: |risk ratio| outside [0.77, 1.30] (i.e., a 30%+
+// gap in either direction), AND in-group size >= 10 (small-n noise guard).
+// Concerning = the disparity is in the worse direction for the metric.
+// ============================================================================
+router.get("/insights/equity", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "Equity dashboard is core-team only" });
+    return;
+  }
+
+  // Same defensive grade parsing pattern as the prior four dashboards.
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  // Cohort + demographic flags.
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      grade: studentsTable.grade,
+      ell: studentsTable.ell,
+      ese: studentsTable.ese,
+      is504: studentsTable.is504,
+      gender: studentsTable.gender,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+      ),
+    );
+
+  // Subgroup membership sets — built whether or not the cohort is empty so
+  // the response shape is stable.
+  const ell = new Set<string>();
+  const ese = new Set<string>(); // IEP
+  const sec504 = new Set<string>();
+  const female = new Set<string>();
+  const male = new Set<string>();
+  let unknownGenderCount = 0;
+  for (const r of studentRows) {
+    if (r.ell) ell.add(r.studentId);
+    if (r.ese) ese.add(r.studentId);
+    if (r.is504) sec504.add(r.studentId);
+    if (r.gender === "F") female.add(r.studentId);
+    else if (r.gender === "M") male.add(r.studentId);
+    else unknownGenderCount += 1;
+  }
+
+  // Subgroup definitions in stable display order.
+  type SubgroupKey = "ELL" | "IEP" | "504" | "Female" | "Male";
+  const SUBGROUPS: { key: SubgroupKey; members: Set<string> }[] = [
+    { key: "ELL", members: ell },
+    { key: "IEP", members: ese },
+    { key: "504", members: sec504 },
+    { key: "Female", members: female },
+    { key: "Male", members: male },
+  ];
+
+  // Metric definitions. `worseDirection` drives the red/green coloring of
+  // the risk ratio: "higher" means a higher-than-peers value is concerning,
+  // "lower" means the opposite.
+  type MetricKey =
+    | "pctOnPlan"
+    | "avgNegPbis"
+    | "posNegRatio"
+    | "pctBq"
+    | "avgEngagementEvents";
+  type MetricDef = {
+    key: MetricKey;
+    label: string;
+    worseDirection: "higher" | "lower";
+  };
+  const METRICS: MetricDef[] = [
+    { key: "pctOnPlan", label: "% on active MTSS plan", worseDirection: "higher" },
+    { key: "avgNegPbis", label: "Avg neg PBIS / student (30d)", worseDirection: "higher" },
+    { key: "posNegRatio", label: "Pos:neg PBIS ratio", worseDirection: "lower" },
+    { key: "pctBq", label: "% flagged BQ (any subject)", worseDirection: "higher" },
+    { key: "avgEngagementEvents", label: "Avg out-of-class events / student (30d)", worseDirection: "higher" },
+  ];
+
+  // Empty-cohort fast path. Same envelope shape, all zeros.
+  if (studentRows.length === 0) {
+    res.json({
+      grade: gradeFilter,
+      windowDays: 30,
+      totals: {
+        cohortStudents: 0,
+        ellCount: 0,
+        ellPct: 0,
+        iepCount: 0,
+        iepPct: 0,
+        students504Count: 0,
+        students504Pct: 0,
+        femaleCount: 0,
+        femalePct: 0,
+        maleCount: 0,
+        malePct: 0,
+        unknownGenderCount: 0,
+        unknownGenderPct: 0,
+        highDisparityFlagCount: 0,
+        maxRiskRatio: null,
+      },
+      disparityFlags: [],
+      subgroupSnapshots: SUBGROUPS.map((sg) => ({
+        subgroup: sg.key,
+        inGroupSize: 0,
+        outGroupSize: 0,
+        metrics: METRICS.map((m) => ({
+          name: m.label,
+          worseDirection: m.worseDirection,
+          inGroupValue: null,
+          outGroupValue: null,
+          riskRatio: null,
+        })),
+      })),
+      sources: {
+        plans: 0,
+        accommodations: 0,
+        negativePbisLast30d: 0,
+        positivePbisLast30d: 0,
+        fastBq: 0,
+        engagementLast30d: 0,
+      },
+    });
+    return;
+  }
+
+  const studentIds = studentRows.map((r) => r.studentId);
+
+  // ----- Pull data sources -----------------------------------------------
+  // Active MTSS plans.
+  const planRows = await db
+    .select({ studentId: studentMtssPlansTable.studentId })
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        isNull(studentMtssPlansTable.closedAt),
+        inArray(studentMtssPlansTable.studentId, studentIds),
+      ),
+    );
+  const studentsWithActivePlan = new Set<string>();
+  for (const r of planRows) studentsWithActivePlan.add(r.studentId);
+
+  const now = Date.now();
+  const windowDays = 30;
+  const fromIso = new Date(now - windowDays * 86_400_000).toISOString();
+
+  // PBIS — pull both polarities so we can compute pos:neg ratios.
+  // Excludes voided entries (voided_at IS NULL) to match the rest of the
+  // codebase's behavior semantics — including voided rows would distort
+  // the avgNegPbis / posNegRatio metrics and inflate disparity ratios.
+  const pbisRows = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      polarity: pbisEntriesTable.polarity,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, fromIso),
+        inArray(pbisEntriesTable.studentId, studentIds),
+      ),
+    );
+  const negCountByStudent = new Map<string, number>();
+  const posCountByStudent = new Map<string, number>();
+  let totalNeg = 0;
+  let totalPos = 0;
+  for (const r of pbisRows) {
+    if (r.polarity === "negative") {
+      negCountByStudent.set(
+        r.studentId,
+        (negCountByStudent.get(r.studentId) ?? 0) + 1,
+      );
+      totalNeg += 1;
+    } else if (r.polarity === "positive") {
+      posCountByStudent.set(
+        r.studentId,
+        (posCountByStudent.get(r.studentId) ?? 0) + 1,
+      );
+      totalPos += 1;
+    }
+  }
+
+  // FAST priorYearBq.
+  const bqRows = await db
+    .select({ studentId: studentFastScoresTable.studentId })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        eq(studentFastScoresTable.priorYearBq, true),
+        inArray(studentFastScoresTable.studentId, studentIds),
+      ),
+    );
+  const bqStudents = new Set<string>();
+  for (const r of bqRows) bqStudents.add(r.studentId);
+
+  // Engagement: hall passes + tardies in last 30d. Sum per student.
+  const passRows = await db
+    .select({ studentId: hallPassesTable.studentId })
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        gte(hallPassesTable.createdAt, fromIso),
+        inArray(hallPassesTable.studentId, studentIds),
+      ),
+    );
+  const tardyRows = await db
+    .select({ studentId: tardiesTable.studentId })
+    .from(tardiesTable)
+    .where(
+      and(
+        eq(tardiesTable.schoolId, schoolId),
+        gte(tardiesTable.createdAt, fromIso),
+        inArray(tardiesTable.studentId, studentIds),
+      ),
+    );
+  const engagementByStudent = new Map<string, number>();
+  for (const r of passRows) {
+    engagementByStudent.set(
+      r.studentId,
+      (engagementByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+  for (const r of tardyRows) {
+    engagementByStudent.set(
+      r.studentId,
+      (engagementByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+  const engagementTotal = passRows.length + tardyRows.length;
+
+  // Accommodations source count (for transparency in `sources`, no metric).
+  const accomRows = await db
+    .select({ studentId: studentAccommodationsTable.studentId })
+    .from(studentAccommodationsTable)
+    .where(
+      and(
+        eq(studentAccommodationsTable.schoolId, schoolId),
+        isNull(studentAccommodationsTable.removedAt),
+        inArray(studentAccommodationsTable.studentId, studentIds),
+      ),
+    );
+
+  // ----- Per-subgroup metric computation ---------------------------------
+  // For each subgroup, compute each metric on the in-group and the out-group
+  // (everyone in the cohort NOT in the subgroup). Risk ratio = in/out with
+  // safety fallbacks: denom 0 → null (UI shows em dash); both 0 → 1.0
+  // (same rate, no disparity). Pos:neg ratio handles totalNeg=0 by treating
+  // the in-group as having an "infinite" ratio when there are positives —
+  // we cap at a sentinel and let the UI display it sanely.
+  function safeRatio(numer: number, denom: number): number | null {
+    if (denom === 0) {
+      return numer === 0 ? 1.0 : null;
+    }
+    return numer / denom;
+  }
+
+  function computeMetricsForGroup(group: Set<string>, peers: Set<string>) {
+    const groupArr = [...group];
+    const peerArr = [...peers];
+    const groupSize = groupArr.length;
+    const peerSize = peerArr.length;
+
+    function avgFromMap(arr: string[], m: Map<string, number>): number {
+      if (arr.length === 0) return 0;
+      let sum = 0;
+      for (const sid of arr) sum += m.get(sid) ?? 0;
+      return sum / arr.length;
+    }
+    function pctFromSet(arr: string[], s: Set<string>): number {
+      if (arr.length === 0) return 0;
+      let n = 0;
+      for (const sid of arr) if (s.has(sid)) n += 1;
+      return n / arr.length;
+    }
+    function totalFromMap(arr: string[], m: Map<string, number>): number {
+      let sum = 0;
+      for (const sid of arr) sum += m.get(sid) ?? 0;
+      return sum;
+    }
+
+    const inPctOnPlan = pctFromSet(groupArr, studentsWithActivePlan);
+    const outPctOnPlan = pctFromSet(peerArr, studentsWithActivePlan);
+
+    const inAvgNeg = avgFromMap(groupArr, negCountByStudent);
+    const outAvgNeg = avgFromMap(peerArr, negCountByStudent);
+
+    const inPos = totalFromMap(groupArr, posCountByStudent);
+    const inNeg = totalFromMap(groupArr, negCountByStudent);
+    const outPos = totalFromMap(peerArr, posCountByStudent);
+    const outNeg = totalFromMap(peerArr, negCountByStudent);
+    // Pos:neg ratio per group. inNeg=0 → null (undefined ratio); the UI
+    // renders an em dash. We intentionally don't synthesize a sentinel
+    // "infinite" value because that would dominate the maxRiskRatio KPI
+    // even when the underlying numerator is small.
+    const inPosNegRatio = inNeg === 0 ? null : inPos / inNeg;
+    const outPosNegRatio = outNeg === 0 ? null : outPos / outNeg;
+
+    const inPctBq = pctFromSet(groupArr, bqStudents);
+    const outPctBq = pctFromSet(peerArr, bqStudents);
+
+    const inAvgEng = avgFromMap(groupArr, engagementByStudent);
+    const outAvgEng = avgFromMap(peerArr, engagementByStudent);
+
+    return {
+      groupSize,
+      peerSize,
+      values: {
+        pctOnPlan: { in: inPctOnPlan, out: outPctOnPlan, ratio: safeRatio(inPctOnPlan, outPctOnPlan) },
+        avgNegPbis: { in: inAvgNeg, out: outAvgNeg, ratio: safeRatio(inAvgNeg, outAvgNeg) },
+        posNegRatio: {
+          in: inPosNegRatio,
+          out: outPosNegRatio,
+          ratio:
+            inPosNegRatio == null || outPosNegRatio == null
+              ? null
+              : safeRatio(inPosNegRatio, outPosNegRatio),
+        },
+        pctBq: { in: inPctBq, out: outPctBq, ratio: safeRatio(inPctBq, outPctBq) },
+        avgEngagementEvents: {
+          in: inAvgEng,
+          out: outAvgEng,
+          ratio: safeRatio(inAvgEng, outAvgEng),
+        },
+      },
+    };
+  }
+
+  // Threshold + sample size guard.
+  const RATIO_HIGH = 1.3;
+  const RATIO_LOW = 1 / RATIO_HIGH; // ~0.769
+  const MIN_GROUP_SIZE = 10;
+
+  function isConcerning(
+    ratio: number | null,
+    direction: "higher" | "lower",
+  ): boolean {
+    if (ratio == null) return false;
+    if (direction === "higher") return ratio >= RATIO_HIGH;
+    return ratio <= RATIO_LOW;
+  }
+
+  // Build per-subgroup snapshot + collect disparity flags.
+  type DisparityFlag = {
+    subgroup: SubgroupKey;
+    subgroupSize: number;
+    peerSize: number;
+    metric: string;
+    metricKey: MetricKey;
+    worseDirection: "higher" | "lower";
+    inGroupValue: number | null;
+    outGroupValue: number | null;
+    riskRatio: number | null;
+    concerning: boolean;
+  };
+
+  const disparityFlags: DisparityFlag[] = [];
+  const subgroupSnapshots: {
+    subgroup: SubgroupKey;
+    inGroupSize: number;
+    outGroupSize: number;
+    metrics: {
+      key: MetricKey;
+      name: string;
+      worseDirection: "higher" | "lower";
+      inGroupValue: number | null;
+      outGroupValue: number | null;
+      riskRatio: number | null;
+    }[];
+  }[] = [];
+
+  let maxRiskRatioObserved: number | null = null;
+
+  for (const sg of SUBGROUPS) {
+    // Out-group = everyone in the cohort minus the in-group.
+    const peers = new Set<string>();
+    for (const sid of studentIds) {
+      if (!sg.members.has(sid)) peers.add(sid);
+    }
+    const computed = computeMetricsForGroup(sg.members, peers);
+
+    const metrics = METRICS.map((m) => {
+      const v = computed.values[m.key];
+      return {
+        key: m.key,
+        name: m.label,
+        worseDirection: m.worseDirection,
+        inGroupValue: v.in,
+        outGroupValue: v.out,
+        riskRatio: v.ratio,
+      };
+    });
+    subgroupSnapshots.push({
+      subgroup: sg.key,
+      inGroupSize: computed.groupSize,
+      outGroupSize: computed.peerSize,
+      metrics,
+    });
+
+    // Disparity flags only fire when the in-group has at least MIN_GROUP_SIZE
+    // students AND the ratio is concerning in the metric's worse direction.
+    // Both-direction-thresholding (>=1.3 OR <=0.77) is folded into the
+    // direction-aware check inside isConcerning().
+    if (computed.groupSize >= MIN_GROUP_SIZE) {
+      for (const m of METRICS) {
+        const v = computed.values[m.key];
+        if (v.ratio == null) continue;
+        // Track max observed magnitude regardless of "concerning" so the
+        // headline KPI shows even neutral-direction outliers.
+        const magnitude = v.ratio >= 1 ? v.ratio : 1 / v.ratio;
+        if (maxRiskRatioObserved == null || magnitude > maxRiskRatioObserved) {
+          maxRiskRatioObserved = magnitude;
+        }
+        if (isConcerning(v.ratio, m.worseDirection)) {
+          disparityFlags.push({
+            subgroup: sg.key,
+            subgroupSize: computed.groupSize,
+            peerSize: computed.peerSize,
+            metric: m.label,
+            metricKey: m.key,
+            worseDirection: m.worseDirection,
+            inGroupValue: v.in,
+            outGroupValue: v.out,
+            riskRatio: v.ratio,
+            concerning: true,
+          });
+        }
+      }
+    }
+  }
+
+  // Sort disparity flags by magnitude (most extreme first). |log(ratio)|
+  // gives a symmetric magnitude that treats 1.5 and 1/1.5 equally.
+  disparityFlags.sort((a, b) => {
+    const am = Math.abs(Math.log(a.riskRatio ?? 1));
+    const bm = Math.abs(Math.log(b.riskRatio ?? 1));
+    return bm - am;
+  });
+
+  const cohort = studentRows.length;
+  const pct = (n: number) => (cohort === 0 ? 0 : n / cohort);
+
+  res.json({
+    grade: gradeFilter,
+    windowDays,
+    totals: {
+      cohortStudents: cohort,
+      ellCount: ell.size,
+      ellPct: pct(ell.size),
+      iepCount: ese.size,
+      iepPct: pct(ese.size),
+      students504Count: sec504.size,
+      students504Pct: pct(sec504.size),
+      femaleCount: female.size,
+      femalePct: pct(female.size),
+      maleCount: male.size,
+      malePct: pct(male.size),
+      unknownGenderCount,
+      unknownGenderPct: pct(unknownGenderCount),
+      highDisparityFlagCount: disparityFlags.length,
+      maxRiskRatio: maxRiskRatioObserved,
+    },
+    disparityFlags: disparityFlags.slice(0, 12),
+    subgroupSnapshots,
+    sources: {
+      plans: planRows.length,
+      accommodations: accomRows.length,
+      negativePbisLast30d: totalNeg,
+      positivePbisLast30d: totalPos,
+      fastBq: bqRows.length,
+      engagementLast30d: engagementTotal,
+    },
+  });
+});
+
 export default router;

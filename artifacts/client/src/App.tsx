@@ -27,6 +27,7 @@ import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
 import SebSelDashboard from "./components/SebSelDashboard";
+import EquityDashboard from "./components/EquityDashboard";
 import StudentProfile from "./components/StudentProfile";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -3109,9 +3110,10 @@ const INSIGHTS_TILES: InsightsTile[] = [
     icon: "⚖️",
     title: "Equity",
     subtitle:
-      "Disproportionality lens across discipline, intervention assignment, and academic outcomes by subgroup.",
-    phase: "Phase 4",
+      "Risk ratios across ELL, IEP, 504, and gender — surfaces where outcomes diverge from peer rates.",
+    phase: "Today",
     group: "domains",
+    targetSection: "equityDashboard",
   },
   {
     id: "plans",
@@ -3528,6 +3530,7 @@ function App() {
     | "behaviorDashboard"
     | "academicsDashboard"
     | "sebSelDashboard"
+    | "equityDashboard"
   >("insightsWatchlist");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -17527,6 +17530,19 @@ function App() {
             // Pin the back-target so the profile's Back button returns
             // to the SEB/SEL dashboard.
             setStudentProfileReturnTo("sebSelDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "equityDashboard" && canAccessMtssHub && (
+        <EquityDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // V1 equity view is aggregate-only (no per-student lists yet),
+            // but we wire the return-to anyway so a future drill-in can
+            // navigate back to this dashboard cleanly.
+            setStudentProfileReturnTo("equityDashboard");
             setActiveSection("studentProfile");
           }}
         />

@@ -1503,6 +1503,224 @@ export async function seedPbisEntriesIfEmpty() {
 }
 
 // -----------------------------------------------------------------------------
+// seedStudentDemographicsIfEmpty: populate students.ell / ese / is_504 /
+// gender so the SEB/SEL and Equity dashboards have demographic signal to
+// disaggregate against. Runs idempotently per-school: skip the whole school
+// the moment ANY student in that school already has a demographic flag set
+// or a non-NULL gender (avoids stomping a real roster import).
+//
+// IMPORTANT — DEMO-ONLY CORRELATIONS:
+// Real district demos hinge on the Equity dashboard surfacing realistic
+// disparity ratios (1.3x–1.7x range). Pure-random seeding produces only
+// statistical noise across 9,750 students. So this seeder applies *mild*
+// intentional correlations to existing risk signals (FAST BQ + recent-30d
+// negative PBIS counts) chosen to match documented real-world patterns:
+//
+//   * ELL students slightly over-represented among BQ + chronic-negative-PBIS
+//     cohorts (mirrors language-acquisition academic gap).
+//   * IEP (ese) students slightly over-represented among chronic-negative-
+//     PBIS cohorts (mirrors documented special-ed discipline disparities).
+//   * 504 mostly independent, with a small math-BQ bump.
+//   * Gender ~50/50 with ~1% NULL preserved as an "unknown" bucket. NO
+//     correlation to outcomes — gender disparities surfaced by the dashboard
+//     would be pure noise on this seed and the demo script should say so.
+//
+// These correlations are *seed* artifacts. Real production data will reflect
+// each school's actual disparities. The Equity dashboard footer carries a
+// disclaimer to that effect.
+// -----------------------------------------------------------------------------
+
+export async function seedStudentDemographicsIfEmpty() {
+  const schools = await db.select().from(schoolsTable);
+  if (schools.length === 0) return;
+
+  const now = Date.now();
+  const dayMs = 86400000;
+  const windowStartIso = new Date(now - 30 * dayMs).toISOString();
+
+  for (const school of schools) {
+    // ---- Two-stage idempotency check (architect-hardened).
+    //
+    // Stage 1: skip if ANY student in this school already has a demographic
+    // flag set or a non-NULL gender. Catches prior runs of this seeder.
+    //
+    // Stage 2: skip if this school has NO demo-seeded marker. A real SIS-
+    // imported roster could legitimately have students with all-false
+    // demographic booleans + NULL gender (a valid "no demographics imported
+    // yet" state) and the Stage 1 check alone would let this seeder
+    // overwrite that real data with random demo flags. So we additionally
+    // gate on `school_accommodations` being non-empty — that table is
+    // populated exclusively by `seedIfEmpty()` on the demo schools, so a
+    // production school that hasn't been demo-seeded will skip even on a
+    // first run. If a real customer ever wants demo demographics, they'd
+    // run a separate explicit one-time backfill, not boot-time seed.
+    const [{ c: alreadySet }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM students
+            WHERE school_id = ${school.id}
+              AND (ell = true OR ese = true OR is_504 = true OR gender IS NOT NULL)`,
+      )
+    ).rows as { c: number }[];
+    if (alreadySet > 0) continue;
+
+    const [{ c: demoMarker }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM school_accommodations
+            WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (demoMarker === 0) {
+      logger.info(
+        { schoolId: school.id },
+        "[seed] skipping demographic seed — school has no demo marker (likely a real SIS-imported school)",
+      );
+      continue;
+    }
+
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+
+    // ---- Pull correlation inputs in one shot.
+    // BQ flag per student, split by subject (ela / math / any).
+    const fastRows = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        priorYearBq: studentFastScoresTable.priorYearBq,
+      })
+      .from(studentFastScoresTable)
+      .where(eq(studentFastScoresTable.schoolId, school.id));
+    const bqAny = new Set<string>();
+    const bqMath = new Set<string>();
+    for (const fs of fastRows) {
+      if (!fs.priorYearBq) continue;
+      bqAny.add(fs.studentId);
+      if (fs.subject === "math") bqMath.add(fs.studentId);
+    }
+
+    // Recent-30d negative PBIS count per student.
+    const negRows = (
+      await db.execute(
+        sql`SELECT student_id, COUNT(*)::int AS c
+            FROM pbis_entries
+            WHERE school_id = ${school.id}
+              AND polarity = 'negative'
+              AND voided_at IS NULL
+              AND created_at >= ${windowStartIso}
+            GROUP BY student_id`,
+      )
+    ).rows as { student_id: string; c: number }[];
+    const negCount = new Map<string, number>();
+    for (const r of negRows) negCount.set(r.student_id, r.c);
+
+    // Deterministic per-school RNG so reseeds reproduce the same dataset.
+    const rng = makeRng(0xde40 + school.id * 8191);
+
+    // ---- Group updates by combination so we issue at most ~24 UPDATEs
+    // per school instead of N=cohort-size individual statements.
+    type Combo = {
+      ell: boolean;
+      ese: boolean;
+      is504: boolean;
+      gender: "M" | "F" | null;
+    };
+    const buckets = new Map<string, { combo: Combo; ids: string[] }>();
+    const keyOf = (c: Combo) =>
+      `${c.ell ? 1 : 0}:${c.ese ? 1 : 0}:${c.is504 ? 1 : 0}:${c.gender ?? "U"}`;
+
+    let countEll = 0;
+    let countEse = 0;
+    let count504 = 0;
+    let countF = 0;
+    let countM = 0;
+    let countU = 0;
+
+    for (const s of studentRows) {
+      const isBqAny = bqAny.has(s.studentId);
+      const isBqMath = bqMath.has(s.studentId);
+      const negs = negCount.get(s.studentId) ?? 0;
+
+      // ---- ELL: base 12% + 8pts if BQ-any + 6pts if recent-negs ≥ 3.
+      let pEll = 0.12;
+      if (isBqAny) pEll += 0.08;
+      if (negs >= 3) pEll += 0.06;
+      const ell = rng() < pEll;
+
+      // ---- ESE (IEP): base 14% + 12pts if recent-negs ≥ 5 + 5pts if BQ.
+      let pEse = 0.14;
+      if (negs >= 5) pEse += 0.12;
+      if (isBqAny) pEse += 0.05;
+      const ese = rng() < pEse;
+
+      // ---- 504: base 4% + 3pts if math BQ specifically.
+      let p504 = 0.04;
+      if (isBqMath) p504 += 0.03;
+      const is504 = rng() < p504;
+
+      // ---- Gender: M ~49.5% / F ~49.5% / NULL ~1%. No outcome correlation.
+      const g = rng();
+      const gender: "M" | "F" | null = g < 0.495 ? "M" : g < 0.99 ? "F" : null;
+
+      const combo: Combo = { ell, ese, is504, gender };
+      const k = keyOf(combo);
+      let bucket = buckets.get(k);
+      if (!bucket) {
+        bucket = { combo, ids: [] };
+        buckets.set(k, bucket);
+      }
+      bucket.ids.push(s.studentId);
+
+      if (ell) countEll++;
+      if (ese) countEse++;
+      if (is504) count504++;
+      if (gender === "F") countF++;
+      else if (gender === "M") countM++;
+      else countU++;
+    }
+
+    // ---- Issue one UPDATE per combination.
+    for (const { combo, ids } of buckets.values()) {
+      // Chunk WHERE student_id = ANY($) to keep the parameter under DB limits.
+      const CHUNK = 1000;
+      for (let i = 0; i < ids.length; i += CHUNK) {
+        const slice = ids.slice(i, i + CHUNK);
+        await db
+          .update(studentsTable)
+          .set({
+            ell: combo.ell,
+            ese: combo.ese,
+            is504: combo.is504,
+            gender: combo.gender,
+          })
+          .where(
+            and(
+              eq(studentsTable.schoolId, school.id),
+              inArray(studentsTable.studentId, slice),
+            ),
+          );
+      }
+    }
+
+    logger.info(
+      {
+        schoolId: school.id,
+        cohort: studentRows.length,
+        ell: countEll,
+        ese: countEse,
+        s504: count504,
+        female: countF,
+        male: countM,
+        unknownGender: countU,
+      },
+      "[seed] student demographics seeded (ELL/ESE/504/gender)",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
 // seedIfEmpty: only runs when school_accommodations is empty (fresh DB).
 // -----------------------------------------------------------------------------
 export async function seedIfEmpty() {
