@@ -16,7 +16,12 @@ import { authFetch } from "../lib/authToken";
 // dictionary.
 // ---------------------------------------------------------------------------
 
-type Kind = "assessments" | "rosters" | "behavior" | "fast_scores";
+type Kind =
+  | "assessments"
+  | "rosters"
+  | "behavior"
+  | "fast_scores"
+  | "fast_prior_year";
 type Scope = "school" | "district";
 
 type PreviewResponse = {
@@ -134,6 +139,18 @@ const FAST_SCORES_TARGETS: TargetDef[] = [
   { value: "pm2", label: "PM2 / winter scale score", required: false },
   { value: "pm3", label: "PM3 / spring scale score", required: false },
   { value: "prior_year_score", label: "Prior-year final scale score", required: false },
+  { value: "prior_year_bq", label: "Prior-year bottom-quartile flag", required: false },
+];
+
+// FAST prior-year-only import targets. Mirror of
+// FAST_PRIOR_YEAR_CONFIG.validTargets — narrower than FAST_SCORES_TARGETS
+// on purpose so the column-mapping dropdowns can't surface PM1/2/3 here.
+// Composite key still (student_id, subject) so the importer upserts in
+// place against the same row the FAST scores importer would create.
+const FAST_PRIOR_YEAR_TARGETS: TargetDef[] = [
+  { value: "student_id", label: "Student ID (SIS number)", required: true },
+  { value: "subject", label: "Subject (ela/reading or math)", required: true },
+  { value: "prior_year_score", label: "Prior-year final scale score (last year's PM3)", required: true },
   { value: "prior_year_bq", label: "Prior-year bottom-quartile flag", required: false },
 ];
 
@@ -414,6 +431,65 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     notes: [
       "School-scope only — FAST scores are managed per school.",
       "Re-uploading the same (student, subject) updates the existing row. Blank PM columns preserve the prior value rather than clearing it, so you can upload PM1 in October and add PM2 in February without losing PM1.",
+      "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
+      "If your prior-year scores arrive in a separate file from your PM data, use the 'FAST scores — prior year only' importer instead. It writes to the same row but cannot touch PM columns, so a prior-year file can never wipe current-year scores.",
+    ],
+  },
+  fast_prior_year: {
+    label: "FAST scores — prior year only",
+    targetsFor: () => FAST_PRIOR_YEAR_TARGETS,
+    supportsDistrict: false,
+    helpText:
+      "Last year's final FAST scale score (functionally last year's PM3). Upserts the prior-year columns only — never touches PM1/PM2/PM3.",
+    description:
+      "A narrower importer for schools whose end-of-year state report arrives in a separate file from PM data. Writes to the same student_fast_scores row that the FAST scores importer uses (key: student_id + subject), but the upsert SET clause only touches prior_year_score and prior_year_bq — PM1/PM2/PM3 are intentionally left alone, so a prior-year file can never wipe current-year scores. If your data already lives in one combined file, just use the FAST scores importer above; this one is purely a convenience.",
+    columns: [
+      {
+        target: "student_id",
+        label: "Student ID",
+        required: true,
+        acceptedHeaders: ["student_id", "student_number", "sis_id", "id", "studentid"],
+      },
+      {
+        target: "subject",
+        label: "Subject",
+        required: true,
+        acceptedHeaders: ["subject", "test", "assessment", "area", "domain"],
+        notes: "Accepts 'ela', 'ELA', 'Reading' (mapped to ela), 'math', 'Math', 'Mathematics'.",
+      },
+      {
+        target: "prior_year_score",
+        label: "Prior-year final scale score",
+        required: true,
+        acceptedHeaders: [
+          "prior_year_score",
+          "prior_year",
+          "py_score",
+          "last_year",
+          "last_year_score",
+          "previous_year_score",
+          "scale_score",
+          "pm3_prior_year",
+          "prior_pm3",
+          "py_pm3",
+          "pm3_last_year",
+        ],
+        notes: "Integer scale score. This is the score that drives the prior-year line on the FAST trend chart.",
+      },
+      {
+        target: "prior_year_bq",
+        label: "Prior-year bottom-quartile flag",
+        required: false,
+        acceptedHeaders: ["prior_year_bq", "bq", "bottom_quartile", "py_bq", "is_bq"],
+        notes: "Y/N, Yes/No, true/false, or 1/0. Drives the 'Needs support' pill. If you leave this column out, the existing BQ flag on file is preserved (it is NOT reset to false).",
+      },
+    ],
+    sampleCsv:
+      "student_id,subject,prior_year_score,prior_year_bq\n10234,ELA,305,Y\n10234,Math,290,N\n10235,Reading,318,N\n",
+    notes: [
+      "School-scope only.",
+      "Re-uploading the same (student, subject) updates the prior-year columns in place. PM1/PM2/PM3 on the existing row are never touched.",
+      "Brand-new (student, subject) rows created by this importer will have NULL PM1/PM2/PM3 until a FAST scores import fills them in.",
       "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
     ],
   },

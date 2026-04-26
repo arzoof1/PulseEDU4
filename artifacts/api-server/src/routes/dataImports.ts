@@ -1011,7 +1011,7 @@ router.post(
     // operator false confidence the data was reverted — we refuse
     // the rollback up front. This must stay in sync with
     // FAST_SCORES_CONFIG.rollback() (also a no-op).
-    if (job.kind === "fast_scores") {
+    if (job.kind === "fast_scores" || job.kind === "fast_prior_year") {
       res.status(409).json({
         error:
           "FAST score imports cannot be rolled back. Re-upload a corrected CSV to update the affected rows.",
@@ -1769,10 +1769,195 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
   },
 };
 
+// FAST prior-year-only importer. Same target table as FAST_SCORES_CONFIG
+// but the CSV carries only (student_id, subject, prior_year_score, [bq])
+// — handy for schools whose end-of-year state report comes in a separate
+// file from PM scores. The upsert SET clause intentionally omits PM
+// columns so a prior-year-only file can never wipe current-year PM data.
+type ParsedFastPriorYear = {
+  studentId: string;
+  subject: "ela" | "math";
+  priorYearScore: number;
+  priorYearBq: boolean | null;
+};
+
+const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
+  validTargets: new Set([
+    "student_id",
+    "subject",
+    "prior_year_score",
+    "prior_year_bq",
+  ]),
+  // prior_year_score is required here (the whole point of this importer);
+  // PMs are not part of validTargets so an admin can't accidentally map
+  // a "PM1" column and have it silently ignored.
+  requiredFields: ["student_id", "subject", "prior_year_score"],
+  headerSynonyms: {
+    student_id: [
+      "student_id",
+      "student_number",
+      "sis_id",
+      "id",
+      "studentid",
+    ],
+    subject: ["subject", "test", "assessment", "area", "domain"],
+    prior_year_score: [
+      "prior_year_score",
+      "prior_year",
+      "py_score",
+      "last_year",
+      "last_year_score",
+      "previous_year_score",
+      "scale_score",
+      // FAST PM3 from last spring is functionally the same number — accept
+      // those header conventions too so SIS exports don't need re-titling.
+      "pm3_prior_year",
+      "prior_pm3",
+      "py_pm3",
+      "pm3_last_year",
+    ],
+    prior_year_bq: [
+      "prior_year_bq",
+      "bq",
+      "bottom_quartile",
+      "py_bq",
+      "is_bq",
+    ],
+  },
+  parseRow(row, mapping) {
+    const target: Record<string, string> = {};
+    for (const [csvCol, tgt] of Object.entries(mapping)) {
+      target[tgt] = csvCol;
+    }
+    for (const req of this.requiredFields) {
+      const csvCol = target[req];
+      if (!csvCol) {
+        return { ok: false, message: `Missing required column: ${req}` };
+      }
+      const raw = (row[csvCol] ?? "").toString().trim();
+      if (!raw) {
+        return { ok: false, message: `Empty value for ${req}` };
+      }
+    }
+    const studentId = row[target.student_id].toString().trim();
+    // Same subject normalization as FAST_SCORES_CONFIG. "Reading" maps to
+    // ela because Florida FAST ELA Reading exports use that label.
+    const subjectRaw = row[target.subject].toString().trim().toLowerCase();
+    let subject: "ela" | "math";
+    if (subjectRaw === "ela" || subjectRaw === "reading") {
+      subject = "ela";
+    } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
+      subject = "math";
+    } else {
+      return {
+        ok: false,
+        message: `Unsupported subject "${subjectRaw}" (expected ela or math)`,
+      };
+    }
+    const priorYearScore = parseOptionalInt(row[target.prior_year_score]);
+    if (priorYearScore === undefined) {
+      return { ok: false, message: "Invalid prior_year_score" };
+    }
+    if (priorYearScore === null) {
+      // Required field guard above only checks for the empty string;
+      // parseOptionalInt also returns null for "N/A"-style sentinels.
+      return { ok: false, message: "Empty prior_year_score" };
+    }
+    // Same null-sentinel pattern as FAST_SCORES_CONFIG: when the BQ
+    // column isn't mapped, leave priorYearBq null so insertChunk can
+    // preserve the existing DB value on conflict instead of clobbering
+    // it with a default `false`.
+    const priorYearBq: boolean | null = target.prior_year_bq !== undefined
+      ? parseBoolFlag(row[target.prior_year_bq]?.toString())
+      : null;
+    return {
+      ok: true,
+      value: { studentId, subject, priorYearScore, priorYearBq },
+    };
+  },
+  async insertChunk(tx, parsed, schoolId, _jobId) {
+    if (parsed.length === 0) return 0;
+    // Upsert against (school_id, student_id, subject). The SET clause
+    // ONLY touches prior-year columns — PM1/PM2/PM3 are intentionally
+    // not in `set` so they remain whatever value the row already had.
+    // Same withBq / withoutBq partition as FAST_SCORES_CONFIG so a
+    // CSV without a BQ column can't wipe an existing true BQ flag.
+    const withBq = parsed.filter((p) => p.priorYearBq !== null);
+    const withoutBq = parsed.filter((p) => p.priorYearBq === null);
+    const now = new Date();
+    if (withBq.length > 0) {
+      await tx
+        .insert(studentFastScoresTable)
+        .values(
+          withBq.map((p) => ({
+            schoolId,
+            studentId: p.studentId,
+            subject: p.subject,
+            priorYearScore: p.priorYearScore,
+            priorYearBq: p.priorYearBq as boolean,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            studentFastScoresTable.schoolId,
+            studentFastScoresTable.studentId,
+            studentFastScoresTable.subject,
+          ],
+          set: {
+            priorYearScore: sql`EXCLUDED.prior_year_score`,
+            priorYearBq: sql`EXCLUDED.prior_year_bq`,
+            updatedAt: now,
+          },
+        });
+    }
+    if (withoutBq.length > 0) {
+      await tx
+        .insert(studentFastScoresTable)
+        .values(
+          withoutBq.map((p) => ({
+            schoolId,
+            studentId: p.studentId,
+            subject: p.subject,
+            priorYearScore: p.priorYearScore,
+            // NOT NULL — only used for brand-new rows. On conflict the
+            // SET clause below preserves the existing value.
+            priorYearBq: false,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            studentFastScoresTable.schoolId,
+            studentFastScoresTable.studentId,
+            studentFastScoresTable.subject,
+          ],
+          set: {
+            priorYearScore: sql`EXCLUDED.prior_year_score`,
+            priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+            updatedAt: now,
+          },
+        });
+    }
+    void _jobId;
+    return parsed.length;
+  },
+  async rollback(_tx, _jobId, _schoolId) {
+    // Same rationale as FAST_SCORES_CONFIG: upsert + no per-job audit
+    // trail = nothing to safely undo. Rollback handler returns 409
+    // before reaching here for fast_prior_year jobs.
+    void _tx;
+    void _jobId;
+    void _schoolId;
+    return 0;
+  },
+};
+
 const KIND_CONFIGS: Record<string, KindConfig<any>> = {
   rosters: ROSTERS_CONFIG,
   behavior: BEHAVIOR_CONFIG,
   fast_scores: FAST_SCORES_CONFIG,
+  fast_prior_year: FAST_PRIOR_YEAR_CONFIG,
 };
 
 // ---------------------------------------------------------------------------
@@ -1977,6 +2162,16 @@ router.post(
   "/data-imports/fast_scores/commit",
   requireImporter(),
   makeCommitHandler("fast_scores", FAST_SCORES_CONFIG),
+);
+router.post(
+  "/data-imports/fast_prior_year/preview",
+  requireImporter(),
+  makePreviewHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
+);
+router.post(
+  "/data-imports/fast_prior_year/commit",
+  requireImporter(),
+  makeCommitHandler("fast_prior_year", FAST_PRIOR_YEAR_CONFIG),
 );
 
 // Mapping templates. Once a school admin has correctly mapped a vendor's
