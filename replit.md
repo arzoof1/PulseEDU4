@@ -2199,3 +2199,59 @@ Not-trivial considerations to think about before we commit:
 Status: **idea parked** — surface to the user when they ask "what's
 next after the eduCLIMBER ledger" or when item #5 (Equity dashboard)
 comes up, since this could *be* the equity dashboard's hero view.
+
+---
+
+## Save-for-later: eduCLIMBER "Program Effectiveness" Sankey
+
+User dropped in a second screenshot on Apr 26, 2026 with the same
+"Save for later" directive. Capturing alongside the Students 3D idea
+above.
+
+Reference image: `attached_assets/image_1777213106692.png`
+
+What it is (from the screenshot):
+- A Sankey / flow diagram titled **Program Effectiveness** showing
+  cohort movement across two assessment windows (Beginning → End).
+  Three benchmark bands on each side, color-coded:
+  - **At or Above Benchmark** (green)
+  - **Below Benchmark** (yellow / amber)
+  - **Well Below Benchmark** (red / pink)
+- Ribbon thickness represents the number of students moving from a
+  Beginning band to an End band. Diagonal cross-flows visualize
+  movement (kids who were Below at BOY but At-or-Above at EOY → green
+  ribbon flowing up, etc.).
+- Top-left controls: **Beginning** + **End** window pickers, a
+  **Default Performance Band** selector (so a school can swap in
+  iReady vs FAST vs district-defined cuts), Search button.
+- An **NA** sliver on the far right — students with no End-of-window
+  score (moved out, untested, etc.). Honest about missing data.
+
+Why it's compelling for our app:
+- This is the headline "did our intervention work?" visual that
+  eduCLIMBER demos lead with. Single picture answers "are kids
+  moving up the bands or sliding down?" across an entire grade or
+  intervention cohort.
+- Pairs naturally with item #3 (Academics dashboard) and item #6
+  (Early Warning composite) — same FAST PM data, different lens.
+- Could also be filtered to a specific intervention's roster to
+  show that intervention's effectiveness specifically.
+
+Not-trivial considerations:
+- Sankey rendering: recharts doesn't have a great built-in Sankey;
+  options are `recharts/Sankey` (basic), `@nivo/sankey` (nicer, new
+  dep), or D3 directly. Nivo is the easiest path if we add it.
+- Cut-score handling: we already have `placePm3` / `placeOnChart`
+  in `lib/fastCutScores.js` — those are the band classifiers we'd
+  feed in for both BOY and EOY snapshots.
+- "Default Performance Band" picker implies multiple cut-score
+  systems coexisting per school. We have FAST today; iReady would
+  be a separate import (blocks on more data infra).
+- Window pairing: needs the user to define what counts as "BOY"
+  and "EOY" per school — could default to first/last assessment in
+  the school year and let the user override.
+
+Status: **idea parked** — surface this together with the Students
+3D idea when item #3 (Academics dashboard) lands, since both are
+academics-flavored views and we'll have the cut-score plumbing
+warm at that point.
