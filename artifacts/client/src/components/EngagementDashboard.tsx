@@ -22,6 +22,11 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
+import InsightsFilterBar, {
+  EMPTY_FILTERS,
+  filtersToQuery,
+  type InsightsFilterValue,
+} from "./InsightsFilterBar";
 
 type WindowKey = "7" | "15" | "30" | "custom";
 
@@ -80,6 +85,7 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   const [grade, setGrade] = useState("");
+  const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<EngagementResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -95,8 +101,9 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
       p.set("window", windowKey);
     }
     if (grade) p.set("grade", grade);
+    for (const [k, v] of filtersToQuery(filters)) p.set(k, v);
     return p.toString();
-  }, [windowKey, customFrom, customTo, grade]);
+  }, [windowKey, customFrom, customTo, grade, filters]);
 
   useEffect(() => {
     if (queryString === null) return; // custom range incomplete
@@ -155,6 +162,8 @@ export default function EngagementDashboard({ onOpenProfile }: Props) {
           setGrade={setGrade}
         />
       </div>
+
+      <InsightsFilterBar value={filters} onChange={setFilters} />
 
       <HowToUseHelp title="How to use Engagement">
         <HowToSection title="What this dashboard is">

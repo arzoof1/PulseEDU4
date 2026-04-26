@@ -44,6 +44,13 @@ import {
 import { and, eq, inArray, isNull, gte, lte, sql, desc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
+import {
+  parseInsightsFilters,
+  applyInsightsFilters,
+  hasAnyInsightsFilter,
+  narrowCohort,
+  type InsightsFilters,
+} from "../lib/insightsFilters.js";
 
 const router: IRouter = Router();
 
@@ -1493,6 +1500,35 @@ router.get("/insights/engagement", async (req, res) => {
     }
   }
 
+  // Cross-cutting filters (teacher / period / ESE / 504 / Tier / BQ).
+  // Narrows the cohort further; if narrowing yields zero students, return
+  // the same empty-cohort shape used by the grade fast-path above.
+  const filters = parseInsightsFilters(req);
+  const narrowed = await narrowCohort(schoolId, studentIds, filters);
+  studentIds = narrowed.ids;
+  if (narrowed.empty) {
+    res.json({
+      window: { from: fromIso, to: toIso, label: window.label, days: window.days },
+      grade: gradeFilter,
+      totals: {
+        hallPasses: 0,
+        tardies: 0,
+        issDays: 0,
+        pullouts: 0,
+        hallPassMinutesLost: 0,
+      },
+      trends: { hallPassesByDay: [], tardiesByDay: [], issDaysByDay: [] },
+      topLists: {
+        hallPassTakers: [],
+        hallPassDestinations: [],
+        tardyStudents: [],
+        tardyPeriods: [],
+        issStudents: [],
+      },
+    });
+    return;
+  }
+
   // ----- Hall passes -----------------------------------------------------
   const hallPassRows = await db
     .select({
@@ -1814,6 +1850,35 @@ router.get("/insights/behavior", async (req, res) => {
     }
   }
 
+  // Cross-cutting filters (teacher / period / ESE / 504 / Tier / BQ).
+  const filters = parseInsightsFilters(req);
+  const narrowed = await narrowCohort(schoolId, studentIds, filters);
+  studentIds = narrowed.ids;
+  if (narrowed.empty) {
+    res.json({
+      window: { from: fromIso, to: toIso, label: window.label, days: window.days },
+      grade: gradeFilter,
+      totals: {
+        positives: 0,
+        negatives: 0,
+        netPoints: 0,
+        ratio: null,
+        studentsRecognized: 0,
+        studentsWithNegatives: 0,
+      },
+      trends: { positivesByDay: [], negativesByDay: [] },
+      topLists: {
+        recognizedStudents: [],
+        concerningStudents: [],
+        positiveReasons: [],
+        negativeReasons: [],
+        recognizingStaff: [],
+        issuingStaff: [],
+      },
+    });
+    return;
+  }
+
   // ----- Pull all non-voided entries in the window ------------------------
   // Done in one query — JS-side splits handle positive/negative bookkeeping
   // because pbis_entries is one row per award and the polarity column is
@@ -2058,11 +2123,17 @@ router.get("/insights/academics", async (req, res) => {
     }
   }
 
+  // Optional cross-cutting filters (teacher/period/ESE/504/tier/BQ).
+  // Parsed once and applied right after the grade-narrowed cohort is
+  // built so every downstream count, average, and top-N list inherits
+  // the filter.
+  const filters = parseInsightsFilters(req);
+
   // Build the cohort: every student at the school, optionally narrowed
   // to one grade. We need the grade per student at hand so we can run
   // grade-aware FAST placement (prior-grade chart for PM3 per the FAST
   // worked example).
-  const studentRows = await db
+  let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
       firstName: studentsTable.firstName,
@@ -2076,6 +2147,16 @@ router.get("/insights/academics", async (req, res) => {
         gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
       ),
     );
+
+  // Apply the cross-cutting filters to the cohort.
+  if (hasAnyInsightsFilter(filters)) {
+    const allowed = await applyInsightsFilters(
+      schoolId,
+      studentRows.map((r) => r.studentId),
+      filters,
+    );
+    studentRows = studentRows.filter((r) => allowed.has(r.studentId));
+  }
 
   // Empty-cohort fast-path (mirrors engagement/behavior). Don't hand
   // Drizzle an empty inArray below — return zeros instead.
@@ -2363,6 +2444,157 @@ router.get("/insights/academics", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /insights/academics/band — drill-in for the placement chart.
+//
+// Returns the list of students placed at a given (subject, level) cell of
+// the PM3 placement distribution, honoring the same grade + cross-cutting
+// filters as the parent academics route. Used by the Academics dashboard
+// when the user clicks an L1..L5 bar.
+//
+// Query params:
+//   subject  required — "ela" or "math"
+//   level    required — 1..5
+//   grade    optional — same parsing as /insights/academics
+//   teacher_id, period, ese, is_504, tier, bq_ela, bq_math — same as parent
+//
+// Caps the result at 200 students with a `truncated` flag so the UI can
+// say "+X more" without dragging the network.
+// ---------------------------------------------------------------------------
+router.get("/insights/academics/band", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "Academics dashboard is core-team only" });
+    return;
+  }
+
+  const subjectRaw =
+    typeof req.query.subject === "string" ? req.query.subject.toLowerCase() : "";
+  const subject: "ela" | "math" | null =
+    subjectRaw === "ela" ? "ela" : subjectRaw === "math" ? "math" : null;
+  const levelRaw =
+    typeof req.query.level === "string" ? Number.parseInt(req.query.level, 10) : NaN;
+  const level: 1 | 2 | 3 | 4 | 5 | null =
+    levelRaw === 1 || levelRaw === 2 || levelRaw === 3 || levelRaw === 4 || levelRaw === 5
+      ? (levelRaw as 1 | 2 | 3 | 4 | 5)
+      : null;
+  if (!subject || !level) {
+    res.status(400).json({ error: "subject (ela|math) and level (1-5) required" });
+    return;
+  }
+
+  // Same grade parsing as the parent route.
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  const filters = parseInsightsFilters(req);
+
+  let studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+      ),
+    );
+
+  if (hasAnyInsightsFilter(filters)) {
+    const allowed = await applyInsightsFilters(
+      schoolId,
+      studentRows.map((r) => r.studentId),
+      filters,
+    );
+    studentRows = studentRows.filter((r) => allowed.has(r.studentId));
+  }
+
+  if (studentRows.length === 0) {
+    res.json({ subject, level, students: [], truncated: false, total: 0 });
+    return;
+  }
+
+  const studentIds = studentRows.map((r) => r.studentId);
+  const gradeById = new Map<string, number | null>(
+    studentRows.map((r) => [r.studentId, r.grade ?? null]),
+  );
+  const nameById = new Map<string, string>(
+    studentRows.map((r) => [
+      r.studentId,
+      `${r.firstName ?? ""} ${r.lastName ?? ""}`.trim() || r.studentId,
+    ]),
+  );
+
+  // Pull this subject's FAST rows and place each PM3 score on the
+  // appropriate chart (prior-grade per the FAST worked example).
+  const fastRows = await db
+    .select({
+      studentId: studentFastScoresTable.studentId,
+      pm1: studentFastScoresTable.pm1,
+      pm3: studentFastScoresTable.pm3,
+    })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        eq(studentFastScoresTable.subject, subject),
+        inArray(studentFastScoresTable.studentId, studentIds),
+      ),
+    );
+
+  type Hit = {
+    studentId: string;
+    studentName: string;
+    grade: number | null;
+    pm1: number | null;
+    pm3: number;
+  };
+  const hits: Hit[] = [];
+  for (const r of fastRows) {
+    if (r.pm3 == null) continue;
+    const grade = gradeById.get(r.studentId) ?? null;
+    if (grade === null) continue;
+    const placement = placePm3(r.pm3, subject, grade);
+    if (!placement || placement.level !== level) continue;
+    hits.push({
+      studentId: r.studentId,
+      studentName: nameById.get(r.studentId) ?? r.studentId,
+      grade,
+      pm1: r.pm1 ?? null,
+      pm3: r.pm3,
+    });
+  }
+  hits.sort((a, b) => a.pm3 - b.pm3);
+
+  const CAP = 200;
+  const truncated = hits.length > CAP;
+  res.json({
+    subject,
+    level,
+    students: truncated ? hits.slice(0, CAP) : hits,
+    truncated,
+    total: hits.length,
+  });
+});
+
+// ---------------------------------------------------------------------------
 // GET /insights/sebsel — Social-Emotional / Behavioral whole-school view.
 //
 // Item #4 in the eduCLIMBER Phase Queue. Mirrors the engagement / behavior /
@@ -2410,7 +2642,7 @@ router.get("/insights/sebsel", async (req, res) => {
 
   // Build the cohort: every student at the school, optionally narrowed
   // to one grade.
-  const studentRows = await db
+  let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
       firstName: studentsTable.firstName,
@@ -2427,6 +2659,16 @@ router.get("/insights/sebsel", async (req, res) => {
         gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
       ),
     );
+
+  // Apply cross-cutting filters (teacher / period / ESE / 504 / Tier / BQ).
+  // Done before the empty-cohort fast-path so filter-narrowed-to-zero takes
+  // the same code path as grade-narrowed-to-zero.
+  const filters = parseInsightsFilters(req);
+  if (hasAnyInsightsFilter(filters) && studentRows.length > 0) {
+    const baseIds = studentRows.map((r) => r.studentId);
+    const allowed = await applyInsightsFilters(schoolId, baseIds, filters);
+    studentRows = studentRows.filter((r) => allowed.has(r.studentId));
+  }
 
   // Empty-cohort fast-path. Don't hand Drizzle an empty inArray below.
   if (studentRows.length === 0) {
@@ -2830,7 +3072,7 @@ router.get("/insights/equity", async (req, res) => {
   }
 
   // Cohort + demographic flags.
-  const studentRows = await db
+  let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
       grade: studentsTable.grade,
@@ -2848,6 +3090,15 @@ router.get("/insights/equity", async (req, res) => {
         gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
       ),
     );
+
+  // Apply cross-cutting filters (teacher / period / ESE / 504 / Tier / BQ).
+  // Equity disparity math is computed across this narrowed cohort.
+  const filters = parseInsightsFilters(req);
+  if (hasAnyInsightsFilter(filters) && studentRows.length > 0) {
+    const baseIds = studentRows.map((r) => r.studentId);
+    const allowed = await applyInsightsFilters(schoolId, baseIds, filters);
+    studentRows = studentRows.filter((r) => allowed.has(r.studentId));
+  }
 
   // Subgroup membership sets — built whether or not the cohort is empty so
   // the response shape is stable.

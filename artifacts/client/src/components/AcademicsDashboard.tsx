@@ -28,6 +28,12 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
+import InsightsFilterBar, {
+  EMPTY_FILTERS,
+  filtersToQuery,
+  type InsightsFilterValue,
+} from "./InsightsFilterBar";
+import BandStudentsDrawer from "./BandStudentsDrawer";
 
 interface Grower {
   studentId: string;
@@ -91,18 +97,57 @@ const MATH_COLOR = "#ea580c"; // orange-600
 const SUCCESS_COLOR = "#16a34a"; // green-600 — % at L3+, % growers
 const RISK_COLOR = "#dc2626"; // red-600 — % BQ
 
+interface BandStudent {
+  studentId: string;
+  studentName: string;
+  grade: number | null;
+  pm1: number | null;
+  pm3: number;
+}
+
+interface BandResponse {
+  subject: "ela" | "math";
+  level: 1 | 2 | 3 | 4 | 5;
+  students: BandStudent[];
+  truncated: boolean;
+  total: number;
+}
+
+const LEVEL_LABEL: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "L1 — Below",
+  2: "L2 — Approaching",
+  3: "L3 — Proficient",
+  4: "L4 — Above",
+  5: "L5 — Mastery",
+};
+
 export default function AcademicsDashboard({ onOpenProfile }: Props) {
   const [grade, setGrade] = useState("");
+  const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<AcademicsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+
+  // Drill-in drawer state.
+  const [drillOpen, setDrillOpen] = useState(false);
+  const [drillSubject, setDrillSubject] = useState<"ela" | "math">("ela");
+  const [drillLevel, setDrillLevel] = useState<1 | 2 | 3 | 4 | 5>(1);
+  const [drillData, setDrillData] = useState<BandResponse | null>(null);
+  const [drillLoading, setDrillLoading] = useState(false);
+  const [drillError, setDrillError] = useState("");
+
+  // Build the shared query string (grade + cross-cutting filters).
+  function buildQuery(): URLSearchParams {
+    const qs = filtersToQuery(filters);
+    if (grade) qs.set("grade", grade);
+    return qs;
+  }
 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
     setError("");
-    const qs = new URLSearchParams();
-    if (grade) qs.set("grade", grade);
+    const qs = buildQuery();
     authFetch(`/api/insights/academics?${qs.toString()}`)
       .then(async (r) => {
         if (cancelled) return;
@@ -124,7 +169,32 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [grade]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [grade, filters]);
+
+  function openBand(subject: "ela" | "math", level: 1 | 2 | 3 | 4 | 5) {
+    setDrillSubject(subject);
+    setDrillLevel(level);
+    setDrillOpen(true);
+    setDrillLoading(true);
+    setDrillError("");
+    setDrillData(null);
+    const qs = buildQuery();
+    qs.set("subject", subject);
+    qs.set("level", String(level));
+    authFetch(`/api/insights/academics/band?${qs.toString()}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          setDrillError(body.error || `Request failed (${r.status})`);
+          return;
+        }
+        const json = (await r.json()) as BandResponse;
+        setDrillData(json);
+      })
+      .catch((e) => setDrillError(String(e?.message ?? e)))
+      .finally(() => setDrillLoading(false));
+  }
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -165,6 +235,8 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
           </select>
         </div>
       </div>
+
+      <InsightsFilterBar value={filters} onChange={setFilters} />
 
       <HowToUseHelp title="How to use Academics">
         <HowToSection title="What this dashboard is">
@@ -285,8 +357,32 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
       )}
 
       {data && !loading && !error && (
-        <Body data={data} onOpenProfile={onOpenProfile} />
+        <Body
+          data={data}
+          onOpenProfile={onOpenProfile}
+          onOpenBand={openBand}
+        />
       )}
+
+      <BandStudentsDrawer
+        open={drillOpen}
+        title={`${drillSubject === "ela" ? "ELA" : "Math"} — ${LEVEL_LABEL[drillLevel]}`}
+        subtitle={
+          drillData
+            ? `${drillData.total} student${drillData.total === 1 ? "" : "s"} placed at this level on PM3${drillData.truncated ? ` (showing first ${drillData.students.length})` : ""}`
+            : undefined
+        }
+        students={drillData?.students ?? []}
+        truncated={drillData?.truncated}
+        total={drillData?.total}
+        loading={drillLoading}
+        error={drillError}
+        onClose={() => setDrillOpen(false)}
+        onOpenProfile={(id) => {
+          setDrillOpen(false);
+          onOpenProfile(id);
+        }}
+      />
     </div>
   );
 }
@@ -296,9 +392,11 @@ export default function AcademicsDashboard({ onOpenProfile }: Props) {
 function Body({
   data,
   onOpenProfile,
+  onOpenBand,
 }: {
   data: AcademicsResponse;
   onOpenProfile: (id: string) => void;
+  onOpenBand: (subject: "ela" | "math", level: 1 | 2 | 3 | 4 | 5) => void;
 }) {
   const allZero = data.totals.studentsAssessed === 0;
 
@@ -441,7 +539,19 @@ function Body({
             marginBottom: "1.25rem",
           }}
         >
-          <div style={panelTitleStyle}>PM3 placement distribution</div>
+          <div style={panelTitleStyle}>
+            PM3 placement distribution
+            <span
+              style={{
+                fontSize: 11,
+                fontWeight: 400,
+                color: "var(--text-subtle)",
+                marginLeft: "0.4rem",
+              }}
+            >
+              (click a bar to see students)
+            </span>
+          </div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart
               data={placementRows}
@@ -452,8 +562,40 @@ function Body({
               <YAxis tick={{ fontSize: 10 }} allowDecimals={false} width={28} />
               <Tooltip contentStyle={{ fontSize: 12 }} />
               <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Bar dataKey="ela" name="ELA" fill={ELA_COLOR} />
-              <Bar dataKey="math" name="Math" fill={MATH_COLOR} />
+              <Bar
+                dataKey="ela"
+                name="ELA"
+                fill={ELA_COLOR}
+                cursor="pointer"
+                onClick={(p: { level?: number }) => {
+                  if (
+                    p?.level === 1 ||
+                    p?.level === 2 ||
+                    p?.level === 3 ||
+                    p?.level === 4 ||
+                    p?.level === 5
+                  ) {
+                    onOpenBand("ela", p.level);
+                  }
+                }}
+              />
+              <Bar
+                dataKey="math"
+                name="Math"
+                fill={MATH_COLOR}
+                cursor="pointer"
+                onClick={(p: { level?: number }) => {
+                  if (
+                    p?.level === 1 ||
+                    p?.level === 2 ||
+                    p?.level === 3 ||
+                    p?.level === 4 ||
+                    p?.level === 5
+                  ) {
+                    onOpenBand("math", p.level);
+                  }
+                }}
+              />
             </BarChart>
           </ResponsiveContainer>
         </div>

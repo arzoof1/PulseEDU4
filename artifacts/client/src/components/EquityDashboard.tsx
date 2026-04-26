@@ -18,6 +18,11 @@
 import { useEffect, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
+import InsightsFilterBar, {
+  EMPTY_FILTERS,
+  filtersToQuery,
+  type InsightsFilterValue,
+} from "./InsightsFilterBar";
 
 // ------------------------- API contract types ------------------------------
 
@@ -188,6 +193,7 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
   // dashboards' Props shape so App.tsx wiring stays uniform), but the v1
   // equity view is aggregate-only — no per-student lists yet.
   const [grade, setGrade] = useState("");
+  const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<EquityResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -198,6 +204,7 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
     setError("");
     const qs = new URLSearchParams();
     if (grade) qs.set("grade", grade);
+    for (const [k, v] of filtersToQuery(filters)) qs.set(k, v);
     authFetch(`/api/insights/equity?${qs.toString()}`)
       .then(async (r) => {
         if (cancelled) return;
@@ -219,7 +226,7 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [grade]);
+  }, [grade, filters]);
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -261,6 +268,8 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
           </select>
         </div>
       </div>
+
+      <InsightsFilterBar value={filters} onChange={setFilters} />
 
       <HowToUseHelp title="How to use Equity">
         <HowToSection title="What this dashboard is">

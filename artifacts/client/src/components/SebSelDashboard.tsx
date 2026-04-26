@@ -28,6 +28,11 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
+import InsightsFilterBar, {
+  EMPTY_FILTERS,
+  filtersToQuery,
+  type InsightsFilterValue,
+} from "./InsightsFilterBar";
 
 type FlagKey = "plan" | "bq" | "negatives" | "iep504";
 
@@ -138,6 +143,7 @@ const FLAG_LABEL: Record<FlagKey, string> = {
 
 export default function SebSelDashboard({ onOpenProfile }: Props) {
   const [grade, setGrade] = useState("");
+  const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<SebSelResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -148,6 +154,7 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
     setError("");
     const qs = new URLSearchParams();
     if (grade) qs.set("grade", grade);
+    for (const [k, v] of filtersToQuery(filters)) qs.set(k, v);
     authFetch(`/api/insights/sebsel?${qs.toString()}`)
       .then(async (r) => {
         if (cancelled) return;
@@ -169,7 +176,7 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [grade]);
+  }, [grade, filters]);
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -211,6 +218,8 @@ export default function SebSelDashboard({ onOpenProfile }: Props) {
           </select>
         </div>
       </div>
+
+      <InsightsFilterBar value={filters} onChange={setFilters} />
 
       <HowToUseHelp title="How to use SEB / SEL">
         <HowToSection title="What this dashboard is">
