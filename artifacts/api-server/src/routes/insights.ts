@@ -447,7 +447,7 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   const accommodations = await db
     .select({
       id: studentAccommodationsTable.id,
-      label: schoolAccommodationsTable.label,
+      label: schoolAccommodationsTable.name,
       assignedAt: studentAccommodationsTable.assignedAt,
     })
     .from(studentAccommodationsTable)
