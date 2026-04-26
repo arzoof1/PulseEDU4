@@ -2143,3 +2143,59 @@ Deferred list ships (separate list — search "*After item #7 in this
 list ships*" earlier in this file), ask the user about adding view
 features for the uploaded data. That reminder is unrelated to this
 phase queue.
+
+---
+
+## Save-for-later: eduCLIMBER "Students 3D" feature
+
+User dropped in a screenshot of eduCLIMBER's **Students 3D** view on
+Apr 26, 2026 with the directive "Save for later." Not on the Phase
+Queue yet — capturing here so we don't lose the reference when the
+user is ready to prioritize it.
+
+Reference image: `attached_assets/image_1777213040627.png`
+
+What it is (from the screenshot):
+- A whole-school visualization where every student is rendered as a
+  small circular portrait, grouped into vertical "stacks" by an
+  attribute (the screenshot shows grouping by Ethnicity — White 67%
+  / 284, Hispanic-Latino 13.7% / 58, Black 8.7% / 37, Two+ Races
+  6.4% / 27, Asian 4% / 17, American Indian 0.2% / …).
+- Top of screen: School Year, Schools, Grades multi-selects with
+  filter chips ("Incident", "Attendance: 93%-100%") shown applied
+  with X-to-remove pills.
+- Left rail "Group" panel: School / Grade / Gender / Ethnicity /
+  Meal Status / Disability / Incident / Attendance buckets — pick
+  one to be the X-axis of the stacks.
+- Left rail "Filter" panel: Assessment / Attendance / Disability /
+  Ethnicity (and more below the fold) — these narrow the population
+  and feed the chip strip at top.
+- Hover/click a portrait → a card appears with the student's name,
+  school, grade, headshot, and the active metrics ("2.00 : Incident",
+  "98.90 : Attendance: …").
+
+Why it's compelling for our app:
+- Makes the abstract numbers feel like real kids — every dot is a
+  face, hard to ignore an outlier subgroup when you can see them.
+- Doubles as an equity lens (it's literally the disproportionality
+  view from item #5) **and** a roster explorer (drill-in to the
+  individual profile we already have).
+- Builds naturally on the watchlist + dashboards we just shipped —
+  the metrics on the hover card are exactly the engagement /
+  behavior / academics KPIs.
+
+Not-trivial considerations to think about before we commit:
+- Photo plumbing: we don't currently store student headshots. Would
+  need a photo upload pipeline + object storage + a fallback initials
+  avatar. That's a meaningful side-quest before this can look like
+  the screenshot. (Could ship a v0 with monogram avatars first.)
+- Performance: rendering hundreds-to-thousands of DOM portraits with
+  hover interactions needs canvas/SVG virtualization, not naive
+  React divs.
+- Privacy: a wall of student faces visible to anyone with the right
+  role is a meaningful escalation of what "core team" sees today.
+  Worth a quick policy check with the user before designing.
+
+Status: **idea parked** — surface to the user when they ask "what's
+next after the eduCLIMBER ledger" or when item #5 (Equity dashboard)
+comes up, since this could *be* the equity dashboard's hero view.
