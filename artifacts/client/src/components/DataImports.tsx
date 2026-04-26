@@ -45,6 +45,18 @@ type PreviewResponse = {
   districtSchoolCount?: number;
 };
 
+type ImportTemplate = {
+  id: number;
+  schoolId: number | null;
+  districtId: number | null;
+  kind: string;
+  name: string;
+  mapping: Record<string, string>;
+  createdBy: number;
+  createdAt: string;
+  scope: "school" | "district";
+};
+
 type ImportJob = {
   id: number;
   schoolId: number | null;
@@ -186,6 +198,11 @@ export default function DataImports({
   const [jobsLoading, setJobsLoading] = useState(false);
   const [rollbackId, setRollbackId] = useState<number | null>(null);
 
+  // Templates state — saved column mappings the user can re-apply.
+  const [templates, setTemplates] = useState<ImportTemplate[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+  const [savingTemplate, setSavingTemplate] = useState(false);
+
   // Endpoints + target dictionary depend on scope. Memoized so the
   // identity is stable across renders inside the same scope.
   const endpoints = useMemo(() => {
@@ -218,6 +235,94 @@ export default function DataImports({
     if (tab === "history") void loadJobs();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, scope]);
+
+  // Load templates whenever the user lands on the Upload tab in a given
+  // scope. Cheap query (one school's worth of rows at most), so always
+  // re-fetching keeps the dropdown current after a save/delete elsewhere.
+  const loadTemplates = async () => {
+    setTemplatesLoading(true);
+    try {
+      const params = new URLSearchParams({ kind });
+      if (scope === "district") params.set("scope", "district");
+      const r = await authFetch(
+        `/api/data-imports/templates?${params.toString()}`,
+      );
+      if (r.ok) setTemplates(await r.json());
+    } finally {
+      setTemplatesLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === "upload") void loadTemplates();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, scope]);
+
+  // Apply a template's mapping to the current preview. We only keep the
+  // pairs whose CSV column actually exists in this file (the user might
+  // be uploading a file from a different vendor than the template was
+  // built for) — every kept pair is also re-validated by the server when
+  // we re-run preview, so there's no risk of saving a stale mapping.
+  const applyTemplate = (tplId: number) => {
+    if (!preview || !csvText) return;
+    const tpl = templates.find((t) => t.id === tplId);
+    if (!tpl) return;
+    const headerSet = new Set(preview.headers);
+    const next: Record<string, string> = {};
+    for (const [csvCol, target] of Object.entries(tpl.mapping)) {
+      if (headerSet.has(csvCol)) next[csvCol] = target;
+    }
+    setMapping(next);
+    void runPreview(csvText, next);
+  };
+
+  const handleSaveTemplate = async () => {
+    if (!preview || Object.keys(mapping).length === 0) return;
+    const name = window.prompt(
+      "Save this mapping as a template. Use the vendor name (e.g. 'FAST', 'iReady'):",
+    );
+    if (!name || !name.trim()) return;
+    setSavingTemplate(true);
+    try {
+      const body = {
+        kind,
+        name: name.trim(),
+        mapping,
+        scope,
+      };
+      const r = await authFetch("/api/data-imports/templates", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        alert(j.error ?? `Save failed (HTTP ${r.status})`);
+        return;
+      }
+      await loadTemplates();
+    } finally {
+      setSavingTemplate(false);
+    }
+  };
+
+  const handleDeleteTemplate = async (tplId: number, tplName: string) => {
+    if (
+      !window.confirm(
+        `Delete the "${tplName}" template? Anyone using it will need to re-map their next upload.`,
+      )
+    )
+      return;
+    const r = await authFetch(`/api/data-imports/templates/${tplId}`, {
+      method: "DELETE",
+    });
+    if (!r.ok) {
+      const j = await r.json().catch(() => ({}));
+      alert(j.error ?? `Delete failed (HTTP ${r.status})`);
+      return;
+    }
+    await loadTemplates();
+  };
 
   const resetUpload = () => {
     // Bumping the token also cancels any in-flight preview from before
@@ -730,6 +835,132 @@ export default function DataImports({
                 We guessed how each CSV column maps to our fields. Override
                 any row, or set a column to "Ignore" to drop it.
               </p>
+
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: "0.5rem",
+                  marginBottom: "0.75rem",
+                  flexWrap: "wrap",
+                }}
+              >
+                <span style={{ fontSize: 13, fontWeight: 600 }}>
+                  Templates:
+                </span>
+                <select
+                  value=""
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (Number.isFinite(v) && v > 0) applyTemplate(v);
+                  }}
+                  disabled={templatesLoading || templates.length === 0}
+                  style={{
+                    padding: "0.3rem 0.5rem",
+                    background: "var(--card-bg, #0f172a)",
+                    color: "inherit",
+                    border: "1px solid var(--border, #2a3447)",
+                    borderRadius: 6,
+                    font: "inherit",
+                    fontSize: 13,
+                    minWidth: 200,
+                  }}
+                >
+                  <option value="">
+                    {templatesLoading
+                      ? "Loading…"
+                      : templates.length === 0
+                        ? "No saved templates"
+                        : "Apply a saved template…"}
+                  </option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.name} {t.scope === "district" ? "🏛 District" : ""}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  onClick={handleSaveTemplate}
+                  disabled={
+                    savingTemplate || Object.keys(mapping).length === 0
+                  }
+                  style={{
+                    padding: "0.3rem 0.75rem",
+                    border: "1px solid var(--border, #2a3447)",
+                    borderRadius: 6,
+                    background: "transparent",
+                    color: "inherit",
+                    cursor:
+                      savingTemplate || Object.keys(mapping).length === 0
+                        ? "not-allowed"
+                        : "pointer",
+                    font: "inherit",
+                    fontSize: 13,
+                    opacity:
+                      savingTemplate || Object.keys(mapping).length === 0
+                        ? 0.5
+                        : 1,
+                  }}
+                  title={
+                    scope === "district"
+                      ? "Saved as a district-wide template (visible to every school in your district)"
+                      : "Saved as a template for your school"
+                  }
+                >
+                  {savingTemplate ? "Saving…" : "Save current as template"}
+                </button>
+                {templates.length > 0 && (
+                  <details style={{ marginLeft: "auto" }}>
+                    <summary
+                      style={{
+                        cursor: "pointer",
+                        fontSize: 12,
+                        color: "var(--text-subtle)",
+                      }}
+                    >
+                      Manage ({templates.length})
+                    </summary>
+                    <ul
+                      style={{
+                        marginTop: "0.4rem",
+                        paddingLeft: "1.25rem",
+                        fontSize: 13,
+                      }}
+                    >
+                      {templates.map((t) => (
+                        <li key={t.id} style={{ marginBottom: 4 }}>
+                          {t.name}{" "}
+                          <span
+                            style={{
+                              color: "var(--text-subtle)",
+                              fontSize: 11,
+                            }}
+                          >
+                            ({t.scope})
+                          </span>{" "}
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteTemplate(t.id, t.name)}
+                            style={{
+                              padding: "0.1rem 0.4rem",
+                              border: "1px solid #ef4444",
+                              background: "transparent",
+                              color: "#ef4444",
+                              borderRadius: 4,
+                              fontSize: 11,
+                              cursor: "pointer",
+                              marginLeft: 4,
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  </details>
+                )}
+              </div>
               <div
                 style={{
                   display: "grid",

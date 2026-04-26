@@ -26,9 +26,10 @@ import {
   staffTable,
   schoolsTable,
   importJobsTable,
+  importTemplatesTable,
   assessmentsTable,
 } from "@workspace/db";
-import { eq, and, desc, sql, isNull } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
 import {
   requireSchool,
   canImportSchoolData,
@@ -1040,6 +1041,287 @@ router.post(
       return count;
     });
     res.json({ ok: true, deleted });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// Mapping templates. Once a school admin has correctly mapped a vendor's
+// CSV (FAST, iReady, MAP, …) they can save the mapping as a named
+// template so the next quarter's upload pre-fills every column.
+//
+// Visibility model:
+//   - school-scope template (schoolId set, districtId null) → visible to
+//     that school only (creator + anyone else uploading at that school).
+//   - district-scope template (districtId set, schoolId null) → visible
+//     to every school in the district as a read-only suggestion AND to
+//     the district itself.
+//
+// Listing rules for a caller:
+//   - school mode: their school's templates + their district's templates
+//     (if they have a district).
+//   - district mode: their district's templates only.
+// ---------------------------------------------------------------------------
+
+// Validate a mapping payload before saving as a template. Same rules as
+// the importer's validateMapping but WITHOUT the required-fields check —
+// templates are allowed to be partial (the user fills in the gaps later
+// when they hit the importer).
+function validateTemplateMapping(
+  mapping: Record<string, string>,
+): string | null {
+  if (
+    !mapping ||
+    typeof mapping !== "object" ||
+    Array.isArray(mapping) ||
+    Object.keys(mapping).length === 0
+  ) {
+    return "Template mapping must have at least one column";
+  }
+  const seenTargets = new Set<string>();
+  for (const [csvCol, target] of Object.entries(mapping)) {
+    if (typeof csvCol !== "string" || !csvCol.trim()) {
+      return "Template has an empty CSV column name";
+    }
+    if (typeof target !== "string" || !VALID_TARGETS.has(target)) {
+      return `Template references unknown target field: "${target}"`;
+    }
+    if (seenTargets.has(target)) {
+      return `Two CSV columns map to the same target: "${target}"`;
+    }
+    seenTargets.add(target);
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// GET /api/data-imports/templates?kind=assessments&scope=school|district
+//   Returns templates visible to the actor in the requested scope.
+//   - school (default): own school + own district's templates
+//   - district: own district's templates only (gated on canActAsDistrict)
+//   Each row carries a `scope` discriminator the UI uses to render a
+//   chip and to enforce edit/delete rules.
+// ---------------------------------------------------------------------------
+router.get(
+  "/data-imports/templates",
+  requireImporter(),
+  async (req, res) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const scope = req.query.scope === "district" ? "district" : "school";
+    const kind =
+      typeof req.query.kind === "string" && req.query.kind.trim()
+        ? req.query.kind.trim()
+        : null;
+    if (!kind) {
+      res.status(400).json({ error: "kind is required" });
+      return;
+    }
+
+    let scopePredicate;
+    if (scope === "district") {
+      if (!canActAsDistrict(staff)) {
+        res.status(403).json({ error: "District access required" });
+        return;
+      }
+      const districtId = await requireActorDistrict(staff, res);
+      if (districtId == null) return;
+      scopePredicate = and(
+        eq(importTemplatesTable.districtId, districtId),
+        isNull(importTemplatesTable.schoolId),
+      );
+    } else {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      // School-mode list = own school templates + own district templates
+      // (if any). Falls through gracefully when the school isn't in a
+      // district yet — only school-scope templates show up.
+      const districtId = await getDistrictIdForSchool(staff.schoolId);
+      const ownSchool = and(
+        eq(importTemplatesTable.schoolId, schoolId),
+        isNull(importTemplatesTable.districtId),
+      );
+      scopePredicate =
+        districtId != null
+          ? or(
+              ownSchool,
+              and(
+                eq(importTemplatesTable.districtId, districtId),
+                isNull(importTemplatesTable.schoolId),
+              ),
+            )
+          : ownSchool;
+    }
+
+    const where = and(scopePredicate, eq(importTemplatesTable.kind, kind));
+    const rows = await db
+      .select()
+      .from(importTemplatesTable)
+      .where(where)
+      .orderBy(desc(importTemplatesTable.createdAt));
+    // Decorate with a scope label so the UI doesn't have to reconstruct
+    // it from schoolId/districtId.
+    const decorated = rows.map((r) => ({
+      ...r,
+      scope:
+        r.districtId != null && r.schoolId == null
+          ? ("district" as const)
+          : ("school" as const),
+    }));
+    res.json(decorated);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// POST /api/data-imports/templates
+//   Body: { kind, name, mapping, scope?: "school"|"district" }
+//   Saves the supplied mapping as a named template. School scope is the
+//   default and works for any importer; district scope requires
+//   canActAsDistrict. Names are de-duplicated within (scope, kind) — if
+//   a template with the same name already exists, this UPDATES it
+//   (upsert by name) so users can iterate without piling up dupes.
+// ---------------------------------------------------------------------------
+router.post(
+  "/data-imports/templates",
+  requireImporter(),
+  async (req, res) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const kind =
+      typeof req.body?.kind === "string" && req.body.kind.trim()
+        ? req.body.kind.trim()
+        : null;
+    const name =
+      typeof req.body?.name === "string" && req.body.name.trim()
+        ? req.body.name.trim().slice(0, 100)
+        : null;
+    const mapping = req.body?.mapping;
+    const scope = req.body?.scope === "district" ? "district" : "school";
+    if (!kind) {
+      res.status(400).json({ error: "kind is required" });
+      return;
+    }
+    if (!name) {
+      res.status(400).json({ error: "name is required" });
+      return;
+    }
+    const mappingError = validateTemplateMapping(mapping);
+    if (mappingError) {
+      res.status(400).json({ error: mappingError });
+      return;
+    }
+
+    let schoolIdCol: number | null = null;
+    let districtIdCol: number | null = null;
+    if (scope === "district") {
+      if (!canActAsDistrict(staff)) {
+        res.status(403).json({ error: "District template requires DA/SU" });
+        return;
+      }
+      const d = await requireActorDistrict(staff, res);
+      if (d == null) return;
+      districtIdCol = d;
+    } else {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      schoolIdCol = schoolId;
+    }
+
+    // Upsert by (scope, kind, name). Two templates called "FAST" at the
+    // same school+kind would be confusing in the dropdown, so we just
+    // overwrite the existing one with the new mapping.
+    const ownerWhere =
+      scope === "district"
+        ? and(
+            eq(importTemplatesTable.districtId, districtIdCol!),
+            isNull(importTemplatesTable.schoolId),
+          )
+        : and(
+            eq(importTemplatesTable.schoolId, schoolIdCol!),
+            isNull(importTemplatesTable.districtId),
+          );
+    const [existing] = await db
+      .select()
+      .from(importTemplatesTable)
+      .where(
+        and(
+          ownerWhere,
+          eq(importTemplatesTable.kind, kind),
+          eq(importTemplatesTable.name, name),
+        ),
+      );
+    if (existing) {
+      await db
+        .update(importTemplatesTable)
+        .set({ mapping, createdBy: staff.id, createdAt: new Date() })
+        .where(eq(importTemplatesTable.id, existing.id));
+      res.json({ id: existing.id, updated: true });
+      return;
+    }
+    const [row] = await db
+      .insert(importTemplatesTable)
+      .values({
+        schoolId: schoolIdCol,
+        districtId: districtIdCol,
+        kind,
+        name,
+        mapping,
+        createdBy: staff.id,
+      })
+      .returning({ id: importTemplatesTable.id });
+    res.json({ id: row.id, updated: false });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// DELETE /api/data-imports/templates/:id
+//   Permission rules:
+//     - school template: any importer at that school may delete (so a
+//       team member can clean up after a colleague leaves).
+//     - district template: only DA/SU on the same district may delete.
+// ---------------------------------------------------------------------------
+router.delete(
+  "/data-imports/templates/:id",
+  requireImporter(),
+  async (req, res) => {
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const id = parseInt(req.params.id, 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid template id" });
+      return;
+    }
+    const [tpl] = await db
+      .select()
+      .from(importTemplatesTable)
+      .where(eq(importTemplatesTable.id, id));
+    if (!tpl) {
+      res.status(404).json({ error: "Template not found" });
+      return;
+    }
+    if (tpl.districtId != null && tpl.schoolId == null) {
+      if (!canActAsDistrict(staff)) {
+        res.status(403).json({ error: "District template requires DA/SU" });
+        return;
+      }
+      const actorDistrictId = await requireActorDistrict(staff, res);
+      if (actorDistrictId == null) return;
+      if (tpl.districtId !== actorDistrictId) {
+        res.status(404).json({ error: "Template not found" });
+        return;
+      }
+    } else if (tpl.schoolId != null) {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      if (tpl.schoolId !== schoolId) {
+        res.status(404).json({ error: "Template not found" });
+        return;
+      }
+    } else {
+      // Neither scope set — refuse to touch a malformed row.
+      res.status(409).json({ error: "Template has no scope" });
+      return;
+    }
+    await db
+      .delete(importTemplatesTable)
+      .where(eq(importTemplatesTable.id, id));
+    res.json({ ok: true });
   },
 );
 
