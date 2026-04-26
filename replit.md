@@ -2475,13 +2475,46 @@ NOT drop any of these without an explicit user OK**.
      by zero race-set count for schools 182-219, 221-277, 391.
 
 6. **Early Warning composite** — single 0-100 risk score per student
-   rolling up the pillars (academics + behavior + attendance +
-   supports). Depends on items 1–4 for the inputs. STATUS: queued
-   (dependent on 1–4, item #5 is independent of item #6).
-6. **Early Warning composite** — single 0-100 risk score per student
-   rolling up the pillars (academics + behavior + attendance +
-   supports). Depends on items 1–4 for the inputs. STATUS: queued
-   (dependent on 1–4).
+   rolling up four pillars (academics + behavior + engagement +
+   supports). STATUS: SHIPPED.
+   - Endpoint: `GET /api/insights/early-warning?grade=...` in
+     `artifacts/api-server/src/routes/insights.ts` — auth gated by
+     `requireSchool` + `isCoreTeam` (same model as Equity).
+   - Pillars (each 0-25, sum = 0-100):
+     - **Academics** — distinct FAST `priorYearBq` subjects: 0→0,
+       1→14, 2+→25.
+     - **Behavior** — negative PBIS in last 30d (excludes voided):
+       0→0, 1-2→8, 3-5→15, 6-9→20, 10+→25.
+     - **Engagement** — weighted disruption: tardy=1, hall pass=1,
+       pullout=2, ISS day=5 (a full day out of class is a much heavier
+       signal than a single tardy). Weighted total: 0-2→0, 3-5→8,
+       6-12→15, 13-25→20, 26+→25.
+     - **Supports** — active MTSS plan tier (max across all open plans):
+       no plan→0, T1→5, T2→14, T3→25. Counts *as* risk because being
+       on a Tier-3 plan means the team has already identified intensive
+       need — the inverse case is captured by the
+       `unsupportedHighRisk` flag (composite ≥ 60 with no active plan).
+   - Risk bands: 0-19 Low · 20-39 Watch · 40-59 Moderate · 60-79
+     High · 80-100 Critical.
+   - Response: totals (cohortStudents, avgScore, maxScore, per-band
+     counts/pcts, highOrCritical, unsupportedHighRiskCount), top-25
+     risk leaderboard with pillar breakdown + signal counts, sources
+     counts (FAST BQ, neg PBIS 30d, hall passes 30d, tardies 30d,
+     pullouts 30d, ISS days 30d, active plans). Empty-cohort fast
+     path returns the same envelope shape with all zeros.
+   - Frontend: `artifacts/client/src/components/EarlyWarningDashboard.tsx`
+     mirroring EquityDashboard structure — grade filter, KPI strip
+     (cohort / avg / max / High+Critical / unsupported), 5-color risk
+     band distribution bar with legend, top-25 leaderboard with
+     pillar-color chips and click-through to studentProfile.
+   - Insights tile (`earlyWarning` in `artifacts/client/src/App.tsx`)
+     promoted from Phase 4 → Today, wired to new
+     `earlyWarningDashboard` activeSection, `studentProfileReturnTo`
+     union extended.
+   - Sanity check on school 1: 875 students, 497 with at least one BQ
+     subject (max 2), 175 active MTSS plans, 193 hall pass rows /
+     120 tardy rows / 57 pullout rows / 15 ISS-day rows in 30d
+     window — composite scoring will exercise all four pillars.
 7. **Attendance importer schema decision** — needs user input on
    per-day vs per-period attendance, the code dictionary
    (P/A/T/E/U/ISS/OSS), and excused-reason free-text vs enum.

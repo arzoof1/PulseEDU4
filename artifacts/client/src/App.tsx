@@ -28,6 +28,7 @@ import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
 import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
+import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
 import StudentProfile from "./components/StudentProfile";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -3140,9 +3141,10 @@ const INSIGHTS_TILES: InsightsTile[] = [
     icon: "🚨",
     title: "Early Warning",
     subtitle:
-      "Configurable risk thresholds across all six domains; auto-generated at-risk roster + parent notifications.",
-    phase: "Phase 4",
+      "One 0-100 composite per student rolling up academics, behavior, engagement, and supports — sorted leaderboard so the team knows who to touch first.",
+    phase: "Today",
     group: "monitoring",
+    targetSection: "earlyWarningDashboard",
   },
 ];
 
@@ -3531,6 +3533,7 @@ function App() {
     | "academicsDashboard"
     | "sebSelDashboard"
     | "equityDashboard"
+    | "earlyWarningDashboard"
   >("insightsWatchlist");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -17543,6 +17546,16 @@ function App() {
             // but we wire the return-to anyway so a future drill-in can
             // navigate back to this dashboard cleanly.
             setStudentProfileReturnTo("equityDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "earlyWarningDashboard" && canAccessMtssHub && (
+        <EarlyWarningDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            setStudentProfileReturnTo("earlyWarningDashboard");
             setActiveSection("studentProfile");
           }}
         />

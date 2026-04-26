@@ -3381,4 +3381,444 @@ router.get("/insights/equity", async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// Early Warning composite — eduCLIMBER-style single 0-100 risk score per
+// student rolling up four pillars (academics / behavior / engagement /
+// supports). The composite collapses noisy multi-domain signals into the
+// one number an MTSS lead can sort on. Unlike the equity dashboard which
+// surfaces *gaps between subgroups*, this one surfaces *individual at-risk
+// students who need intervention now*.
+//
+// Pillars (each 0-25, summed to 0-100):
+//   * Academics  — number of FAST priorYearBq subjects (0/1/2+)
+//   * Behavior   — negative PBIS count in last 30d (excludes voided)
+//   * Engagement — weighted count: hall pass + tardy = 1, pullout = 2,
+//                  ISS day = 5 (a full day out of class is a much heavier
+//                  signal than a single tardy)
+//   * Supports   — active MTSS plan tier (no plan / T1 / T2 / T3)
+//
+// Why supports adds *score* rather than subtracts: a Tier-3 plan means a
+// team has already identified this student as needing intensive support,
+// which is itself a strong indicator that real risk exists. The
+// "unsupportedHighRisk" flag handles the inverse case — high composite
+// score with NO active plan, i.e. the student the team hasn't reached yet.
+//
+// Risk bands by composite:
+//   0-19  Low      |  20-39 Watch     |  40-59 Moderate
+//   60-79 High     |  80-100 Critical
+//
+// Same auth model as equity: requireSchool + isCoreTeam (Admin / SuperUser
+// / MTSS / Behavior / PBIS Coord). Rosters that touch every kid in the
+// school are sensitive enough to gate behind core team.
+// ---------------------------------------------------------------------------
+
+router.get("/insights/early-warning", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "Early Warning is core-team only" });
+    return;
+  }
+
+  // Defensive grade parsing — same pattern as equity / academics / behavior.
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  type Band = "low" | "watch" | "moderate" | "high" | "critical";
+  const bandOf = (score: number): Band => {
+    if (score >= 80) return "critical";
+    if (score >= 60) return "high";
+    if (score >= 40) return "moderate";
+    if (score >= 20) return "watch";
+    return "low";
+  };
+
+  // Empty-cohort fast path. Same envelope shape, all zeros — keeps the
+  // frontend type contract stable whether the cohort has 0 or 5000 kids.
+  const emptyEnvelope = (cohortStudents: number) => ({
+    grade: gradeFilter,
+    windowDays: 30,
+    totals: {
+      cohortStudents,
+      avgScore: 0,
+      maxScore: 0,
+      lowCount: cohortStudents, // empty cohort: no signals → all "low"
+      lowPct: cohortStudents > 0 ? 1 : 0,
+      watchCount: 0,
+      watchPct: 0,
+      moderateCount: 0,
+      moderatePct: 0,
+      highCount: 0,
+      highPct: 0,
+      criticalCount: 0,
+      criticalPct: 0,
+      highOrCriticalCount: 0,
+      highOrCriticalPct: 0,
+      unsupportedHighRiskCount: 0,
+    },
+    topRisk: [] as Array<unknown>,
+    sources: {
+      fastBq: 0,
+      negPbisLast30d: 0,
+      hallPassesLast30d: 0,
+      tardiesLast30d: 0,
+      pulloutsLast30d: 0,
+      issDaysLast30d: 0,
+      activePlans: 0,
+    },
+  });
+
+  // Cohort. Pull names/grade so the leaderboard can render rich rows
+  // without a second query.
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+      ),
+    );
+
+  if (studentRows.length === 0) {
+    res.json(emptyEnvelope(0));
+    return;
+  }
+
+  const studentIds = studentRows.map((r) => r.studentId);
+
+  const now = Date.now();
+  const windowDays = 30;
+  const fromIso = new Date(now - windowDays * 86_400_000).toISOString();
+  // ISS uses a date-only column, not timestamptz.
+  const fromDateOnly = new Date(now - windowDays * 86_400_000)
+    .toISOString()
+    .slice(0, 10);
+
+  // ----- Pull data sources (school-scoped + cohort-bounded) ---------------
+  // Active MTSS plans WITH tier — supports pillar.
+  const planRows = await db
+    .select({
+      studentId: studentMtssPlansTable.studentId,
+      tier: studentMtssPlansTable.tier,
+    })
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        isNull(studentMtssPlansTable.closedAt),
+        inArray(studentMtssPlansTable.studentId, studentIds),
+      ),
+    );
+  // If a student has multiple active plans, take the highest tier — that
+  // represents the most intensive level of support currently in place.
+  const tierByStudent = new Map<string, number>();
+  for (const r of planRows) {
+    const prev = tierByStudent.get(r.studentId) ?? 0;
+    if (r.tier > prev) tierByStudent.set(r.studentId, r.tier);
+  }
+
+  // Negative PBIS in last 30d — behavior pillar. Excludes voided rows
+  // to match the rest of the codebase's behavior semantics.
+  const pbisRows = await db
+    .select({ studentId: pbisEntriesTable.studentId })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        eq(pbisEntriesTable.polarity, "negative"),
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, fromIso),
+        inArray(pbisEntriesTable.studentId, studentIds),
+      ),
+    );
+  const negCountByStudent = new Map<string, number>();
+  for (const r of pbisRows) {
+    negCountByStudent.set(
+      r.studentId,
+      (negCountByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+
+  // FAST priorYearBq — academics pillar. Counts distinct subjects flagged
+  // BQ (per (student, subject) unique key in the schema). 0 / 1 / 2+ → 3
+  // tiers of academic risk.
+  const bqRows = await db
+    .select({ studentId: studentFastScoresTable.studentId })
+    .from(studentFastScoresTable)
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        eq(studentFastScoresTable.priorYearBq, true),
+        inArray(studentFastScoresTable.studentId, studentIds),
+      ),
+    );
+  const bqCountByStudent = new Map<string, number>();
+  for (const r of bqRows) {
+    bqCountByStudent.set(
+      r.studentId,
+      (bqCountByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+
+  // Engagement pillar — four signals weighted by instructional disruption:
+  //   tardy = 1, hall pass = 1, pullout = 2, ISS day = 5
+  // ISS days dwarf the others because a full day out of class is a much
+  // bigger signal than a single tardy.
+  const passRows = await db
+    .select({ studentId: hallPassesTable.studentId })
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        gte(hallPassesTable.createdAt, fromIso),
+        inArray(hallPassesTable.studentId, studentIds),
+      ),
+    );
+  const tardyRows = await db
+    .select({ studentId: tardiesTable.studentId })
+    .from(tardiesTable)
+    .where(
+      and(
+        eq(tardiesTable.schoolId, schoolId),
+        gte(tardiesTable.createdAt, fromIso),
+        inArray(tardiesTable.studentId, studentIds),
+      ),
+    );
+  // pullouts.requestedAt is a TEXT column holding ISO-like timestamps;
+  // string >= comparison works because ISO 8601 is lexicographically
+  // sortable. Same trick used elsewhere in this file.
+  const pulloutRows = await db
+    .select({ studentId: pulloutsTable.studentId })
+    .from(pulloutsTable)
+    .where(
+      and(
+        eq(pulloutsTable.schoolId, schoolId),
+        gte(pulloutsTable.requestedAt, fromIso),
+        inArray(pulloutsTable.studentId, studentIds),
+      ),
+    );
+  const issRows = await db
+    .select({ studentId: issAttendanceDayTable.studentId })
+    .from(issAttendanceDayTable)
+    .where(
+      and(
+        eq(issAttendanceDayTable.schoolId, schoolId),
+        gte(issAttendanceDayTable.day, fromDateOnly),
+        inArray(issAttendanceDayTable.studentId, studentIds),
+      ),
+    );
+
+  const passCountByStudent = new Map<string, number>();
+  for (const r of passRows) {
+    passCountByStudent.set(
+      r.studentId,
+      (passCountByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+  const tardyCountByStudent = new Map<string, number>();
+  for (const r of tardyRows) {
+    tardyCountByStudent.set(
+      r.studentId,
+      (tardyCountByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+  const pulloutCountByStudent = new Map<string, number>();
+  for (const r of pulloutRows) {
+    pulloutCountByStudent.set(
+      r.studentId,
+      (pulloutCountByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+  const issCountByStudent = new Map<string, number>();
+  for (const r of issRows) {
+    issCountByStudent.set(
+      r.studentId,
+      (issCountByStudent.get(r.studentId) ?? 0) + 1,
+    );
+  }
+
+  // ----- Per-pillar scoring helpers --------------------------------------
+  const scoreAcademics = (bqSubjects: number): number => {
+    if (bqSubjects >= 2) return 25;
+    if (bqSubjects === 1) return 14;
+    return 0;
+  };
+  const scoreBehavior = (negCount: number): number => {
+    if (negCount >= 10) return 25;
+    if (negCount >= 6) return 20;
+    if (negCount >= 3) return 15;
+    if (negCount >= 1) return 8;
+    return 0;
+  };
+  const scoreEngagement = (weighted: number): number => {
+    if (weighted >= 26) return 25;
+    if (weighted >= 13) return 20;
+    if (weighted >= 6) return 15;
+    if (weighted >= 3) return 8;
+    return 0;
+  };
+  const scoreSupports = (tier: number): number => {
+    if (tier >= 3) return 25;
+    if (tier === 2) return 14;
+    if (tier === 1) return 5;
+    return 0;
+  };
+
+  // ----- Composite per student --------------------------------------------
+  type Scored = {
+    studentId: string;
+    name: string;
+    grade: number;
+    score: number;
+    band: Band;
+    breakdown: {
+      academics: number;
+      behavior: number;
+      engagement: number;
+      supports: number;
+    };
+    signals: {
+      bqSubjects: number;
+      negPbis30d: number;
+      hallPasses30d: number;
+      tardies30d: number;
+      pullouts30d: number;
+      issDays30d: number;
+      weightedEngagement30d: number;
+      planTier: number | null;
+    };
+    hasActivePlan: boolean;
+    isUnsupportedHighRisk: boolean;
+  };
+
+  const scored: Scored[] = [];
+  let totalScore = 0;
+  let maxScore = 0;
+  const bandCounts: Record<Band, number> = {
+    low: 0, watch: 0, moderate: 0, high: 0, critical: 0,
+  };
+  let unsupportedHighRisk = 0;
+
+  for (const s of studentRows) {
+    const bqSubjects = bqCountByStudent.get(s.studentId) ?? 0;
+    const negPbis = negCountByStudent.get(s.studentId) ?? 0;
+    const passes = passCountByStudent.get(s.studentId) ?? 0;
+    const tardies = tardyCountByStudent.get(s.studentId) ?? 0;
+    const pullouts = pulloutCountByStudent.get(s.studentId) ?? 0;
+    const issDays = issCountByStudent.get(s.studentId) ?? 0;
+    const weightedEng = passes + tardies + pullouts * 2 + issDays * 5;
+    const tier = tierByStudent.get(s.studentId) ?? 0;
+
+    const aca = scoreAcademics(bqSubjects);
+    const beh = scoreBehavior(negPbis);
+    const eng = scoreEngagement(weightedEng);
+    const sup = scoreSupports(tier);
+    const composite = aca + beh + eng + sup;
+    const band = bandOf(composite);
+
+    bandCounts[band] += 1;
+    totalScore += composite;
+    if (composite > maxScore) maxScore = composite;
+
+    const hasPlan = tier > 0;
+    const unsupportedFlag = composite >= 60 && !hasPlan;
+    if (unsupportedFlag) unsupportedHighRisk += 1;
+
+    scored.push({
+      studentId: s.studentId,
+      name: `${s.firstName} ${s.lastName}`.trim(),
+      grade: s.grade,
+      score: composite,
+      band,
+      breakdown: {
+        academics: aca,
+        behavior: beh,
+        engagement: eng,
+        supports: sup,
+      },
+      signals: {
+        bqSubjects,
+        negPbis30d: negPbis,
+        hallPasses30d: passes,
+        tardies30d: tardies,
+        pullouts30d: pullouts,
+        issDays30d: issDays,
+        weightedEngagement30d: weightedEng,
+        planTier: hasPlan ? tier : null,
+      },
+      hasActivePlan: hasPlan,
+      isUnsupportedHighRisk: unsupportedFlag,
+    });
+  }
+
+  const cohort = scored.length;
+  // Sort: highest composite first; tiebreak unsupported flag (more urgent),
+  // then name for stable display.
+  scored.sort((a, b) => {
+    if (b.score !== a.score) return b.score - a.score;
+    if (a.isUnsupportedHighRisk !== b.isUnsupportedHighRisk) {
+      return a.isUnsupportedHighRisk ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+
+  const TOP_N = 25;
+  const topRisk = scored.slice(0, TOP_N);
+
+  const pct = (n: number) => (cohort > 0 ? n / cohort : 0);
+  const highOrCritical = bandCounts.high + bandCounts.critical;
+
+  res.json({
+    grade: gradeFilter,
+    windowDays,
+    totals: {
+      cohortStudents: cohort,
+      avgScore: cohort > 0 ? totalScore / cohort : 0,
+      maxScore,
+      lowCount: bandCounts.low,
+      lowPct: pct(bandCounts.low),
+      watchCount: bandCounts.watch,
+      watchPct: pct(bandCounts.watch),
+      moderateCount: bandCounts.moderate,
+      moderatePct: pct(bandCounts.moderate),
+      highCount: bandCounts.high,
+      highPct: pct(bandCounts.high),
+      criticalCount: bandCounts.critical,
+      criticalPct: pct(bandCounts.critical),
+      highOrCriticalCount: highOrCritical,
+      highOrCriticalPct: pct(highOrCritical),
+      unsupportedHighRiskCount: unsupportedHighRisk,
+    },
+    topRisk,
+    sources: {
+      fastBq: bqRows.length,
+      negPbisLast30d: pbisRows.length,
+      hallPassesLast30d: passRows.length,
+      tardiesLast30d: tardyRows.length,
+      pulloutsLast30d: pulloutRows.length,
+      issDaysLast30d: issRows.length,
+      activePlans: planRows.length,
+    },
+  });
+});
+
 export default router;
