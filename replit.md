@@ -92,6 +92,32 @@ original list layout.
   always sits at the top of the colored bar fill, regardless of how
   short or tall the leader's bar is.
 
+### Pulse Insights mockups — Program Effectiveness (April 2026)
+
+Two design-review mockups for the upcoming "Insights · MTSS" surface live
+in the mockup-sandbox under `pulse-screens/` and are embedded as live
+iframes on the Canvas (artifact id `XegfDyZt7HqfW2Bb8Ghoy`) in the
+signage row at `y=-540`:
+
+- `ProgramEffectivenessSankey.tsx` (iframe at `x=12720`) — Educlimber-style
+  alluvial flow. PM1 → PM3 by default, with PM1→PM2 / PM2→PM3 toggles.
+- `ProgramEffectivenessTrajectory.tsx` (iframe at `x=14060`) — sister view
+  that buckets the same students into 6 journey archetypes:
+  Climbed / Held the line at At/Above / Slipped / Stuck at Well Below /
+  Volatile / Untested at PM3. Each tile click reveals an in-component
+  drill view with 3–4 actionable sub-archetypes (e.g. for Stuck:
+  Closest to escape, Deeply stuck, No active intervention, Chronic
+  absence). The drill state is local `useState`; back button returns
+  to the parent grid.
+
+Both screens use synthetic `Matrix` data (the `BASE_MATRIX_ELA/MATH`
+constants are duplicated at the top of each file). Totals tie out to
+4,705 students across the two screens so they can be reviewed
+side-by-side. Data is mock-only — graduation to live `studentFastScores`
+is a separate task. Sub-archetype counts inside the drill view are
+deterministic ratios of the parent count, so they respond to the
+subject/grade filter chips at the top.
+
 ## Classroom Store + School Store + Object-storage thumbnails (April 2026)
 
 PbisPointsHub now has two reward catalogs that share a single generic

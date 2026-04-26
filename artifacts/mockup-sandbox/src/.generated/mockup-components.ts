@@ -5,6 +5,7 @@ export const modules: ModuleMap = {
   "./components/mockups/heartbeat/Snapshot.tsx": () => import("../components/mockups/heartbeat/Snapshot.tsx"),
   "./components/mockups/pulse-screens/HousesPbis.tsx": () => import("../components/mockups/pulse-screens/HousesPbis.tsx"),
   "./components/mockups/pulse-screens/ProgramEffectivenessSankey.tsx": () => import("../components/mockups/pulse-screens/ProgramEffectivenessSankey.tsx"),
+  "./components/mockups/pulse-screens/ProgramEffectivenessTrajectory.tsx": () => import("../components/mockups/pulse-screens/ProgramEffectivenessTrajectory.tsx"),
   "./components/mockups/pulse-screens/SchoolTrunk.tsx": () => import("../components/mockups/pulse-screens/SchoolTrunk.tsx"),
   "./components/mockups/pulse-screens/StudentTimeline.tsx": () => import("../components/mockups/pulse-screens/StudentTimeline.tsx")
 };
