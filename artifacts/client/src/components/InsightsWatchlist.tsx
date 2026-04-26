@@ -20,6 +20,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface StudentLookup {
   studentId: string;
@@ -628,10 +633,74 @@ export default function InsightsWatchlist({
             : "All students you can see, sorted by top risk"}
         </span>
       </div>
+      <HowToUseHelp title="How to use the Watch List">
+        <HowToSection title="What this is">
+          The Watch List shows every student you can see, ranked by
+          their top current risk signal. Cards are coloured by severity
+          (red = High, amber = Watch, blue = Info) and surface the
+          biggest concerns first — recent referrals, low FAST/iReady
+          performance, attendance dips, MTSS plan status, and more.
+          Data refreshes whenever the page loads.
+        </HowToSection>
+        <HowToSection title="How to read a card">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Severity stripe</strong> on the left — at-a-glance
+              urgency. Red cards are usually worth opening first.
+            </li>
+            <li>
+              <strong>Signal chips</strong> in the middle — the specific
+              flags that put the student here (e.g. "3 referrals last 30d",
+              "FAST below proficient"). Up to five chips fit; an overflow
+              chip ("+3 more") summarises the rest — open the profile to
+              see them all.
+            </li>
+            <li>
+              <strong>Pillar mini-grid</strong> on the right — quick read
+              on whether the student has Acad / Beh / Att / MTSS signals.
+              A filled square means there's something to look at in that
+              area.
+            </li>
+          </ul>
+        </HowToSection>
+        <HowToSection title="Day-to-day workflow">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Filter to who you care about.</strong> Use the preset
+              pill row at the top (e.g. "My students", "High risk only",
+              "Math concerns") or "More filters" for grade / pillar /
+              severity / MTSS-tier. Saved filter presets show up as their
+              own pills.
+            </li>
+            <li>
+              <strong>Sort to suit.</strong> The default is by top risk;
+              switch to alphabetical, by grade, or by recently-changed via
+              the sort menu.
+            </li>
+            <li>
+              <strong>Click a card</strong> to open the full Student
+              Profile (the whole-child view). Use Back to return — your
+              filters and scroll position are preserved.
+            </li>
+            <li>
+              <strong>Quick lookup</strong> — start typing a name in the
+              search box to jump straight to a student without scrolling.
+            </li>
+          </ul>
+        </HowToSection>
+        <HowToSection title="Watch List vs My Watch List">
+          This page is the <em>system</em> Watch List — driven by the
+          data, refreshed automatically, and shared with anyone else
+          who has the same student visibility. If you want a personal
+          space to track "kids on my mind" with your own notes and
+          follow-ups, use <strong>My Watch List</strong> in the
+          sidebar — that one's private to you.
+        </HowToSection>
+      </HowToUseHelp>
       <p
         style={{
           color: "var(--text-subtle)",
-          marginTop: "0.25rem",
+          marginTop: "0.75rem",
           marginBottom: "0.75rem",
           fontSize: "0.85rem",
         }}

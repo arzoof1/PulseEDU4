@@ -17,6 +17,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface Entry {
   id: number;
@@ -288,7 +293,7 @@ export default function MyWatchList({ onOpenStudent }: Props) {
         style={{
           color: "var(--text-subtle)",
           marginTop: "0.25rem",
-          marginBottom: "0.75rem",
+          marginBottom: "0.5rem",
           fontSize: "0.85rem",
         }}
       >
@@ -298,6 +303,85 @@ export default function MyWatchList({ onOpenStudent }: Props) {
         attention for, regardless of whether they've tripped a system
         flag.
       </p>
+
+      <HowToUseHelp title="How to use My Watch List">
+        <HowToSection title="What this is">
+          A private space for students you're personally keeping an eye
+          on. Unlike the system Watch List (which is data-driven and
+          shared), this list is hand-curated and visible only to you.
+          A student stays here until you remove them — they don't drop
+          off because of a data refresh.
+        </HowToSection>
+        <HowToSection title="Adding a student">
+          <ul style={howtoListStyle}>
+            <li>
+              Click <strong>+ Add a student</strong> in the top-right.
+            </li>
+            <li>
+              Search by name or student ID — you can only add students
+              you already have access to (your roster + any kids you're
+              a trusted adult for; core team can add any student at the
+              school).
+            </li>
+            <li>
+              Pick a <strong>group</strong> — Reading, Behavior, Family,
+              or Shine — and add a short note. Notes can be anything:
+              "watch progress monitoring", "mom asked for weekly update",
+              etc.
+            </li>
+            <li>
+              Optionally add a <strong>follow-up</strong> — a short
+              reminder text plus a date. Cards with a follow-up due
+              today or earlier float to the top of their group.
+            </li>
+          </ul>
+        </HowToSection>
+        <HowToSection title="Working the list day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              Use the <strong>group tabs</strong> at the top to focus
+              on one bucket at a time, or "All" to see everything.
+            </li>
+            <li>
+              Each card shows the student's name + grade, your note,
+              any follow-up, and when you last touched base.
+            </li>
+            <li>
+              The <strong>quick-action buttons</strong> on every card —
+              "Touched base", "Called home", "Pulled aside" — log a
+              touch instantly and timestamp it. Use these instead of
+              editing the note when you're just recording an
+              interaction.
+            </li>
+            <li>
+              Click <strong>Edit</strong> on a card to update the note,
+              change the group, or set / clear a follow-up.
+            </li>
+            <li>
+              Cards you haven't touched in <strong>14 days</strong>
+              show a small nudge so nothing slips through. The student
+              isn't removed automatically — that's still your call.
+            </li>
+            <li>
+              Click the student's name to open their full Student
+              Profile, then Back to return here.
+            </li>
+            <li>
+              Done with a student? Click <strong>Remove</strong> on the
+              card. (It's a hard delete — re-add them later if you
+              change your mind.)
+            </li>
+          </ul>
+        </HowToSection>
+        <HowToSection title="Privacy">
+          Entries on this list are private to you. Other staff —
+          including admins — don't see what you've added, what notes
+          you've written, or what touches you've logged. If a student
+          you've bookmarked moves out of your visibility scope (loses
+          you as their teacher / trusted adult), they stop showing on
+          your list automatically.
+        </HowToSection>
+      </HowToUseHelp>
 
       {/* Group tabs */}
       <div
