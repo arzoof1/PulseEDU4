@@ -2391,3 +2391,74 @@ the queued items: pull onto the table when we start item #3
 (Academics dashboard) since it could be the dashboard's main
 canvas. Pairs with the Sankey idea (same data, complementary
 lens).
+
+---
+
+## Save-for-later: eduCLIMBER "Early Warning" dashboard
+
+Fifth "Save for later" screenshot from the user on Apr 26, 2026.
+
+Reference image: `attached_assets/image_1777213241589.png`
+
+What it is (from the screenshot):
+- A **\*Early Warning** dashboard (asterisk in the title implies
+  "saved view") with an Edit button top-right and **five tile
+  cards** laid out in a responsive grid:
+  1. **School Year** filter card (top-left): a multi-select with
+     `2020-2021` chip currently selected.
+  2. **Students** card: a donut/pie chart of the entire student
+     population split by risk band — green = **Low Risk** (the
+     dominant slice), yellow = **Some Risk** (medium slice), red
+     = **High Risk** (small slice). Legend below the chart.
+  3. **By Gender** card: one row per gender bucket (Not Specified
+     / F / M) with a horizontal stacked bar showing the share in
+     each risk band, plus the raw N to the right (e.g., "1320
+     Students" for F).
+  4. **By Ethnicity** card: same horizontal-stacked-bar pattern,
+     one row per ethnicity bucket. Same color coding so the user
+     can scan vertically — any row with a meaningful red segment
+     is a disproportionality flag worth investigating.
+  5. **By Grade** card: same pattern, 1st through 10th grade,
+     with N on the right. Quickly answers "which grade is
+     producing the most at-risk kids."
+  6. (Partially visible at the bottom-left) **By School** card —
+     same pattern, one row per school in the district.
+- Color encoding is consistent across every card: green / yellow /
+  red = Low / Some / High Risk. That's the magic — once you learn
+  it on the donut, every other card is instantly readable.
+
+Why it's compelling for our app:
+- This **is** the visual hero for item #6 (Early Warning
+  composite). The composite score puts every kid in one of the
+  three risk bands; this dashboard is the natural way to slice
+  that population.
+- Doubles as an equity lens (item #5) for free — the By Ethnicity
+  card surfaces disproportionality in the risk score itself,
+  which is a more honest lens than just "look at our incidents."
+- Five tiles, one filter, zero clicks needed to read — exactly
+  the right density for a principal who has 30 seconds before
+  the next meeting.
+
+Not-trivial considerations:
+- Composite definition: we don't have an Early Warning composite
+  yet (item #6 in the queue). The composite needs a defined
+  formula — typically academics + behavior + attendance + supports
+  rolled up to a 0-100 score with cut points for the three bands.
+  This dashboard is the *consumer* of that composite; we have to
+  build the composite first.
+- Multi-axis breakdown plumbing: each card is the same query
+  (population × risk band × dimension). Build one server endpoint
+  that takes the dimension as a param (`?by=gender|ethnicity|grade|school`)
+  and the cards become a thin wrapper around the same component.
+- Edit button: implies user-saved dashboard configurations.
+  Stage-2 polish, not v0.
+- Same equity / privacy / small-N concerns as the Risk Ratio idea.
+  Need an "insufficient sample" treatment for tiny ethnicity
+  buckets so a 4-student row doesn't dominate the visual.
+
+Status: **idea parked** — this is the natural hero view for
+item #6 (Early Warning composite) **once item #6 is built**.
+Sequence is: build the composite scoring engine first, then this
+dashboard becomes a thin consumer of it. If we ever need to
+prove the composite is working, building this view at the same
+time is the fastest way to make the math visible.
