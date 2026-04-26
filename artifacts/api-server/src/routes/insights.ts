@@ -1725,4 +1725,286 @@ router.get("/insights/engagement", async (req, res) => {
   });
 });
 
+// ---------------------------------------------------------------------------
+// GET /api/insights/behavior
+//
+// School-wide PBIS analytics — positive vs negative awards, top recognized
+// students, top concerning students, top reasons (split by polarity), and
+// top recognizing/issuing staff. Mirrors the eduCLIMBER "Behavior" domain.
+//
+// Pulls everything from `pbis_entries` filtered to `voided_at IS NULL`. We
+// don't have a separate "behavior incidents" table — negative-polarity
+// pbis_entries serve that role.
+//
+// Query params + auth identical to /insights/engagement above (window,
+// optional grade cohort, core-team only at the active school).
+// ---------------------------------------------------------------------------
+
+router.get("/insights/behavior", async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId == null) return;
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!isCoreTeam(staff)) {
+    res.status(403).json({ error: "Behavior dashboard is core-team only" });
+    return;
+  }
+
+  const window = parseTimeWindow(req);
+  const fromIso = window.from.toISOString();
+  const toIso = window.to.toISOString();
+  const fromDateOnly = fromIso.slice(0, 10);
+  const toDateOnly = toIso.slice(0, 10);
+
+  // Same defensive grade parsing as /insights/engagement — see that handler
+  // for the rationale (students.grade is integer; UI sends "K" as text).
+  const gradeRaw = typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  const gradeFilter: string | null =
+    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
+  let gradeInt: number | null = null;
+  if (gradeFilter) {
+    if (gradeFilter.toUpperCase() === "K") {
+      gradeInt = 0;
+    } else {
+      const n = Number.parseInt(gradeFilter, 10);
+      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
+    }
+  }
+
+  let studentIds: string[] | null = null;
+  if (gradeInt !== null) {
+    const rows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.grade, gradeInt),
+        ),
+      );
+    studentIds = rows.map((r) => r.studentId);
+    if (studentIds.length === 0) {
+      res.json({
+        window: {
+          from: fromIso,
+          to: toIso,
+          label: window.label,
+          days: window.days,
+        },
+        grade: gradeFilter,
+        totals: {
+          positives: 0,
+          negatives: 0,
+          netPoints: 0,
+          ratio: null,
+          studentsRecognized: 0,
+          studentsWithNegatives: 0,
+        },
+        trends: { positivesByDay: [], negativesByDay: [] },
+        topLists: {
+          recognizedStudents: [],
+          concerningStudents: [],
+          positiveReasons: [],
+          negativeReasons: [],
+          recognizingStaff: [],
+          issuingStaff: [],
+        },
+      });
+      return;
+    }
+  }
+
+  // ----- Pull all non-voided entries in the window ------------------------
+  // Done in one query — JS-side splits handle positive/negative bookkeeping
+  // because pbis_entries is one row per award and the polarity column is
+  // already set correctly at write time.
+  const entryRows = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      reason: pbisEntriesTable.reason,
+      points: pbisEntriesTable.points,
+      polarity: pbisEntriesTable.polarity,
+      staffId: pbisEntriesTable.staffId,
+      staffName: pbisEntriesTable.staffName,
+      createdAt: pbisEntriesTable.createdAt,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        gte(pbisEntriesTable.createdAt, fromIso),
+        lte(pbisEntriesTable.createdAt, toIso),
+        isNull(pbisEntriesTable.voidedAt),
+        studentIds
+          ? inArray(pbisEntriesTable.studentId, studentIds)
+          : sql`true`,
+      ),
+    );
+
+  // ----- Aggregate in JS --------------------------------------------------
+  let positives = 0;
+  let negatives = 0;
+  let positivePoints = 0;
+  let negativePoints = 0;
+  const positivesByDay = new Map<string, number>();
+  const negativesByDay = new Map<string, number>();
+  const positiveStudentCount = new Map<string, number>();
+  const negativeStudentCount = new Map<string, number>();
+  const positiveReasonCount = new Map<string, number>();
+  const negativeReasonCount = new Map<string, number>();
+  const recognizingStaffCount = new Map<string, number>(); // positives by staff
+  const issuingStaffCount = new Map<string, number>(); // negatives by staff
+  const studentsWithPositive = new Set<string>();
+  const studentsWithNegative = new Set<string>();
+
+  for (const e of entryRows) {
+    const day = e.createdAt.slice(0, 10);
+    if (e.polarity === "negative") {
+      negatives += 1;
+      negativePoints += e.points ?? 0;
+      negativesByDay.set(day, (negativesByDay.get(day) ?? 0) + 1);
+      negativeStudentCount.set(
+        e.studentId,
+        (negativeStudentCount.get(e.studentId) ?? 0) + 1,
+      );
+      negativeReasonCount.set(
+        e.reason,
+        (negativeReasonCount.get(e.reason) ?? 0) + 1,
+      );
+      issuingStaffCount.set(
+        e.staffName,
+        (issuingStaffCount.get(e.staffName) ?? 0) + 1,
+      );
+      studentsWithNegative.add(e.studentId);
+    } else {
+      // Treat anything that isn't explicitly "negative" as positive — the
+      // schema default is "positive" and we don't want a stray polarity
+      // value to silently disappear from totals.
+      positives += 1;
+      positivePoints += e.points ?? 0;
+      positivesByDay.set(day, (positivesByDay.get(day) ?? 0) + 1);
+      positiveStudentCount.set(
+        e.studentId,
+        (positiveStudentCount.get(e.studentId) ?? 0) + 1,
+      );
+      positiveReasonCount.set(
+        e.reason,
+        (positiveReasonCount.get(e.reason) ?? 0) + 1,
+      );
+      recognizingStaffCount.set(
+        e.staffName,
+        (recognizingStaffCount.get(e.staffName) ?? 0) + 1,
+      );
+      studentsWithPositive.add(e.studentId);
+    }
+  }
+
+  // ----- Resolve student names for top-N tables ---------------------------
+  const idsNeeded = Array.from(
+    new Set<string>([
+      ...positiveStudentCount.keys(),
+      ...negativeStudentCount.keys(),
+    ]),
+  );
+  const nameRows = idsNeeded.length
+    ? await db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.studentId, idsNeeded),
+          ),
+        )
+    : [];
+  const nameById = new Map(
+    nameRows.map((s) => [
+      s.studentId,
+      `${s.firstName ?? ""} ${s.lastName ?? ""}`.trim() || s.studentId,
+    ]),
+  );
+
+  function topN<K>(m: Map<K, number>, n = 10): Array<[K, number]> {
+    return Array.from(m.entries())
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, n);
+  }
+
+  function denseSeries(m: Map<string, number>): {
+    date: string;
+    count: number;
+  }[] {
+    const out: { date: string; count: number }[] = [];
+    const start = new Date(fromDateOnly + "T00:00:00Z");
+    const end = new Date(toDateOnly + "T00:00:00Z");
+    for (
+      let cur = new Date(start);
+      cur <= end;
+      cur.setUTCDate(cur.getUTCDate() + 1)
+    ) {
+      const d = cur.toISOString().slice(0, 10);
+      out.push({ date: d, count: m.get(d) ?? 0 });
+    }
+    return out;
+  }
+
+  // Positive : negative ratio. `null` when there are no negatives at all
+  // (avoids divide-by-zero). UI renders null as "—".
+  const ratio = negatives === 0 ? null : Number((positives / negatives).toFixed(2));
+
+  res.json({
+    window: {
+      from: fromIso,
+      to: toIso,
+      label: window.label,
+      days: window.days,
+    },
+    grade: gradeFilter,
+    totals: {
+      positives,
+      negatives,
+      netPoints: positivePoints - negativePoints,
+      ratio,
+      studentsRecognized: studentsWithPositive.size,
+      studentsWithNegatives: studentsWithNegative.size,
+    },
+    trends: {
+      positivesByDay: denseSeries(positivesByDay),
+      negativesByDay: denseSeries(negativesByDay),
+    },
+    topLists: {
+      recognizedStudents: topN(positiveStudentCount).map(([id, count]) => ({
+        studentId: id,
+        studentName: nameById.get(id) ?? id,
+        count,
+      })),
+      concerningStudents: topN(negativeStudentCount).map(([id, count]) => ({
+        studentId: id,
+        studentName: nameById.get(id) ?? id,
+        count,
+      })),
+      positiveReasons: topN(positiveReasonCount).map(([reason, count]) => ({
+        reason,
+        count,
+      })),
+      negativeReasons: topN(negativeReasonCount).map(([reason, count]) => ({
+        reason,
+        count,
+      })),
+      recognizingStaff: topN(recognizingStaffCount).map(([staffName, count]) => ({
+        staffName,
+        count,
+      })),
+      issuingStaff: topN(issuingStaffCount).map(([staffName, count]) => ({
+        staffName,
+        count,
+      })),
+    },
+  });
+});
+
 export default router;

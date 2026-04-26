@@ -5,6 +5,7 @@ import {
   hallPassesTable,
   tardiesTable,
   pbisEntriesTable,
+  pbisReasonsTable,
   supportNotesTable,
   accommodationLogsTable,
   studentsTable,
@@ -1324,6 +1325,180 @@ export async function seedEngagementEventsIfEmpty() {
         );
       }
     }
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedPbisCatalogIfEmpty: per-school pbis_reasons starter catalog. Most
+// schools have an empty catalog, so the Behavior dashboard's "top reasons"
+// table would be useless. We only seed when the catalog is strictly empty
+// for the school — schools (like #1) with even one hand-curated reason are
+// left alone. Mirrors the engagement-seed empty-only policy.
+// -----------------------------------------------------------------------------
+
+const PBIS_DEFAULT_POSITIVES = [
+  { name: "Respectful", category: "Character", points: 1 },
+  { name: "Responsible", category: "Character", points: 1 },
+  { name: "Kind to others", category: "Character", points: 1 },
+  { name: "Leadership", category: "Character", points: 2 },
+  { name: "Helpful", category: "Character", points: 1 },
+  { name: "On-task", category: "Effort", points: 1 },
+  { name: "Excellent Work", category: "Effort", points: 2 },
+  { name: "Show Sportsmanship", category: "Athletics", points: 2 },
+];
+
+const PBIS_DEFAULT_NEGATIVES = [
+  { name: "Disruption", category: "Classroom", points: 1 },
+  { name: "Talk too much in class", category: "Classroom", points: 1 },
+  { name: "Off-task", category: "Effort", points: 1 },
+  { name: "Disrespect", category: "Character", points: 1 },
+  { name: "Tech misuse", category: "Classroom", points: 1 },
+  { name: "Tardy to class", category: "Classroom", points: 1 },
+];
+
+export async function seedPbisCatalogIfEmpty() {
+  const schools = await db.select().from(schoolsTable);
+  if (schools.length === 0) return;
+
+  for (const school of schools) {
+    const [{ c: existing }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM pbis_reasons WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (existing > 0) continue;
+
+    const inserts: (typeof pbisReasonsTable.$inferInsert)[] = [];
+    PBIS_DEFAULT_POSITIVES.forEach((r, i) => {
+      inserts.push({
+        schoolId: school.id,
+        name: r.name,
+        category: r.category,
+        defaultPoints: r.points,
+        polarity: "positive",
+        sortOrder: i,
+        ownerScope: "school",
+      });
+    });
+    PBIS_DEFAULT_NEGATIVES.forEach((r, i) => {
+      inserts.push({
+        schoolId: school.id,
+        name: r.name,
+        category: r.category,
+        defaultPoints: r.points,
+        polarity: "negative",
+        sortOrder: i,
+        ownerScope: "school",
+      });
+    });
+    await db.insert(pbisReasonsTable).values(inserts);
+    logger.info(
+      { schoolId: school.id, count: inserts.length },
+      "[seed] pbis_reasons starter catalog seeded",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedPbisEntriesIfEmpty: populate pbis_entries with realistic positive +
+// negative awards over the last 60 days so the Behavior dashboard demos
+// well on a fresh DB. Skip-if-table-empty per school (strict 0-row rule).
+// Pulls reasons live from pbis_reasons so it always stays consistent with
+// the school's actual catalog (whether seeded or hand-curated).
+// -----------------------------------------------------------------------------
+
+export async function seedPbisEntriesIfEmpty() {
+  const schools = await db.select().from(schoolsTable);
+  if (schools.length === 0) return;
+
+  const now = new Date();
+  const dayMs = 86400000;
+
+  for (const school of schools) {
+    const [{ c: entriesExisting }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM pbis_entries WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (entriesExisting > 0) continue;
+
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+    const studentIds = studentRows.map((s) => s.studentId);
+
+    const reasons = await db
+      .select({
+        id: pbisReasonsTable.id,
+        name: pbisReasonsTable.name,
+        defaultPoints: pbisReasonsTable.defaultPoints,
+        polarity: pbisReasonsTable.polarity,
+      })
+      .from(pbisReasonsTable)
+      .where(eq(pbisReasonsTable.schoolId, school.id));
+    const positives = reasons.filter((r) => r.polarity === "positive");
+    const negatives = reasons.filter((r) => r.polarity === "negative");
+    if (positives.length === 0 && negatives.length === 0) continue;
+
+    // Up to 5 staff for variety in top-N "recognizing staff" tables.
+    const staffRows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id))
+      .limit(5);
+    if (staffRows.length === 0) continue;
+
+    const rng = makeRng(0xb12ae + school.id * 1009);
+    const samplePareto = buildWeightedSampler(rng, studentIds);
+
+    const inserts: (typeof pbisEntriesTable.$inferInsert)[] = [];
+    for (let back = 60; back >= 0; back--) {
+      const day = new Date(now.getTime() - back * dayMs);
+      if (!isSchoolDay(day)) continue;
+      const count = 18 + Math.floor(rng() * 14); // 18–31 per school day
+      for (let i = 0; i < count; i++) {
+        // ~80% positive / 20% negative split.
+        const isNegative = rng() < 0.2;
+        const pool = isNegative ? negatives : positives;
+        if (pool.length === 0) continue;
+        const reason = pool[Math.floor(rng() * pool.length)];
+        const staff = staffRows[Math.floor(rng() * staffRows.length)];
+        const hour = 8 + Math.floor(rng() * 7);
+        const min = Math.floor(rng() * 60);
+        const ts = new Date(day);
+        ts.setUTCHours(hour, min, 0, 0);
+        // Negatives are recorded as positive integers; the polarity column
+        // tells the dashboard how to color them. Keeps the points magnitude
+        // honest regardless of school_settings.pbisNegativeAffectsTotal.
+        inserts.push({
+          schoolId: school.id,
+          studentId: samplePareto(),
+          reason: reason.name,
+          points: reason.defaultPoints,
+          staffId: staff.id,
+          staffName: staff.displayName,
+          createdAt: ts.toISOString(),
+          polarity: reason.polarity,
+        });
+      }
+    }
+    if (inserts.length === 0) continue;
+    await db.transaction(async (tx) => {
+      for (let i = 0; i < inserts.length; i += 500) {
+        await tx
+          .insert(pbisEntriesTable)
+          .values(inserts.slice(i, i + 500));
+      }
+    });
+    logger.info(
+      { schoolId: school.id, count: inserts.length },
+      "[seed] pbis_entries demo events seeded",
+    );
   }
 }
 

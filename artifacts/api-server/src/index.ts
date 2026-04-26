@@ -8,6 +8,8 @@ import {
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
   seedEngagementEventsIfEmpty,
+  seedPbisCatalogIfEmpty,
+  seedPbisEntriesIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -50,6 +52,11 @@ if (Number.isNaN(port) || port <= 0) {
   // last 60 days so the new Engagement dashboard renders something on first
   // launch. Skip-if-already-populated per school + per table.
   await seedEngagementEventsIfEmpty();
+  // PBIS catalog (reasons) per school, then 60 days of pbis_entries demo
+  // data so the new Behavior dashboard renders on first launch. Catalog
+  // seed runs first because the entries seed reads pbis_reasons live.
+  await seedPbisCatalogIfEmpty();
+  await seedPbisEntriesIfEmpty();
 })()
   .catch((err) => logger.error({ err }, "Seed failed"))
   .finally(() => {

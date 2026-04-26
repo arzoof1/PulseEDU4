@@ -24,6 +24,7 @@ import BellScheduleSection from "./components/BellScheduleSection";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import InsightsWatchlist from "./components/InsightsWatchlist";
 import EngagementDashboard from "./components/EngagementDashboard";
+import BehaviorDashboard from "./components/BehaviorDashboard";
 import StudentProfile from "./components/StudentProfile";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
@@ -3075,9 +3076,10 @@ const INSIGHTS_TILES: InsightsTile[] = [
     icon: "🛡️",
     title: "Behavior",
     subtitle:
-      "Office referrals, ISS/OSS, behavior incidents by location/time-of-day with PBIS overlays.",
-    phase: "Phase 4",
+      "PBIS positives and negatives — who's getting recognized, who needs support, and which behaviors are trending.",
+    phase: "Today",
     group: "domains",
+    targetSection: "behaviorDashboard",
   },
   {
     id: "seb",
@@ -17480,6 +17482,18 @@ function App() {
             // to the engagement dashboard (not the watchlist or
             // wherever the user was before).
             setStudentProfileReturnTo("engagementDashboard");
+            setActiveSection("studentProfile");
+          }}
+        />
+      )}
+
+      {activeSection === "behaviorDashboard" && canAccessMtssHub && (
+        <BehaviorDashboard
+          onOpenProfile={(studentId) => {
+            setSelectedInsightsStudentId(studentId);
+            // Pin the back-target so the profile's Back button returns
+            // to the behavior dashboard.
+            setStudentProfileReturnTo("behaviorDashboard");
             setActiveSection("studentProfile");
           }}
         />

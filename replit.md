@@ -2053,8 +2053,62 @@ NOT drop any of these without an explicit user OK**.
    not just this endpoint. Out of scope for this item; revisit when
    we re-evaluate the Insights Hub gating model.
 2. **Behavior dashboard** — tile-based PBIS+/PBIS−/incident analytics
-   across grade/teacher/time, eduCLIMBER-style. Uses existing
-   `pbisEvents` + `behaviorIncidents`. STATUS: queued.
+   across grade/teacher/time, eduCLIMBER-style. STATUS: **DONE
+   (Apr 26, 2026)**.
+
+   Shipped:
+   - Backend `GET /api/insights/behavior` in `routes/insights.ts`
+     (~line 1746). Same auth as engagement: `loadStaff` +
+     `isCoreTeam` + `requireSchool`. Same `?window` and `?grade`
+     params with the same defensive K → 0, 0–12 int validation. All
+     queries scoped by `schoolId`; entries filtered by
+     `isNull(voidedAt)` so voided awards never poison KPIs.
+   - Single `pbis_entries` query feeds every aggregation (no separate
+     "incidents" table — negative-polarity entries serve that role).
+     Polarity branching is explicit: only `polarity === "negative"`
+     counts as negative, anything else is treated as positive so a
+     stray polarity value can't silently disappear from totals.
+   - KPIs: positives, negatives, net points (positive − negative),
+     pos:neg ratio (`null` when no negatives, UI renders as "—"),
+     distinct students recognized, distinct students with negatives.
+   - Trends: per-day positives + per-day negatives, both via the
+     same `denseSeries(fromDateOnly..toDateOnly)` so dates align by
+     index for the overlay chart.
+   - Top-N (10): recognized students, concerning students, positive
+     reasons, negative reasons, recognizing staff (positives/staff),
+     issuing staff (negatives/staff). One batched student-name
+     lookup powers both student tables.
+   - Empty-cohort fast-path returns a fully zeroed payload instead
+     of an `inArray([])` crash, mirroring the engagement fix.
+   - Frontend `BehaviorDashboard.tsx`: 6-tile KPI strip with
+     green/red left borders for positive/negative, single overlaid
+     recharts AreaChart (positives green / negatives red with
+     legend), 6 top-N tables in a responsive grid. Student names
+     are buttons calling `onOpenProfile` for drill-in. Same window
+     / grade filters as engagement for visual symmetry.
+   - `App.tsx`: behavior tile graduated from "Phase 4" placeholder
+     to "Today" with `targetSection: "behaviorDashboard"` and a
+     PBIS-accurate subtitle. New render block gated by
+     `canAccessMtssHub` sets `studentProfileReturnTo:
+     "behaviorDashboard"` so the profile back-button returns here.
+   - `seed.ts` adds `seedPbisCatalogIfEmpty` (14 reasons/school —
+     8 positive + 6 negative) and `seedPbisEntriesIfEmpty`
+     (~1050 entries/school over 60 days, school-days only,
+     80%pos/20%neg, Pareto students). Both use strict empty-table
+     skip-guards (the engagement-seed lesson). Wired into
+     `index.ts` boot sequence after the engagement seeders.
+   - Architect review: PASS. No HIGH/CRITICAL issues. Tenant
+     scoping, voided handling, polarity branching, empty-cohort
+     payload, and seed contracts all explicitly verified.
+
+   Known pre-existing surface-wide issue (NOT introduced here):
+   `App.tsx` has narrow union types for `activeSection` and
+   `studentProfileReturnTo` that don't include the new dashboard
+   keys. Engagement triggers the same +2 TS errors (37 → 39 with
+   behavior added — perfectly symmetric); both surfaces work at
+   runtime. Tried widening `studentProfileReturnTo` but it
+   cascaded into `setActiveSection`. Park as broader App.tsx union
+   debt; revisit holistically when we touch the navigation model.
 3. **Academics dashboard** — multi-cohort FAST/iReady/SCI breakdowns
    with filters (school × grade × subgroup). Uses the data we just
    seeded plus existing FAST PM. STATUS: queued.
