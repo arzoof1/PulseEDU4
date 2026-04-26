@@ -140,7 +140,21 @@ interface ProfilePayload {
       net: number;
     }>;
     tardiesDaily: Array<{ day: string; count: number }>;
+    // UTC YYYY-MM-DD day-keys (within window) on which an intervention
+    // was logged. Rendered as vertical markers on the PBIS sparkline so
+    // the eye can correlate trend shifts with intervention activity.
+    interventionDays: string[];
   };
+  // Per-active-plan progress signals — see insights.ts MTSS progress block.
+  // planId joins back to pillars.supports.activeMtssPlans[i].id.
+  mtssProgress: Array<{
+    planId: number;
+    daysActive: number;
+    interventionCount: number;
+    pbisPositiveSinceOpen: number;
+    pbisNegativeSinceOpen: number;
+    pbisNetSinceOpen: number;
+  }>;
 }
 
 const SEVERITY_STYLES: Record<
@@ -232,6 +246,8 @@ function Sparkline({
   baseline = 0,
   ariaLabel,
   title,
+  markerIndices,
+  markerColor = "#6366f1",
 }: {
   values: number[];
   width?: number;
@@ -241,6 +257,11 @@ function Sparkline({
   baseline?: number;
   ariaLabel: string;
   title?: string;
+  // Indices into `values` where a vertical marker tick should be drawn.
+  // Used by the PBIS sparkline to overlay intervention-logged days so
+  // the eye can correlate a trend shift with intervention activity.
+  markerIndices?: number[];
+  markerColor?: string;
 }) {
   if (values.length === 0) {
     return (
@@ -310,6 +331,24 @@ function Sparkline({
           fill={stroke}
         />
       )}
+      {/* intervention markers — vertical ticks across the chart at days
+          where an intervention was logged. Stroked thin + low opacity so
+          they read as context (not as data) over the main trend line. */}
+      {(markerIndices ?? [])
+        .filter((i) => i >= 0 && i < values.length)
+        .map((i) => (
+          <line
+            key={`mk-${i}`}
+            x1={i * stepX}
+            x2={i * stepX}
+            y1={0}
+            y2={height}
+            stroke={markerColor}
+            strokeWidth={1}
+            strokeDasharray="2 2"
+            opacity={0.7}
+          />
+        ))}
     </svg>
   );
 }
@@ -910,13 +949,31 @@ export default function StudentProfile({
                 values={data.trends.pbisDaily.map((d) => d.net)}
                 stroke="#0d9488"
                 fill="#14b8a6"
-                ariaLabel="Daily PBIS net (positives minus negatives)"
-                title={`Net PBIS by day in ${data.window.label.toLowerCase()}`}
+                ariaLabel="Daily PBIS net (positives minus negatives) with intervention overlay"
+                title={`Net PBIS by day in ${data.window.label.toLowerCase()}; vertical ticks mark intervention-logged days`}
+                markerIndices={(() => {
+                  // Map intervention day-keys to indices in pbisDaily so
+                  // the sparkline can draw the overlay ticks at the right
+                  // x-positions. Building a Map once is O(N) and cheaper
+                  // than per-day indexOf when intervention counts grow.
+                  const idx = new Map<string, number>();
+                  data.trends.pbisDaily.forEach((d, i) => idx.set(d.day, i));
+                  return (data.trends.interventionDays ?? [])
+                    .map((d) => idx.get(d) ?? -1)
+                    .filter((i) => i >= 0);
+                })()}
+                markerColor="#6366f1"
               />
               <span>
                 {data.trends.pbisDaily.reduce((s, d) => s + d.net, 0) >= 0 ? "+" : ""}
                 {data.trends.pbisDaily.reduce((s, d) => s + d.net, 0)} net
               </span>
+              {(data.trends.interventionDays?.length ?? 0) > 0 && (
+                <span style={{ color: "#6366f1" }} title="Intervention overlay">
+                  · {data.trends.interventionDays.length} intervention day
+                  {data.trends.interventionDays.length === 1 ? "" : "s"}
+                </span>
+              )}
             </div>
           )}
           {pillars.behavior.recentSupportNotes.length > 0 && (
@@ -1040,14 +1097,69 @@ export default function StudentProfile({
                 Active MTSS plans
               </div>
               <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.85rem" }}>
-                {pillars.supports.activeMtssPlans.map((p) => (
-                  <li key={p.id}>
-                    <strong>Tier {p.tier}</strong>: {p.title}{" "}
-                    <span style={{ color: "#6b7280" }}>
-                      (opened {new Date(p.openedAt).toLocaleDateString()})
-                    </span>
-                  </li>
-                ))}
+                {pillars.supports.activeMtssPlans.map((p) => {
+                  const prog = (data.mtssProgress ?? []).find(
+                    (m) => m.planId === p.id,
+                  );
+                  // Color the net-since-open chip by direction. We treat zero
+                  // as a watch state too — a Tier 2/3 plan that hasn't moved
+                  // the needle in 30+ days deserves an eye, even if nothing
+                  // has gotten worse.
+                  const netColor =
+                    !prog || prog.pbisNetSinceOpen < 0
+                      ? "#991b1b"
+                      : prog.pbisNetSinceOpen > 0
+                        ? "#0d9488"
+                        : "#6b7280";
+                  // Surface "no logged interventions" as a soft warning when
+                  // the plan has been open long enough that activity should
+                  // exist by now.
+                  const stalled =
+                    prog != null &&
+                    prog.daysActive >= 14 &&
+                    prog.interventionCount === 0;
+                  return (
+                    <li key={p.id} style={{ marginBottom: "0.35rem" }}>
+                      <strong>Tier {p.tier}</strong>: {p.title}{" "}
+                      <span style={{ color: "#6b7280" }}>
+                        (opened {new Date(p.openedAt).toLocaleDateString()})
+                      </span>
+                      {prog && (
+                        <div
+                          style={{
+                            marginTop: "0.2rem",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "0.4rem",
+                            fontSize: "0.75rem",
+                            color: "#6b7280",
+                            alignItems: "center",
+                          }}
+                        >
+                          <span>
+                            {prog.daysActive} day
+                            {prog.daysActive === 1 ? "" : "s"} active
+                          </span>
+                          <span>·</span>
+                          <span style={{ color: stalled ? "#b45309" : "inherit" }}>
+                            {prog.interventionCount} intervention
+                            {prog.interventionCount === 1 ? "" : "s"} logged
+                            {stalled ? " (stalled)" : ""}
+                          </span>
+                          <span>·</span>
+                          <span style={{ color: netColor, fontWeight: 600 }}>
+                            {prog.pbisNetSinceOpen >= 0 ? "+" : ""}
+                            {prog.pbisNetSinceOpen} PBIS net since opened
+                          </span>
+                          <span style={{ color: "#9ca3af" }}>
+                            ({prog.pbisPositiveSinceOpen}+ /{" "}
+                            {prog.pbisNegativeSinceOpen}−)
+                          </span>
+                        </div>
+                      )}
+                    </li>
+                  );
+                })}
               </ul>
             </div>
           )}

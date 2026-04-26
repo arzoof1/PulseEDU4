@@ -196,9 +196,9 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     targetsFor: assessmentTargetsFor,
     supportsDistrict: true,
     helpText:
-      "Per-assessment scores (FAST, iReady, MAP, etc.). One row per (student, assessment, date).",
+      "Per-assessment scores (FAST PM, iReady AP, SCI Benchmark, MAP, etc.). One row per (student, assessment, date).",
     description:
-      "Generic assessment scores. Each row is one (student, assessment name, administered date). Re-importing the same row updates the existing record instead of duplicating it. Use this importer for everything except FAST PM scores — FAST has its own importer below that wires PM1/PM2/PM3 into the heartbeat dashboard.",
+      "Generic assessment scores. Each row is one (student, assessment name, administered date). The starter file below shows the expected naming for FAST PM1/PM2/PM3, iReady AP1/AP2/AP3, and SCI Benchmark 1/2/3 — plus any other vendor (MAP, STAR, etc.) is supported as long as you put the assessment's full name in the assessment_name column. NOTE: this importer is APPEND-ONLY — each row gets a fresh history record, and re-uploading the same (student, test, date) row will create a duplicate. That's intentional for raw history (you can see when a record was first reported vs. corrected), but if you want true upsert behavior for FAST PM scores, use the dedicated FAST Scores importer below — it keys on (student, subject) and updates in place, and blank PM columns in a later upload preserve their existing value. Use this generic importer for iReady, SCI, MAP, etc. — and only re-upload Assessments rows that aren't already loaded.",
     columns: [
       {
         target: "student_id",
@@ -212,7 +212,8 @@ const KIND_DEFS: Record<Kind, KindDef> = {
         label: "Assessment name",
         required: true,
         acceptedHeaders: ["assessment_name", "assessment", "test", "test_name", "exam"],
-        notes: "e.g. 'iReady Reading PM2', 'MAP Math Spring'.",
+        notes:
+          "Use the vendor's actual period naming. Recognized examples: 'FAST ELA PM1', 'FAST ELA PM2', 'FAST ELA PM3', 'FAST Math PM1', 'FAST Math PM2', 'FAST Math PM3', 'iReady Reading AP1', 'iReady Reading AP2', 'iReady Reading AP3', 'iReady Math AP1', 'iReady Math AP2', 'iReady Math AP3', 'SCI Benchmark 1', 'SCI Benchmark 2', 'SCI Benchmark 3'. Any other test name (MAP, STAR, etc.) also imports — just write it out.",
       },
       {
         target: "administered_at",
@@ -233,13 +234,14 @@ const KIND_DEFS: Record<Kind, KindDef> = {
         label: "Score level / band",
         required: false,
         acceptedHeaders: ["score_level", "level", "band", "tier", "performance_level"],
-        notes: "e.g. 'Level 3', 'On Track'.",
+        notes: "e.g. 'Level 3', 'On Track', 'Below Benchmark'.",
       },
       {
         target: "source",
         label: "Source / vendor",
         required: false,
         acceptedHeaders: ["source", "vendor", "provider", "system"],
+        notes: "e.g. 'FAST', 'iReady', 'District SCI'.",
       },
       {
         target: "school_code",
@@ -249,11 +251,35 @@ const KIND_DEFS: Record<Kind, KindDef> = {
         notes: "Required when uploading district-wide so each row routes to the right school.",
       },
     ],
+    // Starter file: one row for each named period of each recognized
+    // assessment family so admins can copy/paste into their own export
+    // and trust the naming. Two students included so it also doubles as
+    // a multi-row example.
     sampleCsv:
-      "student_id,assessment_name,administered_at,score,score_level\n10234,iReady Reading PM2,2026-01-15,512,Level 3\n10234,iReady Math PM2,2026-01-16,498,Level 2\n",
+      "student_id,assessment_name,administered_at,score,score_level,source\n" +
+      "10234,FAST ELA PM1,2025-09-15,305,Level 2,FAST\n" +
+      "10234,FAST ELA PM2,2026-01-15,318,Level 3,FAST\n" +
+      "10234,FAST ELA PM3,2026-04-15,330,Level 3,FAST\n" +
+      "10234,FAST Math PM1,2025-09-16,290,Level 2,FAST\n" +
+      "10234,FAST Math PM2,2026-01-16,302,Level 2,FAST\n" +
+      "10234,FAST Math PM3,2026-04-16,315,Level 3,FAST\n" +
+      "10234,iReady Reading AP1,2025-09-20,498,Level 2,iReady\n" +
+      "10234,iReady Reading AP2,2026-01-20,512,Level 3,iReady\n" +
+      "10234,iReady Reading AP3,2026-04-20,524,Level 3,iReady\n" +
+      "10234,iReady Math AP1,2025-09-21,485,Level 2,iReady\n" +
+      "10234,iReady Math AP2,2026-01-21,497,Level 2,iReady\n" +
+      "10234,iReady Math AP3,2026-04-21,510,Level 3,iReady\n" +
+      "10234,SCI Benchmark 1,2025-10-01,72,On Track,District SCI\n" +
+      "10234,SCI Benchmark 2,2026-01-08,78,On Track,District SCI\n" +
+      "10234,SCI Benchmark 3,2026-04-08,82,On Track,District SCI\n" +
+      "10235,FAST ELA PM2,2026-01-15,295,Level 2,FAST\n" +
+      "10235,iReady Reading AP2,2026-01-20,468,Level 1,iReady\n" +
+      "10235,SCI Benchmark 2,2026-01-08,61,Approaching,District SCI\n",
     notes: [
-      "Re-importing a row with the same (student, assessment, date) updates the existing record.",
+      "Append-only: re-uploading the same (student, test, date) row creates a duplicate, not an update. Only upload rows that aren't already loaded. To remove a bad upload, use the History tab → Roll back to delete every row that came in with that job.",
+      "Optional columns left blank in the CSV (score, score_level, source) are simply not stored — they don't overwrite anything because nothing is being updated in the first place.",
       "Rows with an unknown student_id are reported as errors and not committed.",
+      "Recognized assessment families: FAST PM1/PM2/PM3 (ELA + Math), iReady AP1/AP2/AP3 (Reading + Math), SCI Benchmark 1/2/3. Other vendors (MAP, STAR, district-built tests) also import — use the vendor's official name for assessment_name and the importer keeps it intact.",
     ],
   },
   rosters: {

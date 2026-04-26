@@ -508,6 +508,95 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       ? 1
       : activeMtssPlans.reduce((m, p) => Math.max(m, p.tier), 1);
 
+  // ----- MTSS progress -----------------------------------------------------
+  // For each *active* plan, compute "is this plan working?" signals that an
+  // MTSS coordinator can read at a glance:
+  //   * daysActive — how long the plan has been open (calendar days, not
+  //     school days; honest about the plan's age regardless of holidays).
+  //   * interventionCount — how many intervention entries were logged for
+  //     this student since the plan opened. A plan with zero logged
+  //     interventions in 30+ days is itself a finding.
+  //   * pbisPositiveSinceOpen / pbisNegativeSinceOpen / pbisNetSinceOpen —
+  //     PBIS movement scoped to the plan's lifetime, so a Tier 2 behavior
+  //     plan can be evaluated by whether net trend turned positive after
+  //     it opened.
+  //
+  // Implementation: fetch interventions and PBIS once from the earliest
+  // active plan's openedAt forward, then partition per plan in JS. Avoids
+  // N+1 queries when a student carries multiple concurrent plans (rare in
+  // practice but cheap to handle correctly).
+  type MtssProgressRow = {
+    planId: number;
+    daysActive: number;
+    interventionCount: number;
+    pbisPositiveSinceOpen: number;
+    pbisNegativeSinceOpen: number;
+    pbisNetSinceOpen: number;
+  };
+  let mtssProgress: MtssProgressRow[] = [];
+  if (activeMtssPlans.length > 0) {
+    const earliestOpenedAt = activeMtssPlans
+      .map((p) => p.openedAt as Date)
+      .reduce((min, d) => (d < min ? d : min));
+    const earliestOpenedIso = earliestOpenedAt.toISOString();
+
+    const interventionsSincePlan = await db
+      .select({ createdAt: interventionEntriesTable.createdAt })
+      .from(interventionEntriesTable)
+      .where(
+        and(
+          eq(interventionEntriesTable.schoolId, schoolId),
+          eq(interventionEntriesTable.studentId, studentId),
+          gte(interventionEntriesTable.createdAt, earliestOpenedIso),
+        ),
+      );
+
+    const pbisSincePlan = await db
+      .select({
+        polarity: pbisEntriesTable.polarity,
+        points: pbisEntriesTable.points,
+        createdAt: pbisEntriesTable.createdAt,
+        voidedAt: pbisEntriesTable.voidedAt,
+      })
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          eq(pbisEntriesTable.schoolId, schoolId),
+          eq(pbisEntriesTable.studentId, studentId),
+          gte(pbisEntriesTable.createdAt, earliestOpenedIso),
+        ),
+      );
+
+    const nowMs = Date.now();
+    const dayMs = 24 * 60 * 60 * 1000;
+    mtssProgress = activeMtssPlans.map((p) => {
+      const openedAtMs = +new Date(p.openedAt as Date);
+      const daysActive = Math.max(0, Math.floor((nowMs - openedAtMs) / dayMs));
+      const interventionCount = interventionsSincePlan.filter(
+        (e) => +new Date(e.createdAt) >= openedAtMs,
+      ).length;
+      let pbisPositiveSinceOpen = 0;
+      let pbisNegativeSinceOpen = 0;
+      for (const e of pbisSincePlan) {
+        if (e.voidedAt) continue;
+        if (+new Date(e.createdAt) < openedAtMs) continue;
+        if (e.polarity === "positive") {
+          pbisPositiveSinceOpen += e.points ?? 0;
+        } else if (e.polarity === "negative") {
+          pbisNegativeSinceOpen += e.points ?? 0;
+        }
+      }
+      return {
+        planId: p.id,
+        daysActive,
+        interventionCount,
+        pbisPositiveSinceOpen,
+        pbisNegativeSinceOpen,
+        pbisNetSinceOpen: pbisPositiveSinceOpen - pbisNegativeSinceOpen,
+      };
+    });
+  }
+
   const trustedAdults = await db
     .select({
       id: studentTrustedAdultsTable.id,
@@ -787,6 +876,35 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     count: tardiesDailyMap.get(day) ?? 0,
   }));
 
+  // Intervention overlay: pull every intervention timestamp in the window
+  // and bucket into UTC day keys. The client renders these as small
+  // vertical markers on the PBIS sparkline so an MTSS coordinator can
+  // visually correlate "did the trend change after we started logging
+  // interventions?" — the eduCLIMBER intervention-overlay move.
+  //
+  // Separate query because `interventionsAll` is capped at 15 (most-
+  // recent for the side-panel list); this needs every entry in the
+  // window without a limit, but only the createdAt column.
+  const interventionsInWindow = await db
+    .select({ createdAt: interventionEntriesTable.createdAt })
+    .from(interventionEntriesTable)
+    .where(
+      and(
+        eq(interventionEntriesTable.schoolId, schoolId),
+        eq(interventionEntriesTable.studentId, studentId),
+        gte(interventionEntriesTable.createdAt, fromIso),
+        lte(interventionEntriesTable.createdAt, toIso),
+      ),
+    );
+  const interventionDaySet = new Set<string>();
+  for (const r of interventionsInWindow) {
+    const day = utcDayString(r.createdAt);
+    if (dayKeys.length > 0 && day >= dayKeys[0]! && day <= dayKeys[dayKeys.length - 1]!) {
+      interventionDaySet.add(day);
+    }
+  }
+  const interventionDays = [...interventionDaySet].sort();
+
   res.json({
     header: {
       studentId: student.studentId,
@@ -908,7 +1026,9 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     trends: {
       pbisDaily,
       tardiesDaily,
+      interventionDays,
     },
+    mtssProgress,
   });
 });
 

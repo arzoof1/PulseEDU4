@@ -292,6 +292,47 @@ export default function InsightsWatchlist({ onOpenStudent }: Props) {
     };
   }, [queryString]);
 
+  // Cohort summary — aggregate stats over the currently filtered set.
+  // Turns a list of individuals into actionable cohort intelligence so
+  // an MTSS coordinator can read the room before scanning rows. All
+  // numbers are derived from the rows the API already returned, so the
+  // banner stays in sync with the active filters with no extra fetch.
+  const cohortSummary = useMemo(() => {
+    const total = rows.length;
+    let tier1 = 0;
+    let tier2 = 0;
+    let tier3 = 0;
+    let bqEla = 0;
+    let bqMath = 0;
+    let highBehavior = 0; // 3+ negative entries in window
+    let highTardy = 0; // 5+ tardies in window
+    let anyIss = 0;
+    let highRisk = 0; // any high-severity top risk
+    for (const r of rows) {
+      if (r.mtssTier <= 1) tier1++;
+      else if (r.mtssTier === 2) tier2++;
+      else if (r.mtssTier >= 3) tier3++;
+      if (r.bqEla) bqEla++;
+      if (r.bqMath) bqMath++;
+      if (r.behaviorCount >= 3) highBehavior++;
+      if (r.tardyCount >= 5) highTardy++;
+      if (r.issDayCount > 0) anyIss++;
+      if (r.topRiskFlag?.severity === "high") highRisk++;
+    }
+    return {
+      total,
+      tier1,
+      tier2,
+      tier3,
+      bqEla,
+      bqMath,
+      highBehavior,
+      highTardy,
+      anyIss,
+      highRisk,
+    };
+  }, [rows]);
+
   const sortedRows = useMemo(() => {
     const copy = [...rows];
     const dir = sortDir === "asc" ? 1 : -1;
@@ -762,6 +803,61 @@ export default function InsightsWatchlist({ onOpenStudent }: Props) {
         </p>
       ) : (
         <>
+          <div
+            style={{
+              marginBottom: "0.75rem",
+              padding: "0.6rem 0.75rem",
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 6,
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: "0.4rem",
+              fontSize: "0.78rem",
+            }}
+            aria-label="Cohort summary"
+          >
+            <strong style={{ marginRight: "0.25rem" }}>
+              Cohort: {cohortSummary.total} student
+              {cohortSummary.total === 1 ? "" : "s"}
+            </strong>
+            {cohortSummary.tier2 > 0 &&
+              chip(`${cohortSummary.tier2} Tier 2`, "watch")}
+            {cohortSummary.tier3 > 0 &&
+              chip(`${cohortSummary.tier3} Tier 3`, "high")}
+            {cohortSummary.bqEla > 0 &&
+              chip(`${cohortSummary.bqEla} BQ ELA`, "high")}
+            {cohortSummary.bqMath > 0 &&
+              chip(`${cohortSummary.bqMath} BQ Math`, "high")}
+            {cohortSummary.highBehavior > 0 &&
+              chip(
+                `${cohortSummary.highBehavior} w/ 3+ behavior`,
+                "watch",
+              )}
+            {cohortSummary.highTardy > 0 &&
+              chip(`${cohortSummary.highTardy} w/ 5+ tardies`, "watch")}
+            {cohortSummary.anyIss > 0 &&
+              chip(`${cohortSummary.anyIss} w/ ISS`, "high")}
+            {cohortSummary.highRisk > 0 &&
+              chip(
+                `${cohortSummary.highRisk} high-risk top flag`,
+                "high",
+              )}
+            {cohortSummary.total > 0 &&
+              cohortSummary.tier2 === 0 &&
+              cohortSummary.tier3 === 0 &&
+              cohortSummary.bqEla === 0 &&
+              cohortSummary.bqMath === 0 &&
+              cohortSummary.highBehavior === 0 &&
+              cohortSummary.highTardy === 0 &&
+              cohortSummary.anyIss === 0 &&
+              cohortSummary.highRisk === 0 && (
+                <span style={{ color: "#6b7280" }}>
+                  No risk indicators in this cohort.
+                </span>
+              )}
+          </div>
           <div style={{ marginBottom: "0.5rem", color: "#6b7280", fontSize: "0.85rem" }}>
             Showing {sortedRows.length} student{sortedRows.length === 1 ? "" : "s"}
           </div>
