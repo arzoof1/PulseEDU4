@@ -1628,3 +1628,18 @@ non-resource axis score (green ≥75, amber ≥50, red <50) so the chart
 Architect PASS after one revision (fixed: trusted-adult missing from
 supports rationale, no-data plotting as 50 misled viewers, academics
 gate dropped valid PM3-only placements).
+
+## MUST DO before full deploy
+
+These are open user-flagged items that should be resolved (or
+explicitly deferred) before the production deploy. Track them here so
+they cannot slip through as we move forward on other work.
+
+1. **Confirm raw-export shape for FAST / iReady / SCI** — the generic
+   Assessments importer expects "long" format (one row per (student,
+   test, date)). Need to verify with the school's actual vendor
+   exports whether their data lands long (works as-is), or wide (one
+   row per student with columns like `pm1_score`, `pm2_score`). If
+   wide, either add a wide-format adapter or document a one-shot
+   reshape recipe so admins aren't stuck. Pinged user; awaiting their
+   sample header rows. Do NOT close out before getting that answer.
