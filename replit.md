@@ -2462,3 +2462,97 @@ Sequence is: build the composite scoring engine first, then this
 dashboard becomes a thin consumer of it. If we ever need to
 prove the composite is working, building this view at the same
 time is the fastest way to make the math visible.
+
+---
+
+## Save-for-later: eduCLIMBER "Tier 2 Student Referral Form" (printable)
+
+Sixth "Save for later" screenshot from the user on Apr 26, 2026.
+**Different category** from the previous five — this one is a
+*printable document generated from the data*, not a dashboard. The
+others answer "what's happening across the school"; this one is
+the artifact a teacher hands to the MTSS team to start a Tier 2
+referral conversation.
+
+Reference image: `attached_assets/image_1777213280099.png`
+
+What it is (from the screenshot — page 1 of 2):
+- Printable PDF-style report with the school's branding/logo at
+  the top-left and the school's address block top-right (district
+  name, street, city/state/zip).
+- Title: **Tier 2 Student Referral Form**.
+- **Student Information** section (teal header band): name,
+  school, grade, plus a free-text **Student Strengths** paragraph
+  ("Westin is a fun, energetic 3rd grader …"). Strengths-first
+  framing is deliberate and important — sets a respectful tone
+  before listing concerns.
+- **Staff Information** section: "Individual completing form" +
+  "Role in District". Audit trail for who initiated the referral.
+- **Areas of Concern** section: checkbox row (Reading / Math /
+  Social-Emotional / Other) with "Reading" checked.
+- **Reading** detail section (one section per concern checked):
+  - Subtitle "FAST - FAST - aReading"
+  - Most-recent score in big type ("465")
+  - Risk-band ribbon (red-yellow-green gradient) with an X marker
+    placed in the red zone and a "High Risk" caption above it.
+  - Multi-line trend chart spanning Aug → May with overlays:
+    score (yellow line), grade_average (teal), 17-18 25%ile,
+    17-18 50%ile, Aug '19 25%ile, Aug additional baseline. Same
+    norm-comparison pattern as the Program Evaluation idea above.
+- Page footer: form name + "1/2" page indicator (so there's a
+  second page — likely additional concern sections + interventions
+  already attempted + signature/date block).
+
+Why it's compelling for our app:
+- **High-leverage workflow piece.** Schools live in
+  printed/PDF'd referral forms; MTSS team meetings open with
+  exactly this artifact. Generating it from data we already have
+  saves teachers a 30-minute manual data-pull every time they
+  refer a kid.
+- Consumes data we already collect: student demographics,
+  FAST PM scores + cut-band placement, intervention history.
+  Strengths/concerns are the only free-text bits — those become
+  form fields the teacher fills inline.
+- Pairs with our existing `mtssPlans` workflow — the referral
+  form is the *front door*; the MTSS plan is what comes out the
+  *back door* once the team accepts the referral.
+
+Not-trivial considerations:
+- PDF generation pipeline: we don't have one yet. Options:
+  - Server-side: `puppeteer` / `playwright` rendering a printable
+    HTML route (heavy dep, but pixel-perfect).
+  - Browser-side: print-stylesheet `@media print` on a dedicated
+    React route + `window.print()` (lightweight, "good enough"
+    for v0; harder to email/archive).
+  - Library: `@react-pdf/renderer` (declarative, mid-weight,
+    cleanest typography).
+  My instinct: ship v0 as a print-styled route, then upgrade to
+  `@react-pdf/renderer` if the user wants attached PDFs in
+  emails or stored in object storage.
+- Form lifecycle: this isn't just a print job — it's a *record*.
+  Need a `tier2_referrals` table that stores the filled-out form,
+  who created it, when, what the concerns + strengths text were,
+  and a state machine (Draft → Submitted → Reviewed → Plan
+  Created / Declined). The print layout is just one rendering of
+  the underlying record.
+- Demographics & audit: the form shows the school address +
+  district code — pull from the existing school-branding /
+  school-settings tables we already maintain.
+- Multi-concern pages: each checked Area of Concern adds a
+  detail section (with the relevant assessment/behavior data).
+  Reading uses FAST aReading; Math would use FAST aMath; SEL
+  would use whatever screener we add (BIMAS / SAEBRS — which is
+  itself a data-import side-quest); "Other" is a free-text
+  textarea.
+- Permission: who can *create* a referral (any teacher) vs who
+  can *act on* one (MTSS team only). Maps cleanly to existing
+  role plumbing.
+
+Status: **idea parked** — this is a workflow artifact, not a
+dashboard, so it doesn't fit any single ledger item perfectly.
+Best opportunistic moment to surface it is **alongside item #4
+(SEB/SEL dashboard)** since SEB referrals are one of the most
+common Tier 2 paths, and we'll be touching support-side data
+plumbing anyway. Or as its own follow-up item once the user has
+seen the dashboards and asks "great, now how do we *act* on
+this data?"
