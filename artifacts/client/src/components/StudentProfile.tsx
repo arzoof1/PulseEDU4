@@ -188,15 +188,37 @@ function Card({
 interface Props {
   studentId: string;
   onBack: () => void;
+  // True when the signed-in user is on the core team (Admin / SuperUser /
+  // Behavior Specialist / MTSS Coordinator / PBIS Coordinator). Drives the
+  // visibility of the inline "Edit demographics" panel that calls
+  // PATCH /api/students/:studentId/flags. Server still enforces the same
+  // gate; this just hides the affordance for everyone else.
+  canManage?: boolean;
 }
 
-export default function StudentProfile({ studentId, onBack }: Props) {
+export default function StudentProfile({
+  studentId,
+  onBack,
+  canManage = false,
+}: Props) {
   const [data, setData] = useState<ProfilePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [windowKey, setWindowKey] = useState<WindowKey>("30");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
+  // Inline demographics editor — closed by default. When opened it
+  // hydrates from the loaded profile; Save PATCHes only the changed
+  // fields so the server-side merge stays minimal.
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [editGender, setEditGender] = useState("");
+  const [editEll, setEditEll] = useState(false);
+  const [editEse, setEditEse] = useState(false);
+  const [editIs504, setEditIs504] = useState(false);
+  const [editCtEla, setEditCtEla] = useState(false);
+  const [editCtMath, setEditCtMath] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -353,7 +375,191 @@ export default function StudentProfile({ studentId, onBack }: Props) {
                   sev="watch"
                 />
               )}
+              {canManage && !editing && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Hydrate inputs from the currently-loaded payload
+                    // each time the editor opens; this also resets any
+                    // unsaved typing if the user opened, closed, opened.
+                    setEditGender(header.gender ?? "");
+                    setEditEll(header.flags.ell);
+                    setEditEse(header.flags.ese);
+                    setEditIs504(header.flags.is504);
+                    setEditCtEla(header.flags.ctEla);
+                    setEditCtMath(header.flags.ctMath);
+                    setSaveMsg("");
+                    setEditing(true);
+                  }}
+                  style={{
+                    marginLeft: 4,
+                    background: "transparent",
+                    border: "1px dashed #94a3b8",
+                    color: "#475569",
+                    padding: "0.15rem 0.55rem",
+                    borderRadius: 999,
+                    fontSize: "0.75rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                >
+                  ✎ Edit demographics
+                </button>
+              )}
             </div>
+            {canManage && editing && (
+              <div
+                style={{
+                  marginTop: "0.6rem",
+                  padding: "0.6rem 0.75rem",
+                  background: "#f8fafc",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  display: "grid",
+                  gap: "0.4rem",
+                }}
+              >
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.6rem", alignItems: "center" }}>
+                  <label style={{ fontSize: "0.8rem", color: "#475569" }}>
+                    Gender:{" "}
+                    <input
+                      type="text"
+                      value={editGender}
+                      onChange={(e) => setEditGender(e.target.value)}
+                      placeholder="(empty to clear)"
+                      style={{ padding: "0.15rem 0.35rem", fontSize: "0.85rem", width: 120 }}
+                    />
+                  </label>
+                  <label style={{ fontSize: "0.8rem" }}>
+                    <input type="checkbox" checked={editEll} onChange={(e) => setEditEll(e.target.checked)} /> ELL
+                  </label>
+                  <label style={{ fontSize: "0.8rem" }}>
+                    <input type="checkbox" checked={editEse} onChange={(e) => setEditEse(e.target.checked)} /> ESE
+                  </label>
+                  <label style={{ fontSize: "0.8rem" }}>
+                    <input type="checkbox" checked={editIs504} onChange={(e) => setEditIs504(e.target.checked)} /> 504
+                  </label>
+                  <label style={{ fontSize: "0.8rem", color: "#0369a1", fontWeight: 600 }}>
+                    <input type="checkbox" checked={editCtEla} onChange={(e) => setEditCtEla(e.target.checked)} /> CT ELA
+                  </label>
+                  <label style={{ fontSize: "0.8rem", color: "#0369a1", fontWeight: 600 }}>
+                    <input type="checkbox" checked={editCtMath} onChange={(e) => setEditCtMath(e.target.checked)} /> CT Math
+                  </label>
+                </div>
+                <div style={{ display: "flex", gap: "0.4rem", alignItems: "center" }}>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={async () => {
+                      // Build a delta — only fields the user actually
+                      // changed get sent. Server validates strict types
+                      // and returns the canonical post-write row, which
+                      // we splice back into the local payload so the
+                      // chips refresh without a full re-fetch.
+                      const body: Record<string, unknown> = {};
+                      const initialGender = header.gender ?? "";
+                      if (editGender !== initialGender) {
+                        body.gender = editGender === "" ? null : editGender;
+                      }
+                      if (editEll !== header.flags.ell) body.ell = editEll;
+                      if (editEse !== header.flags.ese) body.ese = editEse;
+                      if (editIs504 !== header.flags.is504) body.is504 = editIs504;
+                      if (editCtEla !== header.flags.ctEla) body.ctEla = editCtEla;
+                      if (editCtMath !== header.flags.ctMath) body.ctMath = editCtMath;
+                      if (Object.keys(body).length === 0) {
+                        setSaveMsg("No changes.");
+                        return;
+                      }
+                      setSaving(true);
+                      setSaveMsg("");
+                      try {
+                        const r = await authFetch(
+                          `/api/students/${encodeURIComponent(studentId)}/flags`,
+                          {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify(body),
+                          },
+                        );
+                        if (!r.ok) {
+                          const txt = await r.text().catch(() => "");
+                          throw new Error(txt || `HTTP ${r.status}`);
+                        }
+                        const updated = (await r.json()) as {
+                          gender: string | null;
+                          ell: boolean;
+                          ese: boolean;
+                          is504: boolean;
+                          ctEla: boolean;
+                          ctMath: boolean;
+                        };
+                        setData((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                header: {
+                                  ...prev.header,
+                                  gender: updated.gender,
+                                  flags: {
+                                    ell: updated.ell,
+                                    ese: updated.ese,
+                                    is504: updated.is504,
+                                    ctEla: updated.ctEla,
+                                    ctMath: updated.ctMath,
+                                  },
+                                },
+                              }
+                            : prev,
+                        );
+                        setSaveMsg("Saved.");
+                        setEditing(false);
+                      } catch (e) {
+                        setSaveMsg(
+                          (e as Error).message || "Failed to save",
+                        );
+                      } finally {
+                        setSaving(false);
+                      }
+                    }}
+                    style={{
+                      background: "#0d9488",
+                      color: "white",
+                      border: "none",
+                      padding: "0.3rem 0.8rem",
+                      borderRadius: 6,
+                      cursor: saving ? "not-allowed" : "pointer",
+                      fontSize: "0.8rem",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {saving ? "Saving…" : "Save"}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => {
+                      setEditing(false);
+                      setSaveMsg("");
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid #cbd5e1",
+                      padding: "0.3rem 0.8rem",
+                      borderRadius: 6,
+                      cursor: saving ? "not-allowed" : "pointer",
+                      fontSize: "0.8rem",
+                    }}
+                  >
+                    Cancel
+                  </button>
+                  {saveMsg && (
+                    <span style={{ fontSize: "0.78rem", color: "#475569" }}>
+                      {saveMsg}
+                    </span>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
           <div style={{ fontSize: "0.78rem", color: "#9ca3af", textAlign: "right" }}>
             Visibility:{" "}

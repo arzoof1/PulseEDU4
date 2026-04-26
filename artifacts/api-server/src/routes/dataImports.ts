@@ -30,6 +30,7 @@ import {
   assessmentsTable,
   studentsTable,
   supportNotesTable,
+  studentFastScoresTable,
 } from "@workspace/db";
 import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
 import {
@@ -1003,6 +1004,20 @@ router.post(
         .json({ error: `Cannot roll back a ${job.status} job` });
       return;
     }
+    // FAST scores import is an upsert with no per-job audit trail
+    // (the table has no `import_job_id` column), so there is nothing
+    // we can safely undo. Rather than silently flipping the job to
+    // `rolled_back` while the rows stay changed — which gives the
+    // operator false confidence the data was reverted — we refuse
+    // the rollback up front. This must stay in sync with
+    // FAST_SCORES_CONFIG.rollback() (also a no-op).
+    if (job.kind === "fast_scores") {
+      res.status(409).json({
+        error:
+          "FAST score imports cannot be rolled back. Re-upload a corrected CSV to update the affected rows.",
+      });
+      return;
+    }
     const deleted = await db.transaction(async (tx) => {
       let count = 0;
       // Multi-kind kinds (rosters, behavior) live in the registry. They
@@ -1506,9 +1521,258 @@ const BEHAVIOR_CONFIG: KindConfig<ParsedBehavior> = {
   },
 };
 
+// ---------------------------------------------------------------------------
+// FAST scores — one row per (school, student, subject). The CSV path is an
+// upsert against the unique index `student_fast_scores_student_subject_unique`,
+// so re-uploading the same student updates the row in place rather than
+// creating duplicates. Note: this table has no `import_job_id` column —
+// rollback is therefore a no-op (an upsert can't be safely undone without
+// snapshotting the prior values, which we do not capture here).
+// ---------------------------------------------------------------------------
+type ParsedFastScore = {
+  studentId: string;
+  subject: "ela" | "math";
+  pm1: number | null;
+  pm2: number | null;
+  pm3: number | null;
+  priorYearScore: number | null;
+  // null sentinel = the CSV did not include a prior_year_bq column for
+  // this row, so we must preserve the existing DB value on conflict
+  // rather than overwriting with a default `false`. Boolean = the CSV
+  // explicitly stated true/false; that wins on conflict.
+  priorYearBq: boolean | null;
+};
+
+// Coerce a CSV cell to an integer or null. Empty → null. Decimal values
+// are accepted and rounded (FAST scale scores are always whole numbers
+// in practice but exports occasionally render them with ".0"). Returns
+// `undefined` to signal a parse error so the caller can fail the row.
+function parseOptionalInt(raw: unknown): number | null | undefined {
+  if (raw == null) return null;
+  const v = raw.toString().trim();
+  if (!v) return null;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return undefined;
+  return Math.round(n);
+}
+
+const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
+  validTargets: new Set([
+    "student_id",
+    "subject",
+    "pm1",
+    "pm2",
+    "pm3",
+    "prior_year_score",
+    "prior_year_bq",
+  ]),
+  // student_id and subject are the composite key; PMs / prior-year are
+  // optional so partial-quarter uploads (just PM1) still work.
+  requiredFields: ["student_id", "subject"],
+  headerSynonyms: {
+    student_id: [
+      "student_id",
+      "student_number",
+      "sis_id",
+      "id",
+      "studentid",
+    ],
+    subject: ["subject", "test", "assessment", "area", "domain"],
+    pm1: ["pm1", "pm_1", "fall", "pm1_score", "fall_score"],
+    pm2: ["pm2", "pm_2", "winter", "pm2_score", "winter_score"],
+    pm3: ["pm3", "pm_3", "spring", "pm3_score", "spring_score"],
+    prior_year_score: [
+      "prior_year_score",
+      "prior_year",
+      "py_score",
+      "last_year",
+      "last_year_score",
+      "previous_year_score",
+      "scale_score",
+    ],
+    prior_year_bq: [
+      "prior_year_bq",
+      "bq",
+      "bottom_quartile",
+      "py_bq",
+      "is_bq",
+    ],
+  },
+  parseRow(row, mapping) {
+    const target: Record<string, string> = {};
+    for (const [csvCol, tgt] of Object.entries(mapping)) {
+      target[tgt] = csvCol;
+    }
+    for (const req of this.requiredFields) {
+      const csvCol = target[req];
+      if (!csvCol) {
+        return { ok: false, message: `Missing required column: ${req}` };
+      }
+      const raw = (row[csvCol] ?? "").toString().trim();
+      if (!raw) {
+        return { ok: false, message: `Empty value for ${req}` };
+      }
+    }
+    const studentId = row[target.student_id].toString().trim();
+    // Subject normalization. "Reading" maps to ela because Florida FAST
+    // ELA Reading exports use that label; everything else normalizes to
+    // its base subject. Anything outside ela/math is rejected (we don't
+    // model EOC subjects yet — see schema header comment).
+    const subjectRaw = row[target.subject].toString().trim().toLowerCase();
+    let subject: "ela" | "math";
+    if (subjectRaw === "ela" || subjectRaw === "reading") {
+      subject = "ela";
+    } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
+      subject = "math";
+    } else {
+      return {
+        ok: false,
+        message: `Unsupported subject "${subjectRaw}" (expected ela or math)`,
+      };
+    }
+    const pm1 = target.pm1 !== undefined
+      ? parseOptionalInt(row[target.pm1])
+      : null;
+    if (pm1 === undefined) return { ok: false, message: "Invalid pm1" };
+    const pm2 = target.pm2 !== undefined
+      ? parseOptionalInt(row[target.pm2])
+      : null;
+    if (pm2 === undefined) return { ok: false, message: "Invalid pm2" };
+    const pm3 = target.pm3 !== undefined
+      ? parseOptionalInt(row[target.pm3])
+      : null;
+    if (pm3 === undefined) return { ok: false, message: "Invalid pm3" };
+    const priorYearScore = target.prior_year_score !== undefined
+      ? parseOptionalInt(row[target.prior_year_score])
+      : null;
+    if (priorYearScore === undefined) {
+      return { ok: false, message: "Invalid prior_year_score" };
+    }
+    // BQ flag uses the same forgiving Y/N/true/false parser as rosters
+    // when the column is mapped. When the CSV does NOT include a BQ
+    // column we use a `null` sentinel so insertChunk can preserve any
+    // existing value on conflict instead of clobbering it with `false`.
+    const priorYearBq: boolean | null = target.prior_year_bq !== undefined
+      ? parseBoolFlag(row[target.prior_year_bq]?.toString())
+      : null;
+    return {
+      ok: true,
+      value: {
+        studentId,
+        subject,
+        pm1,
+        pm2,
+        pm3,
+        priorYearScore,
+        priorYearBq,
+      },
+    };
+  },
+  async insertChunk(tx, parsed, schoolId, _jobId) {
+    if (parsed.length === 0) return 0;
+    // Upsert against (school_id, student_id, subject). Numeric PMs and
+    // prior_year_score use COALESCE so a partial CSV (PM1-only mid-year)
+    // doesn't clobber later PMs back to null.
+    //
+    // The BQ flag is trickier: it is NOT NULL in the schema, so we
+    // can't pass null through INSERT. Instead we partition rows on
+    // whether the CSV provided a BQ value:
+    //   - withBq: explicit boolean → SET prior_year_bq = EXCLUDED.* (CSV wins)
+    //   - withoutBq: column unmapped → INSERT default false (only used
+    //     for brand-new rows), and on conflict SET prior_year_bq to
+    //     itself so the existing DB value is preserved.
+    // This guarantees a PM-only CSV upload cannot wipe an existing
+    // true BQ flag back to false.
+    const withBq = parsed.filter((p) => p.priorYearBq !== null);
+    const withoutBq = parsed.filter((p) => p.priorYearBq === null);
+    const now = new Date();
+    if (withBq.length > 0) {
+      await tx
+        .insert(studentFastScoresTable)
+        .values(
+          withBq.map((p) => ({
+            schoolId,
+            studentId: p.studentId,
+            subject: p.subject,
+            pm1: p.pm1,
+            pm2: p.pm2,
+            pm3: p.pm3,
+            priorYearScore: p.priorYearScore,
+            priorYearBq: p.priorYearBq as boolean,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            studentFastScoresTable.schoolId,
+            studentFastScoresTable.studentId,
+            studentFastScoresTable.subject,
+          ],
+          set: {
+            pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
+            pm2: sql`COALESCE(EXCLUDED.pm2, ${studentFastScoresTable.pm2})`,
+            pm3: sql`COALESCE(EXCLUDED.pm3, ${studentFastScoresTable.pm3})`,
+            priorYearScore: sql`COALESCE(EXCLUDED.prior_year_score, ${studentFastScoresTable.priorYearScore})`,
+            priorYearBq: sql`EXCLUDED.prior_year_bq`,
+            updatedAt: now,
+          },
+        });
+    }
+    if (withoutBq.length > 0) {
+      await tx
+        .insert(studentFastScoresTable)
+        .values(
+          withoutBq.map((p) => ({
+            schoolId,
+            studentId: p.studentId,
+            subject: p.subject,
+            pm1: p.pm1,
+            pm2: p.pm2,
+            pm3: p.pm3,
+            priorYearScore: p.priorYearScore,
+            // NOT NULL on a brand-new row only; on conflict the SET
+            // clause below preserves the existing value instead.
+            priorYearBq: false,
+            updatedAt: now,
+          })),
+        )
+        .onConflictDoUpdate({
+          target: [
+            studentFastScoresTable.schoolId,
+            studentFastScoresTable.studentId,
+            studentFastScoresTable.subject,
+          ],
+          set: {
+            pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
+            pm2: sql`COALESCE(EXCLUDED.pm2, ${studentFastScoresTable.pm2})`,
+            pm3: sql`COALESCE(EXCLUDED.pm3, ${studentFastScoresTable.pm3})`,
+            priorYearScore: sql`COALESCE(EXCLUDED.prior_year_score, ${studentFastScoresTable.priorYearScore})`,
+            // No BQ column in CSV → preserve existing DB value.
+            priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+            updatedAt: now,
+          },
+        });
+    }
+    // Silence unused-param lint — jobId is part of the KindConfig
+    // contract but FAST scores doesn't track it (no column).
+    void _jobId;
+    return parsed.length;
+  },
+  async rollback(_tx, _jobId, _schoolId) {
+    // FAST scores are upserts — there is no per-job audit trail, so
+    // rollback is intentionally a no-op. The UI should warn the
+    // importer that FAST imports are not undoable before they commit.
+    void _tx;
+    void _jobId;
+    void _schoolId;
+    return 0;
+  },
+};
+
 const KIND_CONFIGS: Record<string, KindConfig<any>> = {
   rosters: ROSTERS_CONFIG,
   behavior: BEHAVIOR_CONFIG,
+  fast_scores: FAST_SCORES_CONFIG,
 };
 
 // ---------------------------------------------------------------------------
@@ -1703,6 +1967,16 @@ router.post(
   "/data-imports/behavior/commit",
   requireImporter(),
   makeCommitHandler("behavior", BEHAVIOR_CONFIG),
+);
+router.post(
+  "/data-imports/fast_scores/preview",
+  requireImporter(),
+  makePreviewHandler("fast_scores", FAST_SCORES_CONFIG),
+);
+router.post(
+  "/data-imports/fast_scores/commit",
+  requireImporter(),
+  makeCommitHandler("fast_scores", FAST_SCORES_CONFIG),
 );
 
 // Mapping templates. Once a school admin has correctly mapped a vendor's

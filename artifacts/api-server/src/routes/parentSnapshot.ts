@@ -11,6 +11,9 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   schoolHeartbeatSettingsTable,
+  studentFastScoresTable,
+  interventionEntriesTable,
+  studentMtssPlansTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql } from "drizzle-orm";
 import { verifyParentAuthToken } from "../lib/authToken.js";
@@ -248,6 +251,82 @@ router.get("/parent/snapshot", async (req, res) => {
         .limit(20)
     : [];
 
+  // ----- FAST scores (academics) — only if school enabled -----
+  // Surfaces PM1/2/3 plus prior-year scale score and the BQ flag. The
+  // parent UI uses BQ to render the "needs support" banner.
+  const fastScoresRows = sectionsAvailable.fastScores
+    ? await db
+        .select({
+          subject: studentFastScoresTable.subject,
+          pm1: studentFastScoresTable.pm1,
+          pm2: studentFastScoresTable.pm2,
+          pm3: studentFastScoresTable.pm3,
+          priorYearScore: studentFastScoresTable.priorYearScore,
+          priorYearBq: studentFastScoresTable.priorYearBq,
+        })
+        .from(studentFastScoresTable)
+        .where(
+          and(
+            eq(studentFastScoresTable.schoolId, student.schoolId),
+            eq(studentFastScoresTable.studentId, student.studentId),
+          ),
+        )
+    : [];
+
+  // ----- Recent interventions — only if school enabled -----
+  // Redacted shape: type / note / staffName / createdAt only. We never
+  // expose staffId or internal voiding flags on the parent surface.
+  const interventions = sectionsAvailable.interventions
+    ? await db
+        .select({
+          interventionType: interventionEntriesTable.interventionType,
+          note: interventionEntriesTable.note,
+          staffName: interventionEntriesTable.staffName,
+          createdAt: interventionEntriesTable.createdAt,
+        })
+        .from(interventionEntriesTable)
+        .where(
+          and(
+            eq(interventionEntriesTable.schoolId, student.schoolId),
+            eq(interventionEntriesTable.studentId, student.studentId),
+          ),
+        )
+        .orderBy(desc(interventionEntriesTable.createdAt))
+        .limit(10)
+    : [];
+
+  // ----- Active MTSS plans — only if school enabled -----
+  // Plans with closedAt IS NULL. We send the parent the plan title,
+  // tier, and openedAt so they understand the level of support, plus
+  // the goals text (parent-facing by design — schools that don't want
+  // goals shared can keep showMtss=false at the school level).
+  const mtssPlans = sectionsAvailable.mtss
+    ? await db
+        .select({
+          id: studentMtssPlansTable.id,
+          title: studentMtssPlansTable.title,
+          tier: studentMtssPlansTable.tier,
+          openedAt: studentMtssPlansTable.openedAt,
+          goals: studentMtssPlansTable.goals,
+        })
+        .from(studentMtssPlansTable)
+        .where(
+          and(
+            eq(studentMtssPlansTable.schoolId, student.schoolId),
+            eq(studentMtssPlansTable.studentId, student.studentId),
+            isNull(studentMtssPlansTable.closedAt),
+          ),
+        )
+        .orderBy(desc(studentMtssPlansTable.openedAt))
+    : [];
+  // Highest active tier — drives a header chip on the parent page. Tier
+  // 1 means "no active plan" and is the default. Mirrors the convention
+  // used by the staff-side Insights profile endpoint.
+  const mtssTier =
+    mtssPlans.length === 0
+      ? 1
+      : mtssPlans.reduce((m, p) => Math.max(m, p.tier), 1);
+
   res.json({
     parent: {
       displayName: parent?.displayName ?? "",
@@ -313,6 +392,13 @@ router.get("/parent/snapshot", async (req, res) => {
       staffName: n.staffName,
       createdAt: n.createdAt,
     })),
+    // Insights v2 — gated parent-facing pillars. Each section is empty
+    // (not omitted) when the school has it disabled, so the parent
+    // client can render a single shape without optional-chaining every
+    // sub-field.
+    fastScores: fastScoresRows,
+    interventions,
+    mtss: { tier: mtssTier, plans: mtssPlans },
   });
 });
 

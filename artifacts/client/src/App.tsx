@@ -17428,6 +17428,12 @@ function App() {
       {activeSection === "studentProfile" && selectedInsightsStudentId && (
         <StudentProfile
           studentId={selectedInsightsStudentId}
+          // Mirror the server-side requireCoreTeam gate in
+          // routes/studentFlags.ts (SU/Admin/Behavior Specialist/MTSS
+          // Coordinator/PBIS Coordinator). canAccessMtssHub omits PBIS
+          // Coordinator and would hide the affordance for an
+          // authorized actor; canManageMtssPlans matches the server.
+          canManage={canManageMtssPlans}
           onBack={() => {
             setSelectedInsightsStudentId(null);
             setActiveSection("insightsWatchlist");
