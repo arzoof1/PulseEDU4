@@ -7492,6 +7492,20 @@ function App() {
         </div>
       )}
       {hpView === "overview" && (<>
+      {/* Create Pass CTA pinned to the top of the overview so it's
+          reachable on mobile without scrolling past the stats grid.
+          Previously sat below the stats — fine on desktop, awkward on
+          a narrow viewport where the stats stack into a tall column. */}
+      <div className="card cp-cta-card">
+        <div className="cp-cta-text">Need to Create a Pass?</div>
+        <button
+          type="button"
+          className="cp-cta-button"
+          onClick={() => setCreatePassOpen(true)}
+        >
+          + Create Pass
+        </button>
+      </div>
       {(() => {
         let active = 0;
         let overdue = 0;
@@ -7658,16 +7672,8 @@ function App() {
         );
       })()}
 
-      <div className="card cp-cta-card">
-        <div className="cp-cta-text">Need to Create a Pass?</div>
-        <button
-          type="button"
-          className="cp-cta-button"
-          onClick={() => setCreatePassOpen(true)}
-        >
-          + Create Pass
-        </button>
-      </div>
+      {/* Create Pass CTA was here — moved to the top of the overview
+          so it's tappable on mobile without scrolling past the stats. */}
 
       <CreatePassModal
         open={createPassOpen}
