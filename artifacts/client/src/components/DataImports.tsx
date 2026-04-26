@@ -16,7 +16,7 @@ import { authFetch } from "../lib/authToken";
 // dictionary.
 // ---------------------------------------------------------------------------
 
-type Kind = "assessments" | "rosters" | "behavior";
+type Kind = "assessments" | "rosters" | "behavior" | "fast_scores";
 type Scope = "school" | "district";
 
 type PreviewResponse = {
@@ -123,14 +123,54 @@ const BEHAVIOR_TARGETS: TargetDef[] = [
   { value: "created_at", label: "Date / timestamp", required: false },
 ];
 
+// FAST scores import targets — write to the student_fast_scores table.
+// Mirror of FAST_SCORES_CONFIG.validTargets in the route file. Composite
+// key is (student_id, subject); PMs and prior-year are optional so a
+// partial-quarter upload (just PM1) still works.
+const FAST_SCORES_TARGETS: TargetDef[] = [
+  { value: "student_id", label: "Student ID (SIS number)", required: true },
+  { value: "subject", label: "Subject (ela/reading or math)", required: true },
+  { value: "pm1", label: "PM1 / fall scale score", required: false },
+  { value: "pm2", label: "PM2 / winter scale score", required: false },
+  { value: "pm3", label: "PM3 / spring scale score", required: false },
+  { value: "prior_year_score", label: "Prior-year final scale score", required: false },
+  { value: "prior_year_bq", label: "Prior-year bottom-quartile flag", required: false },
+];
+
 // Per-kind metadata. Each kind exposes a label, the targets dictionary
-// (a function so assessments can vary by scope), and a flag for whether
-// district-scope is supported.
+// (a function so assessments can vary by scope), a flag for whether
+// district-scope is supported, and rich setup directions surfaced in
+// the directions panel above the upload step.
+type KindColumnDoc = {
+  // Internal target key (matches the server's validTargets / TargetDef.value).
+  target: string;
+  // Human label as shown in the directions table.
+  label: string;
+  required: boolean;
+  // Header names the auto-mapper will accept (matches headerSynonyms in
+  // the server config). Surfaced so admins can adjust their export
+  // template once instead of fighting the UI mapping every upload.
+  acceptedHeaders: string[];
+  // Optional formatting hint (e.g. "integer 100-700", "Y/N").
+  notes?: string;
+};
+
 type KindDef = {
   label: string;
   targetsFor: (scope: Scope) => TargetDef[];
   supportsDistrict: boolean;
+  // One-line summary shown in the kind picker row.
   helpText: string;
+  // Multi-line description rendered at the top of the directions panel.
+  description: string;
+  // Per-column documentation rendered as a table inside the directions
+  // panel. Required columns are listed first; optional columns follow.
+  columns: KindColumnDoc[];
+  // A short, copy-pasteable CSV (header row + 1-2 data rows) that the
+  // admin can use as a template. Rendered inside a <pre>.
+  sampleCsv: string;
+  // Free-form list of caveats / behavior notes shown below the table.
+  notes: string[];
 };
 
 const KIND_DEFS: Record<Kind, KindDef> = {
@@ -140,6 +180,64 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     supportsDistrict: true,
     helpText:
       "Per-assessment scores (FAST, iReady, MAP, etc.). One row per (student, assessment, date).",
+    description:
+      "Generic assessment scores. Each row is one (student, assessment name, administered date). Re-importing the same row updates the existing record instead of duplicating it. Use this importer for everything except FAST PM scores — FAST has its own importer below that wires PM1/PM2/PM3 into the heartbeat dashboard.",
+    columns: [
+      {
+        target: "student_id",
+        label: "Student ID",
+        required: true,
+        acceptedHeaders: ["student_id", "student_number", "sis_id", "id", "studentid"],
+        notes: "Must already exist in the roster.",
+      },
+      {
+        target: "assessment_name",
+        label: "Assessment name",
+        required: true,
+        acceptedHeaders: ["assessment_name", "assessment", "test", "test_name", "exam"],
+        notes: "e.g. 'iReady Reading PM2', 'MAP Math Spring'.",
+      },
+      {
+        target: "administered_at",
+        label: "Administered date",
+        required: true,
+        acceptedHeaders: ["administered_at", "date", "test_date", "administered_date", "taken_at"],
+        notes: "ISO date or M/D/YYYY.",
+      },
+      {
+        target: "score",
+        label: "Score",
+        required: false,
+        acceptedHeaders: ["score", "scale_score", "raw_score", "result"],
+        notes: "Integer or decimal.",
+      },
+      {
+        target: "score_level",
+        label: "Score level / band",
+        required: false,
+        acceptedHeaders: ["score_level", "level", "band", "tier", "performance_level"],
+        notes: "e.g. 'Level 3', 'On Track'.",
+      },
+      {
+        target: "source",
+        label: "Source / vendor",
+        required: false,
+        acceptedHeaders: ["source", "vendor", "provider", "system"],
+      },
+      {
+        target: "school_code",
+        label: "School code (district scope only)",
+        required: false,
+        acceptedHeaders: ["school_code", "school", "school_id", "site_code", "campus"],
+        notes: "Required when uploading district-wide so each row routes to the right school.",
+      },
+    ],
+    sampleCsv:
+      "student_id,assessment_name,administered_at,score,score_level\n10234,iReady Reading PM2,2026-01-15,512,Level 3\n10234,iReady Math PM2,2026-01-16,498,Level 2\n",
+    notes: [
+      "Re-importing a row with the same (student, assessment, date) updates the existing record.",
+      "Rows with an unknown student_id are reported as errors and not committed.",
+    ],
   },
   rosters: {
     label: "Rosters",
@@ -147,6 +245,61 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     supportsDistrict: false,
     helpText:
       "One row per student. Existing student IDs are skipped (counted as warnings) — the importer will not overwrite.",
+    description:
+      "One row per student. Use this to add new students to the school's roster. Students whose student_id already exists are skipped (you'll see them in the warnings list) — this importer never overwrites an existing roster row. To correct demographics on an existing student, use Settings → Students or the inline editor on the student profile.",
+    columns: [
+      {
+        target: "student_id",
+        label: "Student ID (SIS number)",
+        required: true,
+        acceptedHeaders: ["student_id", "student_number", "sis_id", "id", "studentid"],
+        notes: "The school's permanent SIS identifier.",
+      },
+      {
+        target: "first_name",
+        label: "First name",
+        required: true,
+        acceptedHeaders: ["first_name", "firstname", "first", "given_name", "fname"],
+      },
+      {
+        target: "last_name",
+        label: "Last name",
+        required: true,
+        acceptedHeaders: ["last_name", "lastname", "last", "family_name", "surname", "lname"],
+      },
+      {
+        target: "grade",
+        label: "Grade",
+        required: true,
+        acceptedHeaders: ["grade", "grade_level", "gradelevel", "year", "yr"],
+        notes: "0-12 ('K' is also accepted and stored as 0).",
+      },
+      {
+        target: "parent_name",
+        label: "Parent / guardian name",
+        required: false,
+        acceptedHeaders: ["parent_name", "guardian_name", "contact_name"],
+      },
+      {
+        target: "parent_email",
+        label: "Parent / guardian email",
+        required: false,
+        acceptedHeaders: ["parent_email", "guardian_email", "contact_email", "email"],
+      },
+      {
+        target: "parent_phone",
+        label: "Parent / guardian phone",
+        required: false,
+        acceptedHeaders: ["parent_phone", "guardian_phone", "contact_phone", "phone"],
+      },
+    ],
+    sampleCsv:
+      "student_id,first_name,last_name,grade,parent_email\n10234,Maya,Rivera,3,mrivera@example.com\n10235,Aiden,Chen,5,achen@example.com\n",
+    notes: [
+      "School-scope only — there's no district-wide rosters import.",
+      "If a row's student_id already exists, the row is skipped and counted as a warning.",
+      "Rows with the same student_id appearing twice in one file are treated as the same student.",
+    ],
   },
   behavior: {
     label: "Behavior notes",
@@ -154,6 +307,115 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     supportsDistrict: false,
     helpText:
       "One row per behavior log / counselor note. Always inserts (no de-duplication).",
+    description:
+      "One row per behavior log / counselor note. Each row creates a fresh support note record — there is no de-duplication, so re-uploading the same file will create duplicates. Use this for one-off backfills from prior systems, not for ongoing daily logging (use the in-app behavior tracker for that).",
+    columns: [
+      {
+        target: "student_id",
+        label: "Student ID",
+        required: true,
+        acceptedHeaders: ["student_id", "student_number", "sis_id", "id", "studentid"],
+      },
+      {
+        target: "note_text",
+        label: "Description / narrative",
+        required: true,
+        acceptedHeaders: ["note_text", "note", "description", "details", "incident", "narrative", "behavior", "comments"],
+      },
+      {
+        target: "note_type",
+        label: "Category",
+        required: false,
+        acceptedHeaders: ["note_type", "type", "category", "incident_type", "behavior_type", "infraction_type"],
+        notes: "Defaults to 'concern' if blank.",
+      },
+      {
+        target: "staff_name",
+        label: "Reported by",
+        required: false,
+        acceptedHeaders: ["staff_name", "staff", "teacher", "teacher_name", "reported_by", "logged_by", "author"],
+        notes: "Free text — does not need to match a staff record.",
+      },
+      {
+        target: "created_at",
+        label: "Date / timestamp",
+        required: false,
+        acceptedHeaders: ["created_at", "date", "incident_date", "logged_at", "occurred_at", "timestamp", "when"],
+        notes: "Defaults to today if blank.",
+      },
+    ],
+    sampleCsv:
+      "student_id,note_type,note_text,staff_name,created_at\n10234,concern,Disrupted morning meeting twice,Ms. Patel,2026-04-12\n10235,positive,Helped a peer during math centers,Mr. Lee,2026-04-12\n",
+    notes: [
+      "School-scope only.",
+      "Always inserts — uploading the same file twice doubles the rows. Use rollback from the History tab if you make a mistake.",
+    ],
+  },
+  fast_scores: {
+    label: "FAST scores",
+    targetsFor: () => FAST_SCORES_TARGETS,
+    supportsDistrict: false,
+    helpText:
+      "Florida FAST PM scale scores. One row per (student, subject). Re-importing updates instead of duplicating.",
+    description:
+      "Florida FAST PM scale scores. One row per (student, subject). PM1/PM2/PM3 and prior-year fields are all optional — partial-quarter uploads (e.g. just PM1 in October, then PM1+PM2 in February) are fully supported. Re-uploading the same (student, subject) updates the existing row in place; PM columns left blank in a later upload preserve their existing value rather than being cleared.",
+    columns: [
+      {
+        target: "student_id",
+        label: "Student ID",
+        required: true,
+        acceptedHeaders: ["student_id", "student_number", "sis_id", "id", "studentid"],
+      },
+      {
+        target: "subject",
+        label: "Subject",
+        required: true,
+        acceptedHeaders: ["subject", "test", "assessment", "area", "domain"],
+        notes: "Accepts 'ela', 'ELA', 'Reading' (mapped to ela), 'math', 'Math', 'Mathematics'. Anything else is rejected.",
+      },
+      {
+        target: "pm1",
+        label: "PM1 (fall)",
+        required: false,
+        acceptedHeaders: ["pm1", "pm_1", "fall", "pm1_score", "fall_score"],
+        notes: "Integer scale score.",
+      },
+      {
+        target: "pm2",
+        label: "PM2 (winter)",
+        required: false,
+        acceptedHeaders: ["pm2", "pm_2", "winter", "pm2_score", "winter_score"],
+        notes: "Integer scale score.",
+      },
+      {
+        target: "pm3",
+        label: "PM3 (spring)",
+        required: false,
+        acceptedHeaders: ["pm3", "pm_3", "spring", "pm3_score", "spring_score"],
+        notes: "Integer scale score.",
+      },
+      {
+        target: "prior_year_score",
+        label: "Prior-year final scale score",
+        required: false,
+        acceptedHeaders: ["prior_year_score", "prior_year", "py_score", "last_year", "last_year_score", "previous_year_score", "scale_score"],
+        notes: "Integer. Used to render the trend line.",
+      },
+      {
+        target: "prior_year_bq",
+        label: "Prior-year bottom-quartile flag",
+        required: false,
+        acceptedHeaders: ["prior_year_bq", "bq", "bottom_quartile", "py_bq", "is_bq"],
+        notes: "Y/N, Yes/No, true/false, or 1/0. Drives the 'Needs support' pill on the parent and staff dashboards.",
+      },
+    ],
+    sampleCsv:
+      "student_id,subject,pm1,pm2,pm3,prior_year_score,prior_year_bq\n10234,ELA,310,318,,305,Y\n10234,Math,295,302,,290,N\n10235,Reading,322,330,,318,N\n",
+    notes: [
+      "School-scope only — FAST scores are managed per school.",
+      "Re-uploading the same (student, subject) updates the existing row. Blank PM columns preserve the prior value rather than clearing it, so you can upload PM1 in October and add PM2 in February without losing PM1.",
+      "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
+    ],
   },
 };
 
