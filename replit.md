@@ -1570,3 +1570,24 @@ templates for the new kinds.
 Architect Pass on second review. Attendance importer **deferred** — no
 `daily_attendance` table exists; needs schema discussion before
 proceeding. Next: eduClimber-style Insights module.
+
+### Future direction — attendance via Skyward + ClassLink (2026-04-26)
+
+User signaled intent to eventually pull attendance from **Skyward** (the
+SIS) and **ClassLink** (identity / OneRoster rostering provider). This
+informs the deferred attendance importer design:
+
+- Don't ship attendance as "CSV only." Build a source-adapter layer
+  where CSV is one adapter; Skyward (REST or SFTP nightly drop,
+  contract-dependent) is another; ClassLink OneRoster is another (best
+  for roster + enrollment sync, less for live attendance).
+- All adapters should feed into the same `import_jobs` pipeline so
+  preview, commit, rollback, and audit work uniformly regardless of
+  source.
+- ClassLink overlap with Replit Auth / Clerk: ClassLink also does SSO,
+  so when we wire it up we'll need to decide whether ClassLink replaces
+  or supplements the current sign-in path.
+
+Schema decision to revisit when we start: per-day vs per-period
+attendance, the code dictionary (P / A / T / E / U / ISS / OSS), and
+excused-reason free-text vs enum.
