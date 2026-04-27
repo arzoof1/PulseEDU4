@@ -66,6 +66,13 @@ export const teacherWatchlistEntriesTable = pgTable(
     // case the UI surfaces a small "Added by X" badge so the teacher
     // knows the entry didn't appear out of nowhere.
     addedByStaffId: integer("added_by_staff_id"),
+    // When a core team member seeded this entry, the owning teacher
+    // can click "Acknowledge" to acknowledge they've seen it. The
+    // amber "Added by X" pill then quiets to a muted "Acknowledged"
+    // state and the entry stops being pinned to the top of its group.
+    // Always null for self-added entries (no acknowledgement needed
+    // for something you did yourself).
+    acknowledgedAt: timestamp("acknowledged_at"),
     lastTouchBy: text("last_touch_by"),
     lastTouchWhat: text("last_touch_what"),
     lastTouchAt: timestamp("last_touch_at"),

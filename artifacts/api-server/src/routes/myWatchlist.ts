@@ -46,15 +46,17 @@ import {
   sectionRosterTable,
   studentTrustedAdultsTable,
   teacherWatchlistEntriesTable,
+  teacherWatchlistGroupsTable,
 } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNotNull, isNull, sql } from "drizzle-orm";
+import { sendMyWatchlistSeedEmail } from "../lib/myWatchlistSeedEmail.js";
 
 const router: IRouter = Router();
 
-// Allowed group keys. Mirrors the four built-in groups in
-// MyWatchList.tsx. Free-form strings are still accepted (custom groups
-// is a planned follow-up) but unknown values must be at most 40 chars
-// and not blank — keeps DB hygiene tight.
+// Built-in groups that ship with every account. The client also
+// hardcodes these (keeps the styling/microcopy consistent across all
+// users). Custom groups stored in teacher_watchlist_groups extend
+// this set per-teacher.
 const BUILTIN_GROUP_KEYS = new Set([
   "reading",
   "behavior",
@@ -62,11 +64,52 @@ const BUILTIN_GROUP_KEYS = new Set([
   "shine",
 ]);
 
+// Normalize raw group key input. Accepts any non-empty trimmed
+// lowercase string up to 40 chars. Validation that the key is
+// actually one of the caller's allowed groups happens separately
+// (see isAllowedGroupKey).
 function normalizeGroupKey(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const trimmed = raw.trim().toLowerCase().slice(0, 40);
   if (!trimmed) return null;
   return trimmed;
+}
+
+// Slugify a label into a key safe to store / index. Lowercase,
+// alphanumeric + dash, collapsed dashes, trimmed of leading/trailing
+// dashes. Used when a teacher creates a custom group from a label.
+function slugifyGroupLabel(label: string): string {
+  return label
+    .toLowerCase()
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40);
+}
+
+// Check whether a given groupKey is allowed for a particular owner
+// (built-in OR a custom group they own at the given school). Used by
+// POST + PATCH on entries to reject typos / stale custom-group keys.
+// School-scoped so a staff member who switched active schools doesn't
+// silently inherit groups from their other school.
+async function isAllowedGroupKey(
+  ownerStaffId: number,
+  schoolId: number,
+  key: string,
+): Promise<boolean> {
+  if (BUILTIN_GROUP_KEYS.has(key)) return true;
+  const [match] = await db
+    .select({ id: teacherWatchlistGroupsTable.id })
+    .from(teacherWatchlistGroupsTable)
+    .where(
+      and(
+        eq(teacherWatchlistGroupsTable.staffId, ownerStaffId),
+        eq(teacherWatchlistGroupsTable.schoolId, schoolId),
+        eq(teacherWatchlistGroupsTable.key, key),
+      ),
+    );
+  return Boolean(match);
 }
 
 // Quick-action button labels. Free-form text is also accepted (so the
@@ -258,12 +301,35 @@ router.get("/insights/my-watchlist", async (req, res) => {
           followupDue: e.followupDue,
           addedAt: e.addedAt,
           addedBy,
+          // Only meaningful when addedBy is set. Null on every
+          // self-added entry (acknowledgement is for "someone else
+          // touched my list" only).
+          acknowledgedAt:
+            e.addedByStaffId != null && e.addedByStaffId !== staff.id
+              ? e.acknowledgedAt
+              : null,
           lastTouchBy: e.lastTouchBy,
           lastTouchWhat: e.lastTouchWhat,
           lastTouchAt: e.lastTouchAt,
         };
       })
       .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    // Order: unacknowledged seeded entries first (so they pin to the
+    // top of their group bucket on the client), then by addedAt
+    // descending. Same group bucket on both sides — the client
+    // re-buckets by groupKey after this sort, so within-group order
+    // is what survives.
+    hydrated.sort((a, b) => {
+      const aPinned =
+        a.addedBy != null && a.acknowledgedAt == null ? 0 : 1;
+      const bPinned =
+        b.addedBy != null && b.acknowledgedAt == null ? 0 : 1;
+      if (aPinned !== bPinned) return aPinned - bPinned;
+      const aTime = a.addedAt ? new Date(a.addedAt).getTime() : 0;
+      const bTime = b.addedAt ? new Date(b.addedAt).getTime() : 0;
+      return bTime - aTime;
+    });
 
     res.json({ entries: hydrated });
   } catch (e) {
@@ -347,6 +413,9 @@ router.post("/insights/my-watchlist", async (req, res) => {
     }
 
     // Resolve target staff (the person whose list this lands on).
+    // (Defined below; we need the targetStaff before we can check
+    // whether the group key is valid for THEM, since custom groups
+    // are per-owner.)
     // Defaults to the caller (self-add). Core team can specify a
     // different teacher to seed an entry on their behalf.
     const rawTarget = req.body?.targetStaffId;
@@ -379,6 +448,20 @@ router.post("/insights/my-watchlist", async (req, res) => {
       targetStaff = target;
     }
     const isOnBehalfOf = targetStaff.id !== staff.id;
+
+    // Group key must be either built-in or one of the TARGET teacher's
+    // own custom groups (since custom groups are per-owner). This
+    // catches typos in clients and stops core team from accidentally
+    // assigning a group key that won't render on the target's list.
+    const allowed = await isAllowedGroupKey(targetStaff.id, schoolId, groupKey);
+    if (!allowed) {
+      res.status(400).json({
+        error: "Unknown group",
+        detail:
+          "Pick one of the built-in groups or one of the target teacher's custom groups.",
+      });
+      return;
+    }
 
     // Visibility check — against the OWNING teacher (target), not the
     // caller. An admin acts as their own check on which teacher to
@@ -439,6 +522,75 @@ router.post("/insights/my-watchlist", async (req, res) => {
           addedByStaffId: isOnBehalfOf ? staff.id : null,
         })
         .returning();
+
+      // Best-effort email notification on on-behalf-of adds. The
+      // in-app banner is the primary signal; this is the secondary
+      // channel for teachers who don't open PulseEDU often. The whole
+      // block — group/student lookups + Resend send — runs inside a
+      // self-contained async IIFE with a top-level catch so a DB blip
+      // or Resend timeout can never surface as a 500 on a row that
+      // was already inserted.
+      if (isOnBehalfOf && targetStaff.email) {
+        const targetEmail = targetStaff.email;
+        const targetDisplay = staffDisplayName(targetStaff);
+        const seederDisplay = staffDisplayName(staff);
+        const targetStaffId = targetStaff.id;
+        void (async () => {
+          try {
+            const groupLabelMap: Record<string, string> = {
+              reading: "Reading concerns",
+              behavior: "Behavior watch",
+              family: "Family things to know",
+              shine: "Quiet kids to lift up",
+            };
+            let groupLabel = groupLabelMap[groupKey];
+            if (!groupLabel) {
+              // Custom group — look up the owner's label so the
+              // email says "Math intervention" instead of
+              // "math-intervention".
+              const [g] = await db
+                .select({ label: teacherWatchlistGroupsTable.label })
+                .from(teacherWatchlistGroupsTable)
+                .where(
+                  and(
+                    eq(teacherWatchlistGroupsTable.staffId, targetStaffId),
+                    eq(teacherWatchlistGroupsTable.schoolId, schoolId),
+                    eq(teacherWatchlistGroupsTable.key, groupKey),
+                  ),
+                );
+              groupLabel = g?.label ?? groupKey;
+            }
+            const [studentRow] = await db
+              .select({
+                firstName: studentsTable.firstName,
+                lastName: studentsTable.lastName,
+              })
+              .from(studentsTable)
+              .where(eq(studentsTable.studentId, studentId));
+            const studentName = studentRow
+              ? `${studentRow.firstName} ${studentRow.lastName}`
+              : studentId;
+            const appBaseUrl =
+              process.env.PUBLIC_APP_URL ||
+              (process.env.REPLIT_DEV_DOMAIN
+                ? `https://${process.env.REPLIT_DEV_DOMAIN}`
+                : "https://app.pulseedu.com");
+            await sendMyWatchlistSeedEmail({
+              toEmail: targetEmail,
+              toDisplayName: targetDisplay,
+              fromDisplayName: seederDisplay,
+              studentDisplayName: studentName,
+              groupLabel,
+              note,
+              appBaseUrl,
+            });
+          } catch (err) {
+            // eslint-disable-next-line no-console
+            console.warn("[my-watchlist] seed email failed", err);
+          }
+        })();
+      }
+
       res.status(201).json({ entry: inserted });
     } catch (err) {
       // Drizzle wraps the underlying pg error in DrizzleQueryError, so
@@ -507,6 +659,19 @@ router.patch("/insights/my-watchlist/:id", async (req, res) => {
       const g = normalizeGroupKey(req.body.groupKey);
       if (!g) {
         res.status(400).json({ error: "Invalid groupKey" });
+        return;
+      }
+      // Same allow-list as POST: must be a built-in or one of the
+      // owner's custom keys for this school. Otherwise a stale or
+      // hand-typed key could land in the row and never render in any
+      // group tab.
+      const allowed = await isAllowedGroupKey(staff.id, existing.schoolId, g);
+      if (!allowed) {
+        res.status(400).json({
+          error: "Unknown group",
+          detail:
+            "Pick one of the built-in groups or one of your custom groups.",
+        });
         return;
       }
       update.groupKey = g;
@@ -619,6 +784,220 @@ router.delete("/insights/my-watchlist/:id", async (req, res) => {
     // eslint-disable-next-line no-console
     console.error("[my-watchlist] delete failed", e);
     res.status(500).json({ error: "Failed to delete entry" });
+  }
+});
+
+// ---- POST: acknowledge a seeded entry --------------------------------
+//
+// When a core team member adds a student to a teacher's list the entry
+// gets a bright amber "Added by X" pill so the teacher can't miss it.
+// Once they've seen it, clicking Acknowledge stamps acknowledged_at
+// and the pill quiets to a muted "Acknowledged" state, AND the entry
+// stops being pinned to the top of its group bucket.
+//
+// Only the OWNING teacher can acknowledge. Self-added entries (no
+// addedByStaffId) can't be acknowledged — the action is meaningless.
+
+router.post("/insights/my-watchlist/:id/acknowledge", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [existing] = await db
+      .select()
+      .from(teacherWatchlistEntriesTable)
+      .where(eq(teacherWatchlistEntriesTable.id, id));
+    if (!existing || existing.staffId !== staff.id) {
+      // 404 not 403 — never leak existence of someone else's entry.
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (existing.addedByStaffId == null) {
+      res.status(400).json({
+        error: "Nothing to acknowledge — this entry was self-added.",
+      });
+      return;
+    }
+    if (existing.acknowledgedAt != null) {
+      // Idempotent — already acknowledged. Return the row unchanged.
+      res.json({ entry: existing });
+      return;
+    }
+    const [updated] = await db
+      .update(teacherWatchlistEntriesTable)
+      .set({ acknowledgedAt: new Date() })
+      .where(eq(teacherWatchlistEntriesTable.id, id))
+      .returning();
+    res.json({ entry: updated });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[my-watchlist] acknowledge failed", e);
+    res.status(500).json({ error: "Failed to acknowledge entry" });
+  }
+});
+
+// ---- Custom group management -----------------------------------------
+//
+// GET    /api/insights/my-watchlist/groups
+// POST   /api/insights/my-watchlist/groups
+// DELETE /api/insights/my-watchlist/groups/:id
+//
+// Each teacher owns their own custom groups. Built-ins (reading,
+// behavior, family, shine) are baked into the client and aren't
+// returned here — the client knows about them already and merges
+// the two lists when rendering the group tabs / picker.
+
+router.get("/insights/my-watchlist/groups", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    const schoolId = activeSchoolId(staff);
+    const rows = await db
+      .select({
+        id: teacherWatchlistGroupsTable.id,
+        key: teacherWatchlistGroupsTable.key,
+        label: teacherWatchlistGroupsTable.label,
+        emoji: teacherWatchlistGroupsTable.emoji,
+      })
+      .from(teacherWatchlistGroupsTable)
+      .where(
+        and(
+          eq(teacherWatchlistGroupsTable.staffId, staff.id),
+          // School-scoped — a staff member with multiple schools (or
+          // an active-school override) only sees the groups they
+          // created for the school they're currently viewing.
+          eq(teacherWatchlistGroupsTable.schoolId, schoolId),
+        ),
+      )
+      .orderBy(teacherWatchlistGroupsTable.label);
+    res.json({ groups: rows });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[my-watchlist] groups list failed", e);
+    res.status(500).json({ error: "Failed to load custom groups" });
+  }
+});
+
+router.post("/insights/my-watchlist/groups", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    const schoolId = activeSchoolId(staff);
+
+    const labelRaw =
+      typeof req.body?.label === "string" ? req.body.label.trim() : "";
+    if (!labelRaw) {
+      res.status(400).json({ error: "Label is required" });
+      return;
+    }
+    if (labelRaw.length > 60) {
+      res.status(400).json({ error: "Label must be 60 characters or less" });
+      return;
+    }
+    const emoji =
+      typeof req.body?.emoji === "string"
+        ? req.body.emoji.trim().slice(0, 8) || null
+        : null;
+
+    const key = slugifyGroupLabel(labelRaw);
+    if (!key) {
+      res.status(400).json({
+        error: "Label must contain at least one letter or number",
+      });
+      return;
+    }
+    if (BUILTIN_GROUP_KEYS.has(key)) {
+      res.status(409).json({
+        error: "That label conflicts with a built-in group. Pick a different name.",
+      });
+      return;
+    }
+
+    try {
+      const [inserted] = await db
+        .insert(teacherWatchlistGroupsTable)
+        .values({
+          staffId: staff.id,
+          schoolId,
+          key,
+          label: labelRaw,
+          emoji,
+        })
+        .returning();
+      res.status(201).json({ group: inserted });
+    } catch (err) {
+      const cause = (err as { cause?: { code?: string } }).cause;
+      if (cause?.code === "23505") {
+        res.status(409).json({ error: "You already have a group with that name." });
+        return;
+      }
+      throw err;
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[my-watchlist] groups create failed", e);
+    res.status(500).json({ error: "Failed to create group" });
+  }
+});
+
+router.delete("/insights/my-watchlist/groups/:id", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+
+    // Run lookup → in-use count → delete in one transaction so a
+    // racing POST /my-watchlist that uses this group key can't slip
+    // through after the count and leave us with orphaned entries.
+    // We lock the group row FOR UPDATE; the entries-count is still
+    // not strictly race-proof against an entry insert (no FK), but
+    // the window shrinks to "between count and delete inside the
+    // same tx" instead of "between two top-level requests".
+    const result = await db.transaction(async (tx) => {
+      const [existing] = await tx
+        .select()
+        .from(teacherWatchlistGroupsTable)
+        .where(eq(teacherWatchlistGroupsTable.id, id))
+        .for("update");
+      if (!existing || existing.staffId !== staff.id) {
+        return { status: 404 as const, body: { error: "Not found" } };
+      }
+      const [{ count: inUse } = { count: 0 }] = await tx
+        .select({ count: sql<number>`COUNT(*)::int` })
+        .from(teacherWatchlistEntriesTable)
+        .where(
+          and(
+            eq(teacherWatchlistEntriesTable.staffId, staff.id),
+            eq(teacherWatchlistEntriesTable.groupKey, existing.key),
+          ),
+        );
+      if (inUse > 0) {
+        return {
+          status: 409 as const,
+          body: {
+            error: `Can't delete — ${inUse} student${inUse === 1 ? " is" : "s are"} still in this group. Move or remove them first.`,
+          },
+        };
+      }
+      await tx
+        .delete(teacherWatchlistGroupsTable)
+        .where(eq(teacherWatchlistGroupsTable.id, id));
+      return { status: 200 as const, body: { ok: true } };
+    });
+
+    res.status(result.status).json(result.body);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[my-watchlist] groups delete failed", e);
+    res.status(500).json({ error: "Failed to delete group" });
   }
 });
 

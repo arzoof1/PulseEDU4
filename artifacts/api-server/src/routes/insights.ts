@@ -1204,6 +1204,19 @@ router.get("/insights/watchlist", async (req, res) => {
   const fromDateOnly = fromIso.slice(0, 10);
   const toDateOnly = toIso.slice(0, 10);
 
+  // Previous window of the same length, immediately preceding `from`.
+  // Used for the "new this period" badge + behavior trend microcopy on
+  // the card grid. We don't load every counter for the prev window —
+  // only behavior (pbis negatives + support notes) and ISS days,
+  // because those are the trigger flags that drive the badge.
+  const windowMs = window.to.getTime() - window.from.getTime();
+  const prevTo = window.from;
+  const prevFrom = new Date(prevTo.getTime() - windowMs);
+  const prevFromIso = prevFrom.toISOString();
+  const prevToIso = prevTo.toISOString();
+  const prevFromDateOnly = prevFromIso.slice(0, 10);
+  const prevToDateOnly = prevToIso.slice(0, 10);
+
   // Bulk-load the per-student aggregates in a small number of round-trips.
   // Each query is school-scoped + studentId-IN-list; results are folded
   // into per-student maps below.
@@ -1329,6 +1342,67 @@ router.get("/insights/watchlist", async (req, res) => {
   const issByStudent = new Map<string, number>();
   for (const r of issCounts) issByStudent.set(r.studentId, r.total);
 
+  // ---- Prev-window aggregates (behavior + ISS only) -------------------
+  // Three more grouped counts mirroring the queries above but bounded
+  // to [prevFrom, prevTo). Behavior = pbis negatives + support notes,
+  // same definition we use for the current window so the comparison
+  // is apples-to-apples.
+  const prevPbisCounts = await db
+    .select({
+      studentId: pbisEntriesTable.studentId,
+      total: sql<number>`COUNT(*)::int`,
+    })
+    .from(pbisEntriesTable)
+    .where(
+      and(
+        eq(pbisEntriesTable.schoolId, schoolId),
+        inArray(pbisEntriesTable.studentId, studentIds),
+        eq(pbisEntriesTable.polarity, "negative"),
+        isNull(pbisEntriesTable.voidedAt),
+        gte(pbisEntriesTable.createdAt, prevFromIso),
+        lte(pbisEntriesTable.createdAt, prevToIso),
+      ),
+    )
+    .groupBy(pbisEntriesTable.studentId);
+  const prevPbisCountByStudent = new Map<string, number>();
+  for (const r of prevPbisCounts) prevPbisCountByStudent.set(r.studentId, r.total);
+
+  const prevSupportCounts = await db
+    .select({
+      studentId: supportNotesTable.studentId,
+      total: sql<number>`COUNT(*)::int`,
+    })
+    .from(supportNotesTable)
+    .where(
+      and(
+        eq(supportNotesTable.schoolId, schoolId),
+        inArray(supportNotesTable.studentId, studentIds),
+        gte(supportNotesTable.createdAt, prevFromIso),
+        lte(supportNotesTable.createdAt, prevToIso),
+      ),
+    )
+    .groupBy(supportNotesTable.studentId);
+  const prevSupportCountByStudent = new Map<string, number>();
+  for (const r of prevSupportCounts) prevSupportCountByStudent.set(r.studentId, r.total);
+
+  const prevIssCounts = await db
+    .select({
+      studentId: issAttendanceDayTable.studentId,
+      total: sql<number>`COUNT(*)::int`,
+    })
+    .from(issAttendanceDayTable)
+    .where(
+      and(
+        eq(issAttendanceDayTable.schoolId, schoolId),
+        inArray(issAttendanceDayTable.studentId, studentIds),
+        gte(issAttendanceDayTable.day, prevFromDateOnly),
+        lte(issAttendanceDayTable.day, prevToDateOnly),
+      ),
+    )
+    .groupBy(issAttendanceDayTable.studentId);
+  const prevIssByStudent = new Map<string, number>();
+  for (const r of prevIssCounts) prevIssByStudent.set(r.studentId, r.total);
+
   // Build the rows.
   const rows = students
     .map((s) => {
@@ -1349,6 +1423,23 @@ router.get("/insights/watchlist", async (req, res) => {
       if (issDayCount > 0) flags.push({ code: "ISS_RECENT", severity: "high", label: `${issDayCount} ISS day${issDayCount === 1 ? "" : "s"}` });
       if (tier >= 2) flags.push({ code: `TIER_${tier}`, severity: "watch", label: `Tier ${tier} plan` });
 
+      const previousBehaviorCount =
+        (prevPbisCountByStudent.get(s.studentId) ?? 0) +
+        (prevSupportCountByStudent.get(s.studentId) ?? 0);
+      const previousIssDayCount = prevIssByStudent.get(s.studentId) ?? 0;
+      // "New this period" = the student is currently on the watch list
+      // (has at least one watch- or high-severity flag) AND was clean
+      // last window (zero behavior + zero ISS). Bottom-quartile / tier
+      // status doesn't change within a window so it isn't part of the
+      // "new" signal — that's about behavior/ISS turning a corner.
+      const hasWatchOrHighFlag = flags.some(
+        (f) => f.severity === "watch" || f.severity === "high",
+      );
+      const isNewThisWindow =
+        hasWatchOrHighFlag &&
+        previousBehaviorCount === 0 &&
+        previousIssDayCount === 0;
+
       return {
         studentId: s.studentId,
         firstName: s.firstName,
@@ -1368,6 +1459,9 @@ router.get("/insights/watchlist", async (req, res) => {
         behaviorCount,
         tardyCount,
         issDayCount,
+        previousBehaviorCount,
+        previousIssDayCount,
+        isNewThisWindow,
         topRiskFlag: topRisk(flags),
         riskFlagCount: flags.filter((f) => f.severity !== "info").length,
       };

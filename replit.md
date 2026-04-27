@@ -3837,3 +3837,124 @@ Smoke-tested: staff-directory 200; on-behalf-of POST 201 with
 `addedByStaffId` stamped; non-roster student for target → 404;
 duplicate → 409 with existing entry returned; self-add path
 unchanged with `addedBy: null`.
+
+## My Watch List polish — banner, ack, custom groups + InsightsWatchlist trends (Apr 27, 2026)
+
+Five-item polish push on the Watch List surfaces.
+
+### Schema
+- `teacher_watchlist_entries.acknowledged_at timestamp` (nullable).
+- New `teacher_watchlist_groups` table: `(id serial pk, staff_id int,
+  school_id int, key text, label text, emoji text, created_at)` with
+  `UNIQUE (staff_id, key)`. Lets a teacher define their own group
+  tabs (e.g. "Math intervention" 🧮) on top of the four built-ins
+  (reading / behavior / family / shine).
+- Both applied via direct `ALTER TABLE … ADD COLUMN IF NOT EXISTS` /
+  `CREATE TABLE IF NOT EXISTS` since `drizzle push` is still blocked
+  on a prior interactive prompt; `lib/db` schema files + barrel
+  updated to match.
+
+### Backend (`artifacts/api-server/src/routes/myWatchlist.ts`)
+- `POST /api/insights/my-watchlist/:id/acknowledge` — only the row's
+  owner can ack, and only when `addedByStaffId` is set (self-added
+  → 400). Idempotent (re-ack returns the same timestamp). 404 for
+  wrong owner so we don't leak existence to other teachers.
+- `GET /api/insights/my-watchlist` now hydrates `acknowledgedAt` per
+  entry and orders unacked-seeded first
+  (`addedByStaffId IS NOT NULL AND acknowledged_at IS NULL`), then by
+  `addedAt desc`. Client honors the same order inside each group so
+  the pinning works whichever group tab is open.
+- `GET /api/insights/my-watchlist/groups` — caller's custom groups
+  (no role gate; plain teachers see their own).
+- `POST …/groups` — body `{ label, emoji? }`. Server normalizes
+  `label → key` (`lowercase`, alphanumeric + `-`, max 40). Rejects
+  built-in keys + duplicates → 409 (uses the same
+  `DrizzleQueryError → cause.code === '23505'` unwrap pattern as the
+  entries table).
+- `DELETE …/groups/:id` — only the owner; 409 if any entry still
+  references the group's key (we don't auto-orphan).
+- POST/PATCH `/my-watchlist` accepts a key only if it's a built-in
+  OR one of the caller's custom group keys; else 400. Validation is
+  per-caller, so a custom group only widens the keyspace for its
+  owner.
+- On a successful on-behalf-of POST, `lib/myWatchlistSeedEmail.ts`
+  fires a Resend email via `getUncachableResendClient()`. Subject:
+  "[PulseEDU] {seeder displayName} added a student to your Watch
+  List", body links to the My Watch List section. Wrapped in
+  try/catch with one log line on failure — never blocks or reverses
+  the create.
+
+### Frontend — MyWatchList (`artifacts/client/src/components/MyWatchList.tsx`)
+- `Entry.acknowledgedAt: string | null` added; `CustomGroup` interface
+  + `customGroups` state + `reloadGroups()` + `mergedGroups` memo
+  (built-ins first, custom alpha-sorted after with a slate palette
+  + user's emoji).
+- `pendingSeeded` banner pinned at the top:
+  *"💡 N student(s) were added to your watch list by [names]. Scroll
+  down to review."* Dismiss button = `scrollIntoView` on the first
+  pending row's ref; ack state itself is the source of truth so the
+  banner clears naturally as items get acknowledged.
+- Inside each group, sort puts pending-seeded rows first, then
+  `addedAt desc`.
+- `NoteCard` "Added by X" pill renders amber + inline "Acknowledge"
+  button when unacked → `POST /:id/acknowledge` then local row
+  update. Once acked, the pill renders muted gray
+  *"Added by X · Acknowledged"* with no button.
+- `EntryModal` accepts `groups`, `customGroups`, `onGroupsChanged`.
+  New "Manage groups" inline panel (add `label + emoji`, delete with
+  409 surfaced inline). Edit mode never re-targets the row owner —
+  only add mode shows the "Add to whose watch list?" picker for core
+  team.
+
+### Frontend — InsightsWatchlist (`artifacts/client/src/components/InsightsWatchlist.tsx`)
+- `Row` extended with `previousBehaviorCount`, `previousIssDayCount`,
+  `isNewThisWindow`. Server-side, `/api/insights/watchlist` computes
+  `prevFrom`/`prevTo` (same length, immediately before current
+  window) and runs three additional grouped queries (PBIS notes,
+  support notes, ISS days) keyed by student. `isNewThisWindow` =
+  current window has any high/watch flag AND prev window had zero
+  behavior + zero ISS.
+- `WatchCard` renders a small amber "✨ New this period" badge in
+  the header next to the Spider button when `isNewThisWindow`.
+- `PillarCell` gained an optional `trend` prop. The Beh cell passes
+  `behaviorTrend(row)` which returns `{ arrow, delta }` when current
+  != previous; renders a tiny *"↑ N from prior"* / *"↓ N from prior"*
+  line under the pillar label and folds the same string into the
+  cell's `title` tooltip. Other pillars omit `trend` and look
+  unchanged.
+
+### Smoke
+- Acknowledge endpoint: wrong owner → 404, self-added → 400, owner
+  happy path flips `acknowledgedAt` and is idempotent. Verified via
+  a seeded `(staff 83, addedBy 1)` row.
+- Custom groups: create works, dup key returns 409, `DELETE`
+  blocked-when-in-use returns 409 (handled inline in the modal).
+- `/api/insights/watchlist`: confirmed `isNewThisWindow: true` +
+  populated `previousBehaviorCount` on the seeded BQ_ELA student.
+- Self-add path is unchanged — `addedBy: null` rows never hit the
+  ack code path or render the amber pill.
+
+### Post-review hardening (same day)
+Code review surfaced three real issues — fixed inline:
+1. **Email path could still 500 the create** — the group-label and
+   student-name lookups were `await`ed *before* the `void` send, so a
+   DB blip there would surface as a 500 on a row that was already
+   inserted. Wrapped the entire block (lookups + send) in a
+   self-contained `void (async () => { try { … } catch { warn } })()`
+   IIFE. Now the response always ships immediately and email failures
+   are logged once with no request-path side effect.
+2. **PATCH skipped the group-key allow-list** — the entries POST
+   validates against built-ins + caller's custom keys, but PATCH only
+   normalized the slug. Added the same `isAllowedGroupKey` check to
+   PATCH so a stale or hand-typed key can't land in the row and never
+   render in any tab.
+3. **Custom groups weren't school-scoped + delete had a TOCTOU
+   window** — `isAllowedGroupKey` and `GET /groups` filtered on
+   `staffId` only, so a staff member who switched active schools
+   could see/use the other school's groups. Both now also filter by
+   `schoolId = activeSchoolId(staff)`. Group `DELETE` now runs
+   inside `db.transaction` with `SELECT … FOR UPDATE` on the group
+   row so the count-then-delete window is bounded by the
+   transaction; not perfectly race-proof against a concurrent entry
+   insert (no FK between entries.group_key and groups.key) but the
+   window shrinks dramatically.

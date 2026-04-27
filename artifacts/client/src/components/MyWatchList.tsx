@@ -38,9 +38,23 @@ interface Entry {
   // behavior specialist / PBIS coord / SuperUser) added the entry on
   // this teacher's behalf. Null for self-added entries.
   addedBy: { id: number; displayName: string } | null;
+  // ISO timestamp when the OWNER clicked "Acknowledge" on an entry
+  // someone else seeded for them. Null when addedBy is null OR when
+  // the entry hasn't been acknowledged yet. Drives the
+  // pin-to-top-of-group sort + the muted-pill state.
+  acknowledgedAt: string | null;
   lastTouchBy: string | null;
   lastTouchWhat: string | null;
   lastTouchAt: string | null;
+}
+
+// Custom group as returned by the server (also used as the shape we
+// merge into the built-in groups list at render time).
+interface CustomGroup {
+  id: number;
+  key: string;
+  label: string;
+  emoji: string | null;
 }
 
 interface StudentLookup {
@@ -79,10 +93,11 @@ function isCoreTeamUser(u: CurrentUser | null | undefined): boolean {
   );
 }
 
-// Group definitions — visual + microcopy contract. Keys must be
-// lowercased to match what the server stores. Extend by adding to this
-// list (custom groups are a planned follow-up).
-const GROUPS: Array<{
+// Group definition shape. Built-ins are hardcoded below; custom
+// groups created by the teacher are mapped into this same shape at
+// render time (see customGroupToDef) so downstream rendering doesn't
+// need to know which is which.
+interface GroupDef {
   key: string;
   label: string;
   emoji: string;
@@ -91,7 +106,11 @@ const GROUPS: Array<{
   border: string;
   fg: string;
   noteBg: string;
-}> = [
+}
+
+// Built-in group set — shared across every teacher. Custom groups
+// extend this list at runtime.
+const BUILTIN_GROUPS: GroupDef[] = [
   {
     key: "reading",
     label: "Reading concerns",
@@ -134,14 +153,34 @@ const GROUPS: Array<{
   },
 ];
 
+// Custom groups don't carry styling. Map them onto a neutral slate
+// palette so they look distinct from the built-ins (which each have
+// their own tone) without forcing the teacher to pick colors.
+function customGroupToDef(g: CustomGroup): GroupDef {
+  return {
+    key: g.key,
+    label: g.label,
+    emoji: g.emoji && g.emoji.trim() ? g.emoji : "🏷️",
+    hint: "Your custom group.",
+    bg: "#f1f5f9",
+    border: "#cbd5e1",
+    fg: "#1f2937",
+    noteBg: "#f8fafc",
+  };
+}
+
 const QUICK_ACTIONS = [
   { what: "Touched base", emoji: "👋" },
   { what: "Called home", emoji: "📞" },
   { what: "Pulled aside", emoji: "🤝" },
 ] as const;
 
-function groupDef(key: string) {
-  return GROUPS.find((g) => g.key === key) ?? GROUPS[0];
+// Pick a group def out of a (built-ins + custom) merged list. Falls
+// back to the first built-in when the key isn't found — that should
+// only happen if a custom group was deleted while an entry still
+// referenced it (the server normally blocks this).
+function groupDefIn(groups: GroupDef[], key: string): GroupDef {
+  return groups.find((g) => g.key === key) ?? BUILTIN_GROUPS[0];
 }
 
 // "3 days ago" — short, human, never longer than ~6 chars.
@@ -185,7 +224,18 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
   const [editEntry, setEditEntry] = useState<Entry | null>(null);
   const [studentDirectory, setStudentDirectory] = useState<StudentLookup[]>([]);
   const [staffDirectory, setStaffDirectory] = useState<StaffLookup[]>([]);
+  const [customGroups, setCustomGroups] = useState<CustomGroup[]>([]);
   const isCore = isCoreTeamUser(currentUser);
+
+  // Built-ins first, then custom groups in alpha order. The whole
+  // component (group tabs, group buckets, the modal's group select)
+  // reads from this single merged list.
+  const mergedGroups = useMemo<GroupDef[]>(() => {
+    const customDefs = [...customGroups]
+      .sort((a, b) => a.label.localeCompare(b.label))
+      .map(customGroupToDef);
+    return [...BUILTIN_GROUPS, ...customDefs];
+  }, [customGroups]);
 
   async function reload() {
     setLoading(true);
@@ -202,8 +252,21 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
     }
   }
 
+  async function reloadGroups() {
+    try {
+      const r = await authFetch("/api/insights/my-watchlist/groups");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = (await r.json()) as { groups?: CustomGroup[] };
+      setCustomGroups(Array.isArray(data?.groups) ? data.groups : []);
+    } catch {
+      // Custom groups failing to load shouldn't break the page —
+      // just degrade gracefully to built-ins-only.
+    }
+  }
+
   useEffect(() => {
     reload();
+    reloadGroups();
   }, []);
 
   // Pull the student directory once for the add modal.
@@ -241,12 +304,19 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
 
   const groupCounts = useMemo(() => {
     const counts: Record<string, number> = { all: entries.length };
-    for (const g of GROUPS) counts[g.key] = 0;
+    for (const g of mergedGroups) counts[g.key] = 0;
     for (const e of entries) {
       counts[e.groupKey] = (counts[e.groupKey] ?? 0) + 1;
     }
     return counts;
-  }, [entries]);
+  }, [entries, mergedGroups]);
+
+  // Pending = seeded by someone else, not yet acknowledged. Drives the
+  // top-of-page banner and the unique distinct seeders count.
+  const pendingSeeded = useMemo(
+    () => entries.filter((e) => e.addedBy && !e.acknowledgedAt),
+    [entries],
+  );
 
   const visibleEntries = useMemo(
     () =>
@@ -257,17 +327,62 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
   );
 
   // Bucket the visible entries by group so we can render section
-  // headers in "all" view. In single-group view there's just one
-  // bucket.
+  // headers in "all" view. Within each bucket: pending-seeded first
+  // (the amber pill ones), then by addedAt desc — matches what the
+  // server already returns, but resorting client-side is cheap and
+  // makes the intent obvious if the server order ever changes.
   const grouped = useMemo(() => {
     const buckets: Record<string, Entry[]> = {};
     for (const e of visibleEntries) {
       if (!buckets[e.groupKey]) buckets[e.groupKey] = [];
       buckets[e.groupKey].push(e);
     }
-    return GROUPS.map((g) => ({ group: g, entries: buckets[g.key] ?? [] }))
+    for (const key of Object.keys(buckets)) {
+      buckets[key].sort((a, b) => {
+        const aPending = a.addedBy && !a.acknowledgedAt ? 1 : 0;
+        const bPending = b.addedBy && !b.acknowledgedAt ? 1 : 0;
+        if (aPending !== bPending) return bPending - aPending;
+        return new Date(b.addedAt).getTime() - new Date(a.addedAt).getTime();
+      });
+    }
+    return mergedGroups
+      .map((g) => ({ group: g, entries: buckets[g.key] ?? [] }))
       .filter((b) => b.entries.length > 0);
-  }, [visibleEntries]);
+  }, [visibleEntries, mergedGroups]);
+
+  // The pinned-to-top banner has its own scroll target so "Scroll
+  // down to review" actually lands on the first pending card.
+  const pendingScrollRef = useRef<HTMLDivElement | null>(null);
+  function scrollToFirstPending() {
+    pendingScrollRef.current?.scrollIntoView({
+      behavior: "smooth",
+      block: "start",
+    });
+  }
+
+  async function handleAcknowledge(entry: Entry) {
+    try {
+      const r = await authFetch(
+        `/api/insights/my-watchlist/${entry.id}/acknowledge`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const data = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${r.status}`);
+      }
+      // Local update keeps the card in place (it's still in this
+      // group, just unpinned). reload() would also work but is more
+      // janky for the user.
+      const ackTime = new Date().toISOString();
+      setEntries((cur) =>
+        cur.map((e) =>
+          e.id === entry.id ? { ...e, acknowledgedAt: ackTime } : e,
+        ),
+      );
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to acknowledge");
+    }
+  }
 
   async function handleQuickTouch(entry: Entry, what: string) {
     try {
@@ -441,6 +556,65 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
         </HowToSection>
       </HowToUseHelp>
 
+      {/* Pending-acknowledgement banner — only shown when a core team
+          member has seeded an entry that hasn't been acknowledged yet.
+          Distinct seeders are listed by display name (deduped); the
+          "Scroll down to review" button jumps to the first pending card. */}
+      {pendingSeeded.length > 0 && (
+        <div
+          role="status"
+          aria-live="polite"
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "0.6rem",
+            background: "#fffbeb",
+            border: "1px solid #fcd34d",
+            borderLeft: "4px solid #f59e0b",
+            borderRadius: 8,
+            padding: "0.6rem 0.8rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: "1.1rem" }}>
+            💡
+          </span>
+          <div style={{ flex: 1, fontSize: "0.85rem", color: "#78350f" }}>
+            <strong>
+              {pendingSeeded.length} student
+              {pendingSeeded.length === 1 ? " was" : "s were"} added to your
+              watch list
+            </strong>{" "}
+            by{" "}
+            {Array.from(
+              new Set(
+                pendingSeeded
+                  .map((e) => e.addedBy?.displayName)
+                  .filter((n): n is string => Boolean(n)),
+              ),
+            ).join(", ")}
+            . Review and acknowledge below.
+          </div>
+          <button
+            type="button"
+            onClick={scrollToFirstPending}
+            style={{
+              background: "#f59e0b",
+              color: "white",
+              border: "none",
+              borderRadius: 6,
+              padding: "0.35rem 0.7rem",
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: "0.8rem",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Scroll down to review
+          </button>
+        </div>
+      )}
+
       {/* Group tabs */}
       <div
         style={{
@@ -471,7 +645,7 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
         >
           All ({groupCounts.all})
         </button>
-        {GROUPS.map((g) => (
+        {mergedGroups.map((g) => (
           <button
             key={g.key}
             type="button"
@@ -560,8 +734,12 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
           No students in this group yet.
         </p>
       ) : (
-        grouped.map(({ group, entries: groupEntries }) => (
-          <div key={group.key} style={{ marginBottom: "1rem" }}>
+        grouped.map(({ group, entries: groupEntries }, bucketIdx) => (
+          <div
+            key={group.key}
+            ref={bucketIdx === 0 ? pendingScrollRef : undefined}
+            style={{ marginBottom: "1rem" }}
+          >
             {/* Group header — only visible in "All" view */}
             {activeGroup === "all" && (
               <div
@@ -617,6 +795,7 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
                   onTouch={(what) => handleQuickTouch(e, what)}
                   onEdit={() => setEditEntry(e)}
                   onRemove={() => handleRemove(e)}
+                  onAcknowledge={() => handleAcknowledge(e)}
                 />
               ))}
             </div>
@@ -631,6 +810,9 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
           staffDirectory={staffDirectory}
           allowTargetPicker={isCore}
           currentUserId={currentUser?.id ?? null}
+          groups={mergedGroups}
+          customGroups={customGroups}
+          onGroupsChanged={reloadGroups}
           onClose={() => setAddOpen(false)}
           onSaved={async () => {
             setAddOpen(false);
@@ -646,6 +828,9 @@ export default function MyWatchList({ onOpenStudent, currentUser }: Props) {
           staffDirectory={staffDirectory}
           allowTargetPicker={false}
           currentUserId={currentUser?.id ?? null}
+          groups={mergedGroups}
+          customGroups={customGroups}
+          onGroupsChanged={reloadGroups}
           onClose={() => setEditEntry(null)}
           onSaved={async () => {
             setEditEntry(null);
@@ -666,13 +851,15 @@ function NoteCard({
   onTouch,
   onEdit,
   onRemove,
+  onAcknowledge,
 }: {
   entry: Entry;
-  group: ReturnType<typeof groupDef>;
+  group: GroupDef;
   onOpen: () => void;
   onTouch: (what: string) => void;
   onEdit: () => void;
   onRemove: () => void;
+  onAcknowledge: () => void;
 }) {
   const lastTouchAgo = timeAgo(entry.lastTouchAt);
   const staleTouch =
@@ -750,26 +937,60 @@ function NoteCard({
 
       {/* "Added by X" badge — only present when a core-team member
           seeded the entry on this teacher's behalf. Self-added entries
-          omit this row entirely so the card stays uncluttered. */}
+          omit this row entirely so the card stays uncluttered.
+          Two visual states:
+            - unacknowledged → amber pill + inline "Acknowledge" button
+            - acknowledged   → muted slate pill, no button */}
       {entry.addedBy && (
         <div
           style={{
             display: "inline-flex",
             alignSelf: "flex-start",
             alignItems: "center",
-            gap: 4,
-            padding: "0.15rem 0.45rem",
-            background: "#fef3c7",
-            border: "1px solid #fcd34d",
+            gap: 6,
+            padding: "0.15rem 0.5rem 0.15rem 0.45rem",
+            background: entry.acknowledgedAt ? "#f1f5f9" : "#fef3c7",
+            border: `1px solid ${
+              entry.acknowledgedAt ? "#cbd5e1" : "#fcd34d"
+            }`,
             borderRadius: 999,
             fontSize: "0.7rem",
-            color: "#92400e",
+            color: entry.acknowledgedAt ? "#475569" : "#92400e",
             fontWeight: 600,
           }}
-          title={`Added by ${entry.addedBy.displayName}`}
+          title={
+            entry.acknowledgedAt
+              ? `Added by ${entry.addedBy.displayName} · Acknowledged ${timeAgo(entry.acknowledgedAt)}`
+              : `Added by ${entry.addedBy.displayName}`
+          }
         >
           <span aria-hidden="true">＋</span>
           Added by {entry.addedBy.displayName}
+          {entry.acknowledgedAt ? (
+            <span style={{ fontWeight: 500, opacity: 0.85 }}>
+              · Acknowledged
+            </span>
+          ) : (
+            <button
+              type="button"
+              onClick={onAcknowledge}
+              style={{
+                marginLeft: 4,
+                padding: "0.05rem 0.45rem",
+                background: "#92400e",
+                color: "white",
+                border: "none",
+                borderRadius: 999,
+                fontSize: "0.65rem",
+                fontWeight: 700,
+                cursor: "pointer",
+                lineHeight: 1.4,
+              }}
+              aria-label={`Acknowledge that ${entry.addedBy.displayName} added ${entry.firstName} ${entry.lastName} to your list`}
+            >
+              Acknowledge
+            </button>
+          )}
         </div>
       )}
 
@@ -945,6 +1166,9 @@ function EntryModal({
   staffDirectory,
   allowTargetPicker,
   currentUserId,
+  groups,
+  customGroups,
+  onGroupsChanged,
   onClose,
   onSaved,
 }: {
@@ -957,6 +1181,14 @@ function EntryModal({
   // teacher's list.
   allowTargetPicker: boolean;
   currentUserId: number | null;
+  // Built-ins + caller's custom groups, already merged.
+  groups: GroupDef[];
+  // Just the caller's custom groups — needed by the Manage Groups
+  // panel to show delete buttons (built-ins can't be deleted).
+  customGroups: CustomGroup[];
+  // Called after a custom group is added or deleted so the parent
+  // can re-fetch and rebuild the merged list.
+  onGroupsChanged: () => void | Promise<void>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
@@ -966,7 +1198,7 @@ function EntryModal({
   );
   const [studentQuery, setStudentQuery] = useState("");
   const [studentDropdownOpen, setStudentDropdownOpen] = useState(false);
-  const [groupKey, setGroupKey] = useState(entry?.groupKey ?? GROUPS[0].key);
+  const [groupKey, setGroupKey] = useState(entry?.groupKey ?? groups[0].key);
   const [note, setNote] = useState(entry?.note ?? "");
   const [followupText, setFollowupText] = useState(entry?.followupText ?? "");
   const [followupDue, setFollowupDue] = useState(entry?.followupDue ?? "");
@@ -975,6 +1207,68 @@ function EntryModal({
   // Target staff for the new entry. "" = self (the caller's own list).
   // Only meaningful in add mode when allowTargetPicker is true.
   const [targetStaffId, setTargetStaffId] = useState<string>("");
+  // Manage Groups inline panel state.
+  const [manageOpen, setManageOpen] = useState(false);
+  const [newGroupLabel, setNewGroupLabel] = useState("");
+  const [newGroupEmoji, setNewGroupEmoji] = useState("");
+  const [groupOpErr, setGroupOpErr] = useState("");
+  const [groupOpBusy, setGroupOpBusy] = useState(false);
+
+  async function handleAddGroup() {
+    const label = newGroupLabel.trim();
+    if (!label) {
+      setGroupOpErr("Give the group a name.");
+      return;
+    }
+    setGroupOpBusy(true);
+    setGroupOpErr("");
+    try {
+      const r = await authFetch("/api/insights/my-watchlist/groups", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label,
+          emoji: newGroupEmoji.trim() || null,
+        }),
+      });
+      if (!r.ok) {
+        const data = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${r.status}`);
+      }
+      setNewGroupLabel("");
+      setNewGroupEmoji("");
+      await onGroupsChanged();
+    } catch (e) {
+      setGroupOpErr(e instanceof Error ? e.message : "Failed to add group");
+    } finally {
+      setGroupOpBusy(false);
+    }
+  }
+
+  async function handleDeleteGroup(g: CustomGroup) {
+    setGroupOpBusy(true);
+    setGroupOpErr("");
+    try {
+      const r = await authFetch(
+        `/api/insights/my-watchlist/groups/${g.id}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) {
+        const data = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(data.error ?? `HTTP ${r.status}`);
+      }
+      // If the modal currently has this group selected, fall back to
+      // the first built-in so the form stays valid.
+      if (groupKey === g.key) {
+        setGroupKey(BUILTIN_GROUPS[0].key);
+      }
+      await onGroupsChanged();
+    } catch (e) {
+      setGroupOpErr(e instanceof Error ? e.message : "Failed to delete group");
+    } finally {
+      setGroupOpBusy(false);
+    }
+  }
   const studentBoxRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -1330,21 +1624,207 @@ function EntryModal({
               background: "white",
             }}
           >
-            {GROUPS.map((g) => (
+            {groups.map((g) => (
               <option key={g.key} value={g.key}>
                 {g.emoji} {g.label}
               </option>
             ))}
           </select>
-          <p
+          <div
             style={{
-              margin: "0.25rem 0 0",
-              fontSize: "0.72rem",
-              color: "#6b7280",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              marginTop: "0.25rem",
             }}
           >
-            {groupDef(groupKey).hint}
-          </p>
+            <p
+              style={{
+                margin: 0,
+                fontSize: "0.72rem",
+                color: "#6b7280",
+                flex: 1,
+              }}
+            >
+              {groupDefIn(groups, groupKey).hint}
+            </p>
+            <button
+              type="button"
+              onClick={() => setManageOpen((v) => !v)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#0d9488",
+                cursor: "pointer",
+                fontSize: "0.72rem",
+                fontWeight: 600,
+                padding: 0,
+                whiteSpace: "nowrap",
+              }}
+            >
+              {manageOpen ? "Hide groups" : "Manage groups"}
+            </button>
+          </div>
+
+          {manageOpen && (
+            <div
+              style={{
+                marginTop: "0.5rem",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 8,
+                padding: "0.6rem 0.7rem",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: "0.72rem",
+                  fontWeight: 600,
+                  color: "#475569",
+                  marginBottom: "0.4rem",
+                }}
+              >
+                Your custom groups
+              </div>
+              {customGroups.length === 0 ? (
+                <p
+                  style={{
+                    margin: "0 0 0.5rem",
+                    fontSize: "0.72rem",
+                    color: "#6b7280",
+                    fontStyle: "italic",
+                  }}
+                >
+                  No custom groups yet — built-ins (Reading, Behavior,
+                  Family, Shine) are always available.
+                </p>
+              ) : (
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: "0 0 0.5rem",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: 4,
+                  }}
+                >
+                  {customGroups.map((g) => (
+                    <li
+                      key={g.id}
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.4rem",
+                        fontSize: "0.78rem",
+                        color: "#1f2937",
+                      }}
+                    >
+                      <span aria-hidden="true">{g.emoji ?? "🏷️"}</span>
+                      <span style={{ flex: 1 }}>{g.label}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleDeleteGroup(g)}
+                        disabled={groupOpBusy}
+                        style={{
+                          background: "transparent",
+                          border: "1px solid #fecaca",
+                          color: "#991b1b",
+                          borderRadius: 6,
+                          padding: "0.1rem 0.45rem",
+                          fontSize: "0.7rem",
+                          fontWeight: 600,
+                          cursor: groupOpBusy ? "default" : "pointer",
+                        }}
+                      >
+                        Delete
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <div
+                style={{
+                  display: "flex",
+                  gap: "0.4rem",
+                  alignItems: "center",
+                  marginTop: "0.25rem",
+                }}
+              >
+                <input
+                  type="text"
+                  value={newGroupLabel}
+                  onChange={(e) => setNewGroupLabel(e.target.value)}
+                  placeholder="New group name"
+                  aria-label="New group name"
+                  maxLength={60}
+                  style={{
+                    flex: 1,
+                    padding: "0.3rem 0.45rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    fontSize: "0.8rem",
+                  }}
+                />
+                <input
+                  type="text"
+                  value={newGroupEmoji}
+                  onChange={(e) => setNewGroupEmoji(e.target.value)}
+                  placeholder="🏷️"
+                  aria-label="Optional emoji"
+                  maxLength={4}
+                  style={{
+                    width: 50,
+                    padding: "0.3rem 0.45rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    fontSize: "0.9rem",
+                    textAlign: "center",
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={handleAddGroup}
+                  disabled={groupOpBusy || !newGroupLabel.trim()}
+                  style={{
+                    padding: "0.3rem 0.7rem",
+                    background:
+                      groupOpBusy || !newGroupLabel.trim()
+                        ? "#9ca3af"
+                        : "#0d9488",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 6,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    cursor:
+                      groupOpBusy || !newGroupLabel.trim()
+                        ? "default"
+                        : "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  + Add
+                </button>
+              </div>
+
+              {groupOpErr && (
+                <div
+                  style={{
+                    marginTop: "0.4rem",
+                    background: "#fee2e2",
+                    color: "#991b1b",
+                    padding: "0.3rem 0.5rem",
+                    borderRadius: 6,
+                    fontSize: "0.75rem",
+                  }}
+                >
+                  {groupOpErr}
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         <div style={{ marginBottom: "0.75rem" }}>

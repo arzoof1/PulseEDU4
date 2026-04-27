@@ -54,6 +54,13 @@ interface Row {
   behaviorCount: number;
   tardyCount: number;
   issDayCount: number;
+  // Counts from the immediately-prior window of the same length —
+  // used to render the "↑ N from prior" trend microcopy and the
+  // "✨ New this period" badge. Always present; the server defaults
+  // to 0 when no rows existed for that student in the prev window.
+  previousBehaviorCount: number;
+  previousIssDayCount: number;
+  isNewThisWindow: boolean;
   topRiskFlag:
     | { code: string; severity: "info" | "watch" | "high"; label: string }
     | null;
@@ -1494,6 +1501,28 @@ function WatchCard({
               Grade {row.grade} · {row.studentId}
             </div>
           </div>
+          {row.isNewThisWindow && (
+            <span
+              title="No behavior or ISS in the prior window — this is a new appearance on the watch list."
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 3,
+                padding: "2px 8px",
+                borderRadius: 999,
+                border: "1px solid #fde68a",
+                background: "#fffbeb",
+                color: "#92400e",
+                fontSize: 11,
+                fontWeight: 700,
+                lineHeight: 1.2,
+                flexShrink: 0,
+              }}
+            >
+              <span aria-hidden="true">✨</span>
+              <span>New this period</span>
+            </span>
+          )}
           {onSpider && (
             <button
               type="button"
@@ -1565,8 +1594,15 @@ function WatchCard({
           }}
           aria-label="Pillar status"
         >
-          <PillarCell label="Acad" status={pillars.academic} />
-          <PillarCell label="Beh" status={pillars.behavior} />
+          <PillarCell
+            label="Acad"
+            status={pillars.academic}
+          />
+          <PillarCell
+            label="Beh"
+            status={pillars.behavior}
+            trend={behaviorTrend(row)}
+          />
           <PillarCell label="Att" status={pillars.attendance} />
           <PillarCell label="MTSS" status={pillars.mtss} />
         </div>
@@ -1575,12 +1611,28 @@ function WatchCard({
   );
 }
 
+// "↑ 2 from prior" / "↓ 1 from prior" microcopy under the Beh pillar.
+// Returns null when the count is unchanged so the cell stays compact.
+function behaviorTrend(r: Row): {
+  arrow: "up" | "down";
+  delta: number;
+} | null {
+  const delta = r.behaviorCount - r.previousBehaviorCount;
+  if (delta === 0) return null;
+  return { arrow: delta > 0 ? "up" : "down", delta: Math.abs(delta) };
+}
+
 function PillarCell({
   label,
   status,
+  trend,
 }: {
   label: string;
   status: PillarStatus;
+  // Optional behavior trend microcopy. Currently only the Beh pillar
+  // passes a value; other pillars omit it and render the standard
+  // single-line cell.
+  trend?: { arrow: "up" | "down"; delta: number } | null;
 }) {
   const t = pillarTone(status);
   return (
@@ -1598,9 +1650,27 @@ function PillarCell({
         letterSpacing: 0.3,
         lineHeight: 1.2,
       }}
-      title={`${label}: ${t.label}`}
+      title={
+        trend
+          ? `${label}: ${t.label} · ${trend.arrow === "up" ? "↑" : "↓"} ${trend.delta} from prior window`
+          : `${label}: ${t.label}`
+      }
     >
       {label}
+      {trend && (
+        <div
+          style={{
+            fontSize: "0.6rem",
+            fontWeight: 600,
+            textTransform: "none",
+            letterSpacing: 0,
+            opacity: 0.85,
+            marginTop: 1,
+          }}
+        >
+          {trend.arrow === "up" ? "↑" : "↓"} {trend.delta} from prior
+        </div>
+      )}
     </div>
   );
 }

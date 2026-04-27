@@ -48,3 +48,4 @@ export * from "./studentFastScores";
 export * from "./parents";
 export * from "./houses";
 export * from "./teacherWatchlistEntries";
+export * from "./teacherWatchlistGroups";
