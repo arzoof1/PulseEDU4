@@ -33,6 +33,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     isSocialWorker: row.isSocialWorker,
     capStaffRoles: row.capStaffRoles,
     capManageRoles: row.capManageRoles,
+    capManageDisplays: row.capManageDisplays,
     defaultRoom: row.defaultRoom,
   };
 }

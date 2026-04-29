@@ -3958,3 +3958,26 @@ Code review surfaced three real issues — fixed inline:
    transaction; not perfectly race-proof against a concurrent entry
    insert (no FK between entries.group_key and groups.key) but the
    window shrinks dramatically.
+
+## Displays / digital signage (Apr 28, 2026)
+
+Built per-school playlists that drive lobby/cafeteria TVs. Capability gate
+mirrors PBIS: core team (SuperUser, Admin, MTSS, BS, Dean) gets it for free,
+plus any teacher granted `cap_manage_displays` from Staff & Roles → Manage
+Displays. Schema: `display_playlists` (one per named playlist) +
+`display_playlist_items` (PNG/MP4/WAV/PDF asset rows; `kind` derived from MIME
+on upload). Reused the existing object-storage presigned-PUT flow for uploads.
+Public route `/display/:id` is short-circuited at the very top of `App.tsx`
+(before the auth redirect) so a smart TV opens the URL with no login. The
+public API surface is two narrowly-scoped endpoints: `GET /api/displays/public/playlists/:id`
+returns metadata + enabled items + (when `show_pbis_house_page` is on) the
+house standings & recent shoutouts; `GET /api/displays/public/media/:itemId`
+streams the asset only after verifying the itemId exists in the items table.
+Cycler rules: PNG → image for `durationSeconds`; MP4 → video, advance on
+`onEnded`; WAV → autoplay audio over a colored card, advance on `onEnded`;
+PDF → render each page with `pdfjs-dist`, advance per page using
+`durationSeconds`. Editor lives at School Admin → Displays with name, default
+duration, PBIS toggle, per-item duration override + enable + up/down reorder
++ delete, and an embedded preview iframe of the public URL. Loop reloads
+playlist meta every 60s to pick up edits. v1 deliberately omits scheduling,
+overlays/transitions, and share-tokens.

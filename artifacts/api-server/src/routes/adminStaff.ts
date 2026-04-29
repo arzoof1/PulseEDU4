@@ -91,6 +91,7 @@ const CAP_FLAGS = [
   "capManageLocations",
   "capStaffRoles",
   "capManageRoles",
+  "capManageDisplays",
 ] as const;
 type CapFlag = (typeof CAP_FLAGS)[number];
 
@@ -145,6 +146,7 @@ const STAFF_SELECT = {
   capManageLocations: staffTable.capManageLocations,
   capStaffRoles: staffTable.capStaffRoles,
   capManageRoles: staffTable.capManageRoles,
+  capManageDisplays: staffTable.capManageDisplays,
   defaultRoom: staffTable.defaultRoom,
   schoolId: staffTable.schoolId,
 } as const;

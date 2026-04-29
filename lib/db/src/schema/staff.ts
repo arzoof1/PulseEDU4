@@ -82,6 +82,13 @@ export const staffTable = pgTable("staff", {
   capManageLocations: boolean("cap_manage_locations").notNull().default(false),
   capStaffRoles: boolean("cap_staff_roles").notNull().default(false),
   capManageRoles: boolean("cap_manage_roles").notNull().default(false),
+  // Per-teacher grant for the digital-signage / Displays feature.
+  // Core team (admin / MTSS / behavior specialist / dean / SuperUser)
+  // gets it implicitly; this flag lets an admin extend the
+  // capability to individual teachers who run a classroom TV.
+  capManageDisplays: boolean("cap_manage_displays")
+    .notNull()
+    .default(false),
 
   // Optional home/default classroom for this staff member. Stored as
   // free text (the location name) so historical records remain intact if

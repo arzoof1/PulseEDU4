@@ -1,0 +1,824 @@
+// Displays / digital-signage admin UI.
+//
+// Two view modes inside one component (driven by `editing`):
+//   1. List view: cards for every playlist visible to the caller,
+//      plus a "+ New playlist" affordance.
+//   2. Editor view: pick a playlist → name / default duration /
+//      PBIS-toggle, an item table with per-item duration override,
+//      enable/disable, drag-reorder via up/down arrows, file upload,
+//      and a small live preview iframe of /display/<id>.
+//
+// Capability gating happens at the App.tsx nav level — by the time
+// this component renders, the caller is already authorized to manage
+// at least one playlist. The server enforces the same gate for every
+// write so a teacher who manually visits this page can't escalate.
+
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { authFetch } from "../lib/authToken";
+
+interface PlaylistRow {
+  id: number;
+  schoolId: number;
+  ownerStaffId: number | null;
+  ownerDisplayName: string | null;
+  name: string;
+  defaultDurationSeconds: number;
+  showPbisHousePage: boolean;
+  createdAt: string;
+  updatedAt: string;
+  itemCount: number;
+}
+
+interface PlaylistItem {
+  id: number;
+  playlistId: number;
+  orderIndex: number;
+  kind: "image" | "video" | "audio" | "pdf";
+  objectPath: string;
+  originalFilename: string;
+  mimeType: string;
+  sizeBytes: number;
+  durationSeconds: number | null;
+  enabled: boolean;
+  createdAt: string;
+}
+
+interface PlaylistDetail {
+  playlist: {
+    id: number;
+    schoolId: number;
+    ownerStaffId: number | null;
+    name: string;
+    defaultDurationSeconds: number;
+    showPbisHousePage: boolean;
+    createdAt: string;
+    updatedAt: string;
+  };
+  items: PlaylistItem[];
+}
+
+const card: CSSProperties = {
+  background: "white",
+  border: "1px solid #e5e7eb",
+  borderRadius: 12,
+  padding: 16,
+  boxShadow: "0 1px 2px rgba(0,0,0,0.04)",
+};
+
+const btn: CSSProperties = {
+  border: "1px solid #d1d5db",
+  background: "white",
+  borderRadius: 8,
+  padding: "6px 12px",
+  cursor: "pointer",
+  fontSize: 14,
+};
+
+const btnPrimary: CSSProperties = {
+  ...btn,
+  background: "#2563eb",
+  color: "white",
+  borderColor: "#2563eb",
+};
+
+const btnDanger: CSSProperties = {
+  ...btn,
+  background: "white",
+  color: "#b91c1c",
+  borderColor: "#fca5a5",
+};
+
+const inputStyle: CSSProperties = {
+  border: "1px solid #d1d5db",
+  borderRadius: 8,
+  padding: "6px 10px",
+  fontSize: 14,
+  background: "white",
+};
+
+function kindIcon(kind: PlaylistItem["kind"]): string {
+  switch (kind) {
+    case "image":
+      return "🖼️";
+    case "video":
+      return "🎬";
+    case "audio":
+      return "🔊";
+    case "pdf":
+      return "📄";
+  }
+}
+
+function publicUrlFor(playlistId: number): string {
+  return `${window.location.origin}/display/${playlistId}`;
+}
+
+export default function Displays() {
+  const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  async function refreshList() {
+    setLoading(true);
+    try {
+      const r = await authFetch("/api/displays/playlists");
+      if (!r.ok) throw new Error("Failed to load");
+      const j = (await r.json()) as { playlists: PlaylistRow[] };
+      setPlaylists(j.playlists ?? []);
+      setError(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refreshList();
+  }, []);
+
+  async function createPlaylist() {
+    const name = window.prompt("New playlist name (e.g. 'Lobby TV'):");
+    if (!name || !name.trim()) return;
+    try {
+      const r = await authFetch("/api/displays/playlists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          defaultDurationSeconds: 10,
+          showPbisHousePage: false,
+        }),
+      });
+      const j = (await r.json()) as
+        | { playlist: PlaylistRow }
+        | { error: string };
+      if (!r.ok || "error" in j) {
+        throw new Error(("error" in j && j.error) || "Failed");
+      }
+      await refreshList();
+      setEditingId(j.playlist.id);
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to create");
+    }
+  }
+
+  async function deletePlaylist(p: PlaylistRow) {
+    if (
+      !window.confirm(
+        `Delete "${p.name}"? This removes the playlist and any uploaded items.`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const r = await authFetch(`/api/displays/playlists/${p.id}`, {
+        method: "DELETE",
+      });
+      if (!r.ok) throw new Error("Failed");
+      await refreshList();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to delete");
+    }
+  }
+
+  if (editingId !== null) {
+    return (
+      <PlaylistEditor
+        playlistId={editingId}
+        onBack={async () => {
+          setEditingId(null);
+          await refreshList();
+        }}
+      />
+    );
+  }
+
+  return (
+    <div style={{ padding: 16, maxWidth: 1100, margin: "0 auto" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 16,
+        }}
+      >
+        <div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, margin: 0 }}>Displays</h1>
+          <div style={{ color: "#6b7280", marginTop: 4, fontSize: 14 }}>
+            Build a slideshow for any TV in the building. Open the public link
+            on a smart TV's browser — no login required on the TV.
+          </div>
+        </div>
+        <button style={btnPrimary} onClick={() => void createPlaylist()}>
+          + New playlist
+        </button>
+      </div>
+
+      {error && (
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            color: "#b91c1c",
+            borderRadius: 8,
+            padding: 10,
+            marginBottom: 12,
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {loading ? (
+        <div style={{ color: "#6b7280" }}>Loading…</div>
+      ) : playlists.length === 0 ? (
+        <div style={{ ...card, textAlign: "center", color: "#6b7280" }}>
+          No playlists yet. Click "+ New playlist" to create your first one.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))",
+            gap: 12,
+          }}
+        >
+          {playlists.map((p) => (
+            <div key={p.id} style={card}>
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "flex-start",
+                }}
+              >
+                <div style={{ minWidth: 0, flex: 1 }}>
+                  <div
+                    style={{
+                      fontSize: 16,
+                      fontWeight: 600,
+                      whiteSpace: "nowrap",
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                    }}
+                    title={p.name}
+                  >
+                    {p.name}
+                  </div>
+                  <div
+                    style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}
+                  >
+                    {p.itemCount} item{p.itemCount === 1 ? "" : "s"} ·{" "}
+                    {p.defaultDurationSeconds}s default
+                    {p.showPbisHousePage ? " · 🏠 House page" : ""}
+                  </div>
+                  <div
+                    style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}
+                  >
+                    Owner:{" "}
+                    {p.ownerDisplayName ?? (
+                      <span style={{ fontStyle: "italic" }}>
+                        Whole school
+                      </span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                <button style={btn} onClick={() => setEditingId(p.id)}>
+                  Edit
+                </button>
+                <a
+                  href={publicUrlFor(p.id)}
+                  target="_blank"
+                  rel="noreferrer"
+                  style={{ ...btn, textDecoration: "none", color: "#111827" }}
+                >
+                  Open
+                </a>
+                <button
+                  style={btnDanger}
+                  onClick={() => void deletePlaylist(p)}
+                >
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===================================================================
+// Editor
+// ===================================================================
+
+function PlaylistEditor({
+  playlistId,
+  onBack,
+}: {
+  playlistId: number;
+  onBack: () => void | Promise<void>;
+}) {
+  const [detail, setDetail] = useState<PlaylistDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [uploading, setUploading] = useState(false);
+  // Bumped on every edit so the preview iframe re-fetches the
+  // playlist (it has its own poll, but bumping forces an immediate
+  // refresh so admins see edits land instantly).
+  const [previewNonce, setPreviewNonce] = useState(0);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const r = await authFetch(`/api/displays/playlists/${playlistId}`);
+      if (!r.ok) throw new Error("Failed to load");
+      const j = (await r.json()) as PlaylistDetail;
+      setDetail(j);
+      setError(null);
+      setPreviewNonce((n) => n + 1);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playlistId]);
+
+  async function patchPlaylist(update: {
+    name?: string;
+    defaultDurationSeconds?: number;
+    showPbisHousePage?: boolean;
+    itemOrder?: number[];
+  }) {
+    try {
+      const r = await authFetch(`/api/displays/playlists/${playlistId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(update),
+      });
+      const j = (await r.json()) as
+        | { playlist: PlaylistDetail["playlist"] }
+        | { error: string };
+      if (!r.ok || "error" in j) {
+        throw new Error(("error" in j && j.error) || "Failed");
+      }
+      await refresh();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to update");
+    }
+  }
+
+  async function patchItem(
+    itemId: number,
+    update: { durationSeconds?: number | null; enabled?: boolean },
+  ) {
+    try {
+      const r = await authFetch(
+        `/api/displays/playlists/${playlistId}/items/${itemId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(update),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(j?.error ?? "Failed");
+      }
+      await refresh();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed");
+    }
+  }
+
+  async function deleteItem(item: PlaylistItem) {
+    if (!window.confirm(`Remove "${item.originalFilename}" from the playlist?`)) {
+      return;
+    }
+    try {
+      const r = await authFetch(
+        `/api/displays/playlists/${playlistId}/items/${item.id}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) throw new Error("Failed");
+      await refresh();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed");
+    }
+  }
+
+  async function moveItem(idx: number, dir: -1 | 1) {
+    if (!detail) return;
+    const items = [...detail.items];
+    const target = idx + dir;
+    if (target < 0 || target >= items.length) return;
+    const tmp = items[idx];
+    items[idx] = items[target];
+    items[target] = tmp;
+    await patchPlaylist({ itemOrder: items.map((i) => i.id) });
+  }
+
+  async function handleUpload(file: File) {
+    setUploading(true);
+    try {
+      // Step 1: ask the server for a presigned PUT URL.
+      const r1 = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const j1 = (await r1.json()) as
+        | { uploadURL: string; objectPath?: string }
+        | { error: string };
+      if (!r1.ok || "error" in j1) {
+        throw new Error(("error" in j1 && j1.error) || "Upload setup failed");
+      }
+      // Server returns the signed URL; the path the API expects back
+      // when we register the item is /objects/<gcs object id>. We
+      // derive it from the signed URL's pathname tail.
+      const u = new URL(j1.uploadURL);
+      // GCS path looks like /<bucket>/.private/uploads/<id>; we want
+      // /objects/uploads/<id> which is what the auth-gated GET maps
+      // to. The storage skill / route stores under the same prefix.
+      const tail = u.pathname.split("/.private/")[1] ?? "";
+      if (!tail) throw new Error("Could not parse upload path");
+      const objectPath = `/objects/${tail}`;
+
+      // Step 2: PUT the file body.
+      const r2 = await fetch(j1.uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!r2.ok) throw new Error(`Upload failed (${r2.status})`);
+
+      // Step 3: register the item.
+      const r3 = await authFetch(
+        `/api/displays/playlists/${playlistId}/items`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            objectPath,
+            originalFilename: file.name,
+            mimeType: file.type || "application/octet-stream",
+            sizeBytes: file.size,
+          }),
+        },
+      );
+      const j3 = (await r3.json()) as
+        | { item: PlaylistItem }
+        | { error: string };
+      if (!r3.ok || "error" in j3) {
+        throw new Error(("error" in j3 && j3.error) || "Failed to add item");
+      }
+      await refresh();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  }
+
+  const publicUrl = useMemo(() => publicUrlFor(playlistId), [playlistId]);
+
+  if (loading) {
+    return (
+      <div style={{ padding: 16 }}>
+        <button style={btn} onClick={() => void onBack()}>
+          ← Back
+        </button>
+        <div style={{ marginTop: 16, color: "#6b7280" }}>Loading…</div>
+      </div>
+    );
+  }
+  if (!detail) {
+    return (
+      <div style={{ padding: 16 }}>
+        <button style={btn} onClick={() => void onBack()}>
+          ← Back
+        </button>
+        <div style={{ marginTop: 16, color: "#b91c1c" }}>
+          {error ?? "Playlist not found"}
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ padding: 16, maxWidth: 1200, margin: "0 auto" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: 16,
+        }}
+      >
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <button style={btn} onClick={() => void onBack()}>
+            ← Back
+          </button>
+          <h1 style={{ fontSize: 22, fontWeight: 700, margin: 0 }}>
+            {detail.playlist.name}
+          </h1>
+        </div>
+        <a
+          href={publicUrl}
+          target="_blank"
+          rel="noreferrer"
+          style={{ ...btnPrimary, textDecoration: "none" }}
+        >
+          Open public URL ↗
+        </a>
+      </div>
+
+      {/* Settings card + preview side-by-side */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1fr 360px",
+          gap: 16,
+          marginBottom: 16,
+        }}
+      >
+        <div style={card}>
+          <div style={{ display: "grid", gap: 12 }}>
+            <label style={{ display: "block" }}>
+              <div
+                style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}
+              >
+                Name
+              </div>
+              <input
+                style={{ ...inputStyle, width: "100%" }}
+                defaultValue={detail.playlist.name}
+                onBlur={(e) => {
+                  const v = e.currentTarget.value.trim();
+                  if (v && v !== detail.playlist.name) {
+                    void patchPlaylist({ name: v });
+                  }
+                }}
+              />
+            </label>
+            <label style={{ display: "block", maxWidth: 200 }}>
+              <div
+                style={{ fontSize: 13, fontWeight: 600, marginBottom: 4 }}
+              >
+                Default duration (seconds)
+              </div>
+              <input
+                type="number"
+                min={2}
+                max={600}
+                style={{ ...inputStyle, width: "100%" }}
+                defaultValue={detail.playlist.defaultDurationSeconds}
+                onBlur={(e) => {
+                  const n = Number.parseInt(e.currentTarget.value, 10);
+                  if (
+                    Number.isFinite(n) &&
+                    n !== detail.playlist.defaultDurationSeconds
+                  ) {
+                    void patchPlaylist({ defaultDurationSeconds: n });
+                  }
+                }}
+              />
+              <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                Used for images and PDF pages when an item doesn't override
+                it. Videos and audio always play to their natural end.
+              </div>
+            </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={detail.playlist.showPbisHousePage}
+                onChange={(e) =>
+                  void patchPlaylist({
+                    showPbisHousePage: e.currentTarget.checked,
+                  })
+                }
+              />
+              <span style={{ fontSize: 14 }}>
+                Show PBIS Houses slide each loop
+              </span>
+            </label>
+          </div>
+        </div>
+
+        <div style={card}>
+          <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
+            Live preview
+          </div>
+          <div
+            style={{
+              background: "black",
+              borderRadius: 8,
+              overflow: "hidden",
+              aspectRatio: "16 / 9",
+            }}
+          >
+            <iframe
+              key={previewNonce}
+              src={`/display/${playlistId}?preview=1`}
+              title="Display preview"
+              style={{
+                width: "100%",
+                height: "100%",
+                border: 0,
+                display: "block",
+              }}
+            />
+          </div>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 6 }}>
+            Shareable link:{" "}
+            <code style={{ fontSize: 11 }}>{publicUrl}</code>
+          </div>
+        </div>
+      </div>
+
+      {/* Items table */}
+      <div style={card}>
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 12,
+          }}
+        >
+          <div style={{ fontSize: 16, fontWeight: 600 }}>
+            Items ({detail.items.length})
+          </div>
+          <div>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*,video/mp4,audio/wav,audio/mpeg,application/pdf"
+              style={{ display: "none" }}
+              onChange={(e) => {
+                const f = e.currentTarget.files?.[0];
+                if (f) void handleUpload(f);
+              }}
+            />
+            <button
+              style={btnPrimary}
+              disabled={uploading}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              {uploading ? "Uploading…" : "+ Upload file"}
+            </button>
+          </div>
+        </div>
+
+        {detail.items.length === 0 ? (
+          <div style={{ color: "#6b7280", textAlign: "center", padding: 24 }}>
+            No items yet. Upload a PNG, MP4, WAV, or PDF to get started.
+          </div>
+        ) : (
+          <table
+            style={{
+              width: "100%",
+              borderCollapse: "collapse",
+              fontSize: 14,
+            }}
+          >
+            <thead>
+              <tr style={{ textAlign: "left", color: "#6b7280" }}>
+                <th style={{ padding: "8px 6px", width: 40 }}>#</th>
+                <th style={{ padding: "8px 6px", width: 40 }}></th>
+                <th style={{ padding: "8px 6px" }}>File</th>
+                <th style={{ padding: "8px 6px", width: 140 }}>
+                  Duration (s)
+                </th>
+                <th style={{ padding: "8px 6px", width: 90 }}>Enabled</th>
+                <th style={{ padding: "8px 6px", width: 110 }}>Reorder</th>
+                <th style={{ padding: "8px 6px", width: 70 }}></th>
+              </tr>
+            </thead>
+            <tbody>
+              {detail.items.map((it, idx) => (
+                <tr
+                  key={it.id}
+                  style={{
+                    borderTop: "1px solid #e5e7eb",
+                    opacity: it.enabled ? 1 : 0.55,
+                  }}
+                >
+                  <td style={{ padding: "8px 6px", color: "#6b7280" }}>
+                    {idx + 1}
+                  </td>
+                  <td
+                    style={{ padding: "8px 6px", fontSize: 20, lineHeight: 1 }}
+                  >
+                    {kindIcon(it.kind)}
+                  </td>
+                  <td
+                    style={{
+                      padding: "8px 6px",
+                      maxWidth: 320,
+                      overflow: "hidden",
+                      textOverflow: "ellipsis",
+                      whiteSpace: "nowrap",
+                    }}
+                    title={it.originalFilename}
+                  >
+                    {it.originalFilename}
+                    <div style={{ fontSize: 11, color: "#9ca3af" }}>
+                      {it.mimeType}
+                    </div>
+                  </td>
+                  <td style={{ padding: "8px 6px" }}>
+                    {it.kind === "video" || it.kind === "audio" ? (
+                      <span style={{ color: "#9ca3af", fontSize: 12 }}>
+                        plays to end
+                      </span>
+                    ) : (
+                      <input
+                        type="number"
+                        min={2}
+                        max={600}
+                        placeholder={`(default ${detail.playlist.defaultDurationSeconds})`}
+                        defaultValue={it.durationSeconds ?? ""}
+                        style={{ ...inputStyle, width: 110 }}
+                        onBlur={(e) => {
+                          const raw = e.currentTarget.value.trim();
+                          if (raw === "") {
+                            if (it.durationSeconds !== null) {
+                              void patchItem(it.id, { durationSeconds: null });
+                            }
+                            return;
+                          }
+                          const n = Number.parseInt(raw, 10);
+                          if (
+                            Number.isFinite(n) &&
+                            n !== it.durationSeconds
+                          ) {
+                            void patchItem(it.id, { durationSeconds: n });
+                          }
+                        }}
+                      />
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 6px" }}>
+                    <input
+                      type="checkbox"
+                      checked={it.enabled}
+                      onChange={(e) =>
+                        void patchItem(it.id, {
+                          enabled: e.currentTarget.checked,
+                        })
+                      }
+                    />
+                  </td>
+                  <td style={{ padding: "8px 6px" }}>
+                    <button
+                      style={{ ...btn, padding: "2px 8px", marginRight: 4 }}
+                      disabled={idx === 0}
+                      onClick={() => void moveItem(idx, -1)}
+                      aria-label="Move up"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      style={{ ...btn, padding: "2px 8px" }}
+                      disabled={idx === detail.items.length - 1}
+                      onClick={() => void moveItem(idx, 1)}
+                      aria-label="Move down"
+                    >
+                      ↓
+                    </button>
+                  </td>
+                  <td style={{ padding: "8px 6px", textAlign: "right" }}>
+                    <button
+                      style={btnDanger}
+                      onClick={() => void deleteItem(it)}
+                    >
+                      Delete
+                    </button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  );
+}

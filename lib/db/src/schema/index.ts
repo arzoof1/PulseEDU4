@@ -49,3 +49,5 @@ export * from "./parents";
 export * from "./houses";
 export * from "./teacherWatchlistEntries";
 export * from "./teacherWatchlistGroups";
+export * from "./displayPlaylists";
+export * from "./displayPlaylistItems";

@@ -1,0 +1,791 @@
+// Digital-signage / "Displays" feature.
+//
+// Two audiences:
+//   - Authenticated admins / core team / display-capable teachers,
+//     who CRUD playlists + items.
+//   - Smart TVs / hallway kiosks, which open the *public* endpoints
+//     with no auth header at all and just want the cycler to work.
+//
+// Capability gate for editing:
+//   isSuperUser || isAdmin || isMtssCoordinator
+//   || isBehaviorSpecialist || isDean || capManageDisplays
+//
+// Visibility for editing:
+//   - Core team can see/edit every playlist at their school.
+//   - A capability-only teacher can only see/edit playlists they own
+//     (owner_staff_id = staff.id).
+//
+// Public endpoints (`/api/displays/public/...`) are intentionally
+// unauthenticated. The media endpoint scopes the auth bypass to
+// objects that are referenced by a real `display_playlist_items`
+// row — random GCS object IDs still go through the normal
+// auth-gated `/api/storage/objects/*` route.
+
+import {
+  Router,
+  type IRouter,
+  type Request,
+  type Response,
+} from "express";
+import {
+  db,
+  staffTable,
+  studentsTable,
+  housesTable,
+  pbisEntriesTable,
+  displayPlaylistsTable,
+  displayPlaylistItemsTable,
+} from "@workspace/db";
+import { and, eq, sql, desc, asc } from "drizzle-orm";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "../lib/objectStorage.js";
+
+const router: IRouter = Router();
+const objectStorageService = new ObjectStorageService();
+
+// ---------- helpers ---------------------------------------------------
+
+async function loadStaff(req: Request, res: Response) {
+  const staffId = req.staffId;
+  if (!staffId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return null;
+  }
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, staffId));
+  if (!staff || !staff.active) {
+    res.status(401).json({ error: "Sign-in required" });
+    return null;
+  }
+  return staff;
+}
+
+function isCoreTeamForDisplays(s: typeof staffTable.$inferSelect): boolean {
+  return Boolean(
+    s.isSuperUser ||
+      s.isAdmin ||
+      s.isMtssCoordinator ||
+      s.isBehaviorSpecialist ||
+      s.isDean,
+  );
+}
+
+function canManageDisplays(s: typeof staffTable.$inferSelect): boolean {
+  return isCoreTeamForDisplays(s) || s.capManageDisplays;
+}
+
+function activeSchoolId(s: typeof staffTable.$inferSelect): number {
+  return s.activeSchoolOverride ?? s.schoolId;
+}
+
+// MIME → kind. Anything we don't recognize is rejected so the cycler
+// never has to guess at render time.
+function detectKind(mimeType: string): "image" | "video" | "audio" | "pdf" | null {
+  const m = mimeType.toLowerCase();
+  if (m === "application/pdf") return "pdf";
+  if (m.startsWith("image/")) return "image";
+  if (m.startsWith("video/")) return "video";
+  if (m.startsWith("audio/")) return "audio";
+  return null;
+}
+
+// Look up a playlist and confirm the caller can edit it. Returns the
+// row on success, or null after writing the appropriate error response.
+async function loadPlaylistForEdit(
+  req: Request,
+  res: Response,
+  staff: typeof staffTable.$inferSelect,
+): Promise<typeof displayPlaylistsTable.$inferSelect | null> {
+  const id = Number.parseInt(String(req.params.id), 10);
+  if (!Number.isFinite(id)) {
+    res.status(400).json({ error: "Invalid playlist id" });
+    return null;
+  }
+  const [pl] = await db
+    .select()
+    .from(displayPlaylistsTable)
+    .where(eq(displayPlaylistsTable.id, id));
+  if (!pl || pl.schoolId !== activeSchoolId(staff)) {
+    // 404 not 403 — don't leak existence across schools.
+    res.status(404).json({ error: "Not found" });
+    return null;
+  }
+  // Capability-only teachers can only touch their own playlists.
+  // Core team can touch every playlist at their school.
+  if (!isCoreTeamForDisplays(staff) && pl.ownerStaffId !== staff.id) {
+    res.status(404).json({ error: "Not found" });
+    return null;
+  }
+  return pl;
+}
+
+async function bumpUpdatedAt(playlistId: number) {
+  await db
+    .update(displayPlaylistsTable)
+    .set({ updatedAt: new Date() })
+    .where(eq(displayPlaylistsTable.id, playlistId));
+}
+
+// ---------- GET: list playlists ---------------------------------------
+
+router.get("/displays/playlists", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const schoolId = activeSchoolId(staff);
+
+    // Core team sees every playlist at the school. Capability-only
+    // teachers only see their own (so a teacher never sees the
+    // principal's "Lobby TV" playlist in their own list page).
+    const baseQuery = db
+      .select({
+        id: displayPlaylistsTable.id,
+        schoolId: displayPlaylistsTable.schoolId,
+        ownerStaffId: displayPlaylistsTable.ownerStaffId,
+        ownerDisplayName: staffTable.displayName,
+        name: displayPlaylistsTable.name,
+        defaultDurationSeconds: displayPlaylistsTable.defaultDurationSeconds,
+        showPbisHousePage: displayPlaylistsTable.showPbisHousePage,
+        createdAt: displayPlaylistsTable.createdAt,
+        updatedAt: displayPlaylistsTable.updatedAt,
+        itemCount: sql<number>`(
+          SELECT COUNT(*)::int
+          FROM ${displayPlaylistItemsTable}
+          WHERE ${displayPlaylistItemsTable.playlistId} = ${displayPlaylistsTable.id}
+        )`,
+      })
+      .from(displayPlaylistsTable)
+      .leftJoin(
+        staffTable,
+        eq(staffTable.id, displayPlaylistsTable.ownerStaffId),
+      );
+
+    const rows = isCoreTeamForDisplays(staff)
+      ? await baseQuery
+          .where(eq(displayPlaylistsTable.schoolId, schoolId))
+          .orderBy(desc(displayPlaylistsTable.updatedAt))
+      : await baseQuery
+          .where(
+            and(
+              eq(displayPlaylistsTable.schoolId, schoolId),
+              eq(displayPlaylistsTable.ownerStaffId, staff.id),
+            ),
+          )
+          .orderBy(desc(displayPlaylistsTable.updatedAt));
+
+    res.json({ playlists: rows });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] list failed", e);
+    res.status(500).json({ error: "Failed to load playlists" });
+  }
+});
+
+// ---------- POST: create playlist -------------------------------------
+
+router.post("/displays/playlists", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const schoolId = activeSchoolId(staff);
+
+    const name =
+      typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 80) : "";
+    if (!name) {
+      res.status(400).json({ error: "Name is required" });
+      return;
+    }
+    const defaultDuration = Number.parseInt(
+      String(req.body?.defaultDurationSeconds ?? 10),
+      10,
+    );
+    const dur =
+      Number.isFinite(defaultDuration) && defaultDuration >= 2 && defaultDuration <= 600
+        ? defaultDuration
+        : 10;
+    const showPbis = Boolean(req.body?.showPbisHousePage);
+
+    // Core team can pin a playlist to a specific teacher (or leave it
+    // school-level). Capability-only teachers can only create their
+    // own — server forces ownerStaffId to their id regardless of body.
+    let ownerStaffId: number | null;
+    if (isCoreTeamForDisplays(staff)) {
+      const raw = req.body?.ownerStaffId;
+      if (raw === null || raw === undefined || raw === "") {
+        ownerStaffId = null;
+      } else {
+        const parsed = Number.parseInt(String(raw), 10);
+        if (!Number.isFinite(parsed)) {
+          res.status(400).json({ error: "Invalid ownerStaffId" });
+          return;
+        }
+        // Confirm the target staff is at the same school + active.
+        const [tgt] = await db
+          .select({ id: staffTable.id })
+          .from(staffTable)
+          .where(
+            and(
+              eq(staffTable.id, parsed),
+              eq(staffTable.schoolId, schoolId),
+              eq(staffTable.active, true),
+            ),
+          );
+        if (!tgt) {
+          res.status(404).json({ error: "Owner not found at this school" });
+          return;
+        }
+        ownerStaffId = parsed;
+      }
+    } else {
+      ownerStaffId = staff.id;
+    }
+
+    const [inserted] = await db
+      .insert(displayPlaylistsTable)
+      .values({
+        schoolId,
+        ownerStaffId,
+        name,
+        defaultDurationSeconds: dur,
+        showPbisHousePage: showPbis,
+      })
+      .returning();
+    res.status(201).json({ playlist: inserted });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] create failed", e);
+    res.status(500).json({ error: "Failed to create playlist" });
+  }
+});
+
+// ---------- GET: single playlist (with items) ------------------------
+
+router.get("/displays/playlists/:id", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+    const items = await db
+      .select()
+      .from(displayPlaylistItemsTable)
+      .where(eq(displayPlaylistItemsTable.playlistId, pl.id))
+      .orderBy(asc(displayPlaylistItemsTable.orderIndex));
+    res.json({ playlist: pl, items });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] get failed", e);
+    res.status(500).json({ error: "Failed to load playlist" });
+  }
+});
+
+// ---------- PATCH: edit playlist (incl. reorder via itemOrder) ------
+
+router.patch("/displays/playlists/:id", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+
+    const update: Record<string, unknown> = { updatedAt: new Date() };
+    if (req.body?.name !== undefined) {
+      const n = typeof req.body.name === "string" ? req.body.name.trim() : "";
+      if (!n) {
+        res.status(400).json({ error: "Name is required" });
+        return;
+      }
+      update.name = n.slice(0, 80);
+    }
+    if (req.body?.defaultDurationSeconds !== undefined) {
+      const d = Number.parseInt(String(req.body.defaultDurationSeconds), 10);
+      if (!Number.isFinite(d) || d < 2 || d > 600) {
+        res.status(400).json({
+          error: "defaultDurationSeconds must be between 2 and 600",
+        });
+        return;
+      }
+      update.defaultDurationSeconds = d;
+    }
+    if (req.body?.showPbisHousePage !== undefined) {
+      update.showPbisHousePage = Boolean(req.body.showPbisHousePage);
+    }
+
+    // Optional: itemOrder is an array of item IDs in their new order.
+    // We renumber inside a transaction so the public cycler never
+    // observes a half-renumbered state.
+    const itemOrder: unknown = req.body?.itemOrder;
+    if (Array.isArray(itemOrder)) {
+      const ids = itemOrder
+        .map((x) => Number.parseInt(String(x), 10))
+        .filter((n) => Number.isFinite(n));
+      await db.transaction(async (tx) => {
+        // Confirm every id belongs to this playlist; reject otherwise
+        // so a client bug can't shuffle in foreign rows.
+        const owned = await tx
+          .select({ id: displayPlaylistItemsTable.id })
+          .from(displayPlaylistItemsTable)
+          .where(eq(displayPlaylistItemsTable.playlistId, pl.id));
+        const ownedSet = new Set(owned.map((r) => r.id));
+        for (const id of ids) {
+          if (!ownedSet.has(id)) {
+            throw new Error(`Item ${id} not in playlist`);
+          }
+        }
+        for (let i = 0; i < ids.length; i++) {
+          await tx
+            .update(displayPlaylistItemsTable)
+            .set({ orderIndex: i + 1 })
+            .where(eq(displayPlaylistItemsTable.id, ids[i]));
+        }
+      });
+    }
+
+    const [updated] = await db
+      .update(displayPlaylistsTable)
+      .set(update)
+      .where(eq(displayPlaylistsTable.id, pl.id))
+      .returning();
+    res.json({ playlist: updated });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] patch failed", e);
+    res.status(500).json({ error: "Failed to update playlist" });
+  }
+});
+
+// ---------- DELETE: playlist ------------------------------------------
+
+router.delete("/displays/playlists/:id", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+    // Items go with it via ON DELETE CASCADE on the FK.
+    await db
+      .delete(displayPlaylistsTable)
+      .where(eq(displayPlaylistsTable.id, pl.id));
+    res.json({ ok: true });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] delete failed", e);
+    res.status(500).json({ error: "Failed to delete playlist" });
+  }
+});
+
+// ---------- POST: add item to playlist --------------------------------
+
+router.post("/displays/playlists/:id/items", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+
+    const objectPath =
+      typeof req.body?.objectPath === "string" ? req.body.objectPath : "";
+    const originalFilename =
+      typeof req.body?.originalFilename === "string"
+        ? req.body.originalFilename.slice(0, 200)
+        : "";
+    const mimeType =
+      typeof req.body?.mimeType === "string" ? req.body.mimeType : "";
+    const sizeBytesRaw = Number.parseInt(String(req.body?.sizeBytes ?? 0), 10);
+    const sizeBytes = Number.isFinite(sizeBytesRaw) && sizeBytesRaw > 0 ? sizeBytesRaw : 0;
+    if (!objectPath.startsWith("/objects/") || !mimeType || !originalFilename) {
+      res.status(400).json({
+        error: "objectPath, mimeType, and originalFilename are required",
+      });
+      return;
+    }
+    const kind = detectKind(mimeType);
+    if (!kind) {
+      res.status(400).json({
+        error: `Unsupported file type: ${mimeType}. Allowed: PNG/JPG, MP4, WAV/MP3, PDF.`,
+      });
+      return;
+    }
+
+    let durationSeconds: number | null = null;
+    if (req.body?.durationSeconds !== undefined && req.body.durationSeconds !== null) {
+      const d = Number.parseInt(String(req.body.durationSeconds), 10);
+      if (!Number.isFinite(d) || d < 2 || d > 600) {
+        res.status(400).json({
+          error: "durationSeconds must be between 2 and 600",
+        });
+        return;
+      }
+      durationSeconds = d;
+    }
+
+    // Append to the end. We renumber on reorder so a max+1 here is
+    // safe even if there are gaps from prior deletes.
+    const [{ maxIdx } = { maxIdx: 0 }] = await db
+      .select({
+        maxIdx: sql<number>`COALESCE(MAX(${displayPlaylistItemsTable.orderIndex}), 0)::int`,
+      })
+      .from(displayPlaylistItemsTable)
+      .where(eq(displayPlaylistItemsTable.playlistId, pl.id));
+
+    const [inserted] = await db
+      .insert(displayPlaylistItemsTable)
+      .values({
+        playlistId: pl.id,
+        orderIndex: maxIdx + 1,
+        kind,
+        objectPath,
+        originalFilename,
+        mimeType,
+        sizeBytes,
+        durationSeconds,
+        enabled: true,
+      })
+      .returning();
+    await bumpUpdatedAt(pl.id);
+    res.status(201).json({ item: inserted });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] add item failed", e);
+    res.status(500).json({ error: "Failed to add item" });
+  }
+});
+
+// ---------- PATCH: edit item ------------------------------------------
+
+router.patch("/displays/playlists/:id/items/:itemId", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+    const itemId = Number.parseInt(req.params.itemId, 10);
+    if (!Number.isFinite(itemId)) {
+      res.status(400).json({ error: "Invalid item id" });
+      return;
+    }
+
+    const [item] = await db
+      .select()
+      .from(displayPlaylistItemsTable)
+      .where(eq(displayPlaylistItemsTable.id, itemId));
+    if (!item || item.playlistId !== pl.id) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+
+    const update: Record<string, unknown> = {};
+    if (req.body?.durationSeconds !== undefined) {
+      if (req.body.durationSeconds === null || req.body.durationSeconds === "") {
+        update.durationSeconds = null;
+      } else {
+        const d = Number.parseInt(String(req.body.durationSeconds), 10);
+        if (!Number.isFinite(d) || d < 2 || d > 600) {
+          res.status(400).json({
+            error: "durationSeconds must be between 2 and 600",
+          });
+          return;
+        }
+        update.durationSeconds = d;
+      }
+    }
+    if (req.body?.enabled !== undefined) {
+      update.enabled = Boolean(req.body.enabled);
+    }
+
+    if (Object.keys(update).length === 0) {
+      res.status(400).json({ error: "Nothing to update" });
+      return;
+    }
+
+    const [updated] = await db
+      .update(displayPlaylistItemsTable)
+      .set(update)
+      .where(eq(displayPlaylistItemsTable.id, itemId))
+      .returning();
+    await bumpUpdatedAt(pl.id);
+    res.json({ item: updated });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] patch item failed", e);
+    res.status(500).json({ error: "Failed to update item" });
+  }
+});
+
+// ---------- DELETE: item ----------------------------------------------
+
+router.delete("/displays/playlists/:id/items/:itemId", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+    const itemId = Number.parseInt(req.params.itemId, 10);
+    if (!Number.isFinite(itemId)) {
+      res.status(400).json({ error: "Invalid item id" });
+      return;
+    }
+    const [item] = await db
+      .select()
+      .from(displayPlaylistItemsTable)
+      .where(eq(displayPlaylistItemsTable.id, itemId));
+    if (!item || item.playlistId !== pl.id) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    await db
+      .delete(displayPlaylistItemsTable)
+      .where(eq(displayPlaylistItemsTable.id, itemId));
+    await bumpUpdatedAt(pl.id);
+    res.json({ ok: true });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] delete item failed", e);
+    res.status(500).json({ error: "Failed to delete item" });
+  }
+});
+
+// ---------- PUBLIC endpoints (no auth) --------------------------------
+
+// Returns playlist + enabled items, with `mediaUrl` rewritten to the
+// public media route below. `houseData` is hydrated only when the
+// playlist has the toggle on, so we don't pay for the joins on every
+// poll for playlists that don't need it.
+router.get("/displays/public/playlists/:id", async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [pl] = await db
+      .select()
+      .from(displayPlaylistsTable)
+      .where(eq(displayPlaylistsTable.id, id));
+    if (!pl) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const items = await db
+      .select({
+        id: displayPlaylistItemsTable.id,
+        kind: displayPlaylistItemsTable.kind,
+        mimeType: displayPlaylistItemsTable.mimeType,
+        durationSeconds: displayPlaylistItemsTable.durationSeconds,
+        orderIndex: displayPlaylistItemsTable.orderIndex,
+      })
+      .from(displayPlaylistItemsTable)
+      .where(
+        and(
+          eq(displayPlaylistItemsTable.playlistId, pl.id),
+          eq(displayPlaylistItemsTable.enabled, true),
+        ),
+      )
+      .orderBy(asc(displayPlaylistItemsTable.orderIndex));
+
+    let houseData: unknown = null;
+    if (pl.showPbisHousePage) {
+      // House totals: sum of points per house this school year.
+      // We approximate "this school year" as the current academic
+      // year window the rest of the app uses (Aug 1 → Jul 31).
+      const now = new Date();
+      // pbis_entries.created_at is stored as ISO text (not a timestamp
+      // column), so we compare lexically against an ISO string. Aug 1
+      // → Jul 31 academic year window.
+      const yearStartIso = (
+        now.getUTCMonth() >= 7
+          ? new Date(Date.UTC(now.getUTCFullYear(), 7, 1))
+          : new Date(Date.UTC(now.getUTCFullYear() - 1, 7, 1))
+      ).toISOString();
+
+      // Two separate queries (cheaper and dodges drizzle's
+      // unqualified-column rendering in correlated subqueries):
+      //   1. all houses for this school
+      //   2. point totals grouped by house_id
+      // Then we merge in JS.
+      const housesRows = await db
+        .select({
+          id: housesTable.id,
+          name: housesTable.name,
+          color: housesTable.color,
+          motto: housesTable.motto,
+        })
+        .from(housesTable)
+        .where(eq(housesTable.schoolId, pl.schoolId))
+        .orderBy(housesTable.name);
+
+      const totalsRows = await db.execute<{
+        house_id: number;
+        total_points: number;
+      }>(sql`
+        SELECT s.house_id AS house_id,
+               SUM(pe.points)::int AS total_points
+        FROM pbis_entries pe
+        INNER JOIN students s
+          ON s.student_id = pe.student_id
+          AND s.school_id = pe.school_id
+        WHERE pe.school_id = ${pl.schoolId}
+          AND s.house_id IS NOT NULL
+          AND pe.created_at >= ${yearStartIso}
+        GROUP BY s.house_id
+      `);
+
+      const totalByHouseId = new Map<number, number>();
+      for (const r of totalsRows.rows) {
+        totalByHouseId.set(r.house_id, r.total_points);
+      }
+      const houses = housesRows.map((h) => ({
+        ...h,
+        totalPoints: totalByHouseId.get(h.id) ?? 0,
+      }));
+
+      // Recent pop recognitions: last 10 PBIS entries with notes.
+      const recent = await db
+        .select({
+          id: pbisEntriesTable.id,
+          studentId: pbisEntriesTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+          points: pbisEntriesTable.points,
+          note: pbisEntriesTable.note,
+          createdAt: pbisEntriesTable.createdAt,
+          houseName: housesTable.name,
+          houseColor: housesTable.color,
+        })
+        .from(pbisEntriesTable)
+        .innerJoin(
+          studentsTable,
+          and(
+            eq(studentsTable.studentId, pbisEntriesTable.studentId),
+            eq(studentsTable.schoolId, pbisEntriesTable.schoolId),
+          ),
+        )
+        .leftJoin(housesTable, eq(housesTable.id, studentsTable.houseId))
+        .where(eq(pbisEntriesTable.schoolId, pl.schoolId))
+        .orderBy(desc(pbisEntriesTable.createdAt))
+        .limit(10);
+
+      houseData = { houses, recent };
+    }
+
+    res.json({
+      playlist: {
+        id: pl.id,
+        name: pl.name,
+        defaultDurationSeconds: pl.defaultDurationSeconds,
+        showPbisHousePage: pl.showPbisHousePage,
+      },
+      items: items.map((it) => ({
+        id: it.id,
+        kind: it.kind,
+        mimeType: it.mimeType,
+        durationSeconds: it.durationSeconds,
+        orderIndex: it.orderIndex,
+        // Always serve via the public media endpoint, never the
+        // raw `/api/storage/objects/*` path (that one is auth-gated).
+        mediaUrl: `/api/displays/public/media/${it.id}`,
+      })),
+      houseData,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] public playlist failed", e);
+    res.status(500).json({ error: "Failed to load playlist" });
+  }
+});
+
+// Public media stream. The auth bypass is narrowly scoped: we look
+// up the item by id, then stream the GCS object it points at. A
+// random object id (not in any playlist) still has to go through the
+// auth-gated `/api/storage/objects/*` route.
+router.get("/displays/public/media/:itemId", async (req, res) => {
+  try {
+    const itemId = Number.parseInt(req.params.itemId, 10);
+    if (!Number.isFinite(itemId)) {
+      res.status(400).json({ error: "Invalid item id" });
+      return;
+    }
+    const [item] = await db
+      .select({
+        objectPath: displayPlaylistItemsTable.objectPath,
+        mimeType: displayPlaylistItemsTable.mimeType,
+      })
+      .from(displayPlaylistItemsTable)
+      .where(eq(displayPlaylistItemsTable.id, itemId));
+    if (!item) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    try {
+      const file = await objectStorageService.getObjectEntityFile(item.objectPath);
+      // 1 hour cache — playlists rarely change individual files in
+      // place, and the cycler reloads the playlist meta every minute
+      // anyway so a new item shows up there.
+      const downloaded = await objectStorageService.downloadObject(file, 3600);
+      const r = downloaded as unknown as globalThis.Response;
+      r.headers.forEach((value, key) => res.setHeader(key, value));
+      // Force the right content type even if GCS metadata is stale,
+      // so smart TVs that sniff by MIME pick the correct decoder.
+      if (item.mimeType) res.setHeader("Content-Type", item.mimeType);
+      if (!r.body) {
+        res.end();
+        return;
+      }
+      const reader = r.body.getReader();
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        if (value) res.write(value);
+      }
+      res.end();
+    } catch (err) {
+      if (err instanceof ObjectNotFoundError) {
+        res.status(404).json({ error: "Media not found" });
+        return;
+      }
+      throw err;
+    }
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] public media failed", e);
+    res.status(500).json({ error: "Failed to load media" });
+  }
+});
+
+export default router;

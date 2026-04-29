@@ -53,6 +53,7 @@ import myWatchlistRouter from "./myWatchlist";
 import heartbeatSettingsRouter from "./heartbeatSettings";
 import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
 import parentSnapshotPdfRouter from "./parentSnapshotPdf";
+import displaysRouter from "./displays";
 import uiPrefsRouter from "./uiPrefs";
 
 const router: IRouter = Router();
@@ -112,5 +113,6 @@ router.use(uiPrefsRouter);
 router.use(heartbeatSettingsRouter);
 router.use(parentHeartbeatPrefsRouter);
 router.use(parentSnapshotPdfRouter);
+router.use(displaysRouter);
 
 export default router;

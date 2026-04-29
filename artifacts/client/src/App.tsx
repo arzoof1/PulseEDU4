@@ -21,6 +21,8 @@ import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
 import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
+import Displays from "./components/Displays";
+import DisplayShow from "./components/DisplayShow";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import InsightsWatchlist from "./components/InsightsWatchlist";
 import MyWatchList from "./components/MyWatchList";
@@ -3223,6 +3225,7 @@ NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "settings",
   "hallPassMgmt",
   "trustedAdultsAdmin",
+  "displays",
 ];
 
 function groupContainsActive(groupId: string, activeSection: string): boolean {
@@ -3444,6 +3447,7 @@ function App() {
     isSocialWorker?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
+    capManageDisplays?: boolean;
     defaultRoom?: string | null;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
@@ -3553,6 +3557,7 @@ function App() {
     | "attendanceDashboard"
     | "academicsTrajectory"
     | "trustedAdultsAdmin"
+    | "displays"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -6877,11 +6882,27 @@ function App() {
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
+  // Reuses IconStar so we don't import a new icon — the displays
+  // page is conceptually adjacent to PBIS (signage / morale) so a
+  // star reads fine as a generic "school-wide" icon.
+  const displaysNavSections: NavSection[] = [
+    { key: "displays", label: "Displays", icon: IconStar },
+  ];
   const canManageBellSchedules =
     Boolean(authUser?.isSuperUser) ||
     isAdmin ||
     isMtss ||
     isBehaviorSpec;
+  // Displays = digital-signage feature. Core team always has access;
+  // teachers must be granted the per-staff capability flag by an admin
+  // (cap_manage_displays). This mirrors the server's displays.ts gate.
+  const canManageDisplays =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isMtss ||
+    isBehaviorSpec ||
+    Boolean(authUser?.isDean) ||
+    Boolean(authUser?.capManageDisplays);
   // canManageStaffRoles hoisted above the bounce-back useEffect — see note there.
   const navBadge = (key: typeof activeSection) => {
     const badgeStyle: React.CSSProperties = {
@@ -6946,6 +6967,16 @@ function App() {
         Loading…
       </div>
     );
+  }
+
+  // Public, no-auth digital-signage route. Smart TVs / hallway
+  // kiosks open /display/<id> directly; we short-circuit BEFORE the
+  // auth-redirect below so they never see a login screen.
+  if (typeof window !== "undefined") {
+    const m = window.location.pathname.match(/^\/display\/(\d+)\/?$/);
+    if (m) {
+      return <DisplayShow playlistId={Number.parseInt(m[1], 10)} />;
+    }
   }
 
   if (!authUser) {
@@ -7475,6 +7506,7 @@ function App() {
                   renderNavItem(adminNavSections[0])}
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
+                {canManageDisplays && displaysNavSections.map(renderNavItem)}
                 {canAccessMtssHub &&
                   renderNavItem({
                     key: "trustedAdultsAdmin",
@@ -17322,6 +17354,8 @@ function App() {
       {activeSection === "bellSchedule" && canManageBellSchedules && (
         <BellScheduleSection />
       )}
+
+      {activeSection === "displays" && canManageDisplays && <Displays />}
 
       {activeSection === "settings" && canManageSettings && settingsTile === null && (
         <SettingsHub

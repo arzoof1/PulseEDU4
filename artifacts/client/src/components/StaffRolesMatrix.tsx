@@ -51,6 +51,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Manage", key: "capManageLocations", label: "Manage Locations" },
   { group: "Admin", key: "capStaffRoles", label: "Staff & Roles" },
   { group: "Admin", key: "capManageRoles", label: "Manage Roles" },
+  { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
 ];
 
 // Built-in roles that act as "preset" buttons. Clicking applies the
