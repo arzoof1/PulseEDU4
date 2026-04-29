@@ -7833,7 +7833,7 @@ function App() {
                     onClick={() => window.print()}
                     style={{
                       flex: 1,
-                      background: "#10b981",
+                      background: "var(--brand-header-bg)",
                       border: "none",
                       borderRadius: 12,
                       color: "white",
