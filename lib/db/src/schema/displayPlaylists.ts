@@ -28,6 +28,23 @@ export const displayPlaylistsTable = pgTable("display_playlists", {
   showPbisHousePage: boolean("show_pbis_house_page")
     .notNull()
     .default(false),
+  // When true, the cycler injects a synthetic "Active Hall Passes" slide
+  // each loop. v2 — same shape as the PBIS-house slide toggle.
+  showActiveHallPasses: boolean("show_active_hall_passes")
+    .notNull()
+    .default(false),
+  // Optional play-window schedule (v2). When `scheduleEnabled` is true and
+  // *any* of (current day-of-week ∉ days, current time-of-day < start, or
+  // ≥ end) holds, the cycler shows an "Off-air" slide instead of content.
+  // Defaults to off so existing playlists keep their 24/7 behavior.
+  scheduleEnabled: boolean("schedule_enabled").notNull().default(false),
+  // "HH:MM" 24h, school-local time. Server passes them through; the cycler
+  // does the comparison in the browser so it follows the TV's local clock.
+  scheduleStartTime: text("schedule_start_time"),
+  scheduleEndTime: text("schedule_end_time"),
+  // CSV of weekday integers, 0=Sunday … 6=Saturday (e.g. "1,2,3,4,5" for
+  // Mon-Fri). Empty string or NULL = every day when scheduleEnabled.
+  scheduleDaysOfWeek: text("schedule_days_of_week"),
   createdAt: timestamp("created_at", { withTimezone: true })
     .notNull()
     .defaultNow(),

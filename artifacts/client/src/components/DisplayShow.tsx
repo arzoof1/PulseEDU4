@@ -72,25 +72,114 @@ interface RecentRecognition {
   houseColor: string | null;
 }
 
+interface ActivePass {
+  id: number;
+  studentLabel: string;
+  destination: string;
+  originRoom: string;
+  maxDurationMinutes: number;
+  minutesOpen: number;
+  isOverdue: boolean;
+}
+
+interface HallPassData {
+  passes: ActivePass[];
+  generatedAt: string;
+}
+
 interface PublicPlaylist {
   playlist: {
     id: number;
     name: string;
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
+    showActiveHallPasses: boolean;
+    scheduleEnabled: boolean;
+    scheduleStartTime: string | null;
+    scheduleEndTime: string | null;
+    scheduleDaysOfWeek: string | null;
   };
   items: PublicItem[];
   houseData: {
     houses: HouseTotals[];
     recent: RecentRecognition[];
   } | null;
+  hallPassData: HallPassData | null;
 }
 
 // A "slide" is what the cycler actually displays. We expand the
-// playlist into slides by injecting an optional house card up front.
+// playlist into slides by injecting an optional house card + an
+// optional active-hall-passes card at the front of each loop.
 type Slide =
   | { kind: "house"; data: PublicPlaylist["houseData"] }
+  | { kind: "passes"; data: HallPassData }
   | { kind: "item"; item: PublicItem };
+
+// Schedule helpers — keep this client-side so the TV's local clock is
+// the source of truth (the lobby doesn't care about server timezones).
+
+function parseDaysCsv(s: string | null): Set<number> {
+  if (!s) return new Set();
+  const out = new Set<number>();
+  for (const part of s.split(",")) {
+    const n = Number.parseInt(part.trim(), 10);
+    if (Number.isInteger(n) && n >= 0 && n <= 6) out.add(n);
+  }
+  return out;
+}
+
+// Returns true when the current local time is inside the configured
+// window. If the schedule is malformed (only one of start/end is set)
+// we fall back to "always on" rather than blanking the screen, since a
+// dark TV is worse than an over-eager TV.
+function isInSchedule(
+  meta: PublicPlaylist["playlist"],
+  now: Date = new Date(),
+): boolean {
+  if (!meta.scheduleEnabled) return true;
+  const start = meta.scheduleStartTime;
+  const end = meta.scheduleEndTime;
+  // Time fields not set yet → fail open. (A blank screen is worse than
+  // an over-eager one when the admin half-configured a schedule.)
+  if (!start || !end) {
+    const days = parseDaysCsv(meta.scheduleDaysOfWeek);
+    if (days.size > 0 && !days.has(now.getDay())) return false;
+    return true;
+  }
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = start.split(":").map((n) => Number.parseInt(n, 10));
+  const [eh, em] = end.split(":").map((n) => Number.parseInt(n, 10));
+  if (
+    !Number.isFinite(sh) ||
+    !Number.isFinite(sm) ||
+    !Number.isFinite(eh) ||
+    !Number.isFinite(em)
+  ) {
+    return true;
+  }
+  const startMin = sh * 60 + sm;
+  const endMin = eh * 60 + em;
+  const days = parseDaysCsv(meta.scheduleDaysOfWeek);
+  const today = now.getDay();
+  // Yesterday wraps via modulo so Sunday(0) → Saturday(6).
+  const yesterday = (today + 6) % 7;
+  if (endMin <= startMin) {
+    // Overnight wrap (e.g. 22:00 → 06:00). The window OPENS on the day
+    // the schedule names. So if we're after `startMin`, today must be a
+    // configured day; if we're before `endMin`, *yesterday* must be a
+    // configured day (the window opened yesterday).
+    if (cur >= startMin) {
+      return days.size === 0 || days.has(today);
+    }
+    if (cur < endMin) {
+      return days.size === 0 || days.has(yesterday);
+    }
+    return false;
+  }
+  // Same-day window — day filter must match today.
+  if (days.size > 0 && !days.has(today)) return false;
+  return cur >= startMin && cur < endMin;
+}
 
 const fullBleed: CSSProperties = {
   position: "fixed",
@@ -142,11 +231,23 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
     if (playlist.playlist.showPbisHousePage && playlist.houseData) {
       list.push({ kind: "house", data: playlist.houseData });
     }
+    if (playlist.playlist.showActiveHallPasses && playlist.hallPassData) {
+      list.push({ kind: "passes", data: playlist.hallPassData });
+    }
     for (const item of playlist.items) {
       list.push({ kind: "item", item });
     }
     return list;
   }, [playlist]);
+
+  // Tick once a minute so the off-air check re-evaluates without
+  // waiting on the next 60s playlist poll. The state is otherwise
+  // unused — we just want a re-render at minute boundaries.
+  const [, setMinuteTick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setMinuteTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
 
   // Whenever the slide list changes (admin reorder, item add/remove)
   // and the current index falls off the end, snap back to 0 so the
@@ -205,6 +306,33 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
     );
   }
 
+  // Schedule gate. The minute-tick state above re-runs this on every
+  // minute boundary so a TV that left "Off-air" at 7:59 flips to live
+  // content at 8:00 without a manual refresh.
+  if (!isInSchedule(playlist.playlist)) {
+    return (
+      <div
+        style={{
+          ...fullBleed,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          flexDirection: "column",
+          gap: 16,
+          color: "#9ca3af",
+        }}
+      >
+        <div style={{ fontSize: 48, fontWeight: 700, opacity: 0.85 }}>
+          {playlist.playlist.name}
+        </div>
+        <div style={{ fontSize: 22 }}>Off-air</div>
+        <div style={{ fontSize: 14, opacity: 0.7 }}>
+          This display is outside its scheduled play window.
+        </div>
+      </div>
+    );
+  }
+
   const slide = slides[slideIdx];
   const defaultDuration = playlist.playlist.defaultDurationSeconds;
 
@@ -218,6 +346,15 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
           // lobby crowd has time to scan the totals.
           durationSeconds={Math.max(defaultDuration, 12)}
           onDone={advance}
+        />
+      ) : slide.kind === "passes" ? (
+        <HallPassesSlide
+          data={slide.data}
+          durationSeconds={Math.max(defaultDuration, 12)}
+          onDone={advance}
+          // key forces a fresh mount when the slide changes so the
+          // useTimer inside cleans up correctly.
+          key={`passes-${slideIdx}`}
         />
       ) : slide.kind === "item" ? (
         <ItemSlide
@@ -621,6 +758,180 @@ function HouseSlide({
           )}
         </div>
       </div>
+    </div>
+  );
+}
+
+// ===================================================================
+// Active hall passes slide. Same advance contract as HouseSlide:
+// auto-advances after `durationSeconds` via the shared useTimer.
+// ===================================================================
+
+function HallPassesSlide({
+  data,
+  durationSeconds,
+  onDone,
+}: {
+  data: HallPassData;
+  durationSeconds: number;
+  onDone: () => void;
+}) {
+  useTimer(durationSeconds, onDone);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "linear-gradient(135deg, #0b1220 0%, #111827 100%)",
+        color: "white",
+        padding: "48px 56px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 24,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+        <div style={{ fontSize: 48, fontWeight: 800 }}>🚪 Active Hall Passes</div>
+        <div style={{ fontSize: 18, opacity: 0.7 }}>
+          {data.passes.length} student{data.passes.length === 1 ? "" : "s"} out
+        </div>
+      </div>
+      {data.passes.length === 0 ? (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 28,
+            opacity: 0.55,
+          }}
+        >
+          No active hall passes right now.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(360px, 1fr))",
+            gap: 14,
+            overflow: "hidden",
+          }}
+        >
+          {data.passes.slice(0, 12).map((p) => (
+            <ActivePassCard key={p.id} pass={p} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ActivePassCard({ pass }: { pass: ActivePass }) {
+  const accent = pass.isOverdue ? "#ef4444" : "#3b82f6";
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.05)",
+        border: `1px solid ${accent}`,
+        borderLeft: `5px solid ${accent}`,
+        borderRadius: 10,
+        padding: "12px 16px",
+      }}
+    >
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <div style={{ fontWeight: 700, fontSize: 22 }}>{pass.studentLabel}</div>
+        <div
+          style={{
+            fontVariantNumeric: "tabular-nums",
+            fontWeight: 700,
+            color: accent,
+            fontSize: 20,
+          }}
+        >
+          {pass.minutesOpen}m
+          {pass.isOverdue ? " ⚠" : ""}
+        </div>
+      </div>
+      <div style={{ fontSize: 16, opacity: 0.85, marginTop: 4 }}>
+        {pass.originRoom} → {pass.destination}
+      </div>
+      <div style={{ fontSize: 12, opacity: 0.55, marginTop: 4 }}>
+        Limit {pass.maxDurationMinutes}m
+      </div>
+    </div>
+  );
+}
+
+// ===================================================================
+// Standalone "/display/passes/<schoolId>" page. Same full-bleed shell
+// as the cycler, but only ever shows the active-passes view and polls
+// every 15s so a hallway TV that opens this URL stays near-realtime.
+// ===================================================================
+
+export function HallPassDisplay({ schoolId }: { schoolId: number }) {
+  const [data, setData] = useState<HallPassData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function fetchOnce() {
+      try {
+        const r = await fetch(`/api/displays/public/passes/${schoolId}`);
+        if (!r.ok) {
+          if (!cancelled) setError(`HTTP ${r.status}`);
+          return;
+        }
+        const j = (await r.json()) as HallPassData;
+        if (cancelled) return;
+        setData(j);
+        setError(null);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "Network error");
+        }
+      }
+    }
+    void fetchOnce();
+    const t = window.setInterval(fetchOnce, 15_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [schoolId]);
+
+  // Re-render once a minute so the elapsed-minutes column ticks up
+  // even between full refetches.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  if (error) {
+    return (
+      <div style={{ ...fullBleed, padding: 32 }}>
+        <div style={{ fontSize: 24, opacity: 0.85 }}>
+          Couldn't load active hall passes.
+        </div>
+        <div style={{ marginTop: 12, opacity: 0.6, fontSize: 14 }}>{error}</div>
+      </div>
+    );
+  }
+  if (!data) {
+    return (
+      <div style={{ ...fullBleed, padding: 32, opacity: 0.7 }}>Loading…</div>
+    );
+  }
+  return (
+    <div style={fullBleed}>
+      <HallPassesSlide
+        data={data}
+        // Standalone page — no cycler, so the timer is irrelevant.
+        // Pass a giant duration so the no-op onDone never fires.
+        durationSeconds={3600}
+        onDone={() => {}}
+      />
     </div>
   );
 }

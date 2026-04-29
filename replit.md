@@ -3981,3 +3981,24 @@ duration, PBIS toggle, per-item duration override + enable + up/down reorder
 + delete, and an embedded preview iframe of the public URL. Loop reloads
 playlist meta every 60s to pick up edits. v1 deliberately omits scheduling,
 overlays/transitions, and share-tokens.
+
+### v2 (Apr 29, 2026): schedule + active hall passes
+
+Added 5 columns to `display_playlists`: `schedule_enabled`,
+`schedule_start_time` / `schedule_end_time` (HH:MM text, validated server-side),
+`schedule_days_of_week` (CSV "0,1,...,6"; empty = every day; canonicalized on
+PATCH), and `show_active_hall_passes`. Editor adds a Schedule fieldset (toggle
++ two `<input type="time">` + 7 day chips) and a "Show active hall passes"
+checkbox right next to the existing PBIS toggle. Cycler evaluates the schedule
+on every minute boundary (1-minute tick state) and renders a centered "Off-air"
+card outside the window — overnight wrap is supported (`endMin <= startMin`).
+Schedule semantics fail open: missing start/end = always on (a dark TV is worse
+than an over-eager one). When `show_active_hall_passes` is on, a passes slide
+is injected into the loop alongside the PBIS slide; it shows up to 12 cards
+with `firstName + lastInitial`, origin → destination, and elapsed minutes
+(red border + ⚠ when overdue). New `GET /api/displays/public/passes/:schoolId`
+returns the same sanitized payload standalone (no auth, 10 s cache); the
+short-circuit in `App.tsx` matches `/display/passes/(\d+)` BEFORE the existing
+`/display/(\d+)` route so a numeric playlist id can't shadow the keyword.
+`HallPassDisplay` (also exported from `DisplayShow.tsx`) is the standalone
+full-bleed page — polls every 15 s, ticks every 60 s for live elapsed time.

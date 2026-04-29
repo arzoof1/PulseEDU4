@@ -33,6 +33,7 @@ import {
   studentsTable,
   housesTable,
   pbisEntriesTable,
+  hallPassesTable,
   displayPlaylistsTable,
   displayPlaylistItemsTable,
 } from "@workspace/db";
@@ -154,6 +155,11 @@ router.get("/displays/playlists", async (req, res) => {
         name: displayPlaylistsTable.name,
         defaultDurationSeconds: displayPlaylistsTable.defaultDurationSeconds,
         showPbisHousePage: displayPlaylistsTable.showPbisHousePage,
+        showActiveHallPasses: displayPlaylistsTable.showActiveHallPasses,
+        scheduleEnabled: displayPlaylistsTable.scheduleEnabled,
+        scheduleStartTime: displayPlaylistsTable.scheduleStartTime,
+        scheduleEndTime: displayPlaylistsTable.scheduleEndTime,
+        scheduleDaysOfWeek: displayPlaylistsTable.scheduleDaysOfWeek,
         createdAt: displayPlaylistsTable.createdAt,
         updatedAt: displayPlaylistsTable.updatedAt,
         itemCount: sql<number>`(
@@ -329,6 +335,77 @@ router.patch("/displays/playlists/:id", async (req, res) => {
     }
     if (req.body?.showPbisHousePage !== undefined) {
       update.showPbisHousePage = Boolean(req.body.showPbisHousePage);
+    }
+    if (req.body?.showActiveHallPasses !== undefined) {
+      update.showActiveHallPasses = Boolean(req.body.showActiveHallPasses);
+    }
+    if (req.body?.scheduleEnabled !== undefined) {
+      update.scheduleEnabled = Boolean(req.body.scheduleEnabled);
+    }
+    // "HH:MM" 24h. Empty string clears the field. Anything malformed
+    // is rejected so the client can surface a validation error.
+    if (req.body?.scheduleStartTime !== undefined) {
+      const v = req.body.scheduleStartTime;
+      if (v === null || v === "") {
+        update.scheduleStartTime = null;
+      } else if (
+        typeof v === "string" &&
+        /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
+      ) {
+        update.scheduleStartTime = v;
+      } else {
+        res.status(400).json({ error: "scheduleStartTime must be HH:MM" });
+        return;
+      }
+    }
+    if (req.body?.scheduleEndTime !== undefined) {
+      const v = req.body.scheduleEndTime;
+      if (v === null || v === "") {
+        update.scheduleEndTime = null;
+      } else if (
+        typeof v === "string" &&
+        /^([01]\d|2[0-3]):[0-5]\d$/.test(v)
+      ) {
+        update.scheduleEndTime = v;
+      } else {
+        res.status(400).json({ error: "scheduleEndTime must be HH:MM" });
+        return;
+      }
+    }
+    // CSV of weekday integers, 0-6. We re-canonicalize (sort + dedupe)
+    // so persisted values are stable regardless of how the client sent
+    // them, but we strictly reject any token that isn't a single 0-6
+    // digit — silently dropping garbage tokens like "1x" or "abc" can
+    // mask client bugs.
+    if (req.body?.scheduleDaysOfWeek !== undefined) {
+      const v = req.body.scheduleDaysOfWeek;
+      if (v === null || v === "") {
+        update.scheduleDaysOfWeek = null;
+      } else if (typeof v === "string") {
+        // Validate every raw token (after trim). We deliberately do NOT
+        // drop empty tokens with `.filter(Boolean)` — strings like
+        // "1,,2" or ",1" are malformed and should error rather than
+        // silently parse, since silent fixups can mask client bugs.
+        const tokens = v.split(",").map((s) => s.trim());
+        for (const t of tokens) {
+          if (!/^[0-6]$/.test(t)) {
+            res.status(400).json({
+              error:
+                "scheduleDaysOfWeek must be CSV of 0-6 weekday integers",
+            });
+            return;
+          }
+        }
+        const days = Array.from(new Set(tokens.map((t) => Number(t)))).sort(
+          (a, b) => a - b,
+        );
+        update.scheduleDaysOfWeek = days.length ? days.join(",") : null;
+      } else {
+        res.status(400).json({
+          error: "scheduleDaysOfWeek must be CSV of 0-6 weekday integers",
+        });
+        return;
+      }
     }
 
     // Optional: itemOrder is an array of item IDs in their new order.
@@ -581,6 +658,65 @@ router.delete("/displays/playlists/:id/items/:itemId", async (req, res) => {
   }
 });
 
+// ---------- helpers: active hall passes (public-safe shape) ----------
+
+// Fetch active hall passes for a school, joined to student first/last so the
+// signage screen can render a friendly "Ada R. → Office" line. Sanitized:
+// no district student id, no teacher email, no notes — only fields the
+// front-of-school TV is OK to show. Computes `minutesOpen` server-side so
+// the cycler doesn't need a synced clock with the database.
+async function loadActiveHallPasses(schoolId: number) {
+  const rows = await db
+    .select({
+      id: hallPassesTable.id,
+      studentId: hallPassesTable.studentId,
+      destination: hallPassesTable.destination,
+      originRoom: hallPassesTable.originRoom,
+      maxDurationMinutes: hallPassesTable.maxDurationMinutes,
+      createdAt: hallPassesTable.createdAt,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+    })
+    .from(hallPassesTable)
+    .leftJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, hallPassesTable.studentId),
+        eq(studentsTable.schoolId, hallPassesTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        eq(hallPassesTable.status, "active"),
+      ),
+    )
+    .orderBy(desc(hallPassesTable.createdAt));
+
+  const now = Date.now();
+  const passes = rows.map((r) => {
+    const startedMs = Date.parse(r.createdAt);
+    const minutesOpen = Number.isFinite(startedMs)
+      ? Math.max(0, Math.round((now - startedMs) / 60_000))
+      : 0;
+    // First name + last initial. If we don't have a join row (rare —
+    // student record deleted but pass kept), fall back to a generic
+    // label so we never expose a raw district id on a hallway TV.
+    const firstName = r.firstName ?? "Student";
+    const lastInitial = r.lastName ? `${r.lastName.charAt(0)}.` : "";
+    return {
+      id: r.id,
+      studentLabel: lastInitial ? `${firstName} ${lastInitial}` : firstName,
+      destination: r.destination,
+      originRoom: r.originRoom,
+      maxDurationMinutes: r.maxDurationMinutes,
+      minutesOpen,
+      isOverdue: minutesOpen > r.maxDurationMinutes,
+    };
+  });
+  return { passes, generatedAt: new Date().toISOString() };
+}
+
 // ---------- PUBLIC endpoints (no auth) --------------------------------
 
 // Returns playlist + enabled items, with `mediaUrl` rewritten to the
@@ -704,12 +840,25 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       houseData = { houses, recent };
     }
 
+    // Active hall passes (v2 toggle). Same shape as the standalone
+    // /api/displays/public/passes/:schoolId endpoint below — kept in
+    // sync intentionally so the cycler can render either one.
+    let hallPassData: unknown = null;
+    if (pl.showActiveHallPasses) {
+      hallPassData = await loadActiveHallPasses(pl.schoolId);
+    }
+
     res.json({
       playlist: {
         id: pl.id,
         name: pl.name,
         defaultDurationSeconds: pl.defaultDurationSeconds,
         showPbisHousePage: pl.showPbisHousePage,
+        showActiveHallPasses: pl.showActiveHallPasses,
+        scheduleEnabled: pl.scheduleEnabled,
+        scheduleStartTime: pl.scheduleStartTime,
+        scheduleEndTime: pl.scheduleEndTime,
+        scheduleDaysOfWeek: pl.scheduleDaysOfWeek,
       },
       items: items.map((it) => ({
         id: it.id,
@@ -722,11 +871,35 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         mediaUrl: `/api/displays/public/media/${it.id}`,
       })),
       houseData,
+      hallPassData,
     });
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[displays] public playlist failed", e);
     res.status(500).json({ error: "Failed to load playlist" });
+  }
+});
+
+// Public active hall passes for a school. Designed to be embedded in
+// signage (iframe) OR opened directly on a hallway TV. No auth — only
+// returns the sanitized shape from `loadActiveHallPasses` (no district
+// student id, no teacher email, no notes). schoolId is required as a
+// path param so we can never accidentally aggregate across the district.
+router.get("/displays/public/passes/:schoolId", async (req, res) => {
+  try {
+    const schoolId = Number.parseInt(req.params.schoolId, 10);
+    if (!Number.isFinite(schoolId)) {
+      res.status(400).json({ error: "Invalid school id" });
+      return;
+    }
+    const data = await loadActiveHallPasses(schoolId);
+    // Short cache to keep TVs near-realtime without hammering the DB.
+    res.setHeader("Cache-Control", "public, max-age=10");
+    res.json(data);
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] public passes failed", e);
+    res.status(500).json({ error: "Failed to load active passes" });
   }
 });
 

@@ -51,10 +51,35 @@ interface PlaylistDetail {
     name: string;
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
+    showActiveHallPasses: boolean;
+    scheduleEnabled: boolean;
+    scheduleStartTime: string | null;
+    scheduleEndTime: string | null;
+    scheduleDaysOfWeek: string | null;
     createdAt: string;
     updatedAt: string;
   };
   items: PlaylistItem[];
+}
+
+const WEEKDAY_LABELS: ReadonlyArray<{ idx: number; label: string }> = [
+  { idx: 0, label: "Sun" },
+  { idx: 1, label: "Mon" },
+  { idx: 2, label: "Tue" },
+  { idx: 3, label: "Wed" },
+  { idx: 4, label: "Thu" },
+  { idx: 5, label: "Fri" },
+  { idx: 6, label: "Sat" },
+];
+
+function parseDaysCsv(s: string | null | undefined): Set<number> {
+  if (!s) return new Set();
+  const out = new Set<number>();
+  for (const part of s.split(",")) {
+    const n = Number.parseInt(part.trim(), 10);
+    if (Number.isInteger(n) && n >= 0 && n <= 6) out.add(n);
+  }
+  return out;
 }
 
 const card: CSSProperties = {
@@ -360,6 +385,11 @@ function PlaylistEditor({
     name?: string;
     defaultDurationSeconds?: number;
     showPbisHousePage?: boolean;
+    showActiveHallPasses?: boolean;
+    scheduleEnabled?: boolean;
+    scheduleStartTime?: string | null;
+    scheduleEndTime?: string | null;
+    scheduleDaysOfWeek?: string | null;
     itemOrder?: number[];
   }) {
     try {
@@ -619,6 +649,26 @@ function PlaylistEditor({
                 Show PBIS Houses slide each loop
               </span>
             </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={detail.playlist.showActiveHallPasses}
+                onChange={(e) =>
+                  void patchPlaylist({
+                    showActiveHallPasses: e.currentTarget.checked,
+                  })
+                }
+              />
+              <span style={{ fontSize: 14 }}>
+                Show Active Hall Passes slide each loop
+              </span>
+            </label>
+            <ScheduleEditor
+              playlist={detail.playlist}
+              onPatch={patchPlaylist}
+            />
           </div>
         </div>
 
@@ -820,5 +870,130 @@ function PlaylistEditor({
         )}
       </div>
     </div>
+  );
+}
+
+// Schedule editor — collapsible fieldset that lets a user opt the
+// playlist into a recurring play window (days-of-week + start/end).
+// All fields auto-save on blur or change so the editor stays consistent
+// with the rest of the page (no global "Save" button).
+function ScheduleEditor(props: {
+  playlist: PlaylistDetail["playlist"];
+  onPatch: (u: {
+    scheduleEnabled?: boolean;
+    scheduleStartTime?: string | null;
+    scheduleEndTime?: string | null;
+    scheduleDaysOfWeek?: string | null;
+  }) => Promise<void>;
+}) {
+  const { playlist, onPatch } = props;
+  const days = parseDaysCsv(playlist.scheduleDaysOfWeek);
+
+  function toggleDay(idx: number) {
+    const next = new Set(days);
+    if (next.has(idx)) next.delete(idx);
+    else next.add(idx);
+    const csv = Array.from(next).sort((a, b) => a - b).join(",");
+    void onPatch({ scheduleDaysOfWeek: csv || null });
+  }
+
+  return (
+    <fieldset
+      style={{
+        border: "1px solid #e5e7eb",
+        borderRadius: 8,
+        padding: 12,
+        marginTop: 4,
+      }}
+    >
+      <legend style={{ fontSize: 13, fontWeight: 600, padding: "0 6px" }}>
+        Schedule
+      </legend>
+      <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <input
+          type="checkbox"
+          checked={playlist.scheduleEnabled}
+          onChange={(e) =>
+            void onPatch({ scheduleEnabled: e.currentTarget.checked })
+          }
+        />
+        <span style={{ fontSize: 14 }}>
+          Only play during a recurring window
+        </span>
+      </label>
+      {playlist.scheduleEnabled && (
+        <div style={{ marginTop: 10, display: "grid", gap: 10 }}>
+          <div style={{ display: "flex", gap: 12, alignItems: "flex-end" }}>
+            <label style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                Start
+              </div>
+              <input
+                type="time"
+                style={{ ...inputStyle, width: "100%" }}
+                defaultValue={playlist.scheduleStartTime ?? ""}
+                onBlur={(e) => {
+                  const v = e.currentTarget.value;
+                  if (v !== (playlist.scheduleStartTime ?? "")) {
+                    void onPatch({ scheduleStartTime: v || null });
+                  }
+                }}
+              />
+            </label>
+            <label style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                End
+              </div>
+              <input
+                type="time"
+                style={{ ...inputStyle, width: "100%" }}
+                defaultValue={playlist.scheduleEndTime ?? ""}
+                onBlur={(e) => {
+                  const v = e.currentTarget.value;
+                  if (v !== (playlist.scheduleEndTime ?? "")) {
+                    void onPatch({ scheduleEndTime: v || null });
+                  }
+                }}
+              />
+            </label>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+              Days
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {WEEKDAY_LABELS.map((d) => {
+                const on = days.has(d.idx);
+                return (
+                  <button
+                    type="button"
+                    key={d.idx}
+                    onClick={() => toggleDay(d.idx)}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: on
+                        ? "1px solid #2563eb"
+                        : "1px solid #d1d5db",
+                      background: on ? "#dbeafe" : "white",
+                      color: on ? "#1d4ed8" : "#374151",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 6 }}>
+              No days selected = every day. Outside the window the screen
+              shows an "Off-air" placeholder.
+            </div>
+          </div>
+        </div>
+      )}
+    </fieldset>
   );
 }

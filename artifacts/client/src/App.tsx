@@ -22,7 +22,7 @@ import LocationsAdmin from "./components/LocationsAdmin";
 import StaffRolesMatrix from "./components/StaffRolesMatrix";
 import BellScheduleSection from "./components/BellScheduleSection";
 import Displays from "./components/Displays";
-import DisplayShow from "./components/DisplayShow";
+import DisplayShow, { HallPassDisplay } from "./components/DisplayShow";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
 import InsightsWatchlist from "./components/InsightsWatchlist";
 import MyWatchList from "./components/MyWatchList";
@@ -6969,13 +6969,22 @@ function App() {
     );
   }
 
-  // Public, no-auth digital-signage route. Smart TVs / hallway
-  // kiosks open /display/<id> directly; we short-circuit BEFORE the
+  // Public, no-auth digital-signage routes. Smart TVs / hallway
+  // kiosks open these URLs directly; we short-circuit BEFORE the
   // auth-redirect below so they never see a login screen.
+  //   /display/<id>                → playlist cycler
+  //   /display/passes/<schoolId>   → standalone active hall passes
   if (typeof window !== "undefined") {
-    const m = window.location.pathname.match(/^\/display\/(\d+)\/?$/);
-    if (m) {
-      return <DisplayShow playlistId={Number.parseInt(m[1], 10)} />;
+    const path = window.location.pathname;
+    const passesMatch = path.match(/^\/display\/passes\/(\d+)\/?$/);
+    if (passesMatch) {
+      return <HallPassDisplay schoolId={Number.parseInt(passesMatch[1], 10)} />;
+    }
+    const playlistMatch = path.match(/^\/display\/(\d+)\/?$/);
+    if (playlistMatch) {
+      return (
+        <DisplayShow playlistId={Number.parseInt(playlistMatch[1], 10)} />
+      );
     }
   }
 
