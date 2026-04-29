@@ -134,7 +134,7 @@ router.get(
     const scope = String(req.query.scope ?? "mine");
 
     const isVerifier =
-      staff.isAdmin || staff.isDean || staff.isMtssCoordinator;
+      staff.isSuperUser || staff.isAdmin || staff.isDean || staff.isMtssCoordinator;
     const isIssView =
       staff.isSuperUser ||
       staff.isAdmin ||
@@ -142,7 +142,8 @@ router.get(
       staff.isBehaviorSpecialist ||
       staff.isDean ||
       staff.isMtssCoordinator;
-    const isReviewer = staff.isAdmin || staff.isBehaviorSpecialist;
+    const isReviewer =
+      staff.isSuperUser || staff.isAdmin || staff.isBehaviorSpecialist;
 
     if (scope === "pending" && !isVerifier) {
       res.status(403).json({ error: "Verifier only" });
@@ -237,7 +238,10 @@ router.post(
     let refStaffId: number | null = staff.id;
     let refName: string = staff.displayName;
     if (
-      (staff.isAdmin || staff.isDean || staff.isMtssCoordinator) &&
+      (staff.isSuperUser ||
+        staff.isAdmin ||
+        staff.isDean ||
+        staff.isMtssCoordinator) &&
       typeof referringTeacherStaffId === "number"
     ) {
       const [other] = await db
@@ -285,7 +289,7 @@ router.post(
 
 // Verifier (admin / dean / MTSS) actions.
 const isVerifier = (s: StaffRow) =>
-  s.isAdmin || s.isDean || s.isMtssCoordinator;
+  s.isSuperUser || s.isAdmin || s.isDean || s.isMtssCoordinator;
 
 router.patch(
   "/pullouts/:id/verify",
@@ -431,6 +435,7 @@ router.get(
   "/pullouts/report",
   requireStaffMW(
     (s) =>
+      s.isSuperUser ||
       s.isAdmin ||
       s.isBehaviorSpecialist ||
       s.isDean ||
@@ -705,7 +710,7 @@ router.patch(
 router.patch(
   "/pullouts/:id/review",
   requireStaffMW(
-    (s) => s.isAdmin || s.isBehaviorSpecialist,
+    (s) => s.isSuperUser || s.isAdmin || s.isBehaviorSpecialist,
     "Behavior specialist or admin",
   ),
   async (req: Request, res: Response) => {

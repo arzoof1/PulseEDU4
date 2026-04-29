@@ -59,7 +59,7 @@ function requireBsAdmin(
 ): void {
   void loadStaff(req, res).then((staff) => {
     if (!staff) return;
-    if (!staff.isAdmin && !staff.isBehaviorSpecialist) {
+    if (!staff.isAdmin && !staff.isBehaviorSpecialist && !staff.isSuperUser) {
       res.status(403).json({ error: "Behavior specialist or admin only" });
       return;
     }

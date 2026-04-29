@@ -3743,7 +3743,7 @@ function App() {
   }
   const [allSections, setAllSections] = useState<AllSection[]>([]);
   useEffect(() => {
-    if (!authUser?.isAdmin && !authUser?.isEseCoordinator) {
+    if (!authUser?.isAdmin && !authUser?.isSuperUser && !authUser?.isEseCoordinator) {
       setAllSections([]);
       return;
     }
@@ -3753,7 +3753,12 @@ function App() {
         setAllSections(Array.isArray(data.sections) ? data.sections : []),
       )
       .catch(() => setAllSections([]));
-  }, [authUser?.id, authUser?.isAdmin, authUser?.isEseCoordinator]);
+  }, [
+    authUser?.id,
+    authUser?.isAdmin,
+    authUser?.isSuperUser,
+    authUser?.isEseCoordinator,
+  ]);
   type SchoolAccommodation = {
     id: number;
     name: string;
@@ -4753,7 +4758,7 @@ function App() {
   }, [now, hallPasses]);
 
   const loadAdminNotifications = () => {
-    if (!authUser?.isAdmin) return;
+    if (!authUser?.isAdmin && !authUser?.isSuperUser) return;
     authFetch("/api/admin/notifications")
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setAdminNotifications(data))
@@ -4761,7 +4766,7 @@ function App() {
   };
 
   const loadActiveKiosks = () => {
-    if (!authUser?.isAdmin) return;
+    if (!authUser?.isAdmin && !authUser?.isSuperUser) return;
     authFetch("/api/kiosk/activations?status=active")
       .then((r) => (r.ok ? r.json() : []))
       .then((data) => setActiveKiosks(data))
@@ -4793,12 +4798,15 @@ function App() {
     loadAdminNotifications();
     loadActiveKiosks();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [authUser?.isAdmin]);
+  }, [authUser?.isAdmin, authUser?.isSuperUser]);
 
   useEffect(() => {
     if (activeSection !== "settings") {
       if (settingsTile !== null) setSettingsTile(null);
-    } else if (settingsTile === null && authUser?.isAdmin) {
+    } else if (
+      settingsTile === null &&
+      (authUser?.isAdmin || authUser?.isSuperUser)
+    ) {
       loadAdminNotifications();
       loadActiveKiosks();
     }
@@ -4974,7 +4982,7 @@ function App() {
 
   const hpReportReqIdRef = useRef(0);
   const loadHpReport = async () => {
-    if (!authUser || (!authUser.isAdmin && !authUser.isEseCoordinator)) return;
+    if (!authUser || (!authUser.isAdmin && !authUser.isSuperUser && !authUser.isEseCoordinator)) return;
     if (!/^\d{4}-\d{2}-\d{2}$/.test(hpReportDate)) {
       setHpReportError("Pick a valid date.");
       setHpReportData(null);
@@ -5010,7 +5018,7 @@ function App() {
       activeSection === "hallPasses" &&
       hpView === "reports" &&
       authUser &&
-      (authUser.isAdmin || authUser.isEseCoordinator)
+      (authUser.isAdmin || authUser.isSuperUser || authUser.isEseCoordinator)
     ) {
       loadHpReport();
     }
@@ -5023,19 +5031,28 @@ function App() {
     if (
       authUser &&
       !authUser.isAdmin &&
+      !authUser.isSuperUser &&
       !authUser.isEseCoordinator &&
       hpView !== "overview"
     ) {
       setHpView("overview");
     }
-  }, [authUser?.id, authUser?.isAdmin, authUser?.isEseCoordinator, hpView]);
+  }, [
+    authUser?.id,
+    authUser?.isAdmin,
+    authUser?.isSuperUser,
+    authUser?.isEseCoordinator,
+    hpView,
+  ]);
 
   // On sign-in, default the Hall Passes scope to "mine" for teachers and
   // "all" for admins. Users can still flip the toggle either way after.
   useEffect(() => {
     if (!authUser) return;
-    setPassFilter(authUser.isAdmin ? "all" : "mine");
-  }, [authUser?.id, authUser?.isAdmin]);
+    setPassFilter(
+      authUser.isAdmin || authUser.isSuperUser ? "all" : "mine",
+    );
+  }, [authUser?.id, authUser?.isAdmin, authUser?.isSuperUser]);
 
   const reportReqIdRef = useRef(0);
   const loadReport = async () => {
@@ -5093,7 +5110,7 @@ function App() {
 
   // Load teachers list once for admin/ESE
   useEffect(() => {
-    if (authUser && (authUser.isAdmin || authUser.isEseCoordinator)) {
+    if (authUser && (authUser.isAdmin || authUser.isSuperUser || authUser.isEseCoordinator)) {
       loadReportTeachers();
     }
     // Default selected teacher to the signed-in user when entering the tab
@@ -6510,7 +6527,13 @@ function App() {
     return s ? `${s.firstName} ${s.lastName}` : id;
   };
 
-  const isAdmin = authUser?.isAdmin === true;
+  // SuperUser is a strict superset of Admin — anyone with the
+  // SuperUser flag should pass every Admin gate in the UI. Folding the
+  // bypass into `isAdmin` here means every derived flag below
+  // (`canManageBehaviorLists`, `canEditSchoolStore`, …) automatically
+  // grants SuperUser without dozens of separate edits at each call site.
+  const isAdmin =
+    authUser?.isAdmin === true || authUser?.isSuperUser === true;
   // District Admin counts as a "settings manager" because school-level
   // settings (kiosk, locations, branding, bell schedule, data imports)
   // all fall under their remit when they're acting as a school in their
@@ -7538,7 +7561,7 @@ function App() {
       <main className="app-main">
 
       {activeSection === "hallPasses" && (<>
-      {(authUser?.isAdmin || authUser?.isEseCoordinator) && (
+      {(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
           <button
             type="button"
@@ -7753,9 +7776,9 @@ function App() {
         currentStaffUser={currentStaffUser}
         staffUsers={staffUsers}
         staffDefaults={staffDefaults}
-        canChangeTeacher={Boolean(authUser?.isAdmin)}
+        canChangeTeacher={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         nearDestinations={teacherAllowlistMap[currentStaffUser] ?? []}
-        bypassContactAck={Boolean(authUser?.isAdmin)}
+        bypassContactAck={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
         onCreate={async (payload) => {
@@ -7998,7 +8021,9 @@ function App() {
                     : true,
                 )
                 .map((p) => {
-                  const isAdmin = authUser?.isAdmin === true;
+                  const isAdmin =
+                    authUser?.isAdmin === true ||
+                    authUser?.isSuperUser === true;
                   const isEditing = editingPassId === p.id;
                   const statusClass =
                     p.status === "active"
@@ -8155,7 +8180,7 @@ function App() {
       </div>
 
       </>)}
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
         type ReportTool = {
           key: "overview" | "byDay";
           label: string;
@@ -8252,7 +8277,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "overview" && (() => {
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "overview" && (() => {
         // Build a time series of concurrently-active passes for the selected day,
         // every 15 minutes from 7:00 AM to 4:00 PM local time.
         const [yy, mm, dd] = hpOverviewDate.split("-").map((n) => parseInt(n, 10));
@@ -8631,7 +8656,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "ytd" && (() => {
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "ytd" && (() => {
         const today = new Date();
         const studentGrade = new Map<string, number>();
         for (const s of students) studentGrade.set(s.studentId, s.grade);
@@ -9337,7 +9362,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "research" && (() => {
         const studentInfo = new Map<
           string,
           { name: string; grade: number }
@@ -9648,7 +9673,7 @@ function App() {
         );
       })()}
 
-      {hpView === "reports" && (authUser?.isAdmin || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (<>
+      {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "byDay" && (<>
         <div
           style={{
             borderTopLeftRadius: "var(--radius-lg, 8px)",
@@ -12416,6 +12441,7 @@ function App() {
                   (() => {
                     const isPrivileged =
                       authUser?.isAdmin === true ||
+                      authUser?.isSuperUser === true ||
                       authUser?.isEseCoordinator === true;
                     const periodOptions: number[] = (() => {
                       // Use teacher's own teaching periods if any; else 1..periodCount.
@@ -15536,7 +15562,8 @@ function App() {
                   const s = students.find((s) => s.studentId === row.studentId);
                   const hasNote = !!(row.note && row.note.trim());
                   const canViewNote =
-                    Boolean(authUser?.isAdmin) || isBehaviorSpec;
+                    Boolean(authUser?.isAdmin || authUser?.isSuperUser) ||
+                    isBehaviorSpec;
                   const popoverActive = intervNotePopoverId === row.key;
                   return (
                     <tr key={row.key} style={{ borderBottom: "1px solid #f1f5f9" }}>

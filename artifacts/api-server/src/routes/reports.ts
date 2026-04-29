@@ -87,7 +87,7 @@ router.get("/reports/teachers", requireStaff, async (req, res) => {
   if (schoolId === null) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  if (!staff.isAdmin && !staff.isEseCoordinator) {
+  if (!staff.isSuperUser && !staff.isAdmin && !staff.isEseCoordinator) {
     res.status(403).json({ error: "Admin or ESE coordinator only" });
     return;
   }
@@ -148,7 +148,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
 
   // ---- mode dispatch ----
   if (mode === "student") {
-    if (!staff.isAdmin && !staff.isEseCoordinator) {
+    if (!staff.isSuperUser && !staff.isAdmin && !staff.isEseCoordinator) {
       res.status(403).json({ error: "Admin or ESE coordinator only" });
       return;
     }
@@ -168,7 +168,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
   }
 
   // Teacher can only see their own data; admin / ESE can see anyone's.
-  const isPrivileged = staff.isAdmin || staff.isEseCoordinator;
+  const isPrivileged = staff.isSuperUser || staff.isAdmin || staff.isEseCoordinator;
   if (!isPrivileged && teacherIdNum !== staff.id) {
     res.status(403).json({ error: "You may only view your own usage" });
     return;
@@ -452,7 +452,7 @@ router.get("/reports/accommodations", requireStaff, async (req, res) => {
 router.get("/reports/hall-passes", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  if (!staff.isAdmin && !staff.isEseCoordinator) {
+  if (!staff.isSuperUser && !staff.isAdmin && !staff.isEseCoordinator) {
     res.status(403).json({ error: "Admin or ESE coordinator only" });
     return;
   }
@@ -611,7 +611,7 @@ router.get("/reports/pbis", requireStaff, async (req, res) => {
   }
 
   const isPrivileged =
-    staff.isAdmin || staff.isEseCoordinator || staff.isPbisCoordinator;
+    staff.isSuperUser || staff.isAdmin || staff.isEseCoordinator || staff.isPbisCoordinator;
 
   const reasonFilter =
     typeof req.query.reason === "string" && req.query.reason.trim()

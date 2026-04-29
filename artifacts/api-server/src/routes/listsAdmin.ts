@@ -63,7 +63,11 @@ function requireRole(check: (s: typeof staffTable.$inferSelect) => boolean, labe
 // file teachers can manage their OWN classroom-scope rows (see per-row checks
 // further down in this file).
 const requireSchoolPbisAdmin = requireRole(
-  (s) => s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator,
+  (s) =>
+    s.isSuperUser ||
+    s.isAdmin ||
+    s.isBehaviorSpecialist ||
+    s.isMtssCoordinator,
   "Admin, behavior specialist, or MTSS coordinator",
 );
 
@@ -75,10 +79,19 @@ function canWriteRow(
   row: { ownerScope: string; ownerStaffId: number | null },
 ) {
   if (row.ownerScope === "school") {
-    return !!(staff.isAdmin || staff.isBehaviorSpecialist || staff.isMtssCoordinator);
+    return !!(
+      staff.isSuperUser ||
+      staff.isAdmin ||
+      staff.isBehaviorSpecialist ||
+      staff.isMtssCoordinator
+    );
   }
   // teacher-scope
-  return !!staff.isAdmin || row.ownerStaffId === staff.id;
+  return (
+    !!staff.isSuperUser ||
+    !!staff.isAdmin ||
+    row.ownerStaffId === staff.id
+  );
 }
 
 function normalizeScope(v: unknown): "school" | "teacher" | null {
@@ -87,7 +100,11 @@ function normalizeScope(v: unknown): "school" | "teacher" | null {
 }
 const requireInterventionAdmin = requireRole(
   (s) =>
-    s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator || s.isDean,
+    s.isSuperUser ||
+    s.isAdmin ||
+    s.isBehaviorSpecialist ||
+    s.isMtssCoordinator ||
+    s.isDean,
   "Admin, behavior specialist, MTSS coordinator, or dean",
 );
 
@@ -140,7 +157,14 @@ router.post("/pbis-reasons", async (req, res) => {
   if (!schoolId) return;
   const scope = normalizeScope(req.body?.scope) ?? "school";
   if (scope === "school") {
-    if (!(staff.isAdmin || staff.isBehaviorSpecialist || staff.isMtssCoordinator)) {
+    if (
+      !(
+        staff.isSuperUser ||
+        staff.isAdmin ||
+        staff.isBehaviorSpecialist ||
+        staff.isMtssCoordinator
+      )
+    ) {
       res
         .status(403)
         .json({ error: "Admin, behavior specialist, or MTSS coordinator only" });
@@ -419,7 +443,14 @@ router.post("/pbis-note-templates", async (req, res) => {
   if (!schoolId) return;
   const tplScope = normalizeScope(req.body?.scope) ?? "school";
   if (tplScope === "school") {
-    if (!(staff.isAdmin || staff.isBehaviorSpecialist || staff.isMtssCoordinator)) {
+    if (
+      !(
+        staff.isSuperUser ||
+        staff.isAdmin ||
+        staff.isBehaviorSpecialist ||
+        staff.isMtssCoordinator
+      )
+    ) {
       res
         .status(403)
         .json({ error: "Admin, behavior specialist, or MTSS coordinator only" });

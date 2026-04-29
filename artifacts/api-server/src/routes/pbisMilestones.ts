@@ -20,7 +20,7 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
 }
 
 function isManager(s: StaffRow): boolean {
-  return s.isAdmin || s.isPbisCoordinator;
+  return s.isSuperUser || s.isAdmin || s.isPbisCoordinator;
 }
 
 router.get("/pbis-milestones", async (req: Request, res: Response) => {

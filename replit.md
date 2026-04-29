@@ -211,6 +211,14 @@ Springstead=2, NCT=3, Weeki=4, Powell=5, Test Middle=36). The session sets
 that id. SuperUser is intentionally district-wide and is the only role that
 escapes school scoping.
 
+SuperUser also implicitly inherits all privileges: every role-OR gate on the
+server (and the client's `isAdmin` derivation in App.tsx) treats
+`isSuperUser === true` as satisfying the check. New role-gated routes MUST
+include `isSuperUser` in their OR chain. The carve-outs are role-management
+code in `adminStaff.ts:238/270/385` (which intentionally distinguishes
+admin vs super) and `auth.ts:25` (field passthrough). Sweep last
+completed 2026-04-29 — see git log for the patch set.
+
 `student_id` and `displayName` are NOT globally unique across schools, so
 membership filters in JS are not sufficient — every query that touches
 `students`, `class_sections`, `section_roster`, `student_accommodations`,

@@ -33,7 +33,7 @@ function canManageEntry(
   staff: StaffRow,
   entry: typeof pbisEntriesTable.$inferSelect,
 ): boolean {
-  if (staff.isAdmin || staff.isPbisCoordinator) return true;
+  if (staff.isSuperUser || staff.isAdmin || staff.isPbisCoordinator) return true;
   return entry.staffId !== null && entry.staffId === staff.id;
 }
 

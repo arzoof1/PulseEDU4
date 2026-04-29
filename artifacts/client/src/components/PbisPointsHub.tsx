@@ -82,6 +82,7 @@ type Me = {
   id: number;
   displayName?: string;
   isAdmin?: boolean;
+  isSuperUser?: boolean;
   isEseCoordinator?: boolean;
   isMtssCoordinator?: boolean;
   isBehaviorSpecialist?: boolean;
@@ -133,6 +134,7 @@ export default function PbisPointsHub() {
   // visibility for their roles. Everyone else only sees their own roster
   // (gated server-side too).
   const canViewAllTeachers = !!(
+    me?.isSuperUser ||
     me?.isAdmin ||
     me?.isEseCoordinator ||
     me?.isMtssCoordinator ||
@@ -153,7 +155,11 @@ export default function PbisPointsHub() {
         const meJson = (await meRes.json()) as Me;
         if (cancelled) return;
 
-        const adminScope = !!(meJson.isAdmin || meJson.isEseCoordinator);
+        const adminScope = !!(
+          meJson.isSuperUser ||
+          meJson.isAdmin ||
+          meJson.isEseCoordinator
+        );
 
         const [schedRes, studRes, reasonsRes, pbisRes, tplRes] =
           await Promise.all([
@@ -2523,7 +2529,12 @@ export function SettingsView({
   // PBIS coordinator is intentionally NOT in the school-edit allow-list.
   const canEdit =
     viewScope === "school"
-      ? !!(me?.isAdmin || me?.isBehaviorSpecialist || me?.isMtssCoordinator)
+      ? !!(
+          me?.isSuperUser ||
+          me?.isAdmin ||
+          me?.isBehaviorSpecialist ||
+          me?.isMtssCoordinator
+        )
       : !!me; // any signed-in staff can manage their own teacher-scope rows
 
   // Local working copy so drag-reorders feel instant; we PATCH on drop.

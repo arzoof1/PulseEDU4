@@ -243,7 +243,10 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       if (
         s &&
         s.active &&
-        (s.isAdmin || s.isPbisCoordinator || s.isBehaviorSpecialist)
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isPbisCoordinator ||
+          s.isBehaviorSpecialist)
       ) {
         allowed = true;
       }

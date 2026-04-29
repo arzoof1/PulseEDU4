@@ -47,6 +47,7 @@ router.get("/schedule", async (req: Request, res: Response) => {
   // non-privileged user can't bypass UI checks by hitting the URL directly.
   if (
     wantAll &&
+    !staff.isSuperUser &&
     !staff.isAdmin &&
     !staff.isEseCoordinator &&
     !staff.isMtssCoordinator &&

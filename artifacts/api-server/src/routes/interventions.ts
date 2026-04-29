@@ -50,7 +50,8 @@ router.get("/interventions", requireStaff, async (req, res) => {
   if (schoolId === null) return;
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
-  const isPrivileged = staff.isAdmin || staff.isBehaviorSpecialist;
+  const isPrivileged =
+    staff.isSuperUser || staff.isAdmin || staff.isBehaviorSpecialist;
   const scope = eq(interventionEntriesTable.schoolId, schoolId);
   const rows = await db
     .select()

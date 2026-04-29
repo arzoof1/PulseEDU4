@@ -36,7 +36,7 @@ async function requireEseOrAdmin(
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
-  if (!staff.isAdmin && !staff.isEseCoordinator) {
+  if (!staff.isAdmin && !staff.isEseCoordinator && !staff.isSuperUser) {
     res.status(403).json({ error: "ESE coordinator or admin only" });
     return;
   }

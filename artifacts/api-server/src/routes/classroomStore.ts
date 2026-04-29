@@ -42,7 +42,7 @@ function canWriteRow(
   staff: typeof staffTable.$inferSelect,
   row: { ownerStaffId: number },
 ) {
-  return !!staff.isAdmin || row.ownerStaffId === staff.id;
+  return !!staff.isSuperUser || !!staff.isAdmin || row.ownerStaffId === staff.id;
 }
 
 function nowIso() {

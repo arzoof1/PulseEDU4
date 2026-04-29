@@ -30,7 +30,7 @@ function requireAdmin() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!staff.isAdmin) {
+    if (!staff.isAdmin && !staff.isSuperUser) {
       res.status(403).json({ error: "Admin only" });
       return;
     }

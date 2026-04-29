@@ -58,7 +58,11 @@ function requireRole(
 
 const requirePolarityAdmin = requireRole(
   (s) =>
-    s.isAdmin || s.isBehaviorSpecialist || s.isMtssCoordinator || s.isDean,
+    s.isSuperUser ||
+    s.isAdmin ||
+    s.isBehaviorSpecialist ||
+    s.isMtssCoordinator ||
+    s.isDean,
   "Admin, behavior specialist, MTSS coordinator, or dean",
 );
 

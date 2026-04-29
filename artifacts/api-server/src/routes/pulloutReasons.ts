@@ -45,6 +45,7 @@ function requireReasonAdmin() {
       return;
     }
     if (
+      !staff.isSuperUser &&
       !staff.isAdmin &&
       !staff.isBehaviorSpecialist &&
       !staff.isMtssCoordinator &&

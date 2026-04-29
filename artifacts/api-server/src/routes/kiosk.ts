@@ -64,7 +64,7 @@ async function requireAdmin(
   await requireStaff(req, res, () => {
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
-    if (!staff.isAdmin) {
+    if (!staff.isAdmin && !staff.isSuperUser) {
       res.status(403).json({ error: "Admin only" });
       return;
     }
