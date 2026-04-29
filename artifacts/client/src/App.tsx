@@ -7717,27 +7717,7 @@ function App() {
           className="cp-cta-button cp-cta-button--blue"
           onClick={() => setCreatePassOpen(true)}
         >
-          <svg viewBox="0 0 240 130" fill="currentColor" aria-hidden="true">
-            <g transform="translate(0,60)">
-              <ellipse cx="22" cy="35" rx="20" ry="22" />
-              <ellipse cx="68" cy="32" rx="26" ry="25" />
-              <circle cx="100" cy="14" r="9" />
-              <circle cx="111" cy="25" r="7.5" />
-              <circle cx="115" cy="36" r="6.5" />
-              <circle cx="112" cy="47" r="5.5" />
-              <circle cx="103" cy="55" r="4.5" />
-            </g>
-            <g transform="translate(112,0)">
-              <ellipse cx="22" cy="35" rx="20" ry="22" />
-              <ellipse cx="68" cy="32" rx="26" ry="25" />
-              <circle cx="100" cy="14" r="9" />
-              <circle cx="111" cy="25" r="7.5" />
-              <circle cx="115" cy="36" r="6.5" />
-              <circle cx="112" cy="47" r="5.5" />
-              <circle cx="103" cy="55" r="4.5" />
-            </g>
-          </svg>
-          Create Pass
+          + Create Pass
         </button>
       </div>
       {(() => {
@@ -10086,27 +10066,7 @@ function App() {
           className="cp-cta-button cp-cta-button--blue"
           onClick={() => setLogTardyOpen(true)}
         >
-          <svg viewBox="0 0 240 130" fill="currentColor" aria-hidden="true">
-            <g transform="translate(0,60)">
-              <ellipse cx="22" cy="35" rx="20" ry="22" />
-              <ellipse cx="68" cy="32" rx="26" ry="25" />
-              <circle cx="100" cy="14" r="9" />
-              <circle cx="111" cy="25" r="7.5" />
-              <circle cx="115" cy="36" r="6.5" />
-              <circle cx="112" cy="47" r="5.5" />
-              <circle cx="103" cy="55" r="4.5" />
-            </g>
-            <g transform="translate(112,0)">
-              <ellipse cx="22" cy="35" rx="20" ry="22" />
-              <ellipse cx="68" cy="32" rx="26" ry="25" />
-              <circle cx="100" cy="14" r="9" />
-              <circle cx="111" cy="25" r="7.5" />
-              <circle cx="115" cy="36" r="6.5" />
-              <circle cx="112" cy="47" r="5.5" />
-              <circle cx="103" cy="55" r="4.5" />
-            </g>
-          </svg>
-          Log Tardy
+          + Log Tardy
         </button>
       </div>
       <div className="card" style={{ display: "none" }}>
