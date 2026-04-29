@@ -3768,13 +3768,17 @@ function App() {
     SchoolAccommodation[]
   >([]);
   useEffect(() => {
+    if (!authUser?.id) {
+      setSchoolAccommodations([]);
+      return;
+    }
     authFetch("/api/school-accommodations", { credentials: "include" })
       .then((r) => (r.ok ? r.json() : []))
       .then((rows: SchoolAccommodation[]) =>
         setSchoolAccommodations(Array.isArray(rows) ? rows : []),
       )
       .catch(() => {});
-  }, []);
+  }, [authUser?.id]);
   const accCategoryByName = useMemo(() => {
     const m = new Map<string, SchoolAccommodation["category"]>();
     for (const a of schoolAccommodations) m.set(a.name, a.category);
@@ -3795,16 +3799,37 @@ function App() {
     .filter((s) => !s.isPlanning)
     .map((s) => s.period)
     .sort((a, b) => a - b);
-  // Daily Class Log state
+  // Daily Class Log state.
+  // The Class Log was redesigned to log per-student-per-accommodation
+  // status (provided/refused) for any chosen date + period instead of the
+  // older "select all + confirm absent + apply" flow. The new state shape:
+  //   - dailyDate          chosen YYYY-MM-DD (defaults to today)
+  //   - dailyExpandedSid   which student card is currently open in the roster
+  //   - dailyEntries       per-student per-acc status; absent students simply
+  //                        have no entries (so absence is implicit, no
+  //                        attendance checkbox required).
+  // `bellPeriods` is fetched once for the school's default bell schedule and
+  // is used to autoselect the period currently in session.
   const [dailyPeriod, setDailyPeriod] = useState<string>("");
   const [dailyTeacherId, setDailyTeacherId] = useState<number | null>(null);
-  const [dailyAbsent, setDailyAbsent] = useState<Set<string>>(new Set());
-  const [dailyAbsentConfirmed, setDailyAbsentConfirmed] = useState(false);
-  const [dailySelectedAccs, setDailySelectedAccs] = useState<Set<number>>(
-    new Set(),
-  );
+  const [dailyDate, setDailyDate] = useState<string>(() => {
+    const now = new Date();
+    const y = now.getFullYear();
+    const m = String(now.getMonth() + 1).padStart(2, "0");
+    const d = String(now.getDate()).padStart(2, "0");
+    return `${y}-${m}-${d}`;
+  });
+  const [dailyExpandedSid, setDailyExpandedSid] = useState<string | null>(null);
+  type DailyStatus = "provided" | "refused";
+  const [dailyEntries, setDailyEntries] = useState<
+    Record<string, Record<number, DailyStatus>>
+  >({});
   const [dailySubmitMsg, setDailySubmitMsg] = useState("");
-  const [dailyApplyPulse, setDailyApplyPulse] = useState(false);
+  const [bellPeriods, setBellPeriods] = useState<
+    { periodNumber: number; name: string; startTime: string; endTime: string }[]
+  >([]);
+  const [bellPeriodsLoaded, setBellPeriodsLoaded] = useState(false);
+  const [autoPeriodApplied, setAutoPeriodApplied] = useState(false);
   // Reports sub-tab state
   type ReportRange = "today" | "7d" | "30d" | "custom";
   const [reportRange, setReportRange] = useState<ReportRange>("7d");
@@ -5846,13 +5871,38 @@ function App() {
     }
   };
 
+  // Submit the new per-student Class Log: builds an `entries` array from
+  // `dailyEntries`, posts to /accommodation-logs/bulk-per-student, and
+  // surfaces the server's inserted/skipped counts.
   const submitDailyLog = async () => {
     if (!dailyPeriod) {
       setDailySubmitMsg("Pick a period first.");
       return;
     }
-    if (dailySelectedAccs.size === 0) {
-      setDailySubmitMsg("Select at least one accommodation.");
+    const entries: {
+      studentId: string;
+      accommodationId: number;
+      status: DailyStatus;
+    }[] = [];
+    let studentsTouched = 0;
+    for (const [sid, perAcc] of Object.entries(dailyEntries)) {
+      const accIds = Object.keys(perAcc);
+      if (accIds.length === 0) continue;
+      studentsTouched++;
+      for (const accIdStr of accIds) {
+        const accId = Number(accIdStr);
+        if (!Number.isFinite(accId)) continue;
+        entries.push({
+          studentId: sid,
+          accommodationId: accId,
+          status: perAcc[accId],
+        });
+      }
+    }
+    if (entries.length === 0) {
+      setDailySubmitMsg(
+        "Open at least one student and mark Provided or Refused.",
+      );
       return;
     }
     const periodNum = Number(dailyPeriod);
@@ -5862,71 +5912,52 @@ function App() {
       authUser?.isEseCoordinator === true ||
       authUser?.isMtssCoordinator === true ||
       authUser?.isBehaviorSpecialist === true;
-    const effectiveSections =
-      isElevated && dailyTeacherId != null
-        ? allSections.filter((s) => s.teacherStaffId === dailyTeacherId)
-        : mySections;
-    const effectivePeriodRoster: Record<string, string[]> = Object.fromEntries(
-      effectiveSections.map((s) => [String(s.period), s.studentIds]),
-    );
-    const allInPeriod = effectivePeriodRoster[dailyPeriod] ?? [];
-    const submitStaffId =
-      isElevated && dailyTeacherId != null ? dailyTeacherId : authUser?.id;
-    // Only send students who (a) are in the period, (b) are not absent, and
-    // (c) actually have at least one IEP/504/ELL accommodation. Sending the
-    // whole roster makes the server's "skipped not on student's plan" count
-    // huge and confusing.
-    const eligibleCats = new Set(["IEP", "504", "ELL"]);
-    const studentHasTrackedAcc = (id: string) => {
-      const st = students.find((s) => s.studentId === id);
-      if (!st) return false;
-      for (const name of st.accommodations ?? []) {
-        const cat = accCategoryByName.get(name);
-        if (cat && eligibleCats.has(cat)) return true;
-      }
-      return false;
-    };
-    const present = allInPeriod.filter(
-      (id) => !dailyAbsent.has(id) && studentHasTrackedAcc(id),
-    );
-    if (present.length === 0) {
-      setDailySubmitMsg("No present students with accommodations to log.");
-      return;
-    }
+    // For elevated users logging on behalf of a specific teacher, send
+    // `actingAsStaffId` so the server attributes the section to that
+    // teacher (not the elevated principal). The server validates the
+    // delegation against the principal's role + same-school membership.
+    const actingAsStaffId =
+      isElevated && dailyTeacherId != null && dailyTeacherId !== authUser?.id
+        ? dailyTeacherId
+        : null;
     setDailySubmitMsg("Submitting...");
     try {
-      const url = submitStaffId
-        ? `/api/accommodation-logs/bulk?staffId=${submitStaffId}`
-        : "/api/accommodation-logs/bulk";
-      const res = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        credentials: "include",
-        body: JSON.stringify({
-          period: periodNum,
-          presentStudentIds: present,
-          accommodationIds: Array.from(dailySelectedAccs),
-          staffId: submitStaffId,
-        }),
-      });
+      const res = await authFetch(
+        "/api/accommodation-logs/bulk-per-student",
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+          body: JSON.stringify({
+            period: periodNum,
+            date: dailyDate,
+            entries,
+            ...(actingAsStaffId != null
+              ? { actingAsStaffId }
+              : {}),
+          }),
+        },
+      );
       if (!res.ok) {
         const text = await res.text().catch(() => "");
         throw new Error(text || `HTTP ${res.status}`);
       }
       const data = await res.json();
-      const studentCount = present.length;
-      const recordsWord =
-        data.inserted === 1 ? "record" : "records";
-      const studentsWord =
-        studentCount === 1 ? "student" : "students";
-      let msg = `${data.inserted} ${recordsWord} logged for ${studentCount} present ${studentsWord}.`;
+      const recordsWord = data.inserted === 1 ? "record" : "records";
+      const studentsWord = studentsTouched === 1 ? "student" : "students";
+      let msg = `${data.inserted} ${recordsWord} logged for ${studentsTouched} ${studentsWord} on ${data.date}.`;
       if (data.skippedDuplicate) {
-        msg += ` (${data.skippedDuplicate} already logged earlier today.)`;
+        msg += ` (${data.skippedDuplicate} already logged for that day.)`;
+      }
+      if (data.skippedNotEntitled) {
+        msg += ` (${data.skippedNotEntitled} skipped — not on student's plan.)`;
+      }
+      if (data.skippedNotRostered) {
+        msg += ` (${data.skippedNotRostered} skipped — not on roster.)`;
       }
       setDailySubmitMsg(msg);
-      setDailySelectedAccs(new Set());
-      setDailyApplyPulse(true);
-      window.setTimeout(() => setDailyApplyPulse(false), 1500);
+      setDailyEntries({});
+      setDailyExpandedSid(null);
       playEkgBeep();
       loadAccommodationLogs();
     } catch (err) {
@@ -5935,6 +5966,97 @@ function App() {
       );
     }
   };
+
+  // Fetch the school's active bell schedule once on mount so the Class Log
+  // can autoselect "the period currently in session". Teachers can still
+  // override the period dropdown afterwards.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/bell-schedules/active", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { periods: [] }))
+      .then(
+        (data: {
+          periods?: {
+            periodNumber: number;
+            name: string;
+            startTime: string;
+            endTime: string;
+          }[];
+        }) => {
+          if (cancelled) return;
+          setBellPeriods(Array.isArray(data?.periods) ? data.periods : []);
+          setBellPeriodsLoaded(true);
+        },
+      )
+      .catch(() => {
+        if (cancelled) return;
+        setBellPeriods([]);
+        setBellPeriodsLoaded(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Compute the period that's currently in session by matching today's
+  // local clock-time to a bell-schedule window. Returns null when no
+  // schedule is available, the user is outside any window, or the user
+  // teaches no period today.
+  const currentBellPeriod = (() => {
+    if (!bellPeriodsLoaded || bellPeriods.length === 0) return null;
+    const now = new Date();
+    const hh = String(now.getHours()).padStart(2, "0");
+    const mm = String(now.getMinutes()).padStart(2, "0");
+    const clock = `${hh}:${mm}`;
+    for (const p of bellPeriods) {
+      if (clock >= p.startTime && clock <= p.endTime) return p.periodNumber;
+    }
+    return null;
+  })();
+
+  // Auto-fill the period dropdown the first time the teacher opens the
+  // Class Log on a date where we can identify a "current" period that they
+  // actually teach (or, for elevated users, that the chosen teacher
+  // teaches). Only runs once per session/date so manual changes stick.
+  useEffect(() => {
+    if (autoPeriodApplied) return;
+    if (activeSection !== "accommodations") return;
+    if (accView !== "daily") return;
+    if (!bellPeriodsLoaded) return;
+    if (dailyPeriod) return;
+    const isElevated =
+      authUser?.isAdmin === true ||
+      authUser?.isSuperUser === true ||
+      authUser?.isEseCoordinator === true ||
+      authUser?.isMtssCoordinator === true ||
+      authUser?.isBehaviorSpecialist === true;
+    const sourceSections =
+      isElevated && dailyTeacherId != null
+        ? allSections.filter((s) => s.teacherStaffId === dailyTeacherId)
+        : mySections;
+    const taughtPeriods = sourceSections
+      .filter((s) => !s.isPlanning)
+      .map((s) => s.period);
+    if (taughtPeriods.length === 0) return;
+    if (
+      currentBellPeriod != null &&
+      taughtPeriods.includes(currentBellPeriod)
+    ) {
+      setDailyPeriod(String(currentBellPeriod));
+      setAutoPeriodApplied(true);
+    }
+  }, [
+    activeSection,
+    accView,
+    bellPeriodsLoaded,
+    dailyPeriod,
+    dailyTeacherId,
+    currentBellPeriod,
+    autoPeriodApplied,
+    allSections,
+    mySections,
+    authUser,
+  ]);
 
   const eseAssignSelected = async () => {
     if (!eseStudentId || eseAddSelected.size === 0) return;
@@ -11230,14 +11352,6 @@ function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => setAccView("student")}
-                    disabled={accView === "student"}
-                    style={{ marginRight: "0.25rem" }}
-                  >
-                    By Student
-                  </button>
-                  <button
-                    type="button"
                     onClick={() => setAccView("daily")}
                     disabled={accView === "daily"}
                     style={{ marginRight: "0.25rem" }}
@@ -11704,66 +11818,14 @@ function App() {
                       </>
                     );
                   })()
-                ) : accView === "student" ? (
-                  <>
-                    <h3 style={{ marginTop: 0 }}>Student Accommodations</h3>
-                    <div
-                      style={{
-                        marginBottom: "0.5rem",
-                        display: "flex",
-                        alignItems: "center",
-                        gap: "0.5rem",
-                      }}
-                    >
-                      <label
-                        style={{ fontWeight: 600 }}
-                        htmlFor="acc-student-combobox"
-                      >
-                        Student:
-                      </label>
-                      <StudentCombobox
-                        students={students}
-                        value={accStudentId}
-                        onChange={setAccStudentId}
-                        isAdmin={Boolean(
-                          authUser?.isAdmin || authUser?.isSuperUser,
-                        )}
-                      />
-                    </div>
-                    {!accStudentId ? (
-                      <div>Please select a student.</div>
-                    ) : accs.length === 0 ? (
-                      <div>No accommodations on file</div>
-                    ) : (
-                      <ul style={{ margin: 0 }}>
-                        {accs.map((a) => (
-                          <li key={a} style={{ marginBottom: "0.25rem" }}>
-                            {a}{" "}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                logAccommodationProvided(accStudentId, a, null)
-                              }
-                            >
-                              Log Provided
-                            </button>{" "}
-                            <button
-                              type="button"
-                              onClick={() =>
-                                logAccommodationRefused(accStudentId, a, null)
-                              }
-                              style={{ background: "#fde2e2" }}
-                              title="Mark that the student refused this accommodation today"
-                            >
-                              Refused today
-                            </button>
-                          </li>
-                        ))}
-                      </ul>
-                    )}
-                  </>
                 ) : accView === "daily" ? (
                   (() => {
+                    // ----- Class Log (per-student redesign) -----
+                    // Roster on the left; click a student to open an inline
+                    // dropdown of THAT student's tracked plan accommodations
+                    // with Provided/Refused toggle buttons. Period dropdown
+                    // auto-fills with the bell-schedule's current period;
+                    // date defaults to today but is freely backdatable.
                     const isElevated =
                       authUser?.isAdmin === true ||
                       authUser?.isSuperUser === true ||
@@ -11802,44 +11864,35 @@ function App() {
                     const allInPeriod = dailyPeriod
                       ? effectivePeriodRoster[dailyPeriod] ?? []
                       : [];
-                    const presentIds = allInPeriod.filter(
-                      (id) => !dailyAbsent.has(id),
-                    );
-                    const presentStudents = presentIds
-                      .map((id) =>
-                        students.find((st) => st.studentId === id),
-                      )
-                      .filter(
-                        (s): s is (typeof students)[number] => s !== undefined,
-                      );
-                    const accUnion = Array.from(
-                      new Set(
-                        presentStudents.flatMap(
-                          (s) => s.accommodations ?? [],
-                        ),
-                      ),
-                    );
-                    const accUnionWithIds = schoolAccs
-                      .filter((sa) => accUnion.includes(sa.name))
-                      .sort((a, b) =>
+                    const trackedCats = new Set<
+                      SchoolAccommodation["category"]
+                    >(["IEP", "504", "ELL"]);
+                    type StudentTrackedAcc = {
+                      id: number;
+                      name: string;
+                      category: SchoolAccommodation["category"];
+                    };
+                    const trackedAccsForStudent = (
+                      st: (typeof students)[number],
+                    ): StudentTrackedAcc[] => {
+                      const out: StudentTrackedAcc[] = [];
+                      const seen = new Set<number>();
+                      for (const name of st.accommodations ?? []) {
+                        const cat = accCategoryByName.get(name);
+                        if (!cat || !trackedCats.has(cat)) continue;
+                        const sa = schoolAccommodations.find(
+                          (a) => a.name === name,
+                        );
+                        if (!sa) continue;
+                        if (seen.has(sa.id)) continue;
+                        seen.add(sa.id);
+                        out.push({ id: sa.id, name: sa.name, category: cat });
+                      }
+                      return out.sort((a, b) =>
                         a.category === b.category
                           ? a.name.localeCompare(b.name)
                           : a.category.localeCompare(b.category),
                       );
-                    const trackedCats = new Set<
-                      SchoolAccommodation["category"]
-                    >(["IEP", "504", "ELL"]);
-                    const studentTrackedCats = (
-                      st: (typeof students)[number],
-                    ): SchoolAccommodation["category"][] => {
-                      const seen = new Set<SchoolAccommodation["category"]>();
-                      for (const name of st.accommodations ?? []) {
-                        const cat = accCategoryByName.get(name);
-                        if (cat && trackedCats.has(cat)) seen.add(cat);
-                      }
-                      return ["IEP", "504", "ELL"].filter((c) =>
-                        seen.has(c as SchoolAccommodation["category"]),
-                      ) as SchoolAccommodation["category"][];
                     };
                     const rosterStudents = allInPeriod
                       .map((id) =>
@@ -11847,15 +11900,16 @@ function App() {
                       )
                       .filter(
                         (s): s is (typeof students)[number] => s !== undefined,
+                      )
+                      .map((st) => ({
+                        student: st,
+                        accs: trackedAccsForStudent(st),
+                      }))
+                      .filter((row) => row.accs.length > 0)
+                      .sort((a, b) =>
+                        a.student.lastName.localeCompare(b.student.lastName) ||
+                        a.student.firstName.localeCompare(b.student.firstName),
                       );
-                    const allInPeriodStudents = rosterStudents.filter(
-                      (st) => studentTrackedCats(st).length > 0,
-                    );
-                    const rosterTotal = allInPeriod.length;
-                    const rosterMatched = rosterStudents.length;
-                    const presentEligibleCount = allInPeriodStudents.filter(
-                      (st) => !dailyAbsent.has(st.studentId),
-                    ).length;
                     const catColor = (
                       c: SchoolAccommodation["category"],
                     ): string =>
@@ -11866,6 +11920,39 @@ function App() {
                           : c === "ELL"
                             ? "#0891b2"
                             : "#64748b";
+                    const setEntry = (
+                      sid: string,
+                      accId: number,
+                      next: DailyStatus | null,
+                    ) => {
+                      setDailyEntries((prev) => {
+                        const existing = prev[sid] ?? {};
+                        // Toggle off if same value clicked again.
+                        if (next === null || existing[accId] === next) {
+                          const { [accId]: _drop, ...rest } = existing;
+                          if (Object.keys(rest).length === 0) {
+                            const { [sid]: _dropSid, ...withoutSid } = prev;
+                            return withoutSid;
+                          }
+                          return { ...prev, [sid]: rest };
+                        }
+                        return {
+                          ...prev,
+                          [sid]: { ...existing, [accId]: next },
+                        };
+                      });
+                    };
+                    const studentsTouched = Object.keys(dailyEntries).filter(
+                      (sid) =>
+                        Object.keys(dailyEntries[sid] ?? {}).length > 0,
+                    ).length;
+                    const todayKey = (() => {
+                      const n = new Date();
+                      const y = n.getFullYear();
+                      const m = String(n.getMonth() + 1).padStart(2, "0");
+                      const d = String(n.getDate()).padStart(2, "0");
+                      return `${y}-${m}-${d}`;
+                    })();
                     return (
                       <>
                         <div
@@ -11934,10 +12021,10 @@ function App() {
                                     v === "" ? null : Number(v),
                                   );
                                   setDailyPeriod("");
-                                  setDailyAbsent(new Set());
-                                  setDailyAbsentConfirmed(false);
-                                  setDailySelectedAccs(new Set());
+                                  setDailyEntries({});
+                                  setDailyExpandedSid(null);
                                   setDailySubmitMsg("");
+                                  setAutoPeriodApplied(false);
                                 }}
                                 style={{ minWidth: 220 }}
                               >
@@ -11951,17 +12038,37 @@ function App() {
                             </label>
                           </div>
                         )}
-                        <div style={{ marginBottom: "0.75rem" }}>
+                        <div
+                          style={{
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: "0.75rem",
+                            alignItems: "center",
+                            marginBottom: "0.75rem",
+                          }}
+                        >
+                          <label>
+                            Date:{" "}
+                            <input
+                              type="date"
+                              value={dailyDate}
+                              max={todayKey}
+                              onChange={(e) => {
+                                setDailyDate(e.target.value || todayKey);
+                                setDailySubmitMsg("");
+                              }}
+                            />
+                          </label>
                           <label>
                             Period:{" "}
                             <select
                               value={dailyPeriod}
                               onChange={(e) => {
                                 setDailyPeriod(e.target.value);
-                                setDailyAbsent(new Set());
-                                setDailyAbsentConfirmed(false);
-                                setDailySelectedAccs(new Set());
+                                setDailyEntries({});
+                                setDailyExpandedSid(null);
                                 setDailySubmitMsg("");
+                                setAutoPeriodApplied(true);
                               }}
                               disabled={
                                 isElevated && dailyTeacherId == null
@@ -11971,20 +12078,29 @@ function App() {
                               {effectivePeriods.map((p) => (
                                 <option key={p} value={String(p)}>
                                   Period {p}
+                                  {currentBellPeriod === p
+                                    ? " (current)"
+                                    : ""}
                                 </option>
                               ))}
                             </select>
                           </label>
+                          {currentBellPeriod != null &&
+                            dailyPeriod &&
+                            Number(dailyPeriod) !== currentBellPeriod && (
+                              <span
+                                style={{ color: "#666", fontSize: "0.85rem" }}
+                              >
+                                Logging Period {dailyPeriod} — current period
+                                is {currentBellPeriod}.
+                              </span>
+                            )}
                           {isElevated && dailyTeacherId == null ? (
-                            <span
-                              style={{ marginLeft: "0.5rem", color: "#666" }}
-                            >
+                            <span style={{ color: "#666" }}>
                               Pick a teacher first.
                             </span>
                           ) : effectivePeriods.length === 0 ? (
-                            <span
-                              style={{ marginLeft: "0.5rem", color: "#666" }}
-                            >
+                            <span style={{ color: "#666" }}>
                               {isElevated && dailyTeacherId != null
                                 ? "No teaching periods for this teacher."
                                 : "No teaching periods assigned to you."}
@@ -11993,445 +12109,281 @@ function App() {
                         </div>
                         {!dailyPeriod ? (
                           <div>Pick a period to start.</div>
+                        ) : rosterStudents.length === 0 ? (
+                          <div>
+                            No students in this period have IEP/504/ELL
+                            accommodations.
+                          </div>
                         ) : (
-                          <div
-                            style={{
-                              display: "grid",
-                              gridTemplateColumns: "1fr 1fr",
-                              gap: "1rem",
-                            }}
-                          >
-                            <div>
-                              <h4 style={{ margin: "0 0 0.5rem" }}>
-                                Students with accommodations (
-                                {allInPeriodStudents.length}) — check absentees
-                              </h4>
-                              <div
-                                style={{
-                                  marginBottom: "0.5rem",
-                                  padding: "0.5rem 0.75rem",
-                                  background: dailyAbsentConfirmed
-                                    ? "rgba(13, 148, 136, 0.08)"
-                                    : "rgba(234, 179, 8, 0.08)",
-                                  border: `1px solid ${
-                                    dailyAbsentConfirmed
-                                      ? "rgba(13, 148, 136, 0.4)"
-                                      : "rgba(234, 179, 8, 0.4)"
-                                  }`,
-                                  borderRadius: 6,
-                                }}
-                              >
-                                <label
-                                  style={{
-                                    display: "flex",
-                                    gap: "0.5rem",
-                                    alignItems: "center",
-                                    cursor: "pointer",
-                                    fontSize: 14,
-                                  }}
-                                >
-                                  <input
-                                    type="checkbox"
-                                    checked={dailyAbsentConfirmed}
-                                    onChange={(e) =>
-                                      setDailyAbsentConfirmed(
-                                        e.target.checked,
-                                      )
-                                    }
-                                    disabled={
-                                      allInPeriodStudents.length === 0
-                                    }
-                                  />
-                                  <span>
-                                    I've indicated all absent students by
-                                    checking the box
-                                    {dailyAbsent.size > 0 && (
-                                      <em
-                                        style={{
-                                          color: "#666",
-                                          display: "block",
-                                          marginTop: 2,
-                                        }}
-                                      >
-                                        ({dailyAbsent.size} marked absent)
-                                      </em>
-                                    )}
-                                  </span>
-                                </label>
-                              </div>
-                              {allInPeriodStudents.length === 0 ? (
-                                <div
-                                  style={{
-                                    padding: "0.75rem",
-                                    border: "1px solid #f0c36d",
-                                    background: "#fff8e1",
-                                    borderRadius: 6,
-                                    fontSize: 14,
-                                  }}
-                                >
-                                  {rosterTotal === 0 ? (
-                                    <>
-                                      <strong>This period has no roster.</strong>
-                                      <div style={{ marginTop: 4 }}>
-                                        Confirm the teacher and period above —
-                                        or check that this school's schedule
-                                        was imported.
-                                      </div>
-                                    </>
-                                  ) : (
-                                    <>
-                                      <strong>
-                                        Roster has {rosterTotal} student
-                                        {rosterTotal === 1 ? "" : "s"}, but
-                                        none have an IEP, 504, or ELL on file
-                                        for this school.
-                                      </strong>
-                                      <div style={{ marginTop: 4 }}>
-                                        Add accommodations in{" "}
-                                        <em>ESE Coordinator → Assign</em>, then
-                                        return here.
-                                      </div>
-                                      {rosterMatched > 0 && (
-                                        <details style={{ marginTop: 8 }}>
-                                          <summary
-                                            style={{
-                                              cursor: "pointer",
-                                              fontWeight: 600,
-                                            }}
-                                          >
-                                            Show roster ({rosterMatched})
-                                          </summary>
-                                          <ul
-                                            style={{
-                                              listStyle: "none",
-                                              padding: 0,
-                                              margin: "0.5rem 0 0",
-                                              maxHeight: "12rem",
-                                              overflowY: "auto",
-                                              border: "1px solid #ddd",
-                                              background: "#fff",
-                                            }}
-                                          >
-                                            {rosterStudents
-                                              .slice()
-                                              .sort((a, b) =>
-                                                a.lastName.localeCompare(
-                                                  b.lastName,
-                                                ),
-                                              )
-                                              .map((st) => (
-                                                <li
-                                                  key={st.studentId}
-                                                  style={{
-                                                    padding: "0.2rem 0.5rem",
-                                                    borderBottom:
-                                                      "1px solid #eee",
-                                                    fontSize: 13,
-                                                  }}
-                                                >
-                                                  {st.lastName}, {st.firstName}{" "}
-                                                  <span
-                                                    style={{ color: "#888" }}
-                                                  >
-                                                    ({st.studentId})
-                                                  </span>
-                                                </li>
-                                              ))}
-                                          </ul>
-                                        </details>
-                                      )}
-                                    </>
-                                  )}
-                                </div>
-                              ) : (
-                                <ul
-                                  style={{
-                                    listStyle: "none",
-                                    padding: 0,
-                                    margin: 0,
-                                    maxHeight: "20rem",
-                                    overflowY: "auto",
-                                    border: "1px solid #ddd",
-                                  }}
-                                >
-                                  {allInPeriodStudents
-                                    .sort((a, b) =>
-                                      a.lastName.localeCompare(b.lastName),
-                                    )
-                                    .map((st) => (
-                                      <li
-                                        key={st.studentId}
-                                        style={{
-                                          padding: "0.25rem 0.5rem",
-                                          borderBottom: "1px solid #eee",
-                                        }}
-                                      >
-                                        <label
-                                          style={{
-                                            display: "flex",
-                                            alignItems: "center",
-                                            gap: "0.4rem",
-                                            opacity: dailyAbsent.has(
-                                              st.studentId,
-                                            )
-                                              ? 0.55
-                                              : 1,
-                                          }}
-                                        >
-                                          <input
-                                            type="checkbox"
-                                            checked={dailyAbsent.has(
-                                              st.studentId,
-                                            )}
-                                            onChange={(e) => {
-                                              const next = new Set(
-                                                dailyAbsent,
-                                              );
-                                              if (e.target.checked)
-                                                next.add(st.studentId);
-                                              else next.delete(st.studentId);
-                                              setDailyAbsent(next);
-                                              setDailyAbsentConfirmed(false);
-                                            }}
-                                          />
-                                          <span
-                                            style={{
-                                              flex: 1,
-                                              textDecoration: dailyAbsent.has(
-                                                st.studentId,
-                                              )
-                                                ? "line-through"
-                                                : "none",
-                                            }}
-                                          >
-                                            {st.lastName}, {st.firstName}{" "}
-                                            <span style={{ color: "#888" }}>
-                                              ({st.studentId})
-                                            </span>
-                                          </span>
-                                          {studentTrackedCats(st).map((c) => (
-                                            <span
-                                              key={c}
-                                              style={{
-                                                background: catColor(c),
-                                                color: "#fff",
-                                                borderRadius: 4,
-                                                padding: "1px 5px",
-                                                fontSize: "0.7em",
-                                                fontWeight: 600,
-                                                letterSpacing: "0.02em",
-                                              }}
-                                            >
-                                              {c}
-                                            </span>
-                                          ))}
-                                        </label>
-                                      </li>
-                                    ))}
-                                </ul>
-                              )}
-                              <div
-                                style={{
-                                  marginTop: "0.5rem",
-                                  fontSize: "0.9em",
-                                  color: "#555",
-                                }}
-                              >
-                                Present with accommodations:{" "}
-                                <strong>{presentEligibleCount}</strong> /
-                                Absent: <strong>{dailyAbsent.size}</strong>
-                              </div>
+                          <>
+                            <div
+                              style={{
+                                marginBottom: "0.5rem",
+                                color: "#475569",
+                                fontSize: "0.9rem",
+                              }}
+                            >
+                              {rosterStudents.length} student
+                              {rosterStudents.length === 1 ? "" : "s"} with
+                              accommodations. Click a name to log Provided or
+                              Refused for that student. Skipped students are
+                              treated as absent and not logged.
                             </div>
-                            <div>
-                              {!dailyAbsentConfirmed &&
-                                allInPeriodStudents.length > 0 && (
-                                  <div
+                            <ul
+                              style={{
+                                listStyle: "none",
+                                padding: 0,
+                                margin: 0,
+                                border: "1px solid #e2e8f0",
+                                borderRadius: 6,
+                              }}
+                            >
+                              {rosterStudents.map(({ student: st, accs }) => {
+                                const sid = st.studentId;
+                                const isOpen = dailyExpandedSid === sid;
+                                const perAcc = dailyEntries[sid] ?? {};
+                                const providedCount = Object.values(
+                                  perAcc,
+                                ).filter((v) => v === "provided").length;
+                                const refusedCount = Object.values(
+                                  perAcc,
+                                ).filter((v) => v === "refused").length;
+                                const touched =
+                                  providedCount + refusedCount > 0;
+                                return (
+                                  <li
+                                    key={sid}
                                     style={{
-                                      marginBottom: "0.5rem",
-                                      fontSize: "0.95em",
-                                      fontWeight: 700,
-                                      color: "#b91c1c",
+                                      borderBottom: "1px solid #e2e8f0",
                                     }}
                                   >
-                                    Mark Absent students on the left, then
-                                    confirm to enable APPLY.
-                                  </div>
-                                )}
-                              <div
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "space-between",
-                                  gap: "0.75rem",
-                                  marginBottom: "0.5rem",
-                                  flexWrap: "wrap",
-                                }}
-                              >
-                                <h4 style={{ margin: 0 }}>
-                                  Accommodations
-                                </h4>
-                                <button
-                                  type="button"
-                                  onClick={submitDailyLog}
-                                  disabled={
-                                    !dailyAbsentConfirmed ||
-                                    dailySelectedAccs.size === 0 ||
-                                    presentEligibleCount === 0
-                                  }
-                                  className={
-                                    "apply-ekg-btn" +
-                                    (dailyApplyPulse ? " pulse-active" : "")
-                                  }
-                                  style={{
-                                    background: "#0d9488",
-                                    color: "#fff",
-                                    border: "1px solid #0f766e",
-                                    padding: "0.6rem 1.1rem",
-                                    fontSize: "1rem",
-                                    fontWeight: 600,
-                                    borderRadius: 6,
-                                    cursor: !dailyAbsentConfirmed ||
-                                      dailySelectedAccs.size === 0 ||
-                                      presentEligibleCount === 0
-                                      ? "not-allowed"
-                                      : "pointer",
-                                    opacity: !dailyAbsentConfirmed ||
-                                      dailySelectedAccs.size === 0 ||
-                                      presentEligibleCount === 0
-                                      ? 0.55
-                                      : 1,
-                                  }}
-                                  title={
-                                    !dailyAbsentConfirmed
-                                      ? "Mark absences and confirm first"
-                                      : dailySelectedAccs.size === 0
-                                        ? "Select at least one accommodation"
-                                        : presentEligibleCount === 0
-                                          ? "No present students with accommodations"
-                                          : undefined
-                                  }
-                                >
-                                  <span style={{ position: "relative", zIndex: 1 }}>
-                                    Apply {dailySelectedAccs.size}{" "}
-                                    accommodation
-                                    {dailySelectedAccs.size === 1 ? "" : "s"} to{" "}
-                                    {presentEligibleCount} student
-                                    {presentEligibleCount === 1 ? "" : "s"}
-                                  </span>
-                                  <svg
-                                    className="apply-ekg-overlay"
-                                    viewBox="0 0 600 40"
-                                    preserveAspectRatio="none"
-                                    aria-hidden="true"
-                                  >
-                                    <path
-                                      className="track"
-                                      d="M0 20 H100 L110 20 L118 6 L128 34 L138 12 L148 26 L158 20 H260 L270 20 L278 8 L288 32 L298 14 L308 26 L318 20 H420 L430 20 L438 6 L448 34 L458 12 L468 26 L478 20 H600"
-                                    />
-                                    <path
-                                      className="pulse"
-                                      d="M0 20 H100 L110 20 L118 6 L128 34 L138 12 L148 26 L158 20 H260 L270 20 L278 8 L288 32 L298 14 L308 26 L318 20 H420 L430 20 L438 6 L448 34 L458 12 L468 26 L478 20 H600"
-                                    />
-                                  </svg>
-                                </button>
-                              </div>
-                              {accUnionWithIds.length === 0 ? (
-                                <div>
-                                  No accommodations apply to the present
-                                  students.
-                                </div>
-                              ) : (
-                                <>
-                                  <div style={{ marginBottom: "0.5rem" }}>
                                     <button
                                       type="button"
                                       onClick={() =>
-                                        setDailySelectedAccs(
-                                          new Set(
-                                            accUnionWithIds.map((a) => a.id),
-                                          ),
+                                        setDailyExpandedSid(
+                                          isOpen ? null : sid,
                                         )
                                       }
-                                      style={{ marginRight: "0.25rem" }}
+                                      style={{
+                                        all: "unset",
+                                        cursor: "pointer",
+                                        display: "flex",
+                                        alignItems: "center",
+                                        gap: "0.5rem",
+                                        padding: "0.6rem 0.75rem",
+                                        width: "100%",
+                                        boxSizing: "border-box",
+                                        background: touched
+                                          ? "rgba(13, 148, 136, 0.06)"
+                                          : "transparent",
+                                      }}
                                     >
-                                      Select all
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        setDailySelectedAccs(new Set())
-                                      }
-                                    >
-                                      Clear
-                                    </button>
-                                  </div>
-                                  <ul
-                                    style={{
-                                      listStyle: "none",
-                                      padding: 0,
-                                      margin: 0,
-                                      maxHeight: "20rem",
-                                      overflowY: "auto",
-                                      border: "1px solid #ddd",
-                                    }}
-                                  >
-                                    {accUnionWithIds.map((a) => (
-                                      <li
-                                        key={a.id}
+                                      <span
+                                        aria-hidden="true"
                                         style={{
-                                          padding: "0.25rem 0.5rem",
-                                          borderBottom: "1px solid #eee",
+                                          display: "inline-block",
+                                          width: 12,
+                                          textAlign: "center",
+                                          color: "#475569",
                                         }}
                                       >
-                                        <label>
-                                          <input
-                                            type="checkbox"
-                                            checked={dailySelectedAccs.has(
-                                              a.id,
-                                            )}
-                                            onChange={(e) => {
-                                              const next = new Set(
-                                                dailySelectedAccs,
-                                              );
-                                              if (e.target.checked)
-                                                next.add(a.id);
-                                              else next.delete(a.id);
-                                              setDailySelectedAccs(next);
-                                            }}
-                                          />{" "}
-                                          <span
-                                            style={{
-                                              color: "#666",
-                                              fontSize: "0.85em",
-                                            }}
-                                          >
-                                            [{a.category}]
-                                          </span>{" "}
-                                          {a.name}
-                                        </label>
-                                      </li>
-                                    ))}
-                                  </ul>
-                                </>
+                                        {isOpen ? "▾" : "▸"}
+                                      </span>
+                                      <span style={{ fontWeight: 600 }}>
+                                        {st.lastName}, {st.firstName}
+                                      </span>
+                                      <span
+                                        style={{
+                                          color: "#64748b",
+                                          fontSize: "0.85rem",
+                                        }}
+                                      >
+                                        ({accs.length} acc
+                                        {accs.length === 1 ? "" : "s"})
+                                      </span>
+                                      {touched && (
+                                        <span
+                                          style={{
+                                            marginLeft: "auto",
+                                            fontSize: "0.8rem",
+                                            color: "#0f766e",
+                                          }}
+                                        >
+                                          {providedCount > 0 &&
+                                            `${providedCount} provided`}
+                                          {providedCount > 0 &&
+                                            refusedCount > 0 &&
+                                            " · "}
+                                          {refusedCount > 0 &&
+                                            `${refusedCount} refused`}
+                                        </span>
+                                      )}
+                                    </button>
+                                    {isOpen && (
+                                      <div
+                                        style={{
+                                          padding: "0.5rem 1rem 0.75rem 2rem",
+                                          background: "#f8fafc",
+                                        }}
+                                      >
+                                        <ul
+                                          style={{
+                                            listStyle: "none",
+                                            padding: 0,
+                                            margin: 0,
+                                          }}
+                                        >
+                                          {accs.map((a) => {
+                                            const cur = perAcc[a.id] ?? null;
+                                            return (
+                                              <li
+                                                key={a.id}
+                                                style={{
+                                                  display: "flex",
+                                                  alignItems: "center",
+                                                  gap: "0.5rem",
+                                                  padding: "0.3rem 0",
+                                                }}
+                                              >
+                                                <span
+                                                  style={{
+                                                    background: catColor(
+                                                      a.category,
+                                                    ),
+                                                    color: "white",
+                                                    fontSize: "0.7rem",
+                                                    padding: "1px 6px",
+                                                    borderRadius: 4,
+                                                    minWidth: 36,
+                                                    textAlign: "center",
+                                                  }}
+                                                >
+                                                  {a.category}
+                                                </span>
+                                                <span
+                                                  style={{ flex: 1 }}
+                                                >
+                                                  {a.name}
+                                                </span>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setEntry(
+                                                      sid,
+                                                      a.id,
+                                                      "provided",
+                                                    )
+                                                  }
+                                                  style={{
+                                                    padding: "0.2rem 0.6rem",
+                                                    background:
+                                                      cur === "provided"
+                                                        ? "#0f766e"
+                                                        : "#e2e8f0",
+                                                    color:
+                                                      cur === "provided"
+                                                        ? "white"
+                                                        : "#0f172a",
+                                                    border: "none",
+                                                    borderRadius: 4,
+                                                    cursor: "pointer",
+                                                    fontWeight:
+                                                      cur === "provided"
+                                                        ? 700
+                                                        : 500,
+                                                  }}
+                                                >
+                                                  Provided
+                                                </button>
+                                                <button
+                                                  type="button"
+                                                  onClick={() =>
+                                                    setEntry(
+                                                      sid,
+                                                      a.id,
+                                                      "refused",
+                                                    )
+                                                  }
+                                                  style={{
+                                                    padding: "0.2rem 0.6rem",
+                                                    background:
+                                                      cur === "refused"
+                                                        ? "#b91c1c"
+                                                        : "#fde2e2",
+                                                    color:
+                                                      cur === "refused"
+                                                        ? "white"
+                                                        : "#7f1d1d",
+                                                    border: "none",
+                                                    borderRadius: 4,
+                                                    cursor: "pointer",
+                                                    fontWeight:
+                                                      cur === "refused"
+                                                        ? 700
+                                                        : 500,
+                                                  }}
+                                                >
+                                                  Refused
+                                                </button>
+                                              </li>
+                                            );
+                                          })}
+                                        </ul>
+                                      </div>
+                                    )}
+                                  </li>
+                                );
+                              })}
+                            </ul>
+                            <div
+                              style={{
+                                marginTop: "1rem",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: "0.75rem",
+                                flexWrap: "wrap",
+                              }}
+                            >
+                              <button
+                                type="button"
+                                onClick={submitDailyLog}
+                                disabled={studentsTouched === 0}
+                                style={{
+                                  padding: "0.5rem 1rem",
+                                  background:
+                                    studentsTouched === 0
+                                      ? "#cbd5e1"
+                                      : "#0f766e",
+                                  color: "white",
+                                  border: "none",
+                                  borderRadius: 6,
+                                  fontWeight: 700,
+                                  cursor:
+                                    studentsTouched === 0
+                                      ? "not-allowed"
+                                      : "pointer",
+                                }}
+                              >
+                                Submit log for Period {dailyPeriod} on{" "}
+                                {dailyDate}
+                              </button>
+                              <span style={{ color: "#475569" }}>
+                                {studentsTouched} student
+                                {studentsTouched === 1 ? "" : "s"} marked.
+                              </span>
+                              {dailySubmitMsg && (
+                                <span
+                                  style={{
+                                    color: dailySubmitMsg.startsWith("Failed")
+                                      ? "#a00"
+                                      : "#080",
+                                  }}
+                                >
+                                  {dailySubmitMsg}
+                                </span>
                               )}
-                              <div style={{ marginTop: "0.75rem" }}>
-                                {dailySubmitMsg && (
-                                  <div
-                                    style={{
-                                      marginTop: "0.5rem",
-                                      color: dailySubmitMsg.startsWith(
-                                        "Failed",
-                                      )
-                                        ? "#a00"
-                                        : "#080",
-                                    }}
-                                  >
-                                    {dailySubmitMsg}
-                                  </div>
-                                )}
-                              </div>
                             </div>
-                          </div>
+                          </>
                         )}
                       </>
                     );

@@ -4010,3 +4010,112 @@ short-circuit in `App.tsx` matches `/display/passes/(\d+)` BEFORE the existing
 `/display/(\d+)` route so a numeric playlist id can't shadow the keyword.
 `HallPassDisplay` (also exported from `DisplayShow.tsx`) is the standalone
 full-bleed page — polls every 15 s, ticks every 60 s for live elapsed time.
+
+## Accommodations Class Log redesign (Apr 29, 2026)
+
+Reworked the Accommodations area: dropped the "By Student" tab and rebuilt
+"Class Log" around a per-student-click flow with explicit Provided/Refused
+buttons, plus date + period selectors. Class View and Reports unchanged.
+
+### Server
+- `POST /api/accommodation-logs/bulk-per-student` — accepts
+  `{ period:int, date?:"YYYY-MM-DD", entries:[{studentId,
+  accommodationId, status:'provided'|'refused'}] }`. Composes the chosen
+  date as UTC midnight for `created_at`, validates section ownership for
+  the requesting teacher, validates roster + plan entitlement per entry,
+  and reuses the existing `accommodation_logs` partial-unique index
+  (status='provided' rows only) for duplicate-per-day protection.
+  Returns counts: `inserted, skippedNotRostered, skippedNotEntitled,
+  skippedDuplicate, skippedUnknownAcc`.
+- `GET /api/bell-schedules/active` — any signed-in staff member can
+  fetch the school's default bell schedule's periods so the client can
+  highlight "current period" in dropdowns.
+
+### Client
+- Removed the "By Student" tab button and its `accView === "student"`
+  render branch entirely.
+- Class Log now:
+  - Loads the active bell schedule on mount and computes the
+    "currently in session" period by matching local clock to
+    `startTime`/`endTime` windows.
+  - Auto-fills the period dropdown the first time a teacher opens
+    Class Log on a date where their roster contains today's current
+    period; manual changes stick (`autoPeriodApplied` flag).
+  - Adds `<input type="date">` defaulting to today, `max=today` (no
+    future-dating). Any past date is allowed.
+  - Roster column on the left lists every student in the chosen
+    period whose plan contains an IEP/504/ELL accommodation
+    (Strategy excluded). Click a row to expand THAT student's
+    tracked accommodations with mutually-exclusive Provided / Refused
+    toggle buttons (click again to clear).
+  - Skipping a student is implicit absence — no separate absent flow.
+  - Submit button posts only touched (sid, accId, status) entries to
+    the new bulk-per-student endpoint with the chosen date + period.
+
+### Smoke
+- `GET /api/bell-schedules/active` returns Parrott's "Regular Day"
+  (7 periods).
+- Real positive POST as `sarah.patel1@hcsb.k12.fl.us` (period 1 teacher
+  for section 456): `{inserted:2, skipped*:0, sectionId:456}`. Repeat
+  POST: `{inserted:0, skippedDuplicate:1}` confirming the partial
+  unique index still guards.
+
+### Files touched
+- `artifacts/api-server/src/routes/accommodationLogs.ts` (new endpoint)
+- `artifacts/api-server/src/routes/bellSchedules.ts` (new `/active`)
+- `artifacts/client/src/App.tsx`
+  - state cleanup: removed `dailyAbsent*`, `dailySelectedAccs`,
+    `dailyApplyPulse`; added `dailyDate`, `dailyEntries`,
+    `dailyExpandedSid`, `bellPeriods`, `bellPeriodsLoaded`,
+    `autoPeriodApplied`.
+  - `submitDailyLog` rewritten to call `/bulk-per-student`.
+  - new bell-schedule fetch effect, `currentBellPeriod` helper, and
+    auto-period-select effect.
+  - Class Log render branch entirely replaced; "By Student" tab and
+    branch removed.
+
+### Architect review hardenings (post-build)
+First architect pass found three high-severity issues; all were fixed:
+1. **Tenant isolation**: added `eq(*.schoolId, schoolId)` to the section,
+   accommodation, student-assignment, and target-staff lookups in
+   `bulk-per-student` so cross-school IDs cannot satisfy validation.
+2. **Elevated delegation**: introduced an explicit `actingAsStaffId` body
+   field. Server pulls the principal from `requireStaff` and only honors
+   delegation when the principal has admin/super/ESE/MTSS/behavior
+   roles AND the target staff is in the same school. Client now sends
+   `actingAsStaffId` only when an elevated user has chosen another
+   teacher (no longer overloads the iframe-fallback `staffId`).
+3. **Date hardening**: malformed format → 400 (no silent fallback to
+   today), calendar-invalid (e.g. `2026-02-31`) → 400 via roundtrip
+   check, future dates → 400 server-side (UI's `max=today` is now a
+   defense-in-depth signal, not the only guard).
+
+Re-smoked: malformed/invalid/future dates all return 400; admin
+delegating to teacher in same school returns `inserted:1`; non-elevated
+user trying to delegate returns `403`; default-today path still works.
+
+### Pre-existing TS errors NOT regressed
+`pbis.ts` 892/896, `studentHallPassLimits.ts` 305, `tardies.ts` 85,
+`seed.ts` 809/824/933/2375/2397/2455 (api-server) and the App.tsx HubKey
+narrowing list (lines 2676–17724) all pre-date this change.
+
+### Bug fix: empty-roster regression
+The `schoolAccommodations` state powering `accCategoryByName` was loaded
+by a `useEffect(..., [])` mount-only fetch. On a fresh page load that
+fetch raced ahead of authentication, hit `/api/school-accommodations`
+without a bearer token, fell through the silent `r.ok ? r.json() : []`
+branch, and never re-fired. Result: every accommodation name failed the
+`accCategoryByName.get(name)` lookup in `trackedAccsForStudent`, the
+`!cat || !trackedCats.has(cat)` guard rejected them all, and the
+roster filter `row.accs.length > 0` emptied the entire Class Log even
+though `/api/students` was returning fully-populated `accommodations`
+arrays. Fix: gated the effect on `authUser?.id` and re-added it to the
+dep list so it refetches once auth is established.
+
+### Bug fix: "Sign-in required" on submit
+`submitDailyLog` was using raw `fetch(...)` instead of `authFetch(...)`,
+so the bearer token wasn't attached and the server-side `requireStaff`
+middleware (which prefers the JWT for the principal identity) returned
+401 `{"error":"Sign-in required"}` even after a successful login.
+Fix: swapped to `authFetch`. Same pattern as every other authenticated
+mutation in the file.

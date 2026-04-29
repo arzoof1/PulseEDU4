@@ -131,6 +131,55 @@ router.get(
   },
 );
 
+// Read-only "what's the active schedule and its periods" endpoint usable by
+// any signed-in staff member (teachers need it so the Class Log can
+// autodetect the current period). Returns just the periods of the school's
+// default schedule — no schedule-management metadata.
+router.get(
+  "/bell-schedules/active",
+  async (req: Request, res: Response) => {
+    try {
+      const staff = await loadStaff(req);
+      if (!staff) {
+        res.status(401).json({ error: "Sign-in required" });
+        return;
+      }
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      const [schedule] = await db
+        .select()
+        .from(bellSchedulesTable)
+        .where(
+          and(
+            eq(bellSchedulesTable.schoolId, schoolId),
+            eq(bellSchedulesTable.isDefault, true),
+            eq(bellSchedulesTable.active, true),
+          ),
+        );
+      if (!schedule) {
+        res.json({ schedule: null, periods: [] });
+        return;
+      }
+      const periods = await db
+        .select({
+          periodNumber: bellSchedulePeriodsTable.periodNumber,
+          name: bellSchedulePeriodsTable.name,
+          startTime: bellSchedulePeriodsTable.startTime,
+          endTime: bellSchedulePeriodsTable.endTime,
+        })
+        .from(bellSchedulePeriodsTable)
+        .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id))
+        .orderBy(asc(bellSchedulePeriodsTable.periodNumber));
+      res.json({
+        schedule: { id: schedule.id, name: schedule.name, kind: schedule.kind },
+        periods,
+      });
+    } catch (err) {
+      res.status(500).json({ error: (err as Error).message });
+    }
+  },
+);
+
 router.post(
   "/bell-schedules",
   requireAccess(),
