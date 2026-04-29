@@ -1,25 +1,33 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="720" height="320" viewBox="0 0 720 320">
-  <rect width="720" height="320" fill="#f8fafc"/>
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="360" viewBox="0 0 720 360">
+  <rect width="720" height="360" fill="#f8fafc"/>
 
   <!-- Card 1: Create Pass -->
   <rect x="20" y="30" width="330" height="90" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
   <text x="40" y="82" font-family="-apple-system, system-ui, sans-serif" font-size="14" fill="#475569">Need to Create a Pass?</text>
   <g transform="translate(195,52)">
     <rect width="140" height="46" rx="999" fill="#2563eb"/>
-    <g transform="translate(12,12)" fill="#ffffff">
-      <svg width="32" height="22" viewBox="0 0 170 120">
-        <path d="M5,85 C5,108 38,113 60,107 C75,103 80,100 80,85 C80,68 73,65 58,62 C36,57 5,62 5,85 Z" fill="#ffffff"/>
-        <circle cx="90" cy="68" r="9" fill="#ffffff"/>
-        <circle cx="98" cy="78" r="7.5" fill="#ffffff"/>
-        <circle cx="100" cy="88" r="6.5" fill="#ffffff"/>
-        <circle cx="97" cy="97" r="5.5" fill="#ffffff"/>
-        <circle cx="90" cy="105" r="4.5" fill="#ffffff"/>
-        <path d="M75,35 C75,58 108,63 130,57 C145,53 150,50 150,35 C150,18 143,15 128,12 C106,7 75,12 75,35 Z" fill="#ffffff"/>
-        <circle cx="160" cy="18" r="9" fill="#ffffff"/>
-        <circle cx="168" cy="28" r="7.5" fill="#ffffff"/>
-        <circle cx="170" cy="38" r="6.5" fill="#ffffff"/>
-        <circle cx="167" cy="47" r="5.5" fill="#ffffff"/>
-        <circle cx="160" cy="55" r="4.5" fill="#ffffff"/>
+    <g transform="translate(10,10)">
+      <svg width="36" height="26" viewBox="0 0 240 130">
+        <g fill="#ffffff">
+          <g transform="translate(0,60)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+          <g transform="translate(112,0)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+        </g>
       </svg>
     </g>
     <text x="55" y="29" font-family="-apple-system, system-ui, sans-serif" font-size="15" font-weight="600" fill="#ffffff">Create Pass</text>
@@ -30,65 +38,89 @@
   <text x="390" y="82" font-family="-apple-system, system-ui, sans-serif" font-size="14" fill="#475569">Student Arriving Late?</text>
   <g transform="translate(550,52)">
     <rect width="130" height="46" rx="999" fill="#2563eb"/>
-    <g transform="translate(12,12)" fill="#ffffff">
-      <svg width="32" height="22" viewBox="0 0 170 120">
-        <path d="M5,85 C5,108 38,113 60,107 C75,103 80,100 80,85 C80,68 73,65 58,62 C36,57 5,62 5,85 Z" fill="#ffffff"/>
-        <circle cx="90" cy="68" r="9" fill="#ffffff"/>
-        <circle cx="98" cy="78" r="7.5" fill="#ffffff"/>
-        <circle cx="100" cy="88" r="6.5" fill="#ffffff"/>
-        <circle cx="97" cy="97" r="5.5" fill="#ffffff"/>
-        <circle cx="90" cy="105" r="4.5" fill="#ffffff"/>
-        <path d="M75,35 C75,58 108,63 130,57 C145,53 150,50 150,35 C150,18 143,15 128,12 C106,7 75,12 75,35 Z" fill="#ffffff"/>
-        <circle cx="160" cy="18" r="9" fill="#ffffff"/>
-        <circle cx="168" cy="28" r="7.5" fill="#ffffff"/>
-        <circle cx="170" cy="38" r="6.5" fill="#ffffff"/>
-        <circle cx="167" cy="47" r="5.5" fill="#ffffff"/>
-        <circle cx="160" cy="55" r="4.5" fill="#ffffff"/>
+    <g transform="translate(10,10)">
+      <svg width="36" height="26" viewBox="0 0 240 130">
+        <g fill="#ffffff">
+          <g transform="translate(0,60)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+          <g transform="translate(112,0)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+        </g>
       </svg>
     </g>
     <text x="55" y="29" font-family="-apple-system, system-ui, sans-serif" font-size="15" font-weight="600" fill="#ffffff">Log Tardy</text>
   </g>
 
-  <!-- Standalone large preview -->
+  <!-- Standalone large preview on white -->
   <text x="20" y="170" font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#64748b">Footprint icon — large preview (toes pointing right):</text>
   <g transform="translate(20,185)">
-    <rect width="280" height="120" rx="12" fill="#2563eb"/>
-    <g transform="translate(40,12)" fill="#ffffff">
-      <svg width="200" height="100" viewBox="0 0 170 120">
-        <path d="M5,85 C5,108 38,113 60,107 C75,103 80,100 80,85 C80,68 73,65 58,62 C36,57 5,62 5,85 Z" fill="#ffffff"/>
-        <circle cx="90" cy="68" r="9" fill="#ffffff"/>
-        <circle cx="98" cy="78" r="7.5" fill="#ffffff"/>
-        <circle cx="100" cy="88" r="6.5" fill="#ffffff"/>
-        <circle cx="97" cy="97" r="5.5" fill="#ffffff"/>
-        <circle cx="90" cy="105" r="4.5" fill="#ffffff"/>
-        <path d="M75,35 C75,58 108,63 130,57 C145,53 150,50 150,35 C150,18 143,15 128,12 C106,7 75,12 75,35 Z" fill="#ffffff"/>
-        <circle cx="160" cy="18" r="9" fill="#ffffff"/>
-        <circle cx="168" cy="28" r="7.5" fill="#ffffff"/>
-        <circle cx="170" cy="38" r="6.5" fill="#ffffff"/>
-        <circle cx="167" cy="47" r="5.5" fill="#ffffff"/>
-        <circle cx="160" cy="55" r="4.5" fill="#ffffff"/>
+    <rect width="340" height="160" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
+    <g transform="translate(40,15)">
+      <svg width="260" height="140" viewBox="0 0 240 130">
+        <g fill="#2563eb">
+          <g transform="translate(0,60)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+          <g transform="translate(112,0)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+        </g>
       </svg>
     </g>
   </g>
 
-  <!-- Solid blue footprint pair on white background (alternate look) -->
-  <text x="320" y="170" font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#64748b">Standalone (blue on white):</text>
-  <g transform="translate(320,185)">
-    <rect width="280" height="120" rx="12" fill="#ffffff" stroke="#e2e8f0"/>
-    <g transform="translate(40,12)" fill="#2563eb">
-      <svg width="200" height="100" viewBox="0 0 170 120">
-        <path d="M5,85 C5,108 38,113 60,107 C75,103 80,100 80,85 C80,68 73,65 58,62 C36,57 5,62 5,85 Z" fill="#2563eb"/>
-        <circle cx="90" cy="68" r="9" fill="#2563eb"/>
-        <circle cx="98" cy="78" r="7.5" fill="#2563eb"/>
-        <circle cx="100" cy="88" r="6.5" fill="#2563eb"/>
-        <circle cx="97" cy="97" r="5.5" fill="#2563eb"/>
-        <circle cx="90" cy="105" r="4.5" fill="#2563eb"/>
-        <path d="M75,35 C75,58 108,63 130,57 C145,53 150,50 150,35 C150,18 143,15 128,12 C106,7 75,12 75,35 Z" fill="#2563eb"/>
-        <circle cx="160" cy="18" r="9" fill="#2563eb"/>
-        <circle cx="168" cy="28" r="7.5" fill="#2563eb"/>
-        <circle cx="170" cy="38" r="6.5" fill="#2563eb"/>
-        <circle cx="167" cy="47" r="5.5" fill="#2563eb"/>
-        <circle cx="160" cy="55" r="4.5" fill="#2563eb"/>
+  <!-- White on blue (button context) -->
+  <text x="380" y="170" font-family="-apple-system, system-ui, sans-serif" font-size="13" fill="#64748b">In-button look (white on blue):</text>
+  <g transform="translate(380,185)">
+    <rect width="320" height="160" rx="12" fill="#2563eb"/>
+    <g transform="translate(30,15)">
+      <svg width="260" height="140" viewBox="0 0 240 130">
+        <g fill="#ffffff">
+          <g transform="translate(0,60)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+          <g transform="translate(112,0)">
+            <ellipse cx="22" cy="35" rx="20" ry="22"/>
+            <ellipse cx="68" cy="32" rx="26" ry="25"/>
+            <circle cx="100" cy="14" r="9"/>
+            <circle cx="111" cy="25" r="7.5"/>
+            <circle cx="115" cy="36" r="6.5"/>
+            <circle cx="112" cy="47" r="5.5"/>
+            <circle cx="103" cy="55" r="4.5"/>
+          </g>
+        </g>
       </svg>
     </g>
   </g>

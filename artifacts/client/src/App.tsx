@@ -7717,19 +7717,25 @@ function App() {
           className="cp-cta-button cp-cta-button--blue"
           onClick={() => setCreatePassOpen(true)}
         >
-          <svg viewBox="0 0 170 120" fill="currentColor" aria-hidden="true">
-            <path d="M5,85 C5,108 38,113 60,107 C75,103 80,100 80,85 C80,68 73,65 58,62 C36,57 5,62 5,85 Z" />
-            <circle cx="90" cy="68" r="9" />
-            <circle cx="98" cy="78" r="7.5" />
-            <circle cx="100" cy="88" r="6.5" />
-            <circle cx="97" cy="97" r="5.5" />
-            <circle cx="90" cy="105" r="4.5" />
-            <path d="M75,35 C75,58 108,63 130,57 C145,53 150,50 150,35 C150,18 143,15 128,12 C106,7 75,12 75,35 Z" />
-            <circle cx="160" cy="18" r="9" />
-            <circle cx="168" cy="28" r="7.5" />
-            <circle cx="170" cy="38" r="6.5" />
-            <circle cx="167" cy="47" r="5.5" />
-            <circle cx="160" cy="55" r="4.5" />
+          <svg viewBox="0 0 240 130" fill="currentColor" aria-hidden="true">
+            <g transform="translate(0,60)">
+              <ellipse cx="22" cy="35" rx="20" ry="22" />
+              <ellipse cx="68" cy="32" rx="26" ry="25" />
+              <circle cx="100" cy="14" r="9" />
+              <circle cx="111" cy="25" r="7.5" />
+              <circle cx="115" cy="36" r="6.5" />
+              <circle cx="112" cy="47" r="5.5" />
+              <circle cx="103" cy="55" r="4.5" />
+            </g>
+            <g transform="translate(112,0)">
+              <ellipse cx="22" cy="35" rx="20" ry="22" />
+              <ellipse cx="68" cy="32" rx="26" ry="25" />
+              <circle cx="100" cy="14" r="9" />
+              <circle cx="111" cy="25" r="7.5" />
+              <circle cx="115" cy="36" r="6.5" />
+              <circle cx="112" cy="47" r="5.5" />
+              <circle cx="103" cy="55" r="4.5" />
+            </g>
           </svg>
           Create Pass
         </button>
@@ -10080,19 +10086,25 @@ function App() {
           className="cp-cta-button cp-cta-button--blue"
           onClick={() => setLogTardyOpen(true)}
         >
-          <svg viewBox="0 0 170 120" fill="currentColor" aria-hidden="true">
-            <path d="M5,85 C5,108 38,113 60,107 C75,103 80,100 80,85 C80,68 73,65 58,62 C36,57 5,62 5,85 Z" />
-            <circle cx="90" cy="68" r="9" />
-            <circle cx="98" cy="78" r="7.5" />
-            <circle cx="100" cy="88" r="6.5" />
-            <circle cx="97" cy="97" r="5.5" />
-            <circle cx="90" cy="105" r="4.5" />
-            <path d="M75,35 C75,58 108,63 130,57 C145,53 150,50 150,35 C150,18 143,15 128,12 C106,7 75,12 75,35 Z" />
-            <circle cx="160" cy="18" r="9" />
-            <circle cx="168" cy="28" r="7.5" />
-            <circle cx="170" cy="38" r="6.5" />
-            <circle cx="167" cy="47" r="5.5" />
-            <circle cx="160" cy="55" r="4.5" />
+          <svg viewBox="0 0 240 130" fill="currentColor" aria-hidden="true">
+            <g transform="translate(0,60)">
+              <ellipse cx="22" cy="35" rx="20" ry="22" />
+              <ellipse cx="68" cy="32" rx="26" ry="25" />
+              <circle cx="100" cy="14" r="9" />
+              <circle cx="111" cy="25" r="7.5" />
+              <circle cx="115" cy="36" r="6.5" />
+              <circle cx="112" cy="47" r="5.5" />
+              <circle cx="103" cy="55" r="4.5" />
+            </g>
+            <g transform="translate(112,0)">
+              <ellipse cx="22" cy="35" rx="20" ry="22" />
+              <ellipse cx="68" cy="32" rx="26" ry="25" />
+              <circle cx="100" cy="14" r="9" />
+              <circle cx="111" cy="25" r="7.5" />
+              <circle cx="115" cy="36" r="6.5" />
+              <circle cx="112" cy="47" r="5.5" />
+              <circle cx="103" cy="55" r="4.5" />
+            </g>
           </svg>
           Log Tardy
         </button>
