@@ -7714,10 +7714,13 @@ function App() {
         <div className="cp-cta-text">Need to Create a Pass?</div>
         <button
           type="button"
-          className="cp-cta-button"
+          className="cp-cta-button cp-cta-button--blue"
           onClick={() => setCreatePassOpen(true)}
         >
-          + Create Pass
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M9 4.5c-1.7 0-3 1.6-3 3.5 0 1.7 1.1 3.2 2.6 3.5l.4.1V13c0 .8.7 1.5 1.5 1.5h.5c.8 0 1.5-.7 1.5-1.5v-1.4l.4-.1C13.9 11.2 15 9.7 15 8c0-1.9-1.3-3.5-3-3.5zM6.5 15c-.8 0-1.5.7-1.5 1.5v.5c0 1.1.9 2 2 2s2-.9 2-2v-.5c0-.8-.7-1.5-1.5-1.5h-1zM18 13.5c-1.7 0-3 1.6-3 3.5 0 1.7 1.1 3.2 2.6 3.5l.4.1v.4c0 .8.7 1.5 1.5 1.5s1.5-.7 1.5-1.5v-.4l.4-.1c1.5-.3 2.6-1.8 2.6-3.5 0-1.9-1.3-3.5-3-3.5h-3zM15.5 8.5c-.8 0-1.5.7-1.5 1.5v.5c0 1.1.9 2 2 2s2-.9 2-2V10c0-.8-.7-1.5-1.5-1.5h-1z" />
+          </svg>
+          Create Pass
         </button>
       </div>
       {(() => {
@@ -10063,10 +10066,13 @@ function App() {
         <div className="cp-cta-text">Student Arriving Late?</div>
         <button
           type="button"
-          className="cp-cta-button"
+          className="cp-cta-button cp-cta-button--blue"
           onClick={() => setLogTardyOpen(true)}
         >
-          + Log Tardy
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M9 4.5c-1.7 0-3 1.6-3 3.5 0 1.7 1.1 3.2 2.6 3.5l.4.1V13c0 .8.7 1.5 1.5 1.5h.5c.8 0 1.5-.7 1.5-1.5v-1.4l.4-.1C13.9 11.2 15 9.7 15 8c0-1.9-1.3-3.5-3-3.5zM6.5 15c-.8 0-1.5.7-1.5 1.5v.5c0 1.1.9 2 2 2s2-.9 2-2v-.5c0-.8-.7-1.5-1.5-1.5h-1zM18 13.5c-1.7 0-3 1.6-3 3.5 0 1.7 1.1 3.2 2.6 3.5l.4.1v.4c0 .8.7 1.5 1.5 1.5s1.5-.7 1.5-1.5v-.4l.4-.1c1.5-.3 2.6-1.8 2.6-3.5 0-1.9-1.3-3.5-3-3.5h-3zM15.5 8.5c-.8 0-1.5.7-1.5 1.5v.5c0 1.1.9 2 2 2s2-.9 2-2V10c0-.8-.7-1.5-1.5-1.5h-1z" />
+          </svg>
+          Log Tardy
         </button>
       </div>
       <div className="card" style={{ display: "none" }}>

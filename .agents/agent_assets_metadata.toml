@@ -30,3 +30,9 @@ id = "FJsQ-vt913kB5zX19x-GY"
 uri = "file://attached_assets/pulseedu-logo-animated.gif"
 type = "image"
 title = "PulseEDU Animated Logo (GIF)"
+
+[[outputs]]
+id = "Hppwr1iZqBBxL4x35n2Fs"
+uri = "file://attached_assets/footprint_button_sample.svg"
+type = "image"
+title = "Blue Footprint button — sample"
