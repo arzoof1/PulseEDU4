@@ -574,29 +574,32 @@ function ProgramPills({ row }: { row: RosterRow }) {
   );
 }
 
-// Color map matches the Accommodations Class View popover so a teacher
-// who recognizes the legend there sees the same chip colors here.
-const ACC_CAT_COLOR: Record<string, string> = {
-  IEP: "#0e7490",
-  "504": "#7c3aed",
-  ELL: "#0891b2",
-  Strategy: "#64748b",
-};
-
 function AccommodationsPopover({
   row,
 }: {
   row: RosterRow;
 }) {
-  // Group by category for the popover. Same shape used by the
-  // Accommodations Class View hover popover.
-  const byCat = new Map<string, string[]>();
-  for (const a of row.accommodations) {
-    const cat = a.category || "Strategy";
-    const list = byCat.get(cat) ?? [];
-    list.push(a.name);
-    byCat.set(cat, list);
-  }
+  // The popover lists accommodations as a flat bullet list. We
+  // intentionally do NOT group by the accommodation's school-catalog
+  // category here — that field describes what plan TYPE the
+  // accommodation is typically used for at the school level, NOT
+  // which plan THIS student is on. Showing "504" as a header above
+  // an ESE student's accommodations was misleading. Instead, we
+  // show the student's actual program badges (from row.ese /
+  // row.is504 / row.ell) at the top, then list their accommodations
+  // alphabetically.
+  const programBadges: Array<{ label: string; bg: string; fg: string }> = [];
+  if (row.ese)
+    programBadges.push({ label: "ESE", bg: "#dbeafe", fg: "#1e3a8a" });
+  if (row.is504)
+    programBadges.push({ label: "504", bg: "#ede9fe", fg: "#5b21b6" });
+  if (row.ell)
+    programBadges.push({ label: "ELL", bg: "#dcfce7", fg: "#14532d" });
+
+  const sorted = [...row.accommodations].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
+
   return (
     <div
       role="tooltip"
@@ -621,37 +624,44 @@ function AccommodationsPopover({
         style={{
           fontSize: 11,
           color: "#6b7280",
-          marginBottom: 4,
+          marginBottom: programBadges.length > 0 ? 4 : 6,
         }}
       >
         Accommodations for {row.firstName} {row.lastName}
       </div>
-      {Array.from(byCat.entries()).map(([cat, names]) => (
-        <div key={cat} style={{ marginBottom: 4 }}>
-          <div
-            style={{
-              fontSize: 10,
-              fontWeight: 700,
-              color: ACC_CAT_COLOR[cat] ?? "#475569",
-              textTransform: "uppercase",
-              letterSpacing: 0.5,
-            }}
-          >
-            {cat}
-          </div>
-          <ul
-            style={{
-              margin: "2px 0 0 0",
-              paddingLeft: 16,
-              fontSize: 12,
-            }}
-          >
-            {names.map((n) => (
-              <li key={n}>{n}</li>
-            ))}
-          </ul>
+      {programBadges.length > 0 && (
+        <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
+          {programBadges.map((b) => (
+            <span
+              key={b.label}
+              style={{
+                display: "inline-block",
+                padding: "2px 8px",
+                borderRadius: 6,
+                background: b.bg,
+                color: b.fg,
+                fontSize: 11,
+                fontWeight: 700,
+                letterSpacing: 0.2,
+              }}
+            >
+              {b.label}
+            </span>
+          ))}
         </div>
-      ))}
+      )}
+      <ul
+        style={{
+          margin: 0,
+          paddingLeft: 16,
+          fontSize: 12,
+          lineHeight: 1.5,
+        }}
+      >
+        {sorted.map((a) => (
+          <li key={a.name}>{a.name}</li>
+        ))}
+      </ul>
     </div>
   );
 }
