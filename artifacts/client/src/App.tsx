@@ -3194,6 +3194,8 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   ],
   behaviorSupport: [
     "logIntervention",
+    "mtssPlans",
+    "interventionReports",
     "requestPullout",
     "behaviorSpecialist",
     "interventions",
@@ -3210,15 +3212,17 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   // gives the user *some* group context when they're on that page.
   schoolAdmin: ["bellSchedule", "activeKiosks", "settings", "hallPassMgmt"],
 };
-// Insights launches mtssPlans/mtssCoordinator/mtssTemplates as sub-pages
-// (via tile launchers in InsightsHub); they have no direct sidebar item,
-// so they belong to the Insights group for force-expand purposes.
+// Insights launches mtssCoordinator/mtssTemplates as sub-pages (via tile
+// launchers in InsightsHub); they have no direct sidebar item, so they
+// belong to the Insights group for force-expand purposes. mtssPlans and
+// interventionReports were promoted to direct sidebar items inside the
+// Academic and Behavior Supports group, so their ownership now lives
+// there (see behaviorSupport above) — not here.
 NAV_GROUP_OWNERSHIP.insights = [
   "insights",
   "insightsWatchlist",
   "myWatchList",
   "studentProfile",
-  "mtssPlans",
   "mtssCoordinator",
   "mtssTemplates",
   "academicsTrajectory",
@@ -7432,6 +7436,7 @@ function App() {
           canVerifyPullouts ||
           canViewIssDashboard ||
           canReviewPullouts ||
+          canManageMtssPlans ||
           (canManageBehaviorLists && !isBehaviorSpec);
         const showSpecialPrograms =
           effectiveFeatures.Accommodations || isEseCoord;
@@ -7593,7 +7598,7 @@ function App() {
               <NavGroup
                 key={`${sidebarUserId}-behaviorSupport`}
                 id="behaviorSupport"
-                label="Behavior Support"
+                label="Academic and Behavior Supports"
                 userId={sidebarUserId}
                 containsActive={groupContainsActive(
                   "behaviorSupport",
@@ -7604,6 +7609,25 @@ function App() {
                   renderNavItem({
                     key: "logIntervention",
                     label: "Log Intervention",
+                    icon: IconClipboard,
+                  })}
+                {/* MTSS Plans + Intervention Reports moved here from the
+                    Insights Hub tile launcher so MTSS Coordinators and
+                    School Psychologists have a direct sidebar path to the
+                    plan list and the school-wide completion dashboard.
+                    Same gate as the page render (canManageMtssPlans). The
+                    Insights Hub tiles are intentionally kept as a parallel
+                    discovery path. */}
+                {canManageMtssPlans &&
+                  renderNavItem({
+                    key: "mtssPlans",
+                    label: "MTSS Plans",
+                    icon: IconClipboard,
+                  })}
+                {canManageMtssPlans &&
+                  renderNavItem({
+                    key: "interventionReports",
+                    label: "Intervention Reports",
                     icon: IconClipboard,
                   })}
                 {/* Request Pullout was promoted to Quick Access — kept
