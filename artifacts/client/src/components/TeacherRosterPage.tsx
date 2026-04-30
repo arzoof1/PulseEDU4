@@ -57,6 +57,11 @@ interface RosterRow {
   // window. mtssTier = highest active MTSS plan tier, or null.
   isInvisible: boolean;
   mtssTier: number | null;
+  // Whole-child program flags. Source of truth is the SIS / roster
+  // import; rendered as small chips in the Programs column.
+  ese: boolean;
+  is504: boolean;
+  ell: boolean;
 }
 
 interface RosterResponse {
@@ -472,6 +477,73 @@ function SubjectCells({
   );
 }
 
+// Compact pill for one whole-child program flag. Colors are chosen so
+// the three chips are visually distinct from the BQ pill (dark brown)
+// and from each other while staying calm enough not to dominate the
+// row. Title text spells the abbreviation out for screen readers.
+const PROGRAM_META: Record<
+  "ese" | "504" | "ell",
+  { label: string; bg: string; fg: string; title: string }
+> = {
+  ese: {
+    label: "ESE",
+    bg: "#dbeafe",
+    fg: "#1e3a8a",
+    title: "Exceptional Student Education plan",
+  },
+  "504": {
+    label: "504",
+    bg: "#ede9fe",
+    fg: "#5b21b6",
+    title: "Section 504 plan",
+  },
+  ell: {
+    label: "ELL",
+    bg: "#dcfce7",
+    fg: "#14532d",
+    title: "English Language Learner",
+  },
+};
+
+function ProgramChip({ kind }: { kind: "ese" | "504" | "ell" }) {
+  const meta = PROGRAM_META[kind];
+  return (
+    <span
+      title={meta.title}
+      aria-label={meta.title}
+      style={{
+        display: "inline-block",
+        padding: "2px 8px",
+        borderRadius: 6,
+        background: meta.bg,
+        color: meta.fg,
+        fontSize: 11,
+        fontWeight: 700,
+        letterSpacing: 0.2,
+      }}
+    >
+      {meta.label}
+    </span>
+  );
+}
+
+function ProgramPills({ row }: { row: RosterRow }) {
+  const chips: Array<"ese" | "504" | "ell"> = [];
+  if (row.ese) chips.push("ese");
+  if (row.is504) chips.push("504");
+  if (row.ell) chips.push("ell");
+  if (chips.length === 0) {
+    return <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>;
+  }
+  return (
+    <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+      {chips.map((c) => (
+        <ProgramChip key={c} kind={c} />
+      ))}
+    </div>
+  );
+}
+
 function BqPills({ row }: { row: RosterRow }) {
   const flags: Array<{ subject: string; score: number | null }> = [];
   if (row.ela.priorYearBq) {
@@ -533,6 +605,7 @@ export default function TeacherRosterPage({
     pm3: boolean;
     pm1: boolean;
     pm2: boolean;
+    programs: boolean;
   };
   const VIS_DEFAULT: Visibility = {
     lg: true,
@@ -541,8 +614,12 @@ export default function TeacherRosterPage({
     pm3: true,
     pm1: true,
     pm2: true,
+    programs: true,
   };
-  const VIS_KEY = "teacherRoster.visibility.v2";
+  // Bumped to v3 because the Programs (ESE / 504 / ELL) toggle was
+  // added; previous keys are missing the field but the `??` fallbacks
+  // below default it to true, so old saved prefs upgrade cleanly.
+  const VIS_KEY = "teacherRoster.visibility.v3";
   const [visibility, setVisibility] = useState<Visibility>(() => {
     if (typeof window === "undefined") return VIS_DEFAULT;
     try {
@@ -556,6 +633,7 @@ export default function TeacherRosterPage({
         pm3: parsed.pm3 ?? true,
         pm1: parsed.pm1 ?? true,
         pm2: parsed.pm2 ?? true,
+        programs: parsed.programs ?? true,
       };
     } catch {
       return VIS_DEFAULT;
@@ -649,7 +727,10 @@ export default function TeacherRosterPage({
     const total = data.students.length;
     const elaBq = data.students.filter((s) => s.ela.priorYearBq).length;
     const mathBq = data.students.filter((s) => s.math.priorYearBq).length;
-    return { total, elaBq, mathBq };
+    const ese = data.students.filter((s) => s.ese).length;
+    const five04 = data.students.filter((s) => s.is504).length;
+    const ell = data.students.filter((s) => s.ell).length;
+    return { total, elaBq, mathBq, ese, five04, ell };
   }, [data]);
 
   return (
@@ -767,6 +848,12 @@ export default function TeacherRosterPage({
         </span>
         <span>BQ = Bottom Quartile (prior-year final scale score)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
+          Programs:
+          <ProgramChip kind="ese" />
+          <ProgramChip kind="504" />
+          <ProgramChip kind="ell" />
+        </span>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <InvisibleEyeIcon tier={null} windowDays={data?.invisibleDays ?? null} />
           Invisible (0 PBIS in last {data?.invisibleDays ?? 10} school days)
         </span>
@@ -856,6 +943,17 @@ export default function TeacherRosterPage({
         </label>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the Programs column (ESE / 504 / ELL)"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.programs}
+            onChange={() => toggleVis("programs")}
+          />
+          Programs
+        </label>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the invisible-student eye icon column"
         >
           <input
@@ -870,7 +968,9 @@ export default function TeacherRosterPage({
       {summary && (
         <div style={{ fontSize: 13, color: "#374151", marginBottom: 12 }}>
           {summary.total} student{summary.total === 1 ? "" : "s"} •{" "}
-          {summary.elaBq} ELA BQ • {summary.mathBq} Math BQ
+          {summary.elaBq} ELA BQ • {summary.mathBq} Math BQ • {summary.ese} ESE
+          {" • "}
+          {summary.five04} 504 • {summary.ell} ELL
         </div>
       )}
 
@@ -963,6 +1063,15 @@ export default function TeacherRosterPage({
                 {visibility.bq && (
                   <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                     BQ
+                  </th>
+                )}
+                {visibility.programs && (
+                  <th
+                    rowSpan={2}
+                    style={{ padding: "8px 10px", verticalAlign: "bottom" }}
+                    title="ESE / 504 / ELL designations from the SIS"
+                  >
+                    Programs
                   </th>
                 )}
               </tr>
@@ -1084,6 +1193,11 @@ export default function TeacherRosterPage({
                   {visibility.bq && (
                     <td style={{ padding: "6px 10px" }}>
                       <BqPills row={row} />
+                    </td>
+                  )}
+                  {visibility.programs && (
+                    <td style={{ padding: "6px 10px" }}>
+                      <ProgramPills row={row} />
                     </td>
                   )}
                 </tr>

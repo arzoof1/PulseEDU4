@@ -377,6 +377,13 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       // tier (or null when the student has no open plan).
       isInvisible,
       mtssTier,
+      // Whole-child program flags from the SIS / roster import.
+      // Surfaced here so a teacher can see at a glance which of their
+      // students have an ESE plan, a 504 plan, or are an ELL — common
+      // context they need before reaching out to specialists.
+      ese: stu.ese,
+      is504: stu.is504,
+      ell: stu.ell,
     };
   });
 

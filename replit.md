@@ -4388,3 +4388,22 @@ Deferred follow-up: HeartBEAT signage screen at `/signage/heartbeat`
 (component `HeartbeatSignage.tsx`) still isn't a first-class playlist
 item in the Signage Displays editor — adding it as a registered
 display type is a separate task.
+
+### Teacher Roster: ESE / 504 / ELL chips (Apr 30 2026)
+
+Added a "Programs" column to the Teacher Roster page so teachers can
+see whole-child program flags at a glance without opening each student
+profile.
+
+- Server: `GET /api/teacher-roster` now includes `ese`, `is504`, and
+  `ell` booleans on every student row, sourced directly from the
+  `students` table (populated by the SIS / roster importer).
+- Client: `TeacherRosterPage.tsx` renders three small pastel chips
+  (ESE / 504 / ELL) per row. Hidden when none apply ("—"). New
+  visibility toggle "Programs" alongside the existing PM/LG/BQ/Eye
+  toggles, persisted in `localStorage` under
+  `teacherRoster.visibility.v3` (`v2` keys upgrade cleanly via `??`
+  fallbacks). Legend includes a sample of each chip. Summary line is
+  unchanged in shape but now also reports ESE / 504 / ELL counts to
+  callers via `summary.ese / summary.five04 / summary.ell` (display
+  text not surfaced yet — chip column itself is the primary signal).
