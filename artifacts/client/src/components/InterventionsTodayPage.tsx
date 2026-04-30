@@ -9,18 +9,29 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
-interface OwedRow {
+interface Tier2Row {
   studentId: string;
   studentName: string;
-  tier: 2 | 3;
-  reason: string; // "Tier 2 daily" | "Tier 3 — Mon"
-  weekStartDate?: string;
+  grade: string | null;
+  subType: string | null;
+  planId: number;
+}
+
+interface Tier3Row {
+  studentId: string;
+  studentName: string;
+  grade: string | null;
+  planId: number;
+  weekStartDate: string;
+  missingDayCount: number;
 }
 
 interface OwedPayload {
   visible: boolean;
-  totalOwed: number;
-  rows: OwedRow[];
+  todayDate: string;
+  weekStartDate: string;
+  tier2: Tier2Row[];
+  tier3: Tier3Row[];
 }
 
 interface Props {
@@ -47,7 +58,12 @@ export default function InterventionsTodayPage({
     (async () => {
       setLoading(true);
       try {
-        const r = await authFetch("/api/interventions/owed-today");
+        // See InterventionsBell for why `cache: "no-store"` matters —
+        // browser ETag revalidation otherwise yields a 304 with empty
+        // body on re-mount and breaks the load.
+        const r = await authFetch("/api/interventions/owed-today", {
+          cache: "no-store",
+        });
         if (!r.ok) throw new Error(await r.text());
         const data = (await r.json()) as OwedPayload;
         if (!cancelled) setPayload(data);
@@ -63,8 +79,9 @@ export default function InterventionsTodayPage({
     };
   }, [refreshKey]);
 
-  const tier2 = payload?.rows.filter((r) => r.tier === 2) ?? [];
-  const tier3 = payload?.rows.filter((r) => r.tier === 3) ?? [];
+  const tier2 = payload?.tier2 ?? [];
+  const tier3 = payload?.tier3 ?? [];
+  const totalOwed = tier2.length + tier3.length;
 
   return (
     <section style={{ padding: "1rem", maxWidth: 880 }}>
@@ -98,7 +115,7 @@ export default function InterventionsTodayPage({
         </div>
       )}
 
-      {!loading && payload && payload.totalOwed === 0 && (
+      {!loading && payload && totalOwed === 0 && (
         <div
           style={{
             padding: "1rem",
@@ -130,9 +147,25 @@ export default function InterventionsTodayPage({
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 600 }}>{r.studentName}</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {r.studentName}
+                    {r.grade ? (
+                      <span
+                        style={{
+                          color: "#64748b",
+                          fontWeight: 400,
+                          marginLeft: 6,
+                        }}
+                      >
+                        · Grade {r.grade}
+                      </span>
+                    ) : null}
+                  </div>
                   <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                    {r.reason}
+                    Tier 2 daily
+                    {r.subType
+                      ? ` · ${r.subType === "cico" ? "Check-In/Check-Out" : "Behavior Group"}`
+                      : ""}
                   </div>
                 </div>
                 <button
@@ -173,9 +206,25 @@ export default function InterventionsTodayPage({
                 }}
               >
                 <div>
-                  <div style={{ fontWeight: 600 }}>{r.studentName}</div>
+                  <div style={{ fontWeight: 600 }}>
+                    {r.studentName}
+                    {r.grade ? (
+                      <span
+                        style={{
+                          color: "#64748b",
+                          fontWeight: 400,
+                          marginLeft: 6,
+                        }}
+                      >
+                        · Grade {r.grade}
+                      </span>
+                    ) : null}
+                  </div>
                   <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                    {r.reason}
+                    Tier 3 weekly · week of {r.weekStartDate}
+                    {r.missingDayCount > 0
+                      ? ` · ${r.missingDayCount} day${r.missingDayCount === 1 ? "" : "s"} unscored`
+                      : ""}
                   </div>
                 </div>
                 <button

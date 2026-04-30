@@ -10,7 +10,8 @@ import { authFetch } from "../lib/authToken";
 
 interface OwedPayload {
   visible: boolean;
-  totalOwed: number;
+  tier2: Array<{ studentId: string }>;
+  tier3: Array<{ studentId: string }>;
 }
 
 interface Props {
@@ -28,12 +29,23 @@ export default function InterventionsBell({ refreshKey, onClick }: Props) {
 
     async function poll() {
       try {
-        const r = await authFetch("/api/interventions/owed-today");
+        // `cache: "no-store"` is critical here. Without it the browser
+        // will send an `If-None-Match` from the previous response's
+        // ETag and the server returns 304 with an empty body; `r.ok`
+        // is then false (304 is outside the 2xx success range) and we
+        // silently exit, leaving the bell hidden after a logout / re-
+        // login cycle even though the user has owed interventions.
+        const r = await authFetch("/api/interventions/owed-today", {
+          cache: "no-store",
+        });
         if (!r.ok) return;
         const data = (await r.json()) as OwedPayload;
         if (cancelled) return;
-        setVisible(Boolean(data.visible));
-        setCount(data.totalOwed ?? 0);
+        const total =
+          (Array.isArray(data.tier2) ? data.tier2.length : 0) +
+          (Array.isArray(data.tier3) ? data.tier3.length : 0);
+        setVisible(Boolean(data.visible) && total > 0);
+        setCount(total);
       } catch {
         /* swallow */
       }
