@@ -1616,33 +1616,38 @@ render correctly.
   Don't act until the user opens the door — they explicitly said it is
   not part of the current build.
 
-## Parked: School-wide HeartBEAT as a Signage Displays toggle (captured Apr 30, 2026)
+## Displays: HeartBEAT toggle (shipped Apr 30, 2026)
 
-The school-wide HeartBEAT screen already exists at `/signage/heartbeat`
-(`artifacts/client/src/signage/HeartbeatSignage.tsx`) — red/green
-"mood meter" slider, live activity ticker (passes/tardies/PBIS/etc.),
-and a per-student variant. It's reachable from the Signage Launcher
-view but is **not** exposed as a toggle inside the **Signage Displays**
-playlist editor (`display_playlists` / `display_playlist_items`),
-so admins can't drop it into a TV rotation alongside houses,
-announcements, etc.
+The school-wide HeartBEAT screen at `/signage/heartbeat`
+(`artifacts/client/src/signage/HeartbeatSignage.tsx` — red/green mood
+slider, live activity ticker for passes/tardies/PBIS/etc., already
+school-scoped via `?schoolId=N`) is now exposed as a third toggle
+inside the Signage Displays playlist editor, mirroring the existing
+"Show PBIS Houses slide each loop" and "Show Active Hall Passes slide
+each loop" controls.
 
-User wants this surfaced as:
-
-1. A first-class playlist item type ("School-wide HeartBEAT") in the
-   Signage Displays editor — selectable like any other slide.
-2. Optional duration knob (e.g. show for 30s before rotating).
-3. Same screen reused for individual students when launched from a
-   student profile (already partially supported via
-   `StudentTimelineSignage.tsx`).
-
-User flagged this Apr 30 while building the new tier-aware Intervention
-system. They could not initially find the screen — confirm with them
-that `/signage/heartbeat` IS what they remembered before scoping the
-playlist-toggle work, in case they actually want a redesign.
-
-**Don't act until the user opens the door — they explicitly said this
-is the *next* thing after the Intervention history work.**
+- Schema: new `display_playlists.show_heartbeat` boolean column
+  (`NOT NULL DEFAULT false`) added to
+  `lib/db/src/schema/displayPlaylists.ts`.
+- Server (`artifacts/api-server/src/routes/displays.ts`): the field
+  is read in the playlists list SELECT, accepted in PATCH (same shape
+  as the other two booleans), and surfaced on the public playlist
+  endpoint. The public endpoint also now returns `playlist.schoolId`
+  so the cycler can build the per-school iframe URL — that field was
+  already on the row, just not previously exposed.
+- Client editor (`Displays.tsx` PlaylistEditor): third checkbox
+  appended after "Show Active Hall Passes" with label "Show Today's
+  Heartbeat slide each loop". Patches via the same `patchPlaylist`
+  helper.
+- Client cycler (`DisplayShow.tsx`): new `Slide` variant
+  `{ kind: "heartbeat"; schoolId }` injected after the house and
+  passes slides. Renders as a sandboxed iframe at
+  `/signage/heartbeat?schoolId=N`; advances on the playlist's default
+  duration (floored to 15s so visitors have time to read at least one
+  row). The heartbeat page polls `/api/pulse/*` for itself, so we do
+  not fetch heartbeat data server-side for the playlist response.
+- Auth model is unchanged: same `cap_manage_displays` capability for
+  the editor; no auth on the public cycler path.
 
 ## Parked: Bathroom Queue (kiosk station)
 
@@ -4384,10 +4389,14 @@ intervention source into one row shape:
     table removed and replaced with a violet call-out card linking to
     My Interventions ("View My Interventions →").
 
-Deferred follow-up: HeartBEAT signage screen at `/signage/heartbeat`
-(component `HeartbeatSignage.tsx`) still isn't a first-class playlist
-item in the Signage Displays editor — adding it as a registered
-display type is a separate task.
+Follow-up done Apr 30: HeartBEAT signage screen at `/signage/heartbeat`
+is now wireable into a Signage Displays playlist as a per-loop slide
+(see "Displays: HeartBEAT toggle (shipped Apr 30, 2026)" earlier in
+this file). It is rendered as a sandboxed iframe rather than a
+first-class playlist *item* type — the editor toggle lives in the
+playlist meta (alongside the PBIS-houses and active-hall-passes
+toggles), not in the items list. Promoting it to a first-class item
+type with per-instance duration is still on the wishlist.
 
 ### Teacher Roster: ESE / 504 / ELL chips (Apr 30 2026)
 

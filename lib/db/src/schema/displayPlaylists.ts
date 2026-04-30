@@ -33,6 +33,11 @@ export const displayPlaylistsTable = pgTable("display_playlists", {
   showActiveHallPasses: boolean("show_active_hall_passes")
     .notNull()
     .default(false),
+  // When true, the cycler injects a synthetic "Today's Heartbeat" slide
+  // each loop. The slide is rendered client-side as an iframe pointing
+  // at the existing /signage/heartbeat page (no server-side data fetch
+  // is needed — the heartbeat page polls for itself).
+  showHeartbeat: boolean("show_heartbeat").notNull().default(false),
   // Optional play-window schedule (v2). When `scheduleEnabled` is true and
   // *any* of (current day-of-week ∉ days, current time-of-day < start, or
   // ≥ end) holds, the cycler shows an "Off-air" slide instead of content.

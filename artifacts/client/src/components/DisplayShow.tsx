@@ -90,10 +90,15 @@ interface HallPassData {
 interface PublicPlaylist {
   playlist: {
     id: number;
+    // schoolId is needed to build the per-school Heartbeat iframe URL
+    // (`/signage/heartbeat?schoolId=N`). The server returns this on
+    // the public endpoint — see `routes/displays.ts`.
+    schoolId: number;
     name: string;
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
     showActiveHallPasses: boolean;
+    showHeartbeat: boolean;
     scheduleEnabled: boolean;
     scheduleStartTime: string | null;
     scheduleEndTime: string | null;
@@ -109,10 +114,12 @@ interface PublicPlaylist {
 
 // A "slide" is what the cycler actually displays. We expand the
 // playlist into slides by injecting an optional house card + an
-// optional active-hall-passes card at the front of each loop.
+// optional active-hall-passes card + an optional heartbeat embed at
+// the front of each loop.
 type Slide =
   | { kind: "house"; data: PublicPlaylist["houseData"] }
   | { kind: "passes"; data: HallPassData }
+  | { kind: "heartbeat"; schoolId: number }
   | { kind: "item"; item: PublicItem };
 
 // Schedule helpers — keep this client-side so the TV's local clock is
@@ -233,6 +240,12 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
     }
     if (playlist.playlist.showActiveHallPasses && playlist.hallPassData) {
       list.push({ kind: "passes", data: playlist.hallPassData });
+    }
+    if (playlist.playlist.showHeartbeat) {
+      // Heartbeat is rendered as an iframe of the existing /signage/heartbeat
+      // page, which polls /api/pulse/* for itself. We just need to know
+      // which school to scope it to.
+      list.push({ kind: "heartbeat", schoolId: playlist.playlist.schoolId });
     }
     for (const item of playlist.items) {
       list.push({ kind: "item", item });
@@ -355,6 +368,16 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
           // key forces a fresh mount when the slide changes so the
           // useTimer inside cleans up correctly.
           key={`passes-${slideIdx}`}
+        />
+      ) : slide.kind === "heartbeat" ? (
+        <HeartbeatSlide
+          schoolId={slide.schoolId}
+          // Heartbeat is a "live page" with no natural end, so the
+          // playlist default governs how long it stays up. Pad to 15s
+          // so visitors have time to read at least one row.
+          durationSeconds={Math.max(defaultDuration, 15)}
+          onDone={advance}
+          key={`heartbeat-${slideIdx}`}
         />
       ) : slide.kind === "item" ? (
         <ItemSlide
@@ -933,5 +956,43 @@ export function HallPassDisplay({ schoolId }: { schoolId: number }) {
         onDone={() => {}}
       />
     </div>
+  );
+}
+
+// ===================================================================
+// Heartbeat embed slide.
+//
+// We render the existing /signage/heartbeat?schoolId=N kiosk page in
+// an iframe — it polls /api/pulse/* for itself and already handles
+// the "no schoolId" case, so the cycler doesn't need its own data
+// path. The slide advances on a timer like the other synthetic slides.
+// ===================================================================
+
+function HeartbeatSlide({
+  schoolId,
+  durationSeconds,
+  onDone,
+}: {
+  schoolId: number;
+  durationSeconds: number;
+  onDone: () => void;
+}) {
+  useTimer(durationSeconds, onDone);
+  // The heartbeat page is a full-bleed dark UI of its own — no extra
+  // chrome needed here. Sandbox blocks navigation away just in case
+  // the embedded page ever tries to follow a link (it shouldn't).
+  return (
+    <iframe
+      src={`/signage/heartbeat?schoolId=${encodeURIComponent(String(schoolId))}`}
+      title="Today's Heartbeat"
+      sandbox="allow-scripts allow-same-origin"
+      style={{
+        width: "100%",
+        height: "100%",
+        border: 0,
+        display: "block",
+        background: "black",
+      }}
+    />
   );
 }

@@ -52,6 +52,7 @@ interface PlaylistDetail {
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
     showActiveHallPasses: boolean;
+    showHeartbeat: boolean;
     scheduleEnabled: boolean;
     scheduleStartTime: string | null;
     scheduleEndTime: string | null;
@@ -299,6 +300,8 @@ export default function Displays() {
                     {p.itemCount} item{p.itemCount === 1 ? "" : "s"} ·{" "}
                     {p.defaultDurationSeconds}s default
                     {p.showPbisHousePage ? " · 🏠 House page" : ""}
+                    {p.showActiveHallPasses ? " · 🎫 Hall passes" : ""}
+                    {p.showHeartbeat ? " · 💓 Heartbeat" : ""}
                   </div>
                   <div
                     style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}
@@ -386,6 +389,7 @@ function PlaylistEditor({
     defaultDurationSeconds?: number;
     showPbisHousePage?: boolean;
     showActiveHallPasses?: boolean;
+    showHeartbeat?: boolean;
     scheduleEnabled?: boolean;
     scheduleStartTime?: string | null;
     scheduleEndTime?: string | null;
@@ -663,6 +667,22 @@ function PlaylistEditor({
               />
               <span style={{ fontSize: 14 }}>
                 Show Active Hall Passes slide each loop
+              </span>
+            </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={detail.playlist.showHeartbeat}
+                onChange={(e) =>
+                  void patchPlaylist({
+                    showHeartbeat: e.currentTarget.checked,
+                  })
+                }
+              />
+              <span style={{ fontSize: 14 }}>
+                Show Today's Heartbeat slide each loop
               </span>
             </label>
             <ScheduleEditor

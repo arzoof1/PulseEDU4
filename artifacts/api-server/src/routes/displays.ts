@@ -156,6 +156,7 @@ router.get("/displays/playlists", async (req, res) => {
         defaultDurationSeconds: displayPlaylistsTable.defaultDurationSeconds,
         showPbisHousePage: displayPlaylistsTable.showPbisHousePage,
         showActiveHallPasses: displayPlaylistsTable.showActiveHallPasses,
+        showHeartbeat: displayPlaylistsTable.showHeartbeat,
         scheduleEnabled: displayPlaylistsTable.scheduleEnabled,
         scheduleStartTime: displayPlaylistsTable.scheduleStartTime,
         scheduleEndTime: displayPlaylistsTable.scheduleEndTime,
@@ -338,6 +339,9 @@ router.patch("/displays/playlists/:id", async (req, res) => {
     }
     if (req.body?.showActiveHallPasses !== undefined) {
       update.showActiveHallPasses = Boolean(req.body.showActiveHallPasses);
+    }
+    if (req.body?.showHeartbeat !== undefined) {
+      update.showHeartbeat = Boolean(req.body.showHeartbeat);
     }
     if (req.body?.scheduleEnabled !== undefined) {
       update.scheduleEnabled = Boolean(req.body.scheduleEnabled);
@@ -851,10 +855,16 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
     res.json({
       playlist: {
         id: pl.id,
+        // schoolId is needed by the cycler so it can build the
+        // ?schoolId=N URL for the embedded Heartbeat slide. (No PII —
+        // schoolId is a public number already used in other signage
+        // URLs.)
+        schoolId: pl.schoolId,
         name: pl.name,
         defaultDurationSeconds: pl.defaultDurationSeconds,
         showPbisHousePage: pl.showPbisHousePage,
         showActiveHallPasses: pl.showActiveHallPasses,
+        showHeartbeat: pl.showHeartbeat,
         scheduleEnabled: pl.scheduleEnabled,
         scheduleStartTime: pl.scheduleStartTime,
         scheduleEndTime: pl.scheduleEndTime,
