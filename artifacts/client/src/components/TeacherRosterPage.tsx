@@ -536,11 +536,13 @@ function ProgramPills({ row }: { row: RosterRow }) {
   if (row.ese) chips.push("ese");
   if (row.is504) chips.push("504");
   if (row.ell) chips.push("ell");
-  // No flags AND no accommodations: render the placeholder em-dash so
-  // the row stays aligned. (When the student HAS accommodations but
-  // none of the three program flags, we still want to show a hover
-  // affordance — handled in the parent <td>.)
-  if (chips.length === 0 && row.accommodations.length === 0) {
+  // The school recognizes only ESE / 504 / ELL as trackable program
+  // identifiers. If a student has none of these flags we render a
+  // placeholder em-dash, regardless of whether they have
+  // accommodations on file. (Students with accommodations but no
+  // program flag indicate a SIS data-quality issue — the source
+  // system should be reflagged, not the UI.)
+  if (chips.length === 0) {
     return <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>;
   }
   return (
@@ -548,28 +550,6 @@ function ProgramPills({ row }: { row: RosterRow }) {
       {chips.map((c) => (
         <ProgramChip key={c} kind={c} />
       ))}
-      {/* If the only signal is "has accommodations" with no program
-          flag, surface a soft "Acc" chip so there's something to hover
-          on. Same pastel + dark-ink treatment as the program chips. */}
-      {chips.length === 0 && row.accommodations.length > 0 && (
-        <span
-          title={`${row.accommodations.length} active accommodation${
-            row.accommodations.length === 1 ? "" : "s"
-          } — hover to view`}
-          style={{
-            display: "inline-block",
-            padding: "2px 8px",
-            borderRadius: 6,
-            background: "#f1f5f9",
-            color: "#334155",
-            fontSize: 11,
-            fontWeight: 700,
-            letterSpacing: 0.2,
-          }}
-        >
-          Acc
-        </span>
-      )}
     </div>
   );
 }
