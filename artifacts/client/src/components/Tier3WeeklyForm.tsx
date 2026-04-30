@@ -712,6 +712,10 @@ export default function Tier3WeeklyForm({
                   </td>
                   {DAYS.map((d, i) => {
                     const isAbsent = absentDays[d];
+                    // No goal text yet means there's nothing to score
+                    // against — leave the buttons inert + greyed so it's
+                    // obvious the row is awaiting a goal from Core Team.
+                    const noGoal = !goal;
                     return (
                       <td
                         key={d}
@@ -724,7 +728,11 @@ export default function Tier3WeeklyForm({
                               ? "1px solid #e2e8f0"
                               : undefined,
                           verticalAlign: "middle",
-                          background: isAbsent ? "#fef3c7" : undefined,
+                          background: isAbsent
+                            ? "#fef3c7"
+                            : noGoal
+                              ? "#f1f5f9"
+                              : undefined,
                         }}
                       >
                         {isAbsent ? (
@@ -737,6 +745,18 @@ export default function Tier3WeeklyForm({
                             }}
                           >
                             Absent
+                          </div>
+                        ) : noGoal ? (
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "#94a3b8",
+                              textAlign: "center",
+                              fontStyle: "italic",
+                            }}
+                            title="Add a goal first to enable scoring."
+                          >
+                            —
                           </div>
                         ) : (
                           <div
