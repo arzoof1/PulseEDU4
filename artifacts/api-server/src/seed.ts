@@ -31,6 +31,7 @@ import {
   issRosterTable,
   interventionEntriesTable,
   studentMtssPlansTable,
+  tier3GoalsTable,
   studentFastScoresTable,
   housesTable,
   assessmentsTable,
@@ -416,6 +417,40 @@ export async function ensureMtssPlansSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS student_mtss_plans_student_idx ON student_mtss_plans (school_id, student_id)`,
   );
+  // ---- Tier 2 / Tier 3 columns added after the original v1 ship.
+  // ALTER … IF NOT EXISTS keeps prod migrations idempotent.
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS intervention_sub_type TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS assigned_teacher_ids TEXT NOT NULL DEFAULT ''`,
+  );
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS track_school_wide_expectations BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS tier3_goal_slots INTEGER NOT NULL DEFAULT 2`,
+  );
+  // ---- tier3_goals — version-on-edit goal storage for Tier 3 plans.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tier3_goals (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      slot INTEGER NOT NULL,
+      text TEXT NOT NULL,
+      effective_from TEXT NOT NULL,
+      created_by_staff_id INTEGER,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tier3_goals_school_idx ON tier3_goals (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tier3_goals_student_slot_idx ON tier3_goals (school_id, student_id, slot, effective_from)`,
+  );
 }
 
 export async function seedMtssPlansIfEmpty() {
@@ -467,6 +502,199 @@ export async function seedMtssPlansIfEmpty() {
     logger.info(
       { schoolId: school.id, count: plans.length },
       "[seed] MTSS plans seeded (20% of students)",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedTieredInterventionsIfEmpty: idempotent per-school. Picks ~10% of
+// each school's students and gives them a *tiered* (Tier 2 daily or
+// Tier 3 weekly) intervention plan that's fully wired up: sub-type set,
+// assignedTeacherIds populated from the section roster so the bell
+// shows up for the right teachers, plus 2-3 versioned goals per Tier 3
+// student so the weekly form has score rows to render.
+//
+// This sits alongside the legacy `seedMtssPlansIfEmpty` (which only
+// produces v1 metadata-only Tier 2 plans). Use `opened_by_name =
+// 'Tiered Demo Seed'` as the marker so re-runs are safe and so demo
+// users can tell auto-seeded tiered plans apart from real ones.
+//
+// Distribution:
+//   * 60% Tier 2 → split 50/50 between CICO and Group sub-types
+//   * 40% Tier 3 → 2 or 3 goal slots, PRIDE on by default
+// Each plan gets 1-3 assigned teachers pulled from the student's own
+// section roster, so the "owed today" bell actually fires.
+// -----------------------------------------------------------------------------
+const TIER2_PLAN_TITLES = [
+  "Tier 2 — Check-In/Check-Out",
+  "Tier 2 — Behavior Group",
+  "Tier 2 — Daily Engagement Plan",
+];
+const TIER3_PLAN_TITLES = [
+  "Tier 3 — Individualized Behavior Plan",
+  "Tier 3 — Wraparound Support",
+  "Tier 3 — Intensive Daily Monitoring",
+];
+const TIER3_GOAL_TEXTS = [
+  "Arrive to class on time and ready to learn (materials out within 2 minutes).",
+  "Use respectful language with peers and adults throughout the day.",
+  "Complete and turn in assigned classwork by end of period.",
+  "Use a coping strategy (deep breath, break, journal) when frustrated.",
+  "Stay in assigned seat / area unless given permission to move.",
+  "Follow first-time directions from the teacher without argument.",
+  "Use kind words and keep hands/feet to self during transitions.",
+  "Track speaker and raise hand before contributing to class discussion.",
+];
+
+export async function seedTieredInterventionsIfEmpty() {
+  await ensureMtssPlansSchema();
+
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    // Idempotency marker: skip schools that already have a tiered seed.
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM student_mtss_plans
+            WHERE school_id = ${school.id}
+              AND opened_by_name = 'Tiered Demo Seed'`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const studentRows = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length === 0) continue;
+
+    // Pull the section roster joined to class_sections so we know which
+    // teachers each student sees during the day. Stored as a Map<studentId, teacherId[]>.
+    const rosterRows = (
+      await db.execute(
+        sql`SELECT sr.student_id, cs.teacher_staff_id
+            FROM section_roster sr
+            JOIN class_sections cs ON cs.id = sr.section_id
+            WHERE cs.school_id = ${school.id}
+              AND cs.is_planning = false`,
+      )
+    ).rows as { student_id: string; teacher_staff_id: number }[];
+    const teachersByStudent = new Map<string, number[]>();
+    for (const r of rosterRows) {
+      const arr = teachersByStudent.get(r.student_id) ?? [];
+      if (!arr.includes(r.teacher_staff_id)) arr.push(r.teacher_staff_id);
+      teachersByStudent.set(r.student_id, arr);
+    }
+
+    // Deterministic shuffle so re-seeds (after a wipe + skip-marker
+    // clear) produce the same sample.
+    const rng = makeRng(0x71e3ed + school.id * 8101);
+    const ids = studentRows.map((s) => s.studentId);
+    for (let i = ids.length - 1; i > 0; i--) {
+      const j = Math.floor(rng() * (i + 1));
+      [ids[i], ids[j]] = [ids[j], ids[i]];
+    }
+    const sampleSize = Math.floor(ids.length * 0.1);
+    const sampled = ids.slice(0, sampleSize);
+
+    type PlanInsert = typeof studentMtssPlansTable.$inferInsert;
+    const plans: PlanInsert[] = [];
+    // Track which sampled students are Tier 3 so we can write goals
+    // after the plans are inserted (we need plan IDs first).
+    const tier3Students: Array<{ studentId: string; goalCount: number }> = [];
+
+    let idx = 0;
+    for (const studentId of sampled) {
+      idx += 1;
+      const teacherIds = teachersByStudent.get(studentId) ?? [];
+      // Up to 3 teachers, deterministic order.
+      const assignedCsv = teacherIds.slice(0, 3).join(",");
+
+      // 60% Tier 2, 40% Tier 3. Use idx so the split is exact and
+      // independent of the RNG stream that picked the students.
+      const isTier3 = idx % 5 >= 3;
+      if (isTier3) {
+        const goalCount = (idx % 2) + 2; // 2 or 3 goals
+        tier3Students.push({ studentId, goalCount });
+        plans.push({
+          schoolId: school.id,
+          studentId,
+          title: pick(rng, TIER3_PLAN_TITLES),
+          goals:
+            "Auto-seeded Tier 3 plan. Goals are tracked in tier3_goals — edit there.",
+          tier: 3,
+          pointRangeMin: 1,
+          pointRangeMax: 5,
+          notes: "Auto-seeded tiered plan. Remove or replace before live use.",
+          interventionSubType: null,
+          assignedTeacherIds: assignedCsv,
+          trackSchoolWideExpectations: true,
+          tier3GoalSlots: goalCount,
+          openedByName: "Tiered Demo Seed",
+        });
+      } else {
+        // Tier 2 — alternate CICO and group so each school has both.
+        const subType = idx % 2 === 0 ? "cico" : "group";
+        plans.push({
+          schoolId: school.id,
+          studentId,
+          title:
+            subType === "cico"
+              ? "Tier 2 — Check-In/Check-Out"
+              : "Tier 2 — Behavior Group",
+          goals:
+            "Auto-seeded Tier 2 plan. Daily entries roll up into the MTSS dashboard.",
+          tier: 2,
+          pointRangeMin: 0,
+          pointRangeMax: 100,
+          notes: "Auto-seeded tiered plan. Remove or replace before live use.",
+          interventionSubType: subType,
+          assignedTeacherIds: assignedCsv,
+          trackSchoolWideExpectations: true,
+          tier3GoalSlots: 2,
+          openedByName: "Tiered Demo Seed",
+        });
+      }
+    }
+
+    if (plans.length === 0) continue;
+
+    for (let i = 0; i < plans.length; i += 500) {
+      await db.insert(studentMtssPlansTable).values(plans.slice(i, i + 500));
+    }
+
+    // Now write Tier 3 goals. Use a stable effectiveFrom = today (school
+    // local would be ideal, but this seed runs at boot and the demo uses
+    // today everywhere else too — close enough for fixture data).
+    const today = new Date().toISOString().slice(0, 10);
+    type GoalInsert = typeof tier3GoalsTable.$inferInsert;
+    const goals: GoalInsert[] = [];
+    for (const t3 of tier3Students) {
+      for (let slot = 1; slot <= t3.goalCount; slot++) {
+        goals.push({
+          schoolId: school.id,
+          studentId: t3.studentId,
+          slot,
+          text: pick(rng, TIER3_GOAL_TEXTS),
+          effectiveFrom: today,
+          createdByName: "Tiered Demo Seed",
+        });
+      }
+    }
+    if (goals.length > 0) {
+      for (let i = 0; i < goals.length; i += 500) {
+        await db.insert(tier3GoalsTable).values(goals.slice(i, i + 500));
+      }
+    }
+
+    logger.info(
+      {
+        schoolId: school.id,
+        plansSeeded: plans.length,
+        tier2: plans.length - tier3Students.length,
+        tier3: tier3Students.length,
+        goalsSeeded: goals.length,
+      },
+      "[seed] tiered intervention plans seeded (~10% of students)",
     );
   }
 }

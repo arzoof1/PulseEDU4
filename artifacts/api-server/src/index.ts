@@ -4,6 +4,7 @@ import {
   seedIfEmpty,
   seedTenancy,
   seedMtssPlansIfEmpty,
+  seedTieredInterventionsIfEmpty,
   seedFastScoresIfEmpty,
   seedHousesIfEmpty,
   seedIreadyAndSciIfEmpty,
@@ -47,6 +48,13 @@ async function runSeed(): Promise<void> {
   // Runs after the main seed so studentsTable is populated. Idempotent
   // per-school: skipped for any school that already has at least one plan.
   await seedMtssPlansIfEmpty();
+  // Tier-aware demo: ~10% of each school's students get a fully wired
+  // Tier 2 (CICO/group, daily) or Tier 3 (weekly with goals) plan, with
+  // assigned_teacher_ids drawn from the section roster so the bell
+  // surfaces "owed today" rows for the right teachers. Idempotent:
+  // skipped if any plan with `opened_by_name = 'Tiered Demo Seed'`
+  // already exists for that school.
+  await seedTieredInterventionsIfEmpty();
   // Same pattern: ensure schema + skip-if-non-empty per school. Required
   // before the Teacher Roster API has anything to render.
   await seedFastScoresIfEmpty();
