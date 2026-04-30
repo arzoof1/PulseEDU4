@@ -7,6 +7,7 @@ import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import InterventionsTodayPage from "./components/InterventionsTodayPage";
 import InterventionReportsPage from "./components/InterventionReportsPage";
+import MtssReportsPage from "./components/MtssReportsPage";
 import MyInterventionsPage from "./components/MyInterventionsPage";
 import SchoolWideExpectationsPanel from "./components/SchoolWideExpectationsPanel";
 import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
@@ -3438,6 +3439,15 @@ function App() {
   // "Quick Check-in" secondary link inside the launcher.
   const [interventionLauncherOpen, setInterventionLauncherOpen] =
     useState(false);
+  // When the user clicks "Report" on a row in MtssPlansAdmin we
+  // route into the Reports nav section in per-plan mode. When this
+  // is null, the Reports section renders the standalone view.
+  const [mtssReportsPlanId, setMtssReportsPlanId] = useState<number | null>(
+    null,
+  );
+  const [mtssReportsPlanTitle, setMtssReportsPlanTitle] = useState<
+    string | null
+  >(null);
   const [interventionLauncherInitial, setInterventionLauncherInitial] =
     useState<{
       studentId: string | null;
@@ -14955,6 +14965,11 @@ function App() {
               isMtss ? "mtssCoordinator" : "behaviorSpecialist",
             )
           }
+          onOpenReport={(planId, planTitle) => {
+            setMtssReportsPlanId(planId);
+            setMtssReportsPlanTitle(planTitle);
+            setActiveSection("interventionReports");
+          }}
         />
       )}
 
@@ -17649,10 +17664,28 @@ function App() {
       )}
 
       {activeSection === "interventionReports" && canManageMtssPlans && (
-        <InterventionReportsPage
-          onBack={() => setActiveSection("mtssCoordinator")}
-        />
+        mtssReportsPlanId != null ? (
+          <MtssReportsPage
+            planId={mtssReportsPlanId}
+            initialPlanTitle={mtssReportsPlanTitle ?? undefined}
+            onBack={() => {
+              setMtssReportsPlanId(null);
+              setMtssReportsPlanTitle(null);
+              setActiveSection("mtssPlans");
+            }}
+          />
+        ) : (
+          <MtssReportsPage
+            onBack={() => setActiveSection("mtssCoordinator")}
+          />
+        )
       )}
+      {activeSection === "interventionReportsLegacy" &&
+        canManageMtssPlans && (
+          <InterventionReportsPage
+            onBack={() => setActiveSection("interventionReports")}
+          />
+        )}
 
       {activeSection === "myInterventions" && (
         <MyInterventionsPage

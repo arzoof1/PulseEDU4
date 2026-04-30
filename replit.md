@@ -4550,3 +4550,38 @@ Both fixed:
 - Effective-teacher resolution in the SQL exactly mirrors the
   server helper: schedule ∪ additional − excluded for auto plans;
   legacy assigned for manual plans.
+
+### MTSS Reports page (Apr 30 2026)
+
+New richer Reports page lives at the existing
+`activeSection === "interventionReports"` slot but renders a new
+component, `MtssReportsPage.tsx`, instead of the legacy weekly
+grid. (The legacy weekly grid is still reachable from
+`activeSection === "interventionReportsLegacy"` if a future link
+needs it.)
+
+- Server: new `artifacts/api-server/src/routes/mtssReports.ts`
+  exposes one endpoint:
+  `GET /api/mtss-reports/summary?range=7|30|60|90|sinceOpened&planId=&tier=&subType=&grade=&teacherStaffId=`.
+  Auth uses the same Core Team gate as the rest of the MTSS admin
+  surface (admin / BS / MTSS coord / PBIS coord / SuperUser).
+  Response shape returns: `weeklyTrend`, `perTeacher`,
+  `perSubject` (joined to current schedule for course names),
+  `dayOfWeek` (Mon-Fri completion %), `t3GoalTrend`, plus summary
+  tiles and a `planMeta` payload in per-plan mode. All counts
+  respect the per-plan effective-teacher list (schedule ∪ extras
+  − excluded) and treat each plan's expected work as starting at
+  `openedAt` and ending at `closedAt` if set.
+- Client: `MtssReportsPage` ships in two modes:
+  1. Standalone — entered via the existing Reports nav item;
+     filters are tier / subtype / grade / teacher.
+  2. Per-plan — entered via a new "Report" button on every row
+     of `MtssPlansAdmin`. App.tsx tracks the picked plan in
+     `mtssReportsPlanId` / `mtssReportsPlanTitle` state and the
+     Reports section conditionally renders the per-plan view,
+     which unlocks the "Since plan opened" date preset and shows
+     plan metadata up top.
+  Charts use the already-installed `recharts`. Includes a
+  Print-to-PDF button backed by a `@media print` stylesheet that
+  hides the back button and filters so the PDF is
+  presentation-ready.

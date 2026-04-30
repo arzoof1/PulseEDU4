@@ -80,6 +80,9 @@ interface Student {
 interface Props {
   canManage: boolean;
   onBack?: () => void;
+  // Optional callback — when provided, each plan row gets a "Report"
+  // button that hands off to the parent's reports view.
+  onOpenReport?: (planId: number, planTitle: string) => void;
 }
 
 const TIER_COLORS: Record<number, string> = {
@@ -121,7 +124,11 @@ function joinGoals(list: string[]): string {
     .join("\n");
 }
 
-export default function MtssPlansAdmin({ canManage, onBack }: Props) {
+export default function MtssPlansAdmin({
+  canManage,
+  onBack,
+  onOpenReport,
+}: Props) {
   const [plans, setPlans] = useState<Plan[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -498,6 +505,25 @@ export default function MtssPlansAdmin({ canManage, onBack }: Props) {
                             justifyContent: "flex-end",
                           }}
                         >
+                          {onOpenReport && (
+                            <button
+                              type="button"
+                              onClick={() => onOpenReport(p.id, p.title)}
+                              style={{
+                                background: "#ecfdf5",
+                                color: "#065f46",
+                                border: "1px solid #a7f3d0",
+                                borderRadius: 4,
+                                padding: "2px 8px",
+                                fontSize: "0.78rem",
+                                cursor: "pointer",
+                                fontWeight: 600,
+                              }}
+                              title="Open this plan's report"
+                            >
+                              Report
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setEditing(p)}
