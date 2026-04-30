@@ -4427,3 +4427,126 @@ profile.
   category }[]` per row. When a student has accommodations but none
   of the three program flags, a soft "Acc" pill is shown so there's
   still a hover target.
+
+### MTSS BIP: Auto-track schedule + exclude/extra-interventionist (Apr 30 2026)
+
+Refactor to how interventionist assignments work on every Tier 2 / Tier 3
+plan in `student_mtss_plans`. Replaces the static `assigned_teacher_ids`
+CSV as the *source of truth* for who owes interventions.
+
+- New columns on `student_mtss_plans` (added via `ALTER TABLE`; reflected
+  in `lib/db/src/schema/studentMtssPlans.ts`):
+  - `auto_assign_schedule_teachers BOOLEAN NOT NULL DEFAULT TRUE` —
+    when true (the new default), the student's *current* class
+    schedule (joined via `section_roster` → `class_sections`,
+    excluding planning periods) is the authoritative list of who
+    owes the daily/weekly entry. Mid-year roster changes flow
+    through automatically.
+  - `excluded_teacher_ids TEXT NOT NULL DEFAULT ''` — CSV of staff
+    ids the team has excused from this particular plan (e.g. art /
+    PE teacher who can't realistically check-in/check-out). Only
+    consulted when `auto_assign_schedule_teachers = true`.
+  - `additional_interventionist_ids TEXT NOT NULL DEFAULT ''` — CSV
+    of staff ids ADDED on top (counselor, behavior specialist,
+    school psych, social worker, trusted adult — anyone who isn't
+    one of the student's classroom teachers but is still on the
+    plan).
+- Legacy `assigned_teacher_ids` is kept and continues to be populated
+  on insert / patch by clients that haven't been updated, but server
+  consumers prefer the *effective list* whenever a plan has
+  `auto_assign_schedule_teachers = true`.
+- New shared helper `artifacts/api-server/src/lib/effectiveTeachers.ts`
+  exports `parseCsvIds`, `loadScheduleTeacherIdsForStudents` (batched
+  by school + student), `effectiveTeacherIdsForPlan`, and
+  `loadScheduleSectionsForStudent`. Both `routes/mtssPlans.ts` and
+  `routes/interventionsBell.ts` import from here so the
+  auto/exclude/extra logic lives in exactly one place.
+- `routes/mtssPlans.ts`:
+  - `GET /mtss-plans` (list) now includes `effectiveTeacherIds`
+    (number[]) and `effectiveTeachers: { staffId, displayName,
+    source: "schedule" | "additional" }[]` per row. The three new
+    raw fields are also returned so the modal can seed itself.
+  - New `GET /mtss-plans/teacher-options?studentId=…` returns
+    `scheduleTeachers: { staffId, displayName, period, courseName }[]`
+    plus `staffOptions: { id, displayName }[]` (active staff in the
+    same school) and `scheduleStaffIds`. The Plan modal uses this
+    to render the live schedule list and to power the
+    "Additional interventionists" picker.
+  - `POST /mtss-plans` and `PATCH /mtss-plans/:id` accept
+    `autoAssignScheduleTeachers`, `excludedTeacherIds`,
+    `additionalInterventionistIds` (arrays or CSVs are normalized
+    via `normalizeStaffIdCsv`). When `auto = true` the legacy
+    `assignedTeacherIds` is recomputed server-side as schedule ∪
+    additional − excluded; when `auto = false` clients still write
+    `assignedTeacherIds` explicitly.
+- `routes/interventionsBell.ts`:
+  - `GET /interventions/owed-today` now filters by the effective
+    teacher list per plan instead of the static CSV.
+  - `GET /interventions/completion-report` builds the expected
+    "who-owes-what-this-week" set from the effective list, *but*
+    UNIONs in any past teacher who actually logged a Tier 2 entry
+    or Tier 3 weekly record for the plan during the report window.
+    This means a teacher who left mid-year (or was just removed
+    from the schedule) still shows up correctly for any week where
+    they did the work.
+- Backfill (run once via `executeSql`): every active plan was
+  flipped to `auto = true`. `additional_interventionist_ids` was
+  seeded with the set of ids in the OLD `assigned_teacher_ids` that
+  weren't in the student's current schedule (preserves counselors /
+  past-schedule contributors). For the existing 2,923 active plans
+  the diff was zero — the old assigned ids were already a subset of
+  the live schedule — so no plan lost any interventionist.
+- Client `MtssPlansAdmin.tsx` PlanModal: new "Include all teachers
+  on this student's schedule" checkbox (default ON). When ON, the
+  schedule is rendered as a list with a per-row Exclude / Include
+  toggle (excluded teachers strike-through). Below it is a
+  type-to-search "Additional interventionists" multi-pick that
+  reuses `staffOptions` from the new `teacher-options` endpoint.
+  The modal fetches `teacher-options` whenever the picked student
+  changes; closed plans seed the modal from the persisted CSVs.
+
+### Demo backfill: 60 days of intervention data at School 2 (Apr 30 2026)
+
+To make the upcoming Reports page demo-able, ~60 days of synthetic
+Tier 2 daily entries and ~8 weeks of Tier 3 weekly records were
+inserted at School 2 via the canonical helper SQL at
+`scripts/sql/seed_mtss_demo_data.sql` (idempotent — re-running is a
+no-op thanks to `WHERE NOT EXISTS` guards).
+
+- For every active T2 plan: each weekday × each effective teacher
+  gets a `tier2_intervention_entries` row with a 90% completion
+  probability (`random() < 0.9`). Result: 135,728 rows; ~90%
+  completion as displayed in the existing completion-report.
+- For every active T3 plan: each Monday × each effective teacher
+  gets a `tier3_weekly_records` row with mon..fri scores drawn
+  from `[5,5,4,5,4,5,3,5,4,5]` (mean 4.5 / 5 = exactly 90%) and
+  `submitted_at` set to that week's Friday. Result: 4,905 rows;
+  measured mean 4.50.
+
+### Subtype-aware completion keying (Apr 30 2026 follow-up)
+
+Architect re-review caught two latent same-subtype-collision bugs.
+Both fixed:
+
+- `interventionsBell.ts` `GET /interventions/completion-report`:
+  the per-plan `t2Counts` map is now keyed by
+  `${studentId}::${teacherId}::${subType ?? ""}` (and the parallel
+  `t3ByKey` map by `…::tier3`). Without the discriminator, two T2
+  plans for the same student and same teacher with different
+  subtypes would inflate each other's "X of 5" completion display.
+- `interventionsBell.ts` `GET /interventions/owed-today`: the
+  `submitted` query now also selects `subType`, and `doneIds` is
+  keyed by `${studentId}::${subType ?? ""}`. Without it, a teacher
+  who logged a CICO entry for a student would clear that same
+  student's separate check-and-connect owed row for the day.
+- Manual-mode authoring: `MtssPlansAdmin.tsx` PlanModal now seeds
+  the picker from `assignedTeacherIds` when
+  `autoAssignScheduleTeachers === false` (so editing a manual plan
+  shows the actual team), and submit spreads
+  `assignedTeacherIds: additionalIds` whenever the toggle is OFF
+  (so the picker IS the authoritative manual list). The picker
+  label and helper text also switch from "Additional
+  interventionists" to "Assigned interventionists" in manual mode.
+- Effective-teacher resolution in the SQL exactly mirrors the
+  server helper: schedule ∪ additional − excluded for auto plans;
+  legacy assigned for manual plans.

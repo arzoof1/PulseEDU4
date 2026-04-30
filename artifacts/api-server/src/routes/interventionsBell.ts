@@ -29,6 +29,7 @@ import {
 import { and, eq, sql, inArray } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { loadScheduleTeacherIdsForStudents } from "../lib/effectiveTeachers.js";
 
 const router: IRouter = Router();
 
@@ -103,6 +104,30 @@ function parseTeacherCsv(csv: string): number[] {
     .filter((n) => Number.isInteger(n) && n > 0);
 }
 
+// Resolve "who is responsible for this plan today?" using the new toggle
+// model: schedule teachers (live) ∪ additional interventionists, minus
+// excluded teachers. Falls back to the legacy assignedTeacherIds CSV
+// when the plan is in manual mode (autoAssignScheduleTeachers=false).
+function resolveEffectiveTeachers(
+  plan: {
+    autoAssignScheduleTeachers: boolean;
+    assignedTeacherIds: string;
+    excludedTeacherIds: string;
+    additionalInterventionistIds: string;
+  },
+  scheduleIds: number[],
+): number[] {
+  if (!plan.autoAssignScheduleTeachers) {
+    return parseTeacherCsv(plan.assignedTeacherIds);
+  }
+  const excluded = new Set(parseTeacherCsv(plan.excludedTeacherIds));
+  const additional = parseTeacherCsv(plan.additionalInterventionistIds);
+  const out = new Set<number>();
+  for (const t of scheduleIds) if (!excluded.has(t)) out.add(t);
+  for (const t of additional) if (!excluded.has(t)) out.add(t);
+  return Array.from(out);
+}
+
 // =================================================================
 // OWED-TODAY
 // =================================================================
@@ -128,8 +153,10 @@ router.get("/interventions/owed-today", async (req, res) => {
   const todayDate = todayStr();
   const weekStartDate = mondayOf(today);
 
-  // Pull every active plan that names this teacher in
-  // assignedTeacherIds. The csv is small enough to filter in JS.
+  // Pull every active plan in this school, then resolve each to its
+  // effective teacher list (live schedule ∪ additional interventionists,
+  // minus excluded). Filter to plans that name THIS teacher in the
+  // effective list. We batch the schedule lookup to one query.
   const allPlans = await db
     .select()
     .from(studentMtssPlansTable)
@@ -139,8 +166,18 @@ router.get("/interventions/owed-today", async (req, res) => {
         sql`${studentMtssPlansTable.closedAt} IS NULL`,
       ),
     );
+  const planStudentIds = Array.from(
+    new Set(allPlans.map((p) => p.studentId)),
+  );
+  const scheduleByStudent = await loadScheduleTeacherIdsForStudents(
+    schoolId,
+    planStudentIds,
+  );
   const myPlans = allPlans.filter((p) =>
-    parseTeacherCsv(p.assignedTeacherIds).includes(staff.id),
+    resolveEffectiveTeachers(
+      p,
+      scheduleByStudent.get(p.studentId) ?? [],
+    ).includes(staff.id),
   );
 
   const tier2Plans = myPlans.filter((p) => p.tier === 2);
@@ -184,7 +221,10 @@ router.get("/interventions/owed-today", async (req, res) => {
   if (!isWeekend(today) && tier2Plans.length > 0) {
     const studentIdsT2 = tier2Plans.map((p) => p.studentId);
     const submitted = await db
-      .select({ studentId: tier2InterventionEntriesTable.studentId })
+      .select({
+        studentId: tier2InterventionEntriesTable.studentId,
+        subType: tier2InterventionEntriesTable.subType,
+      })
       .from(tier2InterventionEntriesTable)
       .where(
         and(
@@ -194,9 +234,16 @@ router.get("/interventions/owed-today", async (req, res) => {
           inArray(tier2InterventionEntriesTable.studentId, studentIdsT2),
         ),
       );
-    const doneIds = new Set(submitted.map((r) => r.studentId));
+    // Key by (studentId, subType) so a teacher who logged a CICO
+    // entry for a student doesn't accidentally clear that same
+    // student's check-and-connect (or other-subtype) owed row.
+    const doneIds = new Set(
+      submitted.map((r) => `${r.studentId}::${r.subType ?? ""}`),
+    );
     tier2Owed = tier2Plans
-      .filter((p) => !doneIds.has(p.studentId))
+      .filter(
+        (p) => !doneIds.has(`${p.studentId}::${p.interventionSubType ?? ""}`),
+      )
       .map((p) => {
         const s = studentMap.get(p.studentId);
         return {
@@ -377,10 +424,53 @@ router.get("/interventions/completion-report", async (req, res) => {
             ),
           );
 
+  // Resolve the EFFECTIVE teacher list per plan (live schedule ∪
+  // additional interventionists − excluded). Then UNION-in any teacher
+  // who has actually logged a Tier 2 entry or Tier 3 record for this
+  // student in the report week so historical contributions still show
+  // up even if the staffer is no longer on the schedule.
+  const planScheduleByStudent = await loadScheduleTeacherIdsForStudents(
+    schoolId,
+    studentIds,
+  );
+  // Plan-scope the historic UNION as much as the schema allows. T2
+  // entries carry their own `sub_type`, so we key by
+  // (studentId, subType) — that disambiguates two T2 plans for the
+  // same student that happen to use different subtypes (e.g. CICO vs
+  // check-and-connect). T3 has no such discriminator on the entry
+  // row; concurrent T3 plans for one student are rare in practice
+  // (T3 is intensive 1:1) so we accept the over-inclusion risk and
+  // key by (studentId, tier=3) only.
+  const t2HistoricByStudentSubType = new Map<string, Set<number>>();
+  for (const e of tier2Entries) {
+    const key = `${e.studentId}::${e.subType ?? ""}`;
+    const set = t2HistoricByStudentSubType.get(key) ?? new Set<number>();
+    set.add(e.teacherStaffId);
+    t2HistoricByStudentSubType.set(key, set);
+  }
+  const t3HistoricByStudent = new Map<string, Set<number>>();
+  for (const r of tier3Records) {
+    const set = t3HistoricByStudent.get(r.studentId) ?? new Set<number>();
+    set.add(r.teacherStaffId);
+    t3HistoricByStudent.set(r.studentId, set);
+  }
+  const effectivePlanTeachers = new Map<number, number[]>();
+  for (const p of plans) {
+    const sched = planScheduleByStudent.get(p.studentId) ?? [];
+    const merged = new Set<number>(resolveEffectiveTeachers(p, sched));
+    const histSet =
+      p.tier === 2
+        ? t2HistoricByStudentSubType.get(
+            `${p.studentId}::${p.interventionSubType ?? ""}`,
+          )
+        : t3HistoricByStudent.get(p.studentId);
+    if (histSet) for (const id of histSet) merged.add(id);
+    effectivePlanTeachers.set(p.id, Array.from(merged).sort((a, b) => a - b));
+  }
   // staff lookup (id -> name)
   const teacherIdSet = new Set<number>();
-  for (const p of plans) {
-    for (const t of parseTeacherCsv(p.assignedTeacherIds)) teacherIdSet.add(t);
+  for (const ids of effectivePlanTeachers.values()) {
+    for (const t of ids) teacherIdSet.add(t);
   }
   const teacherList =
     teacherIdSet.size === 0
@@ -396,28 +486,37 @@ router.get("/interventions/completion-report", async (req, res) => {
           );
   const teacherMap = new Map(teacherList.map((t) => [t.id, t.displayName]));
 
-  // Group entries/records by (studentId, teacherId).
-  type T2Key = string; // `${studentId}::${teacherId}`
-  const t2Counts = new Map<T2Key, Set<string>>();
+  // Group entries/records by (studentId, teacherId, subType-or-tier3).
+  // Including the discriminator on the COUNT key matches the
+  // discriminator we used on the historic-contributors UNION above
+  // and prevents same-student / same-teacher / different-subtype T2
+  // plans from inflating each other's per-plan completion numbers.
+  type CountKey = string; // `${studentId}::${teacherId}::${disc}`
+  const t2Counts = new Map<CountKey, Set<string>>();
   for (const e of tier2Entries) {
-    const key = `${e.studentId}::${e.teacherStaffId}`;
+    const key = `${e.studentId}::${e.teacherStaffId}::${e.subType ?? ""}`;
     const set = t2Counts.get(key) ?? new Set<string>();
     set.add(e.entryDate);
     t2Counts.set(key, set);
   }
+  // T3 has no per-entry discriminator; use a fixed sentinel so the
+  // key shape stays parallel.
   const t3ByKey = new Map<
-    T2Key,
+    CountKey,
     typeof tier3WeeklyRecordsTable.$inferSelect
   >();
   for (const r of tier3Records) {
-    t3ByKey.set(`${r.studentId}::${r.teacherStaffId}`, r);
+    t3ByKey.set(`${r.studentId}::${r.teacherStaffId}::tier3`, r);
   }
 
   const out = plans.map((p) => {
     const s = studentMap.get(p.studentId);
-    const teacherIds = parseTeacherCsv(p.assignedTeacherIds);
+    const teacherIds = effectivePlanTeachers.get(p.id) ?? [];
     const teachers = teacherIds.map((tid) => {
-      const key = `${p.studentId}::${tid}`;
+      const key =
+        p.tier === 2
+          ? `${p.studentId}::${tid}::${p.interventionSubType ?? ""}`
+          : `${p.studentId}::${tid}::tier3`;
       let completed = 0;
       let expected = 0;
       let scoreAvg: number | null = null;

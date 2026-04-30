@@ -28,6 +28,46 @@ interface Plan {
   openedByName: string | null;
   closedAt: string | null;
   closedByName: string | null;
+  // New teacher-toggle fields (server returns CSV strings, client uses
+  // them to seed the modal). `effectiveTeachers` is the resolved
+  // (schedule + additional − excluded) list for at-a-glance display.
+  autoAssignScheduleTeachers: boolean;
+  excludedTeacherIds: string;
+  additionalInterventionistIds: string;
+  effectiveTeachers: Array<{
+    staffId: number;
+    displayName: string;
+    source: "schedule" | "additional";
+  }>;
+}
+
+interface ScheduleTeacherOption {
+  staffId: number;
+  displayName: string;
+  period: number;
+  courseName: string;
+}
+
+interface StaffOption {
+  id: number;
+  displayName: string;
+}
+
+interface TeacherOptionsResp {
+  studentId: string;
+  scheduleTeachers: ScheduleTeacherOption[];
+  scheduleStaffIds: number[];
+  staffOptions: StaffOption[];
+}
+
+function parseCsv(csv: string | null | undefined): number[] {
+  if (!csv) return [];
+  return csv
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((s) => Number(s))
+    .filter((n) => Number.isInteger(n) && n > 0);
 }
 
 interface Student {
@@ -582,6 +622,76 @@ function PlanModal({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
+  // ---- Teacher-toggle state ----
+  // Default ON for new plans; respect the persisted flag on existing.
+  const [autoAssign, setAutoAssign] = useState<boolean>(
+    plan?.autoAssignScheduleTeachers ?? true,
+  );
+  // Excluded schedule teachers (only consulted when autoAssign is true).
+  const [excludedIds, setExcludedIds] = useState<number[]>(() =>
+    parseCsv(plan?.excludedTeacherIds),
+  );
+  // The picker doubles as:
+  //   - "Additional interventionists" when autoAssign=true
+  //     (counselor / BS / school psych / SW / trusted adult)
+  //   - "Assigned interventionists" when autoAssign=false
+  //     (entire authoritative manual list)
+  // Seed accordingly so editing a manual plan shows the actual team
+  // and not an empty picker.
+  const [additionalIds, setAdditionalIds] = useState<number[]>(() => {
+    if (plan && plan.autoAssignScheduleTeachers === false) {
+      // Manual mode: source of truth is the legacy CSV.
+      return parseCsv(
+        (plan as Plan & { assignedTeacherIds?: string }).assignedTeacherIds,
+      );
+    }
+    return parseCsv(plan?.additionalInterventionistIds);
+  });
+  const [teacherOpts, setTeacherOpts] = useState<TeacherOptionsResp | null>(
+    null,
+  );
+  const [teacherOptsLoading, setTeacherOptsLoading] = useState(false);
+  const [teacherOptsError, setTeacherOptsError] = useState("");
+  const [interventionistFilter, setInterventionistFilter] = useState("");
+
+  // Pull schedule + staff list any time the picked student changes (or
+  // on mount in edit mode).
+  useEffect(() => {
+    const sid = studentId.trim();
+    if (!sid) {
+      setTeacherOpts(null);
+      return;
+    }
+    setTeacherOptsLoading(true);
+    setTeacherOptsError("");
+    let cancelled = false;
+    authFetch(
+      `/api/mtss-plans/teacher-options?studentId=${encodeURIComponent(sid)}`,
+    )
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error ?? `HTTP ${r.status}`);
+        }
+        return r.json();
+      })
+      .then((data: TeacherOptionsResp) => {
+        if (cancelled) return;
+        setTeacherOpts(data);
+      })
+      .catch((err: Error) => {
+        if (cancelled) return;
+        setTeacherOptsError(err.message ?? "Failed to load teachers");
+        setTeacherOpts(null);
+      })
+      .finally(() => {
+        if (!cancelled) setTeacherOptsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
   const studentLabel = (s: Student) =>
     `${s.firstName} ${s.lastName} — ID ${s.studentId} (Gr ${s.grade})`;
 
@@ -631,6 +741,13 @@ function PlanModal({
         pointRangeMin: minN,
         pointRangeMax: maxN,
         notes: notes.trim(),
+        autoAssignScheduleTeachers: autoAssign,
+        excludedTeacherIds: excludedIds,
+        additionalInterventionistIds: additionalIds,
+        // When auto is OFF, the picker IS the authoritative manual
+        // list — wire those same ids over to the legacy CSV the
+        // server keys off of in manual mode.
+        ...(autoAssign ? {} : { assignedTeacherIds: additionalIds }),
       };
       if (!isEdit) body.studentId = studentId.trim();
       const r = await authFetch(url, {
@@ -770,6 +887,367 @@ function PlanModal({
             <option value={2}>Tier 2 — small-group</option>
             <option value={3}>Tier 3 — intensive</option>
           </select>
+        </div>
+
+        {/* ---- Teacher assignment block ---- */}
+        <div
+          style={{
+            marginBottom: "0.75rem",
+            padding: "0.75rem",
+            border: "1px solid #e2e8f0",
+            borderRadius: 8,
+            background: "#f8fafc",
+          }}
+        >
+          <label
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              fontWeight: 600,
+              marginBottom: 6,
+              cursor: "pointer",
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={autoAssign}
+              onChange={(e) => setAutoAssign(e.target.checked)}
+              style={{ width: 16, height: 16 }}
+            />
+            <span>Include all teachers on this student&rsquo;s schedule</span>
+          </label>
+          <div
+            style={{
+              fontSize: "0.78rem",
+              color: "#64748b",
+              marginBottom: 8,
+              paddingLeft: 24,
+            }}
+          >
+            On by default. Mid-year roster changes flow through automatically.
+            Past teachers&rsquo; logged interventions are always retained.
+          </div>
+
+          {!studentId.trim() ? (
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: "#64748b",
+                paddingLeft: 24,
+              }}
+            >
+              Pick a student above to load their schedule.
+            </div>
+          ) : teacherOptsLoading ? (
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: "#64748b",
+                paddingLeft: 24,
+              }}
+            >
+              Loading schedule…
+            </div>
+          ) : teacherOptsError ? (
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: "#b91c1c",
+                paddingLeft: 24,
+              }}
+            >
+              {teacherOptsError}
+            </div>
+          ) : teacherOpts && autoAssign ? (
+            teacherOpts.scheduleTeachers.length === 0 ? (
+              <div
+                style={{
+                  fontSize: "0.85rem",
+                  color: "#92400e",
+                  paddingLeft: 24,
+                  background: "#fef3c7",
+                  border: "1px solid #fde68a",
+                  borderRadius: 6,
+                  padding: "6px 10px",
+                }}
+              >
+                This student has no schedule on file. Add interventionists
+                below or turn the toggle off and add teachers manually.
+              </div>
+            ) : (
+              <div style={{ paddingLeft: 24 }}>
+                <div
+                  style={{
+                    fontSize: "0.78rem",
+                    color: "#475569",
+                    marginBottom: 4,
+                  }}
+                >
+                  {teacherOpts.scheduleTeachers.length -
+                    teacherOpts.scheduleTeachers.filter((t) =>
+                      excludedIds.includes(t.staffId),
+                    ).length}{" "}
+                  of {teacherOpts.scheduleTeachers.length} included
+                </div>
+                <ul
+                  style={{
+                    listStyle: "none",
+                    padding: 0,
+                    margin: 0,
+                    display: "grid",
+                    gap: 4,
+                  }}
+                >
+                  {teacherOpts.scheduleTeachers.map((t) => {
+                    const excluded = excludedIds.includes(t.staffId);
+                    return (
+                      <li
+                        key={`${t.staffId}-${t.period}`}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          padding: "4px 6px",
+                          background: excluded ? "#fef2f2" : "white",
+                          border: `1px solid ${
+                            excluded ? "#fecaca" : "#e2e8f0"
+                          }`,
+                          borderRadius: 6,
+                          fontSize: "0.85rem",
+                        }}
+                      >
+                        <span
+                          style={{
+                            display: "inline-block",
+                            width: 28,
+                            color: "#64748b",
+                            fontWeight: 600,
+                          }}
+                        >
+                          P{t.period}
+                        </span>
+                        <span style={{ flex: 1 }}>
+                          <strong
+                            style={{
+                              color: excluded ? "#94a3b8" : "#0f172a",
+                              textDecoration: excluded
+                                ? "line-through"
+                                : "none",
+                            }}
+                          >
+                            {t.displayName}
+                          </strong>
+                          <span
+                            style={{
+                              color: "#64748b",
+                              marginLeft: 6,
+                            }}
+                          >
+                            — {t.courseName}
+                          </span>
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setExcludedIds((prev) =>
+                              excluded
+                                ? prev.filter((x) => x !== t.staffId)
+                                : [...prev, t.staffId],
+                            );
+                          }}
+                          title={
+                            excluded ? "Re-include" : "Exclude from this plan"
+                          }
+                          style={{
+                            background: excluded ? "#dbeafe" : "#fee2e2",
+                            color: excluded ? "#1d4ed8" : "#b91c1c",
+                            border: "1px solid",
+                            borderColor: excluded ? "#bfdbfe" : "#fecaca",
+                            borderRadius: 4,
+                            padding: "2px 8px",
+                            fontSize: "0.72rem",
+                            fontWeight: 600,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {excluded ? "Include" : "Exclude"}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </div>
+            )
+          ) : null}
+
+          {/* ---- Additional interventionists ---- */}
+          <div
+            style={{
+              marginTop: autoAssign ? 12 : 0,
+              paddingLeft: 24,
+            }}
+          >
+            <div
+              style={{
+                fontWeight: 600,
+                fontSize: "0.85rem",
+                marginBottom: 4,
+                color: "#0f172a",
+              }}
+            >
+              {autoAssign
+                ? "Additional interventionists"
+                : "Assigned interventionists"}
+            </div>
+            <div
+              style={{
+                fontSize: "0.78rem",
+                color: "#64748b",
+                marginBottom: 6,
+              }}
+            >
+              {autoAssign
+                ? "Counselor, behavior specialist, school psychologist, social worker, trusted adult — anyone supporting this plan who isn\u2019t one of the student\u2019s classroom teachers."
+                : "Pick everyone who is responsible for this plan. With the schedule toggle off, this list IS the plan team."}
+            </div>
+
+            {additionalIds.length > 0 && teacherOpts && (
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 4,
+                  marginBottom: 6,
+                }}
+              >
+                {additionalIds.map((id) => {
+                  const opt = teacherOpts.staffOptions.find(
+                    (s) => s.id === id,
+                  );
+                  return (
+                    <span
+                      key={id}
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        background: "#ecfeff",
+                        border: "1px solid #a5f3fc",
+                        color: "#0e7490",
+                        borderRadius: 999,
+                        padding: "2px 4px 2px 10px",
+                        fontSize: "0.78rem",
+                        fontWeight: 600,
+                      }}
+                    >
+                      {opt?.displayName ?? `#${id}`}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setAdditionalIds((prev) =>
+                            prev.filter((x) => x !== id),
+                          )
+                        }
+                        title="Remove"
+                        style={{
+                          background: "transparent",
+                          border: "none",
+                          color: "#0e7490",
+                          fontWeight: 700,
+                          cursor: "pointer",
+                          fontSize: "0.95rem",
+                          lineHeight: 1,
+                          padding: "0 4px",
+                        }}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  );
+                })}
+              </div>
+            )}
+
+            <input
+              type="text"
+              placeholder={
+                teacherOpts
+                  ? "Type to search staff…"
+                  : "Pick a student above first"
+              }
+              value={interventionistFilter}
+              onChange={(e) => setInterventionistFilter(e.target.value)}
+              disabled={!teacherOpts}
+              style={{
+                width: "100%",
+                padding: "0.4rem 0.5rem",
+                border: "1px solid #cbd5e1",
+                borderRadius: 6,
+                fontSize: "0.85rem",
+                marginBottom: 4,
+              }}
+            />
+            {teacherOpts && interventionistFilter.trim() && (
+              <div
+                style={{
+                  maxHeight: 160,
+                  overflow: "auto",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  background: "white",
+                }}
+              >
+                {teacherOpts.staffOptions
+                  .filter(
+                    (s) =>
+                      !additionalIds.includes(s.id) &&
+                      s.displayName
+                        .toLowerCase()
+                        .includes(interventionistFilter.trim().toLowerCase()),
+                  )
+                  .slice(0, 25)
+                  .map((s) => (
+                    <button
+                      key={s.id}
+                      type="button"
+                      onClick={() => {
+                        setAdditionalIds((prev) =>
+                          prev.includes(s.id) ? prev : [...prev, s.id],
+                        );
+                        setInterventionistFilter("");
+                      }}
+                      style={{
+                        display: "block",
+                        width: "100%",
+                        textAlign: "left",
+                        background: "transparent",
+                        border: "none",
+                        padding: "6px 10px",
+                        cursor: "pointer",
+                        fontSize: "0.85rem",
+                        color: "#0f172a",
+                        borderBottom: "1px solid #f1f5f9",
+                      }}
+                      onMouseDown={(e) => e.preventDefault()}
+                    >
+                      {s.displayName}
+                      {teacherOpts.scheduleStaffIds.includes(s.id) && (
+                        <span
+                          style={{
+                            color: "#64748b",
+                            fontSize: "0.72rem",
+                            marginLeft: 6,
+                          }}
+                        >
+                          (already on schedule)
+                        </span>
+                      )}
+                    </button>
+                  ))}
+              </div>
+            )}
+          </div>
         </div>
 
         <div style={{ marginBottom: "0.75rem" }}>

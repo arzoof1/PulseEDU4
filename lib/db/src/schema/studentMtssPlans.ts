@@ -42,11 +42,34 @@ export const studentMtssPlansTable = pgTable(
     // NULL means the plan hasn't picked a sub-type yet (allowed for
     // Tier 1/3 plans). Teachers see this as locked; Core Team can edit.
     interventionSubType: text("intervention_sub_type"),
-    // CSV of staff IDs of every teacher on the student's schedule who
-    // is responsible for completing the daily/weekly intervention log.
-    // Stored CSV (e.g. "12,47,138") to match how other roster columns
-    // are stored in this codebase. Empty string = no one assigned yet.
+    // CSV of staff IDs — LEGACY. Used only when
+    // `autoAssignScheduleTeachers` is FALSE (manual-pick mode). When
+    // auto is TRUE, this field is preserved as a historical record but
+    // is NOT authoritative; the effective list is computed from the
+    // student's live class schedule. Stored CSV (e.g. "12,47,138") to
+    // match how other roster columns are stored in this codebase.
     assignedTeacherIds: text("assigned_teacher_ids").notNull().default(""),
+    // When TRUE (default), the plan automatically tracks every teacher
+    // currently on the student's class schedule (excluding planning
+    // periods). Mid-year roster changes flow through automatically.
+    // Past teachers' previously-logged entries are NOT deleted — they
+    // remain visible in reports because intervention rows are immutable
+    // and joined on (studentId, teacherStaffId), not on this list.
+    autoAssignScheduleTeachers: boolean("auto_assign_schedule_teachers")
+      .notNull()
+      .default(true),
+    // CSV of staff IDs explicitly excluded from the auto-assigned
+    // schedule list (e.g. "include all 7 teachers EXCEPT the PE
+    // teacher"). Only consulted when `autoAssignScheduleTeachers` is
+    // TRUE. Empty string = no exclusions.
+    excludedTeacherIds: text("excluded_teacher_ids").notNull().default(""),
+    // CSV of staff IDs added on TOP of the schedule teachers — used for
+    // non-classroom interventionists (counselor, behavior specialist,
+    // school psych, social worker, trusted adult). Always included in
+    // the effective list regardless of the auto toggle.
+    additionalInterventionistIds: text("additional_interventionist_ids")
+      .notNull()
+      .default(""),
     // When true (default), the Tier 3 weekly form includes the
     // school-wide expectations row (PRIDE / equivalent) on a 0..2 scale
     // per day. Core Team can toggle off per plan.

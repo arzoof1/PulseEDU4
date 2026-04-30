@@ -24,8 +24,14 @@ import {
   staffTable,
   studentsTable,
 } from "@workspace/db";
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import {
+  effectiveTeacherIdsForPlan,
+  loadScheduleSectionsForStudent,
+  loadScheduleTeacherIdsForStudents,
+  parseCsvIds,
+} from "../lib/effectiveTeachers.js";
 
 const router: IRouter = Router();
 
@@ -100,6 +106,27 @@ function parseOptionalInt(v: unknown): number | null | "BAD" {
   return n;
 }
 
+// Accept either an array of numbers or a comma-string from the client and
+// produce the canonical "12,47,138" CSV the DB column stores. De-dupes
+// and drops anything that isn't a positive integer.
+function normalizeStaffIdCsv(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  let arr: unknown[] = [];
+  if (Array.isArray(v)) arr = v;
+  else if (typeof v === "string") arr = v.split(",");
+  else return "";
+  const seen = new Set<number>();
+  const out: number[] = [];
+  for (const raw of arr) {
+    const n = Number(typeof raw === "string" ? raw.trim() : raw);
+    if (!Number.isInteger(n) || n <= 0) continue;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    out.push(n);
+  }
+  return out.sort((a, b) => a - b).join(",");
+}
+
 // ---- TEACHER PROBE ----
 // Lightweight endpoint that lets any signed-in staff member ask
 // "what tier is the active plan for this student?" without needing the
@@ -149,6 +176,69 @@ router.get("/mtss-plans/probe/:studentId", async (req, res) => {
   res.json({ plan: sorted[0] ?? null });
 });
 
+// ---- TEACHER OPTIONS for the plan modal ----
+// Returns the resolved schedule teachers for this student plus a sorted
+// list of every active staff member in the school. The modal uses the
+// schedule list to render the "include all teachers on this student's
+// schedule" checklist (with per-teacher exclude X) and the staff list
+// to drive the "Add additional interventionists" picker.
+router.get("/mtss-plans/teacher-options", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!requireCoreTeam(staff, res)) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const studentId =
+    typeof req.query.studentId === "string"
+      ? req.query.studentId.trim()
+      : "";
+  if (!studentId) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+  // Confirm the student lives in this school before exposing their
+  // schedule (cross-tenant attack defense).
+  const [student] = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  if (!student) {
+    res.status(404).json({ error: "Student not found in this school" });
+    return;
+  }
+  const sections = await loadScheduleSectionsForStudent(schoolId, studentId);
+  const scheduleStaffIds = Array.from(
+    new Set(sections.map((s) => s.staffId)),
+  );
+  // Pull all active staff in the school for the picker. Names only.
+  const allStaff = await db
+    .select({
+      id: staffTable.id,
+      displayName: staffTable.displayName,
+    })
+    .from(staffTable)
+    .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)))
+    .orderBy(asc(staffTable.displayName));
+  const nameById = new Map(allStaff.map((s) => [s.id, s.displayName]));
+  const scheduleTeachers = sections.map((s) => ({
+    staffId: s.staffId,
+    displayName: nameById.get(s.staffId) ?? `#${s.staffId}`,
+    period: s.period,
+    courseName: s.courseName,
+  }));
+  res.json({
+    studentId,
+    scheduleTeachers,
+    scheduleStaffIds,
+    staffOptions: allStaff,
+  });
+});
+
 // ---- LIST ----
 router.get("/mtss-plans", async (req, res) => {
   const staff = await loadStaff(req, res);
@@ -195,13 +285,62 @@ router.get("/mtss-plans", async (req, res) => {
     .where(and(...conds))
     .orderBy(sql`${studentMtssPlansTable.openedAt} DESC`);
 
+  // Resolve effective teachers (schedule + additional − excluded) for
+  // every plan in one batch so the UI doesn't need follow-up calls.
+  const studentIdsForLookup = Array.from(
+    new Set(rows.map((r) => r.plan.studentId)),
+  );
+  const scheduleByStudent = await loadScheduleTeacherIdsForStudents(
+    schoolId,
+    studentIdsForLookup,
+  );
+  const allStaffIds = new Set<number>();
+  for (const r of rows) {
+    const sched = scheduleByStudent.get(r.plan.studentId) ?? [];
+    for (const id of effectiveTeacherIdsForPlan(r.plan, sched)) {
+      allStaffIds.add(id);
+    }
+    // Always also resolve names for explicit additionals/excluded so the
+    // UI can render badges for "excluded teacher: Mr. Smith" etc. even
+    // when they're no longer effective.
+    for (const id of parseCsvIds(r.plan.additionalInterventionistIds)) {
+      allStaffIds.add(id);
+    }
+    for (const id of parseCsvIds(r.plan.excludedTeacherIds)) {
+      allStaffIds.add(id);
+    }
+  }
+  const staffNameRows =
+    allStaffIds.size === 0
+      ? []
+      : await db
+          .select({ id: staffTable.id, displayName: staffTable.displayName })
+          .from(staffTable)
+          .where(
+            and(
+              eq(staffTable.schoolId, schoolId),
+              inArray(staffTable.id, Array.from(allStaffIds)),
+            ),
+          );
+  const nameById = new Map(staffNameRows.map((s) => [s.id, s.displayName]));
+
   res.json(
-    rows.map((r) => ({
-      ...r.plan,
-      studentName:
-        r.firstName && r.lastName ? `${r.firstName} ${r.lastName}` : null,
-      studentGrade: r.grade ?? null,
-    })),
+    rows.map((r) => {
+      const sched = scheduleByStudent.get(r.plan.studentId) ?? [];
+      const effective = effectiveTeacherIdsForPlan(r.plan, sched);
+      return {
+        ...r.plan,
+        studentName:
+          r.firstName && r.lastName ? `${r.firstName} ${r.lastName}` : null,
+        studentGrade: r.grade ?? null,
+        effectiveTeacherIds: effective,
+        effectiveTeachers: effective.map((id) => ({
+          staffId: id,
+          displayName: nameById.get(id) ?? `#${id}`,
+          source: sched.includes(id) ? "schedule" : "additional",
+        })),
+      };
+    }),
   );
 });
 
@@ -221,6 +360,10 @@ router.post("/mtss-plans", async (req, res) => {
     pointRangeMin,
     pointRangeMax,
     notes,
+    autoAssignScheduleTeachers,
+    excludedTeacherIds,
+    additionalInterventionistIds,
+    assignedTeacherIds, // legacy/manual list — only honored when auto=false
   } = req.body ?? {};
 
   const cleanStudentId =
@@ -279,6 +422,41 @@ router.post("/mtss-plans", async (req, res) => {
     return;
   }
 
+  // New-plan default: auto-track the student's schedule unless the
+  // client explicitly says otherwise. Excluded list and additional
+  // interventionists default to empty.
+  const autoFlag =
+    typeof autoAssignScheduleTeachers === "boolean"
+      ? autoAssignScheduleTeachers
+      : true;
+
+  const excludedCsv = normalizeStaffIdCsv(excludedTeacherIds);
+  const additionalCsv = normalizeStaffIdCsv(additionalInterventionistIds);
+
+  // Always recompute the legacy `assignedTeacherIds` server-side so
+  // older readers (and any code path that still consults the CSV
+  // directly) stays in sync with the new effective list. When
+  // auto=true we materialize schedule ∪ additional − excluded; when
+  // auto=false we honor the explicit list the client sent.
+  let assignedCsv: string;
+  if (autoFlag) {
+    const sched = (
+      await loadScheduleTeacherIdsForStudents(schoolId, [cleanStudentId])
+    ).get(cleanStudentId) ?? [];
+    const eff = effectiveTeacherIdsForPlan(
+      {
+        autoAssignScheduleTeachers: true,
+        assignedTeacherIds: "",
+        excludedTeacherIds: excludedCsv,
+        additionalInterventionistIds: additionalCsv,
+      },
+      sched,
+    );
+    assignedCsv = eff.join(",");
+  } else {
+    assignedCsv = normalizeStaffIdCsv(assignedTeacherIds);
+  }
+
   const [row] = await db
     .insert(studentMtssPlansTable)
     .values({
@@ -292,6 +470,10 @@ router.post("/mtss-plans", async (req, res) => {
       notes: clampString(notes, 4000),
       openedByStaffId: staff.id,
       openedByName: staff.displayName,
+      autoAssignScheduleTeachers: autoFlag,
+      excludedTeacherIds: excludedCsv,
+      additionalInterventionistIds: additionalCsv,
+      assignedTeacherIds: assignedCsv,
     })
     .returning();
 
@@ -334,6 +516,10 @@ router.patch("/mtss-plans/:id", async (req, res) => {
     pointRangeMax,
     notes,
     closed,
+    autoAssignScheduleTeachers,
+    excludedTeacherIds,
+    additionalInterventionistIds,
+    assignedTeacherIds, // legacy/manual list — only honored when auto=false
   } = req.body ?? {};
 
   const updates: Partial<typeof studentMtssPlansTable.$inferInsert> = {};
@@ -383,6 +569,62 @@ router.patch("/mtss-plans/:id", async (req, res) => {
       .status(400)
       .json({ error: "pointRangeMin cannot exceed pointRangeMax" });
     return;
+  }
+
+  if (typeof autoAssignScheduleTeachers === "boolean") {
+    updates.autoAssignScheduleTeachers = autoAssignScheduleTeachers;
+  }
+  if (excludedTeacherIds !== undefined) {
+    updates.excludedTeacherIds = normalizeStaffIdCsv(excludedTeacherIds);
+  }
+  if (additionalInterventionistIds !== undefined) {
+    updates.additionalInterventionistIds = normalizeStaffIdCsv(
+      additionalInterventionistIds,
+    );
+  }
+
+  // Keep the legacy `assignedTeacherIds` CSV in lockstep with the new
+  // assignment fields whenever any of them is touched (or the toggle
+  // flips). For auto plans we recompute schedule ∪ additional −
+  // excluded; for manual plans we honor whatever the client sent
+  // (falling back to the existing list to avoid a surprise wipe).
+  const touchesAssignment =
+    updates.autoAssignScheduleTeachers !== undefined ||
+    updates.excludedTeacherIds !== undefined ||
+    updates.additionalInterventionistIds !== undefined ||
+    assignedTeacherIds !== undefined;
+  if (touchesAssignment) {
+    const newAuto =
+      updates.autoAssignScheduleTeachers !== undefined
+        ? updates.autoAssignScheduleTeachers
+        : existing.autoAssignScheduleTeachers;
+    const newExcluded =
+      updates.excludedTeacherIds !== undefined
+        ? updates.excludedTeacherIds
+        : existing.excludedTeacherIds;
+    const newAdditional =
+      updates.additionalInterventionistIds !== undefined
+        ? updates.additionalInterventionistIds
+        : existing.additionalInterventionistIds;
+    if (newAuto) {
+      const sched = (
+        await loadScheduleTeacherIdsForStudents(schoolId, [existing.studentId])
+      ).get(existing.studentId) ?? [];
+      const eff = effectiveTeacherIdsForPlan(
+        {
+          autoAssignScheduleTeachers: true,
+          assignedTeacherIds: "",
+          excludedTeacherIds: newExcluded,
+          additionalInterventionistIds: newAdditional,
+        },
+        sched,
+      );
+      updates.assignedTeacherIds = eff.join(",");
+    } else if (assignedTeacherIds !== undefined) {
+      updates.assignedTeacherIds = normalizeStaffIdCsv(assignedTeacherIds);
+    }
+    // else: manual mode + client did not send assignedTeacherIds →
+    // leave the existing CSV alone to avoid a surprise wipe.
   }
 
   if (closed === true && !existing.closedAt) {
