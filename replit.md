@@ -1607,6 +1607,14 @@ render correctly.
   closed — the user explicitly gated it. Once #7 is marked done, prompt
   the user with: "You wanted to revisit view features for uploaded data
   after #7 — ready to scope that now?"
+- *Search-box → combobox sweep (captured Apr 30, 2026, NOT part of any
+  active build):* the user wants a dedicated pass to convert every plain
+  search/filter input across the app into a typeahead combobox (input
+  + dropdown of matching options, keyboard-navigable, click-to-select).
+  Surface this when the user finishes their current build OR explicitly
+  asks "what was that combobox thing I asked you to remind me about?"
+  Don't act until the user opens the door — they explicitly said it is
+  not part of the current build.
 
 ## Parked: Bathroom Queue (kiosk station)
 
