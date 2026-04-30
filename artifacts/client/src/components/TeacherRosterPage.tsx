@@ -1347,11 +1347,6 @@ export default function TeacherRosterPage({
                       <BqPills row={row} />
                     </td>
                   )}
-                  {visibility.programs && (
-                    <td style={{ padding: "6px 10px" }}>
-                      <ProgramPills row={row} />
-                    </td>
-                  )}
                 </tr>
               ))}
             </tbody>
