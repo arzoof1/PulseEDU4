@@ -7191,6 +7191,13 @@ function App() {
             />
           </svg>
         </div>
+        {/* Notification bell sits immediately to the right of the
+            PulseEDU wordmark so the purple glow + shake catches the
+            eye in an otherwise calm corner of the header. */}
+        <InterventionsBell
+          refreshKey={interventionRefreshKey}
+          onClick={() => setActiveSection("interventionsToday")}
+        />
         <div className="header-controls">
           <SchoolSwitcher />
           <label>
@@ -7217,10 +7224,6 @@ function App() {
               <option value="mine">My Records Only</option>
             </select>
           </label>
-          <InterventionsBell
-            refreshKey={interventionRefreshKey}
-            onClick={() => setActiveSection("interventionsToday")}
-          />
           <span className="user-pill">
             <span className="avatar">{userInitials || "?"}</span>
             <span style={{ padding: "0 0.5rem", whiteSpace: "nowrap" }}>
