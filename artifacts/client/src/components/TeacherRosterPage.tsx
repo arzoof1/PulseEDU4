@@ -62,6 +62,10 @@ interface RosterRow {
   ese: boolean;
   is504: boolean;
   ell: boolean;
+  // Active accommodations (no removedAt) joined to the school catalog
+  // so the Programs hover popover can group + color them by category.
+  // Empty array when the student has none.
+  accommodations: Array<{ name: string; category: string }>;
 }
 
 interface RosterResponse {
@@ -532,13 +536,121 @@ function ProgramPills({ row }: { row: RosterRow }) {
   if (row.ese) chips.push("ese");
   if (row.is504) chips.push("504");
   if (row.ell) chips.push("ell");
-  if (chips.length === 0) {
+  // No flags AND no accommodations: render the placeholder em-dash so
+  // the row stays aligned. (When the student HAS accommodations but
+  // none of the three program flags, we still want to show a hover
+  // affordance — handled in the parent <td>.)
+  if (chips.length === 0 && row.accommodations.length === 0) {
     return <span style={{ color: "#9ca3af", fontSize: 12 }}>—</span>;
   }
   return (
     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
       {chips.map((c) => (
         <ProgramChip key={c} kind={c} />
+      ))}
+      {/* If the only signal is "has accommodations" with no program
+          flag, surface a soft "Acc" chip so there's something to hover
+          on. Same pastel + dark-ink treatment as the program chips. */}
+      {chips.length === 0 && row.accommodations.length > 0 && (
+        <span
+          title={`${row.accommodations.length} active accommodation${
+            row.accommodations.length === 1 ? "" : "s"
+          } — hover to view`}
+          style={{
+            display: "inline-block",
+            padding: "2px 8px",
+            borderRadius: 6,
+            background: "#f1f5f9",
+            color: "#334155",
+            fontSize: 11,
+            fontWeight: 700,
+            letterSpacing: 0.2,
+          }}
+        >
+          Acc
+        </span>
+      )}
+    </div>
+  );
+}
+
+// Color map matches the Accommodations Class View popover so a teacher
+// who recognizes the legend there sees the same chip colors here.
+const ACC_CAT_COLOR: Record<string, string> = {
+  IEP: "#0e7490",
+  "504": "#7c3aed",
+  ELL: "#0891b2",
+  Strategy: "#64748b",
+};
+
+function AccommodationsPopover({
+  row,
+}: {
+  row: RosterRow;
+}) {
+  // Group by category for the popover. Same shape used by the
+  // Accommodations Class View hover popover.
+  const byCat = new Map<string, string[]>();
+  for (const a of row.accommodations) {
+    const cat = a.category || "Strategy";
+    const list = byCat.get(cat) ?? [];
+    list.push(a.name);
+    byCat.set(cat, list);
+  }
+  return (
+    <div
+      role="tooltip"
+      style={{
+        position: "absolute",
+        top: "100%",
+        left: 8,
+        marginTop: 4,
+        zIndex: 5,
+        background: "white",
+        border: "1px solid #e5e7eb",
+        borderRadius: 6,
+        padding: "0.5rem 0.7rem",
+        boxShadow: "0 4px 14px rgba(0,0,0,0.12)",
+        minWidth: 240,
+        maxWidth: 360,
+        color: "#111827",
+        textAlign: "left",
+      }}
+    >
+      <div
+        style={{
+          fontSize: 11,
+          color: "#6b7280",
+          marginBottom: 4,
+        }}
+      >
+        Accommodations for {row.firstName} {row.lastName}
+      </div>
+      {Array.from(byCat.entries()).map(([cat, names]) => (
+        <div key={cat} style={{ marginBottom: 4 }}>
+          <div
+            style={{
+              fontSize: 10,
+              fontWeight: 700,
+              color: ACC_CAT_COLOR[cat] ?? "#475569",
+              textTransform: "uppercase",
+              letterSpacing: 0.5,
+            }}
+          >
+            {cat}
+          </div>
+          <ul
+            style={{
+              margin: "2px 0 0 0",
+              paddingLeft: 16,
+              fontSize: 12,
+            }}
+          >
+            {names.map((n) => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </div>
       ))}
     </div>
   );
@@ -594,6 +706,11 @@ export default function TeacherRosterPage({
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Which student's Programs cell is currently being hovered (or has
+  // been click-pinned). Mirrors the Accommodations Class View pattern
+  // so a teacher can either glance via hover or pin the popover open
+  // by clicking. Null = no popover.
+  const [programHoverId, setProgramHoverId] = useState<string | null>(null);
 
   // Per-user view toggles. Each maps to one optional column. Defaults
   // to all-on; persisted to localStorage so the teacher's preference
@@ -1174,8 +1291,38 @@ export default function TeacherRosterPage({
                     </span>
                   </td>
                   {visibility.programs && (
-                    <td style={{ padding: "6px 10px" }}>
+                    <td
+                      style={{
+                        padding: "6px 10px",
+                        position: "relative",
+                        cursor:
+                          row.accommodations.length > 0 ? "pointer" : "default",
+                      }}
+                      onMouseEnter={() => {
+                        if (row.accommodations.length > 0) {
+                          setProgramHoverId(row.studentId);
+                        }
+                      }}
+                      onMouseLeave={() =>
+                        setProgramHoverId((cur) =>
+                          cur === row.studentId ? null : cur,
+                        )
+                      }
+                      onClick={() =>
+                        setProgramHoverId((cur) =>
+                          cur === row.studentId
+                            ? null
+                            : row.accommodations.length > 0
+                              ? row.studentId
+                              : cur,
+                        )
+                      }
+                    >
                       <ProgramPills row={row} />
+                      {programHoverId === row.studentId &&
+                        row.accommodations.length > 0 && (
+                          <AccommodationsPopover row={row} />
+                        )}
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>

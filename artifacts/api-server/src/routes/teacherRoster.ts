@@ -29,6 +29,8 @@ import {
   pbisEntriesTable,
   studentMtssPlansTable,
   schoolSettingsTable,
+  studentAccommodationsTable,
+  schoolAccommodationsTable,
 } from "@workspace/db";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -285,7 +287,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
   // Pull demographics + FAST scores + recent PBIS entries + active MTSS
   // plans in parallel. The PBIS query only returns studentId since
   // that's all we need to mark "has been recognized recently".
-  const [students, scores, recentPbis, activeMtss] = await Promise.all([
+  const [students, scores, recentPbis, activeMtss, accommodations] = await Promise.all([
     db
       .select()
       .from(studentsTable)
@@ -328,7 +330,46 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(studentMtssPlansTable.studentId, studentIds),
         ),
       ),
+    // Active accommodations (those with no removedAt). Joined to the
+    // school catalog so we can return both the human name and the
+    // category, which the client uses to group + color the popover
+    // shown when the teacher hovers a student's Programs cell.
+    // Same school-AND-filter pattern as routes/students.ts to defend
+    // against student_id collisions across schools.
+    db
+      .select({
+        studentId: studentAccommodationsTable.studentId,
+        name: schoolAccommodationsTable.name,
+        category: schoolAccommodationsTable.category,
+      })
+      .from(studentAccommodationsTable)
+      .innerJoin(
+        schoolAccommodationsTable,
+        eq(
+          studentAccommodationsTable.accommodationId,
+          schoolAccommodationsTable.id,
+        ),
+      )
+      .where(
+        and(
+          eq(studentAccommodationsTable.schoolId, schoolId),
+          isNull(studentAccommodationsTable.removedAt),
+          inArray(studentAccommodationsTable.studentId, studentIds),
+        ),
+      ),
   ]);
+
+  // Group accommodations by studentId so the row builder can attach
+  // them in O(1).
+  const accommodationsByStudent = new Map<
+    string,
+    Array<{ name: string; category: string }>
+  >();
+  for (const a of accommodations) {
+    const list = accommodationsByStudent.get(a.studentId) ?? [];
+    list.push({ name: a.name, category: a.category });
+    accommodationsByStudent.set(a.studentId, list);
+  }
 
   // Set of students with at least one non-voided PBIS entry in the window.
   const recognizedIds = new Set<string>();
@@ -384,6 +425,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       ese: stu.ese,
       is504: stu.is504,
       ell: stu.ell,
+      // Active accommodations (no removedAt) attached so the Programs
+      // cell on the Teacher Roster page can pop up a category-grouped
+      // list on hover. Empty array when the student has none.
+      accommodations: accommodationsByStudent.get(stu.studentId) ?? [],
     };
   });
 

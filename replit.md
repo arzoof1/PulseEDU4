@@ -4407,3 +4407,14 @@ profile.
   unchanged in shape but now also reports ESE / 504 / ELL counts to
   callers via `summary.ese / summary.five04 / summary.ell` (display
   text not surfaced yet — chip column itself is the primary signal).
+- Column position: Programs sits between Student/Spider and Grade so
+  it reads as student-context, not academic data.
+- Hover popover: hovering (or clicking to pin) the Programs cell of
+  any student with active accommodations opens a category-grouped
+  popover listing the accommodation names. Categories use the same
+  color palette as the Accommodations Class View
+  (IEP/504/ELL/Strategy). Server now joins `student_accommodations`
+  → `school_accommodations` and returns `accommodations: { name,
+  category }[]` per row. When a student has accommodations but none
+  of the three program flags, a soft "Acc" pill is shown so there's
+  still a hover target.
