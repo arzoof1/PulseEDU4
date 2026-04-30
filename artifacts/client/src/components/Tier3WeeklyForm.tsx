@@ -351,10 +351,15 @@ export default function Tier3WeeklyForm({
     }
     const rows: Array<{ slot: number; goal: GoalRow | undefined }> = [];
     for (let i = 1; i <= max; i++) {
+      // Hide empty slots from teachers — there's nothing for them to
+      // do in those rows. Core Team still sees them so they can use
+      // the "+ New version" affordance to seed a goal into an empty
+      // slot (this form is the only place goals can be created).
+      if (!bySlot[i] && !isCoreTeam) continue;
       rows.push({ slot: i, goal: bySlot[i] });
     }
     return rows;
-  }, [goals, plan, today]);
+  }, [goals, plan, today, isCoreTeam]);
 
   const showPride = plan?.trackSchoolWideExpectations !== false;
   const visibleStrategies = strategies.filter((s) => s.active);
