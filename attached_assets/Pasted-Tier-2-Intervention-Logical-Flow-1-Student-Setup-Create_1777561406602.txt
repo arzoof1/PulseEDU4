@@ -1,0 +1,95 @@
+Tier 2 Intervention – Logical Flow
+1. Student Setup
+    •    Create student profile
+    •    Assign Tier 2 status
+    •    Select intervention type:
+    ◦    Check-In/Check-Out (CICO)
+    ◦    Behavioral Group
+
+2. Session Entry (Daily or As Needed)
+    •    Teacher selects student
+    •    System displays:
+    ◦    Intervention type
+    •    Teacher clicks “Add New Entry”
+
+3. Required Fields for Entry
+    •    Date picker (calendar selection)
+    •    Intervention type (auto-filled or selectable if needed)
+    •    Notes box (free text)
+
+4. Save Entry
+    •    Validate:
+    ◦    Date is selected
+    ◦    Notes are optional but available
+    •    Save entry to student record
+
+5. Data Storage Structure
+Each entry should store:
+    •    Student ID
+    •    Intervention type (CICO or Group)
+    •    Date
+    •    Notes
+    •    Teacher ID (optional but helpful)
+
+6. View History
+    •    Teacher can:
+    ◦    View all past entries
+    ◦    Filter by date or intervention type
+
+Tier 3 Intervention – Logical Flow
+1. Student Setup
+    •    Create student profile (or select existing)
+    •    Assign Tier 3 status
+    •    Input 2 behavior goals
+    ◦    Editable text fields
+    ◦    Allow updates at any time
+
+2. Weekly Tracking Setup
+    •    System generates weekly tracking form:
+    ◦    Monday → Friday
+
+3. Daily Input Fields
+For EACH day (Mon–Fri), include:
+    •    Rating scale (1–5 dropdown or buttons)
+    •    Comments box (free text)
+
+4. Weekly Entry Process
+    •    Teacher selects student
+    •    Opens current week
+    •    Inputs:
+    ◦    Score (1–5) for each day
+    ◦    Comments for each day
+
+5. Save Weekly Data
+    •    Validate:
+    ◦    Each day has a score (or allow partial saves if needed)
+    •    Save as one weekly record
+
+6. Data Structure
+Each weekly record should include:
+    •    Student ID
+    •    Week start date
+    •    Goal 1 (current version)
+    •    Goal 2 (current version)
+    •    Monday–Friday:
+    ◦    Score (1–5)
+    ◦    Comment
+    •    Teacher ID
+
+7. Editing & Updating
+    •    Teacher can:
+    ◦    Edit scores/comments
+    ◦    Update goals (stored separately so changes don’t erase past data)
+
+8. View Progress
+    •    Display:
+    ◦    Weekly summaries
+    ◦    Trends in scores over time
+    ◦    Past comments
+
+Important Things Not to Miss
+    •    Keep Tier 2 and Tier 3 data separate
+    •    Allow multiple entries for Tier 2 (daily logs)
+    •    Keep Tier 3 structured as weekly tracking
+    •    Goals must be editable without deleting past history
+    •    Always tie data to a specific student and date
