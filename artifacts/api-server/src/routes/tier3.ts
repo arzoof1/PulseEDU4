@@ -316,6 +316,7 @@ router.post("/tier3-records", async (req, res) => {
     prideThu,
     prideFri,
     strategyUsage,
+    goalScores,
   } = req.body ?? {};
 
   const cleanStudentId =
@@ -402,6 +403,71 @@ router.post("/tier3-records", async (req, res) => {
     }
   }
 
+  // Per-goal-per-day score map. Shape on the wire:
+  //   { "1": { "mon":5,"tue":4, ... }, "2": { ... } }
+  // Slots outside 1..5 and unknown days are dropped silently. Any
+  // value that isn't a 1..5 integer becomes null. When the caller
+  // sends a `goalScores` payload we ALSO derive the day-overall
+  // mon..fri columns as the rounded average across goals so the
+  // existing analytics keep working without a schema migration on
+  // every dashboard query.
+  const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"] as const;
+  type DayKey = (typeof DAY_KEYS)[number];
+  let parsedGoalScores:
+    | Record<string, Record<DayKey, number | null>>
+    | undefined;
+  if ("goalScores" in (req.body ?? {})) {
+    parsedGoalScores = {};
+    if (goalScores && typeof goalScores === "object") {
+      for (const [slotKey, perDay] of Object.entries(
+        goalScores as Record<string, unknown>,
+      )) {
+        const slotN = Number(slotKey);
+        if (!Number.isInteger(slotN) || slotN < 1 || slotN > 5) continue;
+        if (!perDay || typeof perDay !== "object") continue;
+        const cleanedDays: Record<DayKey, number | null> = {
+          mon: null,
+          tue: null,
+          wed: null,
+          thu: null,
+          fri: null,
+        };
+        for (const d of DAY_KEYS) {
+          const raw = (perDay as Record<string, unknown>)[d];
+          const v = clampScore15(raw);
+          cleanedDays[d] = v === "BAD" || v === undefined ? null : v;
+        }
+        parsedGoalScores[String(slotN)] = cleanedDays;
+      }
+    }
+    // Derive overall day score = rounded mean across goals that have
+    // a score for that day. This OVERRIDES any explicit monScore..
+    // friScore that came in the same request body.
+    for (const d of DAY_KEYS) {
+      const values: number[] = [];
+      for (const slot of Object.values(parsedGoalScores)) {
+        const v = slot[d];
+        if (typeof v === "number") values.push(v);
+      }
+      const colName =
+        d === "mon"
+          ? "monScore"
+          : d === "tue"
+            ? "tueScore"
+            : d === "wed"
+              ? "wedScore"
+              : d === "thu"
+                ? "thuScore"
+                : "friScore";
+      if (values.length > 0) {
+        const mean = values.reduce((a, b) => a + b, 0) / values.length;
+        scoreFields[colName as keyof typeof scoreFields] = Math.round(mean);
+      } else {
+        scoreFields[colName as keyof typeof scoreFields] = null;
+      }
+    }
+  }
+
   // Snapshot the active goal versions for this student. We base maxSlot
   // on the plan's `tier3GoalSlots` if a plan exists, else fall back to 5.
   const [plan] = await db
@@ -472,6 +538,17 @@ router.post("/tier3-records", async (req, res) => {
   if ("weeklyComment" in body) {
     cols.weeklyComment = clampComment(body.weeklyComment) ?? "";
   }
+  if (parsedGoalScores !== undefined) {
+    cols.goalScores = parsedGoalScores;
+    // Re-sync the derived overall day scores into cols (since we only
+    // assign cols when the source key was present, but the per-goal
+    // map implicitly overrides them).
+    cols.monScore = scoreFields.monScore;
+    cols.tueScore = scoreFields.tueScore;
+    cols.wedScore = scoreFields.wedScore;
+    cols.thuScore = scoreFields.thuScore;
+    cols.friScore = scoreFields.friScore;
+  }
 
   let recordId: number;
   if (existing) {
@@ -508,6 +585,7 @@ router.post("/tier3-records", async (req, res) => {
         prideThu: (cols.prideThu as number | null) ?? null,
         prideFri: (cols.prideFri as number | null) ?? null,
         goalVersionIds,
+        goalScores: parsedGoalScores ?? {},
       })
       .returning();
     recordId = row.id;

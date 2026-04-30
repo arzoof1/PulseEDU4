@@ -95,6 +95,7 @@ interface RecordRow {
   prideWed: number | null;
   prideThu: number | null;
   prideFri: number | null;
+  goalScores?: Record<string, Record<string, number | null>> | null;
   strategyUsage?: UsageRow[];
 }
 
@@ -133,14 +134,19 @@ export default function Tier3WeeklyForm({
   const [record, setRecord] = useState<RecordRow | null>(null);
   const [acronym, setAcronym] = useState<string>("PRIDE");
 
-  // Editable state.
-  const [scores, setScores] = useState<Record<Day, number | null>>({
+  // Editable state. Per-goal-per-day score map.
+  // Shape: { 1: {mon:5, tue:null, ...}, 2: {...} }. The server expects
+  // string slot keys, but in component state we keep them as numbers
+  // for cheap indexing — they get JSON.stringified at submit time.
+  type DayScores = Record<Day, number | null>;
+  const emptyDayScores = (): DayScores => ({
     mon: null,
     tue: null,
     wed: null,
     thu: null,
     fri: null,
   });
+  const [goalScores, setGoalScores] = useState<Record<number, DayScores>>({});
   const [pride, setPride] = useState<Record<Day, number | null>>({
     mon: null,
     tue: null,
@@ -242,13 +248,51 @@ export default function Tier3WeeklyForm({
 
   function hydrateFromRecord(r: RecordRow): void {
     setRecord(r);
-    setScores({
-      mon: r.monScore,
-      tue: r.tueScore,
-      wed: r.wedScore,
-      thu: r.thuScore,
-      fri: r.friScore,
-    });
+    // Per-goal-per-day scores. If the saved record has any goalScores
+    // map, use it as-is. Otherwise migrate any legacy single-row score
+    // (mon..fri) into slot 1 so an existing weekly entry doesn't
+    // appear blank when teachers reopen the form.
+    const incoming = r.goalScores ?? {};
+    const slotKeys = Object.keys(incoming);
+    if (slotKeys.length > 0) {
+      const next: Record<number, DayScores> = {};
+      for (const k of slotKeys) {
+        const slotN = Number(k);
+        if (!Number.isInteger(slotN) || slotN < 1 || slotN > 5) continue;
+        const perDay = incoming[k] ?? {};
+        next[slotN] = {
+          mon:
+            typeof perDay.mon === "number" ? (perDay.mon as number) : null,
+          tue:
+            typeof perDay.tue === "number" ? (perDay.tue as number) : null,
+          wed:
+            typeof perDay.wed === "number" ? (perDay.wed as number) : null,
+          thu:
+            typeof perDay.thu === "number" ? (perDay.thu as number) : null,
+          fri:
+            typeof perDay.fri === "number" ? (perDay.fri as number) : null,
+        };
+      }
+      setGoalScores(next);
+    } else if (
+      r.monScore !== null ||
+      r.tueScore !== null ||
+      r.wedScore !== null ||
+      r.thuScore !== null ||
+      r.friScore !== null
+    ) {
+      setGoalScores({
+        1: {
+          mon: r.monScore,
+          tue: r.tueScore,
+          wed: r.wedScore,
+          thu: r.thuScore,
+          fri: r.friScore,
+        },
+      });
+    } else {
+      setGoalScores({});
+    }
     setPride({
       mon: r.prideMon,
       tue: r.prideTue,
@@ -335,14 +379,27 @@ export default function Tier3WeeklyForm({
         const [sid, d] = key.split(":");
         strategyUsage.push({ strategyId: Number(sid), day: d as Day });
       }
+      // Send the per-goal-per-day score map. Server derives the
+      // overall mon..fri scores as the rounded mean across goals so
+      // we don't have to send them again here.
+      const goalScoresPayload: Record<string, Record<string, number | null>> = {};
+      for (const [slot, perDay] of Object.entries(goalScores)) {
+        goalScoresPayload[String(slot)] = {
+          mon: perDay.mon,
+          tue: perDay.tue,
+          wed: perDay.wed,
+          thu: perDay.thu,
+          fri: perDay.fri,
+        };
+      }
       const body: Record<string, unknown> = {
         studentId,
         weekStartDate,
         weeklyComment,
         strategyUsage,
+        goalScores: goalScoresPayload,
       };
       for (const d of DAYS) {
-        body[`${d}Score`] = scores[d];
         body[`${d}Comment`] = comments[d];
         if (showPride) {
           body[`pride${d.charAt(0).toUpperCase()}${d.slice(1)}`] = pride[d];
@@ -395,27 +452,48 @@ export default function Tier3WeeklyForm({
         {SCORE_LEGEND.map((l) => l.label).join(" · ")}
       </div>
 
-      {/* Goals + score grid */}
+      {/* Goals + score grid. Each goal renders its OWN 1..5 score row
+          per day, so the teacher records a separate score for every
+          goal instead of a single shared "overall" score. The
+          `dayCellStyle` helper adds a soft vertical border between
+          every Mon..Fri column so the days don't visually run
+          together — the first day cell gets a left border too. */}
       <div style={{ overflowX: "auto" }}>
-        <table style={{ borderCollapse: "collapse", width: "100%" }}>
+        <table
+          style={{
+            borderCollapse: "collapse",
+            width: "100%",
+            tableLayout: "fixed",
+          }}
+        >
+          <colgroup>
+            <col style={{ width: 220 }} />
+            {DAYS.map((d) => (
+              <col key={d} />
+            ))}
+          </colgroup>
           <thead>
             <tr>
               <th
                 style={{
                   textAlign: "left",
                   padding: "0.4rem",
-                  borderBottom: "1px solid #e2e8f0",
+                  borderBottom: "2px solid #cbd5e1",
+                  background: "#f8fafc",
                 }}
               >
                 Goal
               </th>
-              {DAYS.map((d) => (
+              {DAYS.map((d, i) => (
                 <th
                   key={d}
                   style={{
                     padding: "0.4rem",
-                    borderBottom: "1px solid #e2e8f0",
-                    width: 110,
+                    borderBottom: "2px solid #cbd5e1",
+                    borderLeft: "1px solid #cbd5e1",
+                    borderRight:
+                      i === DAYS.length - 1 ? "1px solid #cbd5e1" : undefined,
+                    background: "#f8fafc",
                   }}
                 >
                   {DAY_LABELS[d]}
@@ -424,141 +502,135 @@ export default function Tier3WeeklyForm({
             </tr>
           </thead>
           <tbody>
-            {/* Score row applies to the WEEK overall — same scores for all
-                goal rows in a single weekly record. We show one editable
-                score row at the top, then each goal as a label row below. */}
-            <tr>
-              <td
-                style={{
-                  padding: "0.4rem",
-                  fontWeight: 600,
-                  borderBottom: "1px solid #f1f5f9",
-                }}
-              >
-                Daily score (overall)
-              </td>
-              {DAYS.map((d) => (
-                <td
-                  key={d}
-                  style={{
-                    padding: "0.4rem",
-                    borderBottom: "1px solid #f1f5f9",
-                  }}
-                >
-                  <div style={{ display: "flex", gap: 4 }}>
-                    {[1, 2, 3, 4, 5].map((v) => (
-                      <button
-                        key={v}
-                        type="button"
-                        onClick={() =>
-                          setScores({
-                            ...scores,
-                            [d]: scores[d] === v ? null : v,
-                          })
-                        }
-                        style={buttonStyle(scores[d] === v)}
-                        title={
-                          SCORE_LEGEND.find((l) => l.value === v)?.label ?? ""
-                        }
-                      >
-                        {v}
-                      </button>
-                    ))}
-                  </div>
-                </td>
-              ))}
-            </tr>
-
-            {activeGoals.map(({ slot, goal }) => (
-              <tr key={slot}>
-                <td
-                  style={{
-                    padding: "0.4rem",
-                    borderBottom: "1px solid #f1f5f9",
-                    verticalAlign: "top",
-                  }}
-                >
-                  <div style={{ fontSize: "0.85rem", color: "#475569" }}>
-                    Goal {slot}
-                  </div>
-                  {goal ? (
-                    <div style={{ fontSize: "0.95rem" }}>{goal.text}</div>
-                  ) : (
-                    <div style={{ color: "#94a3b8", fontStyle: "italic" }}>
-                      (no goal yet)
+            {activeGoals.map(({ slot, goal }) => {
+              const slotScores = goalScores[slot] ?? emptyDayScores();
+              return (
+                <tr key={slot}>
+                  <td
+                    style={{
+                      padding: "0.4rem",
+                      borderBottom: "1px solid #e2e8f0",
+                      verticalAlign: "top",
+                    }}
+                  >
+                    <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+                      Goal {slot}
                     </div>
-                  )}
-                  {isCoreTeam && (
-                    <div style={{ marginTop: 4 }}>
-                      {editingGoalSlot === slot ? (
-                        <div style={{ display: "flex", gap: 4 }}>
-                          <input
-                            value={newGoalText}
-                            onChange={(e) => setNewGoalText(e.target.value)}
-                            placeholder="New goal text…"
-                            style={{
-                              flex: 1,
-                              padding: "0.3rem 0.4rem",
-                              borderRadius: 4,
-                              border: "1px solid #cbd5e1",
-                              fontSize: "0.85rem",
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => saveGoal(slot)}
-                            style={{ fontSize: "0.8rem" }}
-                          >
-                            Save
-                          </button>
+                    {goal ? (
+                      <div style={{ fontSize: "0.95rem" }}>{goal.text}</div>
+                    ) : (
+                      <div style={{ color: "#94a3b8", fontStyle: "italic" }}>
+                        (no goal yet)
+                      </div>
+                    )}
+                    {isCoreTeam && (
+                      <div style={{ marginTop: 4 }}>
+                        {editingGoalSlot === slot ? (
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <input
+                              value={newGoalText}
+                              onChange={(e) => setNewGoalText(e.target.value)}
+                              placeholder="New goal text…"
+                              style={{
+                                flex: 1,
+                                padding: "0.3rem 0.4rem",
+                                borderRadius: 4,
+                                border: "1px solid #cbd5e1",
+                                fontSize: "0.85rem",
+                              }}
+                            />
+                            <button
+                              type="button"
+                              onClick={() => saveGoal(slot)}
+                              style={{ fontSize: "0.8rem" }}
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingGoalSlot(null);
+                                setNewGoalText("");
+                              }}
+                              style={{ fontSize: "0.8rem" }}
+                            >
+                              ✕
+                            </button>
+                          </div>
+                        ) : (
                           <button
                             type="button"
                             onClick={() => {
-                              setEditingGoalSlot(null);
-                              setNewGoalText("");
+                              setEditingGoalSlot(slot);
+                              setNewGoalText(goal?.text ?? "");
                             }}
-                            style={{ fontSize: "0.8rem" }}
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "#2563eb",
+                              background: "transparent",
+                              border: "none",
+                              padding: 0,
+                              cursor: "pointer",
+                            }}
                           >
-                            ✕
+                            + New version
                           </button>
-                        </div>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setEditingGoalSlot(slot);
-                            setNewGoalText(goal?.text ?? "");
-                          }}
-                          style={{
-                            fontSize: "0.75rem",
-                            color: "#2563eb",
-                            background: "transparent",
-                            border: "none",
-                            padding: 0,
-                            cursor: "pointer",
-                          }}
-                        >
-                          + New version
-                        </button>
-                      )}
-                    </div>
-                  )}
-                </td>
-                {DAYS.map((d) => (
-                  <td
-                    key={d}
-                    style={{
-                      padding: "0.4rem",
-                      borderBottom: "1px solid #f1f5f9",
-                      color: "#94a3b8",
-                      fontSize: "0.75rem",
-                    }}
-                  >
-                    {scores[d] !== null ? `→ score ${scores[d]}` : "—"}
+                        )}
+                      </div>
+                    )}
                   </td>
-                ))}
-              </tr>
-            ))}
+                  {DAYS.map((d, i) => (
+                    <td
+                      key={d}
+                      style={{
+                        padding: "0.4rem",
+                        borderBottom: "1px solid #e2e8f0",
+                        borderLeft: "1px solid #e2e8f0",
+                        borderRight:
+                          i === DAYS.length - 1
+                            ? "1px solid #e2e8f0"
+                            : undefined,
+                        verticalAlign: "middle",
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          gap: 3,
+                          justifyContent: "center",
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        {[1, 2, 3, 4, 5].map((v) => (
+                          <button
+                            key={v}
+                            type="button"
+                            onClick={() => {
+                              const cur = slotScores[d];
+                              const next: Record<number, DayScores> = {
+                                ...goalScores,
+                                [slot]: {
+                                  ...slotScores,
+                                  [d]: cur === v ? null : v,
+                                },
+                              };
+                              setGoalScores(next);
+                            }}
+                            style={buttonStyle(slotScores[d] === v)}
+                            title={
+                              SCORE_LEGEND.find((l) => l.value === v)?.label ??
+                              ""
+                            }
+                          >
+                            {v}
+                          </button>
+                        ))}
+                      </div>
+                    </td>
+                  ))}
+                </tr>
+              );
+            })}
 
             {showPride && (
               <tr>
@@ -566,7 +638,7 @@ export default function Tier3WeeklyForm({
                   style={{
                     padding: "0.4rem",
                     fontWeight: 600,
-                    borderBottom: "1px solid #f1f5f9",
+                    borderBottom: "1px solid #e2e8f0",
                   }}
                 >
                   {acronym} (school-wide)
@@ -580,15 +652,26 @@ export default function Tier3WeeklyForm({
                     {PRIDE_LEGEND.map((l) => l.label).join(" · ")}
                   </div>
                 </td>
-                {DAYS.map((d) => (
+                {DAYS.map((d, i) => (
                   <td
                     key={d}
                     style={{
                       padding: "0.4rem",
-                      borderBottom: "1px solid #f1f5f9",
+                      borderBottom: "1px solid #e2e8f0",
+                      borderLeft: "1px solid #e2e8f0",
+                      borderRight:
+                        i === DAYS.length - 1
+                          ? "1px solid #e2e8f0"
+                          : undefined,
                     }}
                   >
-                    <div style={{ display: "flex", gap: 4 }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 4,
+                        justifyContent: "center",
+                      }}
+                    >
                       {[0, 1, 2].map((v) => (
                         <button
                           key={v}
@@ -620,17 +703,22 @@ export default function Tier3WeeklyForm({
                 style={{
                   padding: "0.4rem",
                   fontWeight: 600,
-                  borderBottom: "1px solid #f1f5f9",
+                  borderBottom: "1px solid #e2e8f0",
                 }}
               >
                 Day comment
               </td>
-              {DAYS.map((d) => (
+              {DAYS.map((d, i) => (
                 <td
                   key={d}
                   style={{
                     padding: "0.4rem",
-                    borderBottom: "1px solid #f1f5f9",
+                    borderBottom: "1px solid #e2e8f0",
+                    borderLeft: "1px solid #e2e8f0",
+                    borderRight:
+                      i === DAYS.length - 1
+                        ? "1px solid #e2e8f0"
+                        : undefined,
                   }}
                 >
                   <textarea
@@ -645,6 +733,7 @@ export default function Tier3WeeklyForm({
                       padding: "0.3rem",
                       border: "1px solid #cbd5e1",
                       borderRadius: 4,
+                      boxSizing: "border-box",
                     }}
                   />
                 </td>

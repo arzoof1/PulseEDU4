@@ -451,6 +451,15 @@ export async function ensureMtssPlansSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS tier3_goals_student_slot_idx ON tier3_goals (school_id, student_id, slot, effective_from)`,
   );
+  // ---- Per-goal-per-day score map on the weekly record. Added after
+  // teachers reported that a single shared "overall" score row was
+  // confusing — each goal now gets its own 1..5 row in the form, stored
+  // here as { "<slot>": { mon: 1..5|null, tue: ..., ... } }. The
+  // legacy mon_score..fri_score columns stay as the rounded average so
+  // every existing dashboard query keeps working unchanged.
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS goal_scores JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
 }
 
 export async function seedMtssPlansIfEmpty() {

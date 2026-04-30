@@ -63,6 +63,19 @@ export const tier3WeeklyRecordsTable = pgTable(
       .notNull()
       .default({}),
 
+    // Per-goal-per-day score map. Shape:
+    //   { "1": {"mon":5,"tue":4,"wed":null,"thu":3,"fri":null}, "2": {...} }
+    // Slot keys are "1".."tier3GoalSlots" (max 5). Day keys mon..fri.
+    // Values: integer 1..5 or null when the day hasn't been scored for
+    // that goal. The single-column `monScore..friScore` fields above
+    // remain authoritative for whole-day analytics; the server
+    // auto-populates them as the rounded average of the per-goal
+    // scores on save so existing dashboards keep working unchanged.
+    goalScores: jsonb("goal_scores")
+      .$type<Record<string, Record<string, number | null>>>()
+      .notNull()
+      .default({}),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
