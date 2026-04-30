@@ -7,6 +7,7 @@ import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import InterventionsTodayPage from "./components/InterventionsTodayPage";
 import InterventionReportsPage from "./components/InterventionReportsPage";
+import MyInterventionsPage from "./components/MyInterventionsPage";
 import SchoolWideExpectationsPanel from "./components/SchoolWideExpectationsPanel";
 import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
@@ -3582,6 +3583,7 @@ function App() {
     | "displays"
     | "interventionsToday"
     | "interventionReports"
+    | "myInterventions"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -6964,7 +6966,9 @@ function App() {
     }
     if (activeSection === "logIntervention") {
       loadInterventionTypes();
-      loadInterventionEntries();
+      // Recent-interventions table is gone — full history lives on the
+      // My Interventions page now, so we no longer need to prefetch
+      // /api/interventions on entry to this section.
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeSection, isPbisCoord, isBehaviorSpec, canManageBehaviorLists]);
@@ -7008,6 +7012,7 @@ function App() {
     { key: "schoolStore", label: "School Store", icon: IconStar },
     { key: "accommodations", label: "Accommodations", icon: IconClipboard },
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
+    { key: "myInterventions", label: "My Interventions", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
   ];
   // Sidebar entries that map to a per-school feature flag. Anything not
@@ -7018,6 +7023,7 @@ function App() {
     schoolStore: "SchoolStore",
     accommodations: "Accommodations",
     logIntervention: "LogIntervention",
+    myInterventions: "LogIntervention",
     requestPullout: "RequestPullout",
   };
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
@@ -15481,226 +15487,48 @@ function App() {
                 behavior specialist to add some on the Interventions page.
               </div>
             )}
-          <h3 style={{ marginTop: "1.25rem" }}>Recent interventions</h3>
-          {(() => {
-            type CombinedRow = {
-              key: string;
-              createdAt: string;
-              studentId: string;
-              typeLabel: string;
-              staffName: string;
-              note: string | null;
-              source: "intervention" | "checkInOut";
-            };
-            const combined: CombinedRow[] = [
-              ...interventionEntries.map((e) => ({
-                key: `i-${e.id}`,
-                createdAt: e.createdAt,
-                studentId: e.studentId,
-                typeLabel: e.interventionType,
-                staffName: e.staffName,
-                note: e.note,
-                source: "intervention" as const,
-              })),
-              ...tardies
-                .filter(
-                  (t) =>
-                    t.entryType === "checkin" ||
-                    t.entryType === "checkout" ||
-                    t.entryType === "intervention",
-                )
-                .map((t) => ({
-                  key: `t-${t.id}`,
-                  createdAt: t.createdAt,
-                  studentId: t.studentId,
-                  typeLabel:
-                    t.entryType === "intervention"
-                      ? t.checkInWith || "Intervention"
-                      : t.entryType === "checkin"
-                        ? "Check-In"
-                        : "Check-Out",
-                  staffName:
-                    t.createdBy ||
-                    (t.entryType === "intervention"
-                      ? t.teacherName
-                      : t.checkInWith || t.teacherName),
-                  note: (t.notes && t.notes.trim()) || null,
-                  source: "checkInOut" as const,
-                })),
-            ].sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
-            const rows = combined.slice(0, 50);
-            if (rows.length === 0) {
-              return (
-                <p style={{ color: "var(--text-subtle, #64748b)" }}>
-                  No interventions logged yet.
-                </p>
-              );
-            }
-            return (
-            <table
+          <div
+            style={{
+              marginTop: "1.25rem",
+              padding: "0.85rem 1rem",
+              background: "#f5f3ff",
+              border: "1px solid #ddd6fe",
+              borderRadius: 8,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: "1rem",
+              flexWrap: "wrap",
+            }}
+          >
+            <div>
+              <div style={{ fontWeight: 700, color: "#5b21b6" }}>
+                Looking for past entries?
+              </div>
+              <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+                Your full history (Tier 2, Tier 3, Trusted Adult, Quick
+                Check-in) lives on the My Interventions page — filter by
+                date, student, or tier and print clean lists for parent
+                meetings.
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setActiveSection("myInterventions")}
               style={{
-                width: "100%",
-                borderCollapse: "collapse",
-                fontSize: "0.9rem",
+                padding: "0.5rem 1rem",
+                background: "#7c3aed",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                fontWeight: 600,
+                cursor: "pointer",
+                whiteSpace: "nowrap",
               }}
             >
-              <thead>
-                <tr
-                  style={{
-                    textAlign: "left",
-                    borderBottom: "2px solid #cbd5e1",
-                    background: "#f8fafc",
-                  }}
-                >
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Date / Time</th>
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Student ID</th>
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Student Name</th>
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Grade</th>
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Intervention</th>
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Logged By</th>
-                  <th style={{ padding: "0.5rem 0.5rem", fontSize: "0.78rem", color: "#64748b", textTransform: "uppercase", letterSpacing: 0.5 }}>Notes</th>
-                </tr>
-              </thead>
-              <tbody>
-                {rows.map((row) => {
-                  const s = students.find((s) => s.studentId === row.studentId);
-                  const hasNote = !!(row.note && row.note.trim());
-                  const canViewNote =
-                    Boolean(authUser?.isAdmin || authUser?.isSuperUser) ||
-                    isBehaviorSpec;
-                  const popoverActive = intervNotePopoverId === row.key;
-                  return (
-                    <tr key={row.key} style={{ borderBottom: "1px solid #f1f5f9" }}>
-                      <td style={{ padding: "0.5rem 0.5rem", whiteSpace: "nowrap" }}>
-                        {new Date(row.createdAt).toLocaleString()}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.5rem", fontFamily: "monospace" }}>
-                        {row.studentId}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.5rem" }}>
-                        {s ? `${s.firstName} ${s.lastName}` : "—"}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.5rem" }}>
-                        {s ? String(s.grade).padStart(2, "0") : "—"}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.5rem" }}>
-                        {row.typeLabel}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.5rem" }}>
-                        {row.staffName}
-                      </td>
-                      <td style={{ padding: "0.5rem 0.5rem", position: "relative" }}>
-                        {hasNote ? (
-                          canViewNote ? (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setIntervNotePopoverId(
-                                  popoverActive ? null : numericId,
-                                )
-                              }
-                              style={{
-                                padding: "2px 10px",
-                                borderRadius: 999,
-                                background: "#ede9fe",
-                                color: "#5b21b6",
-                                border: "1px solid #c4b5fd",
-                                fontWeight: 600,
-                                fontSize: "0.75rem",
-                                cursor: "pointer",
-                              }}
-                              aria-label="View note"
-                            >
-                              Notes
-                            </button>
-                          ) : (
-                            <span
-                              style={{
-                                padding: "2px 10px",
-                                borderRadius: 999,
-                                background: "#f1f5f9",
-                                color: "#64748b",
-                                border: "1px solid #e2e8f0",
-                                fontWeight: 600,
-                                fontSize: "0.75rem",
-                              }}
-                            >
-                              Notes
-                            </span>
-                          )
-                        ) : (
-                          <span style={{ color: "#cbd5e1" }}>—</span>
-                        )}
-                        {popoverActive && hasNote && canViewNote && (
-                          <div
-                            style={{
-                              position: "absolute",
-                              top: "calc(100% + 4px)",
-                              right: 0,
-                              zIndex: 20,
-                              width: 320,
-                              background: "white",
-                              border: "1px solid #c4b5fd",
-                              borderRadius: 8,
-                              boxShadow: "0 8px 24px rgba(15,23,42,0.15)",
-                              padding: "0.75rem",
-                            }}
-                          >
-                            <div
-                              style={{
-                                display: "flex",
-                                justifyContent: "space-between",
-                                alignItems: "center",
-                                marginBottom: "0.4rem",
-                              }}
-                            >
-                              <strong style={{ fontSize: "0.8rem", color: "#475569" }}>
-                                Note from {row.staffName}
-                              </strong>
-                              <button
-                                type="button"
-                                onClick={() => setIntervNotePopoverId(null)}
-                                style={{
-                                  background: "none",
-                                  border: "none",
-                                  fontSize: "1.1rem",
-                                  cursor: "pointer",
-                                  color: "#64748b",
-                                  lineHeight: 1,
-                                }}
-                                aria-label="Close note"
-                              >
-                                ×
-                              </button>
-                            </div>
-                            <div
-                              style={{
-                                fontSize: "0.85rem",
-                                color: "#0f172a",
-                                whiteSpace: "pre-wrap",
-                                marginBottom: "0.4rem",
-                              }}
-                            >
-                              {row.note}
-                            </div>
-                            <div
-                              style={{
-                                fontSize: "0.7rem",
-                                color: "#94a3b8",
-                              }}
-                            >
-                              {new Date(row.createdAt).toLocaleString()}
-                            </div>
-                          </div>
-                        )}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-            );
-          })()}
+              View My Interventions →
+            </button>
+          </div>
         </section>
         </>
       )}
@@ -17799,6 +17627,12 @@ function App() {
       {activeSection === "interventionReports" && canManageMtssPlans && (
         <InterventionReportsPage
           onBack={() => setActiveSection("mtssCoordinator")}
+        />
+      )}
+
+      {activeSection === "myInterventions" && (
+        <MyInterventionsPage
+          onBack={() => setActiveSection("logIntervention")}
         />
       )}
 

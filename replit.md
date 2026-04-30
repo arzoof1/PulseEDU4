@@ -4338,3 +4338,53 @@ Deferred to follow-ups:
 - Other server routes (`mtssPlans.ts`, `listsAdmin.ts`,
   `schoolSettings.ts`) still re-implement Core Team gates rather
   than using `lib/coreTeam.ts`. Pre-existing pattern; not regressed.
+
+### Unified intervention history (Apr 30 2026)
+
+Replaced the ad-hoc "Recent interventions" table on the Log
+Intervention page with a single canonical surface that merges every
+intervention source into one row shape:
+
+- Server: `artifacts/api-server/src/routes/interventionHistory.ts`
+  exposes two endpoints. Both return rows of shape
+  `{source, sourceId, studentId, staffId, staffName, occurredAt, date,
+  tier, typeLabel, detail}` merged from `tier2_intervention_entries`,
+  `tier3_weekly_records`, legacy `intervention_entries`, and
+  check-in/check-out rows in `tardies`. Source-of-truth tier labels
+  come from joined `intervention_types`. Tardies have no `staff_id`
+  so we fuzzy-match `createdBy`/`teacherName` to `staff.display_name`
+  when populating `staffId`/`staffName`.
+  - `GET /api/students/:studentId/intervention-history` — all entries
+    for one student (school-scoped). Powers the per-student panel on
+    StudentProfile.
+  - `GET /api/interventions/my-history?from&to&studentId&tier&staffId`
+    — caller's own entries by default. `staffId` override is
+    Core-Team-only (`isCoreTeam` from `lib/coreTeam.ts`). Counts
+    object (`{t2, t3, legacy, quick}`) is computed **before** the
+    optional `tier` filter so the summary stays honest when the user
+    narrows the table.
+- Client:
+  - `artifacts/client/src/components/MyInterventionsPage.tsx` — new
+    page wired to `activeSection === "myInterventions"`. Date presets
+    All / Today / 7d / 15d / 30d / Custom, datalist-based student
+    combobox, tier filter, summary counts row, results table with
+    coloured tier badges. Print uses a hidden print-only block
+    rendered into the DOM right before `window.print()`; if the
+    visible result is "long" (>25 rows) the user gets a Print Range
+    picker first to optionally narrow the printout to a date range.
+  - Nav: added "My Interventions" entry below "Log Intervention" in
+    `allBaseNavSections`, gated by the same `LogIntervention` feature
+    flag.
+  - StudentProfile: new "Intervention history" Card under the pillars
+    grid that fetches the per-student endpoint and renders rows with
+    tier badges. The small 5-item "Recent interventions" list inside
+    the Supports pillar stays as a quick glance; the new panel is the
+    full record.
+  - Log Intervention page: legacy in-page "Recent interventions" IIFE
+    table removed and replaced with a violet call-out card linking to
+    My Interventions ("View My Interventions →").
+
+Deferred follow-up: HeartBEAT signage screen at `/signage/heartbeat`
+(component `HeartbeatSignage.tsx`) still isn't a first-class playlist
+item in the Signage Displays editor — adding it as a registered
+display type is a separate task.

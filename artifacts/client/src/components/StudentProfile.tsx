@@ -502,6 +502,57 @@ export default function StudentProfile({
   const [editCtEla, setEditCtEla] = useState(false);
   const [editCtMath, setEditCtMath] = useState(false);
 
+  // Unified intervention history (Tier 2 + Tier 3 + legacy + check-in/out).
+  // Lives below the pillars grid as the canonical "everything we've tried
+  // for this student" surface. The pillar Supports card keeps its quick
+  // glance list; this panel is the full record.
+  type HistoryRow = {
+    source: "tier2" | "tier3" | "legacy" | "checkInOut";
+    sourceId: number;
+    studentId: string;
+    staffId: number | null;
+    staffName: string | null;
+    occurredAt: string;
+    date: string;
+    tier: "t2" | "t3" | "legacy" | "quick";
+    typeLabel: string;
+    detail: string | null;
+  };
+  const [historyRows, setHistoryRows] = useState<HistoryRow[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyErr, setHistoryErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryErr(null);
+    authFetch(
+      `/api/students/${encodeURIComponent(studentId)}/intervention-history`,
+    )
+      .then(async (r) => {
+        const body = await r.json().catch(() => ({}));
+        if (cancelled) return;
+        if (!r.ok) {
+          setHistoryErr(body?.error || `HTTP ${r.status}`);
+          setHistoryRows([]);
+        } else {
+          setHistoryRows(body?.rows ?? []);
+        }
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setHistoryErr(String((e as Error)?.message || e));
+          setHistoryRows([]);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setHistoryLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
   useEffect(() => {
     setLoading(true);
     setError("");
@@ -1360,6 +1411,176 @@ export default function StudentProfile({
               : "No parent portal account linked yet"}
           </div>
         </Card>
+      </div>
+
+      <div
+        className="card"
+        style={{ marginTop: "1rem", padding: "1rem 1.25rem" }}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: "0.75rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <h3 style={{ margin: 0, color: "#7c3aed", fontSize: "1.05rem" }}>
+            Intervention history
+          </h3>
+          <span style={{ fontSize: "0.8rem", color: "#64748b" }}>
+            {historyRows.length === 0
+              ? ""
+              : `${historyRows.length} entr${historyRows.length === 1 ? "y" : "ies"} — newest first`}
+          </span>
+        </div>
+        <p
+          style={{
+            margin: "0.25rem 0 0.75rem",
+            color: "var(--text-subtle, #64748b)",
+            fontSize: "0.85rem",
+          }}
+        >
+          Every Tier 2, Tier 3, Trusted-Adult, and Quick Check-in entry
+          recorded for this student, across all staff who logged them.
+        </p>
+        {historyErr && (
+          <div
+            style={{
+              padding: "0.5rem 0.75rem",
+              background: "#fef2f2",
+              border: "1px solid #fecaca",
+              color: "#b91c1c",
+              borderRadius: 6,
+              marginBottom: "0.5rem",
+            }}
+          >
+            {historyErr}
+          </div>
+        )}
+        {historyLoading ? (
+          <div style={{ color: "#64748b" }}>Loading…</div>
+        ) : historyRows.length === 0 ? (
+          <p style={{ color: "var(--text-subtle, #64748b)", margin: 0 }}>
+            No interventions logged for this student yet.
+          </p>
+        ) : (
+          <div style={{ overflowX: "auto" }}>
+            <table
+              style={{
+                width: "100%",
+                borderCollapse: "collapse",
+                fontSize: "0.85rem",
+              }}
+            >
+              <thead>
+                <tr
+                  style={{
+                    textAlign: "left",
+                    borderBottom: "2px solid #cbd5e1",
+                    background: "#f8fafc",
+                  }}
+                >
+                  <th
+                    style={{
+                      padding: "0.5rem",
+                      fontSize: "0.72rem",
+                      color: "#64748b",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                      whiteSpace: "nowrap",
+                    }}
+                  >
+                    Date
+                  </th>
+                  <th
+                    style={{
+                      padding: "0.5rem",
+                      fontSize: "0.72rem",
+                      color: "#64748b",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Type
+                  </th>
+                  <th
+                    style={{
+                      padding: "0.5rem",
+                      fontSize: "0.72rem",
+                      color: "#64748b",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Logged by
+                  </th>
+                  <th
+                    style={{
+                      padding: "0.5rem",
+                      fontSize: "0.72rem",
+                      color: "#64748b",
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    Detail
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {historyRows.map((r) => {
+                  const tierColor =
+                    r.tier === "t2"
+                      ? { bg: "#fef3c7", fg: "#92400e", bd: "#fde68a" }
+                      : r.tier === "t3"
+                        ? { bg: "#ede9fe", fg: "#5b21b6", bd: "#c4b5fd" }
+                        : r.tier === "quick"
+                          ? { bg: "#dbeafe", fg: "#1e40af", bd: "#93c5fd" }
+                          : { bg: "#f1f5f9", fg: "#475569", bd: "#cbd5e1" };
+                  return (
+                    <tr
+                      key={`${r.source}-${r.sourceId}`}
+                      style={{ borderBottom: "1px solid #f1f5f9" }}
+                    >
+                      <td style={{ padding: "0.5rem", whiteSpace: "nowrap" }}>
+                        {r.date}
+                      </td>
+                      <td style={{ padding: "0.5rem" }}>
+                        <span
+                          style={{
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            fontWeight: 600,
+                            fontSize: "0.72rem",
+                            background: tierColor.bg,
+                            color: tierColor.fg,
+                            border: `1px solid ${tierColor.bd}`,
+                          }}
+                        >
+                          {r.typeLabel}
+                        </span>
+                      </td>
+                      <td style={{ padding: "0.5rem" }}>
+                        {r.staffName || "—"}
+                      </td>
+                      <td
+                        style={{
+                          padding: "0.5rem",
+                          color: r.detail ? "#0f172a" : "#cbd5e1",
+                          whiteSpace: "pre-wrap",
+                        }}
+                      >
+                        {r.detail || "—"}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
