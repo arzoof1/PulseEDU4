@@ -3,6 +3,12 @@ import Login from "./Login";
 import CreatePassModal from "./components/CreatePassModal";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
+import LogInterventionLauncher from "./components/LogInterventionLauncher";
+import InterventionsBell from "./components/InterventionsBell";
+import InterventionsTodayPage from "./components/InterventionsTodayPage";
+import InterventionReportsPage from "./components/InterventionReportsPage";
+import SchoolWideExpectationsPanel from "./components/SchoolWideExpectationsPanel";
+import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
@@ -3421,6 +3427,22 @@ function App() {
   const [createPassOpen, setCreatePassOpen] = useState(false);
   const [logTardyOpen, setLogTardyOpen] = useState(false);
   const [checkInOutOpen, setCheckInOutOpen] = useState(false);
+  // Tier-aware Log Intervention launcher state. The launcher routes to
+  // the matching Tier 2 / Tier 3 form based on the picked student's
+  // active MTSS plan; the legacy CheckInOutModal lives on as the
+  // "Quick Check-in" secondary link inside the launcher.
+  const [interventionLauncherOpen, setInterventionLauncherOpen] =
+    useState(false);
+  const [interventionLauncherInitial, setInterventionLauncherInitial] =
+    useState<{
+      studentId: string | null;
+      mode: "tier2" | "tier3" | "auto";
+      weekStartDate?: string;
+    }>({ studentId: null, mode: "auto" });
+  // Bumped after every successful intervention save so the bell badge
+  // and the My Interventions Today page repoll without waiting for the
+  // 60s timer.
+  const [interventionRefreshKey, setInterventionRefreshKey] = useState(0);
   const [teacherAllowlistMap, setTeacherAllowlistMap] = useState<
     Record<string, string[]>
   >({});
@@ -3558,6 +3580,8 @@ function App() {
     | "academicsTrajectory"
     | "trustedAdultsAdmin"
     | "displays"
+    | "interventionsToday"
+    | "interventionReports"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -7193,6 +7217,10 @@ function App() {
               <option value="mine">My Records Only</option>
             </select>
           </label>
+          <InterventionsBell
+            refreshKey={interventionRefreshKey}
+            onClick={() => setActiveSection("interventionsToday")}
+          />
           <span className="user-pill">
             <span className="avatar">{userInitials || "?"}</span>
             <span style={{ padding: "0 0.5rem", whiteSpace: "nowrap" }}>
@@ -14193,6 +14221,7 @@ function App() {
           | "schoolWidePbis"
           | "schoolStoreManage"
           | "mtssPlans"
+          | "interventionReports"
           | "teacherRoster";
         type HubTool = {
           key: HubKey;
@@ -14283,6 +14312,13 @@ function App() {
             label: "MTSS Plans",
             desc: "Open and manage student intervention plans (Tier 1/2/3).",
             color: "#0d9488",
+            show: canManageMtssPlans,
+          },
+          {
+            key: "interventionReports",
+            label: "Intervention Reports",
+            desc: "Tier 2/3 completion, score trends, strategy usage, and PRIDE.",
+            color: "#0369a1",
             show: canManageMtssPlans,
           },
           {
@@ -14914,6 +14950,7 @@ function App() {
           | "schoolWidePbis"
           | "schoolStoreManage"
           | "mtssPlans"
+          | "interventionReports"
           | "teacherRoster";
         type MtssTool = {
           key: MtssHubKey;
@@ -14931,6 +14968,12 @@ function App() {
             label: "MTSS Plans",
             desc: "Open and manage student intervention plans (Tier 1/2/3).",
             color: "#0d9488",
+          },
+          {
+            key: "interventionReports",
+            label: "Intervention Reports",
+            desc: "Tier 2/3 completion, score trends, strategy usage, and PRIDE.",
+            color: "#0369a1",
           },
           {
             key: "mtssTemplates",
@@ -15394,7 +15437,13 @@ function App() {
             <button
               type="button"
               className="cp-cta-button"
-              onClick={() => setCheckInOutOpen(true)}
+              onClick={() => {
+                setInterventionLauncherInitial({
+                  studentId: null,
+                  mode: "auto",
+                });
+                setInterventionLauncherOpen(true);
+              }}
             >
               + Log Intervention
             </button>
@@ -17447,6 +17496,26 @@ function App() {
                 "Header gradient, logo, and school colors for printouts, parent snapshot, and Kiosk.",
               group: "school-identity",
             });
+            // School-wide expectations (PRIDE, ROAR, etc) — drives the
+            // optional 0/1/2 buttons on the Tier 3 weekly form.
+            tiles.push({
+              id: "school-wide-expectations",
+              icon: "🦁",
+              title: "School-wide Expectations",
+              subtitle:
+                "Acronym + per-letter words shown on Tier 3 weekly logs (PRIDE, ROAR, etc).",
+              group: "school-identity",
+            });
+            // Intervention Strategies — Core Team CRUD over the
+            // checklist used by the Tier 3 weekly form.
+            tiles.push({
+              id: "intervention-strategies",
+              icon: "🧰",
+              title: "Intervention Strategies",
+              subtitle:
+                "Categories and strategies shown in the Tier 3 weekly checklist.",
+              group: "feature-config",
+            });
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV
             // screens (Heartbeat, Houses, Student Timeline). One-click open
             // and copy-link helpers live inside the tile.
@@ -17709,6 +17778,27 @@ function App() {
         <TrustedAdultsAdmin canManage={canAccessMtssHub} />
       )}
 
+      {activeSection === "interventionsToday" && (
+        <InterventionsTodayPage
+          refreshKey={interventionRefreshKey}
+          onLog={(studentId, mode, weekStartDate) => {
+            setInterventionLauncherInitial({
+              studentId,
+              mode,
+              weekStartDate,
+            });
+            setInterventionLauncherOpen(true);
+          }}
+          onBack={() => setActiveSection("hallPasses")}
+        />
+      )}
+
+      {activeSection === "interventionReports" && canManageMtssPlans && (
+        <InterventionReportsPage
+          onBack={() => setActiveSection("mtssCoordinator")}
+        />
+      )}
+
       {activeSection === "districtAdmin" && canActAsDistrict && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>District Overview</h2>
@@ -17739,6 +17829,18 @@ function App() {
       {activeSection === "settings" && canManageSettings && settingsTile === "branding" && (
         <SchoolBrandingPanel />
       )}
+
+      {activeSection === "settings" &&
+        canManageSettings &&
+        settingsTile === "school-wide-expectations" && (
+          <SchoolWideExpectationsPanel />
+        )}
+
+      {activeSection === "settings" &&
+        canManageSettings &&
+        settingsTile === "intervention-strategies" && (
+          <Tier3StrategiesAdmin />
+        )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "notifications" && (
         <div className="card" style={{ marginBottom: "1rem" }}>
@@ -18681,6 +18783,39 @@ function App() {
             throw new Error(text || "Failed to log entry.");
           }
           loadTardies();
+        }}
+      />
+
+      <LogInterventionLauncher
+        open={interventionLauncherOpen}
+        onClose={() => setInterventionLauncherOpen(false)}
+        schoolId={null}
+        students={students.map((s) => ({
+          studentId: s.studentId,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          grade: String(s.grade),
+        }))}
+        isCoreTeam={
+          !!(
+            authUser?.isSuperUser ||
+            authUser?.isDistrictAdmin ||
+            authUser?.isAdmin ||
+            authUser?.isBehaviorSpecialist ||
+            authUser?.isMtssCoordinator ||
+            (authUser as { isSchoolPsychologist?: boolean } | null)
+              ?.isSchoolPsychologist
+          )
+        }
+        initialStudentId={interventionLauncherInitial.studentId}
+        initialMode={interventionLauncherInitial.mode}
+        initialWeekStartDate={interventionLauncherInitial.weekStartDate}
+        onOpenQuickCheckin={() => {
+          setInterventionLauncherOpen(false);
+          setCheckInOutOpen(true);
+        }}
+        onLogged={() => {
+          setInterventionRefreshKey((k) => k + 1);
         }}
       />
       </main>

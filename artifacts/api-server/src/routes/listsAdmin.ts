@@ -735,7 +735,7 @@ router.get("/trusted-adult-interventions", async (req, res) => {
 router.post("/trusted-adult-interventions", requireInterventionAdmin, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const { name, category } = req.body ?? {};
+  const { name, category, tier } = req.body ?? {};
   if (typeof name !== "string" || !name.trim()) {
     res.status(400).json({ error: "name is required" });
     return;
@@ -744,6 +744,12 @@ router.post("/trusted-adult-interventions", requireInterventionAdmin, async (req
     typeof category === "string" && category.trim()
       ? category.trim()
       : "Trusted Adult";
+  let tierVal: string | null = null;
+  if (tier === "2" || tier === "3") tierVal = tier;
+  else if (tier !== null && tier !== undefined && tier !== "") {
+    res.status(400).json({ error: "tier must be '2', '3', or null" });
+    return;
+  }
   const existing = await db
     .select()
     .from(trustedAdultInterventionsTable)
@@ -759,7 +765,13 @@ router.post("/trusted-adult-interventions", requireInterventionAdmin, async (req
   }
   const [row] = await db
     .insert(trustedAdultInterventionsTable)
-    .values({ schoolId, name: name.trim(), category: cat, active: true })
+    .values({
+      schoolId,
+      name: name.trim(),
+      category: cat,
+      active: true,
+      tier: tierVal,
+    })
     .returning();
   res.status(201).json(row);
 });
@@ -772,12 +784,18 @@ router.patch("/trusted-adult-interventions/:id", requireInterventionAdmin, async
     res.status(400).json({ error: "Invalid id" });
     return;
   }
-  const { name, category, active } = req.body ?? {};
+  const { name, category, active, tier } = req.body ?? {};
   const updates: Partial<typeof trustedAdultInterventionsTable.$inferInsert> = {};
   if (typeof name === "string" && name.trim()) updates.name = name.trim();
   if (typeof category === "string" && category.trim())
     updates.category = category.trim();
   if (typeof active === "boolean") updates.active = active;
+  if (tier === null || tier === "") updates.tier = null;
+  else if (tier === "2" || tier === "3") updates.tier = tier;
+  else if (tier !== undefined) {
+    res.status(400).json({ error: "tier must be '2', '3', null, or omitted" });
+    return;
+  }
   if (Object.keys(updates).length === 0) {
     res.status(400).json({ error: "No updates" });
     return;

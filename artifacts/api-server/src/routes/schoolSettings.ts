@@ -93,6 +93,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisReasonImbalancePct,
     pbisColdPeriodMultiple,
     pbisNegativeAffectsTotal,
+    schoolWideExpectationAcronym,
+    schoolWideExpectationLetters,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -258,6 +260,56 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.pbisNegativeAffectsTotal = pbisNegativeAffectsTotal;
+  }
+
+  // -----------------------------------------------------------------
+  // School-wide expectation acronym + letters (PRIDE config). Tier 3
+  // weekly form reads these to render its optional expectations row.
+  // -----------------------------------------------------------------
+  if (schoolWideExpectationAcronym !== undefined) {
+    if (
+      schoolWideExpectationAcronym === null ||
+      typeof schoolWideExpectationAcronym === "string"
+    ) {
+      const trimmed =
+        typeof schoolWideExpectationAcronym === "string"
+          ? schoolWideExpectationAcronym.trim().toUpperCase().slice(0, 12)
+          : "";
+      // Column is non-null with default "PRIDE"; treat empty/null as reset
+      updates.schoolWideExpectationAcronym =
+        trimmed && trimmed.length > 0 ? trimmed : "PRIDE";
+    } else {
+      res
+        .status(400)
+        .json({ error: "schoolWideExpectationAcronym must be a string or null" });
+      return;
+    }
+  }
+  if (schoolWideExpectationLetters !== undefined) {
+    if (schoolWideExpectationLetters === null) {
+      // Column is non-null with a default; treat null as "reset to empty"
+      updates.schoolWideExpectationLetters = [];
+    } else if (Array.isArray(schoolWideExpectationLetters)) {
+      const sanitized: Array<{ letter: string; word: string }> = [];
+      for (const item of schoolWideExpectationLetters) {
+        if (
+          item &&
+          typeof item === "object" &&
+          typeof (item as { letter?: unknown }).letter === "string" &&
+          typeof (item as { word?: unknown }).word === "string"
+        ) {
+          const l = (item as { letter: string }).letter.toUpperCase().slice(0, 1);
+          const w = (item as { word: string }).word.slice(0, 60);
+          if (l) sanitized.push({ letter: l, word: w });
+        }
+      }
+      updates.schoolWideExpectationLetters = sanitized;
+    } else {
+      res
+        .status(400)
+        .json({ error: "schoolWideExpectationLetters must be an array or null" });
+      return;
+    }
   }
 
   // -----------------------------------------------------------------

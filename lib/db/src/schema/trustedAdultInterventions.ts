@@ -7,6 +7,12 @@ export const trustedAdultInterventionsTable = pgTable(
     schoolId: integer("school_id").notNull(),
     name: text("name").notNull(),
     category: text("category").notNull().default("Trusted Adult"),
+    // Tier-tagging for the new Tier 2 / Tier 3 intervention system.
+    // '2' = available on the Tier 2 daily form's Trusted Adult picker;
+    // '3' = available on the Tier 3 weekly form (future); NULL = legacy
+    // / available everywhere. Stored as text to leave room for "1" or
+    // multi-tag schemes later without an enum migration.
+    tier: text("tier"),
     active: boolean("active").notNull().default(true),
   },
   (t) => ({

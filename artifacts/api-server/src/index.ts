@@ -16,6 +16,7 @@ import {
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
+import { startReminderScheduler } from "./lib/scheduler";
 
 const rawPort = process.env["PORT"];
 
@@ -195,6 +196,18 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule weekly HeartBEAT email",
+          );
+        }
+
+        // Tier 2 / Tier 3 reminder scheduler. Dormant by default —
+        // EMAIL_REMINDERS_ENABLED=true flips it live once the
+        // hcsb.k12.fl.us sender domain is verified in Resend.
+        try {
+          startReminderScheduler();
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule intervention reminders",
           );
         }
       }

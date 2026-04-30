@@ -4127,3 +4127,186 @@ middleware (which prefers the JWT for the principal identity) returned
 401 `{"error":"Sign-in required"}` even after a successful login.
 Fix: swapped to `authFetch`. Same pattern as every other authenticated
 mutation in the file.
+
+## Tier-aware Intervention Logging (Tier 2 / Tier 3)
+
+The legacy "+ Log Intervention" CTA, which dropped every user into the
+free-form `CheckInOutModal` (raw `tardies` POST), has been replaced with
+a tier-aware launcher that routes a teacher to the correct daily/weekly
+log based on the student's active MTSS plan. The CheckInOutModal lives
+on as a "Quick Check-in" secondary link inside the launcher so the
+legacy quick-tally path still works.
+
+### Roles touched
+
+- New role flag: `staff.is_school_psychologist`. Surfaced in the Staff
+  Roles matrix as a "School Psych" column. Treated as Core Team for the
+  intervention surfaces (alongside SuperUser / DistrictAdmin / Admin /
+  BS / MTSS) — see `lib/coreTeam.ts` (server) and the inline
+  `isCoreTeam` predicate in `App.tsx` where the launcher is rendered.
+
+### DB schema
+
+Tables (all in `lib/db/src/schema/`):
+
+- `tier2_intervention_entries` — one row per teacher per student per
+  date. `sub_type` is `'cico' | 'group'`, optional
+  `trusted_adult_intervention_id` FK to the new tier-tagged
+  `intervention_types` rows.
+- `tier3_goals` — versioned (effective_from, never UPDATEd). Slot 1..5
+  per student. Edits create a new row; readers should always pick the
+  latest `effective_from <= today` per slot.
+- `tier3_weekly_records` — one row per (student, teacher, Monday).
+  Columns: `mon..fri` 1..5 score, per-day comment, weekly comment,
+  `pride_mon..pride_fri` (0..2 nullable), `goal_version_ids` json
+  (snapshot of which goal versions this record was scored against).
+- `tier3_strategy_categories` + `tier3_strategies` —
+  school-scoped CRUD; drives the "Interventions Used This Week"
+  checklist.
+- `tier3_strategy_usage` — `(weekly_record_id, strategy_id, day, used)`.
+- `student_mtss_plans` extensions: `intervention_sub_type`,
+  `assigned_teacher_ids` (csv), `track_school_wide_expectations` bool.
+- `intervention_types.tier` — `'2' | '3' | null`. Tier 2 form filters
+  the Trusted Adult selector to `tier='2'`. Trusted Adult admin now
+  shows a tier dropdown on add + per-row inline select.
+- `school_settings` extensions:
+  `school_wide_expectation_acronym`, `school_wide_expectation_letters`
+  (json `[{letter, word}]`).
+
+Schema was applied via `executeSql` (drizzle-kit push was blocked by
+interactive prompts). If pushing later, ensure `db:push --force` is
+used and matches the columns above.
+
+### Server endpoints
+
+All under `artifacts/api-server/src/routes/`:
+
+- `tier2.ts` — POST/GET/PATCH/DELETE `/api/tier2-entries`. Teachers see
+  and edit only their own; Core Team sees school-wide.
+- `tier3.ts` — POST/GET/PATCH/DELETE `/api/tier3-records` +
+  `/api/tier3-goals`. Goal edits insert a new versioned row, never
+  UPDATE; reads return the latest version per slot. Strategy usage is
+  upserted alongside the weekly record.
+- `tier3Strategies.ts` — `/api/tier3-strategies` and
+  `/api/tier3-strategy-categories`. Core Team writes only.
+- `interventionsBell.ts` — `/api/interventions/owed-today` returns the
+  bell payload (`{visible, totalOwed, rows[]}`). Hidden for Core Team
+  (`visible:false`). Tier 2 rows skip weekends; Tier 3 rows respect
+  Mon..Fri day-of-week.
+- `interventionsBell.ts` also exposes
+  `/api/interventions/completion-report` for the Intervention Reports
+  page — Core Team only. Returns
+  `{schoolDayDates[5], rows[].teachers[]={teacherStaffId, teacherName,
+  completed, expected, scoreAvg}}`.
+- `schoolSettings.ts` PUT extended to validate
+  `schoolWideExpectationAcronym` (≤16 chars) and
+  `schoolWideExpectationLetters` (json array of `{letter, word}`).
+- `listsAdmin.ts` POST/PATCH for `intervention_types` now accept
+  `tier` ('2'|'3'|null).
+- `emailPreview.ts` — `GET /api/admin/email-preview/<type>` renders
+  each dormant template against canned sample data. SuperUser only.
+
+### Client surfaces
+
+All under `artifacts/client/src/components/`:
+
+- `LogInterventionLauncher.tsx` — student picker. On pick, fetches the
+  active plan and routes to `Tier2DailyForm` or `Tier3WeeklyForm`.
+  Exposes `onOpenQuickCheckin` so the launcher can drop down to the
+  legacy CheckInOutModal.
+- `Tier2DailyForm.tsx` — date picker, sub-type radios (locked for
+  teachers when the plan dictates, free for Core Team), Trusted Adult
+  selector filtered to `tier='2'`, notes, submit.
+- `Tier3WeeklyForm.tsx` — Mon..Fri score buttons (1..5 with frozen
+  percent legend: 5=80%+, 4=60–80%, 3=40–60%, 2=20–40%, 1=<20%),
+  dynamic 1..5 goal rows, per-day + weekly comments, optional
+  PRIDE/school-wide-expectation 0/1/2 buttons (gated on
+  `track_school_wide_expectations`), and a category-grouped
+  "Interventions Used This Week" checklist with five Mon..Fri
+  checkboxes per row. Goals are read-only for teachers; Core Team has
+  an inline "Edit goals" affordance that POSTs new versioned rows.
+- `InterventionsBell.tsx` — global header bell. Hidden for Core Team
+  and when `totalOwed === 0`. Polls `/api/interventions/owed-today`
+  every 60s + on `refreshKey` bump (each save bumps the key).
+- `InterventionsTodayPage.tsx` — `activeSection === "interventionsToday"`
+  page. Groups rows by tier with one-click "Log now" buttons that hand
+  off to the launcher with `initialStudentId` + `initialMode` set.
+- `InterventionReportsPage.tsx` — `activeSection ===
+  "interventionReports"`. Two-pane: roster left with tier badges and
+  completion pill, detail drawer right with per-teacher completion
+  grid, per-goal averages, overall + PRIDE averages, strategy usage
+  frequency, recent comments. Visible only to `canManageMtssPlans`
+  (Admin / BS / MTSS / Psych). Wired into the BS hub and MTSS hub as a
+  new "Intervention Reports" tile.
+- `SchoolWideExpectationsPanel.tsx` (Settings → School Identity tile,
+  id `school-wide-expectations`) — acronym + letter→word list.
+- `Tier3StrategiesAdmin.tsx` (Settings → Feature Configuration tile,
+  id `intervention-strategies`) — Core Team CRUD over categories and
+  strategies.
+- `TrustedAdultInterventionsAdmin.tsx` — got a Tier dropdown on add
+  and a per-row inline select; persists to the `tier` column.
+
+### Email reminder infrastructure (dormant)
+
+- `lib/emails/interventionReminders.ts` — three templates
+  (`tier2-morning`, `tier3-weekly-load`, `core-team-friday`) plus
+  `maybeSend(...)` which is gated on the env flag
+  `EMAIL_REMINDERS_ENABLED` (default `false`). Sender is
+  `RESEND_FROM_ADDRESS` which is intended to land on a verified
+  `@hcsb.k12.fl.us` address — domain not yet verified, so the cron is
+  off by default.
+- `lib/scheduler.ts` — node-cron registrations:
+  - `0 7 * * 1-5` America/New_York → Tier 2 morning digest
+  - `0 7 * * 1`   America/New_York → Tier 3 weekly load digest
+  - `0 14 * * 5`  America/New_York → Core Team Friday summary
+  Wired into `index.ts` `startListening`. Logs
+  `intervention reminder scheduler registered  enabled: false  tz: ...`
+  on boot. To enable: set `EMAIL_REMINDERS_ENABLED=true` and
+  `RESEND_FROM_ADDRESS=...@hcsb.k12.fl.us` after sender verification.
+- Inspection: `/api/admin/email-preview/<type>` (SuperUser only)
+  renders each template against canned sample data.
+
+### Known caveats
+
+- App.tsx still has pre-existing TS errors (sections in `HubKey` /
+  `MtssHubKey` that aren't in the `activeSection` union, an `AuthUser`
+  vs `AuthUserLite` mismatch on `SignageLauncherView`, several
+  `'s' is possibly 'undefined'` reduces, etc.). None of them were
+  introduced by this work; the build still ships.
+- Scheduler is registered but **dormant** — cron jobs are no-ops until
+  the env flag is flipped. The Resend integration itself is already
+  installed.
+
+### Architect-driven fixes
+
+After the first pass, an architect review surfaced three issues that
+were addressed:
+
+1. **Plain teachers couldn't read `/api/mtss-plans`** so the launcher
+   always fell through to Tier 2 even for Tier 3 students. Added
+   `GET /api/mtss-plans/probe/:studentId` — open to any signed-in
+   staff in the same school, returns only
+   `{tier, interventionSubType, trackSchoolWideExpectations}` (no
+   notes / goal text). LogInterventionLauncher / Tier2DailyForm /
+   Tier3WeeklyForm now use the probe endpoint.
+2. **TZ rollover**: `interventionsBell.ts` formatted "today" as
+   `toISOString().slice(0,10)` (UTC), so a teacher submitting at
+   ~8 PM EST would see tomorrow's row. Replaced with a
+   `toLocaleDateString("en-CA", { timeZone: "America/New_York" })`
+   helper plus a `todayDowLocal()` helper for the Tier 3 day-of-week
+   calculation.
+3. **Bell refresh wiring**: confirmed `interventionRefreshKey` is
+   already lifted to `App.tsx` and bumped via the launcher's
+   `onLogged`, then passed to both `<InterventionsBell>` and
+   `<InterventionsTodayPage>` — no fix needed; architect's first read
+   was a false alarm.
+
+Deferred to follow-ups:
+
+- The `/api/interventions/owed-today` payload still issues several
+  sequential queries (allPlans → studentRows → tier2Entries →
+  tier3Records). Acceptable at current scale; consolidate into one
+  CTE if it becomes a bottleneck.
+- Other server routes (`mtssPlans.ts`, `listsAdmin.ts`,
+  `schoolSettings.ts`) still re-implement Core Team gates rather
+  than using `lib/coreTeam.ts`. Pre-existing pattern; not regressed.

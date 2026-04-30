@@ -5,6 +5,7 @@ import {
   integer,
   timestamp,
   index,
+  boolean,
 } from "drizzle-orm/pg-core";
 
 // student_mtss_plans — MTSS intervention plans owned by the MTSS
@@ -37,6 +38,25 @@ export const studentMtssPlansTable = pgTable(
     pointRangeMin: integer("point_range_min"),
     pointRangeMax: integer("point_range_max"),
     notes: text("notes").notNull().default(""),
+    // Tier 2 sub-type for the daily form: 'cico' | 'group' | NULL.
+    // NULL means the plan hasn't picked a sub-type yet (allowed for
+    // Tier 1/3 plans). Teachers see this as locked; Core Team can edit.
+    interventionSubType: text("intervention_sub_type"),
+    // CSV of staff IDs of every teacher on the student's schedule who
+    // is responsible for completing the daily/weekly intervention log.
+    // Stored CSV (e.g. "12,47,138") to match how other roster columns
+    // are stored in this codebase. Empty string = no one assigned yet.
+    assignedTeacherIds: text("assigned_teacher_ids").notNull().default(""),
+    // When true (default), the Tier 3 weekly form includes the
+    // school-wide expectations row (PRIDE / equivalent) on a 0..2 scale
+    // per day. Core Team can toggle off per plan.
+    trackSchoolWideExpectations: boolean("track_school_wide_expectations")
+      .notNull()
+      .default(true),
+    // Tier 3 plans declare how many goal slots are in use (1..5). The
+    // weekly form renders only this many score rows. Defaults to 2 to
+    // match the most common form layout in the wild.
+    tier3GoalSlots: integer("tier3_goal_slots").notNull().default(2),
     openedAt: timestamp("opened_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

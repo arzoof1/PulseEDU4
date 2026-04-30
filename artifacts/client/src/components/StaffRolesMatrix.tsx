@@ -139,6 +139,16 @@ const ROLE_PRESETS: {
     ],
   },
   {
+    flag: "isSchoolPsychologist",
+    label: "School Psych",
+    capabilities: [
+      "capStudentActivity",
+      "capInterventionLog",
+      "capInterventionManage",
+      "capSupportNotes",
+    ],
+  },
+  {
     flag: "isSocialWorker",
     label: "School Social Worker",
     capabilities: [

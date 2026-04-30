@@ -49,6 +49,12 @@ export const staffTable = pgTable("staff", {
   isMtssCoordinator: boolean("is_mtss_coordinator").notNull().default(false),
   isCounselor: boolean("is_counselor").notNull().default(false),
   isSocialWorker: boolean("is_social_worker").notNull().default(false),
+  // School Psychologist sits in the Core Team alongside Admin / BS / MTSS.
+  // Has full Tier 2 / Tier 3 plan editing rights, can edit goals
+  // (versioned), and can view the Intervention Completion report.
+  isSchoolPsychologist: boolean("is_school_psychologist")
+    .notNull()
+    .default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with

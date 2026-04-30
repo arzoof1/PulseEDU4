@@ -14,7 +14,9 @@ export type SettingsTileId =
   | "signage"
   | "tenancy"
   | "data-imports"
-  | "parent-portal-sections";
+  | "parent-portal-sections"
+  | "school-wide-expectations"
+  | "intervention-strategies";
 
 export type SettingsGroupId =
   | "hall-pass-ops"

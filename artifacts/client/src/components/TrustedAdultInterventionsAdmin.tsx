@@ -6,7 +6,10 @@ interface Row {
   name: string;
   category: string;
   active: boolean;
+  tier: string | null;
 }
+
+type TierVal = "" | "2" | "3";
 
 export default function TrustedAdultInterventionsAdmin() {
   const [rows, setRows] = useState<Row[]>([]);
@@ -14,6 +17,7 @@ export default function TrustedAdultInterventionsAdmin() {
   const [msg, setMsg] = useState<string | null>(null);
   const [newName, setNewName] = useState("");
   const [newCategory, setNewCategory] = useState("Trusted Adult");
+  const [newTier, setNewTier] = useState<TierVal>("");
 
   const load = async () => {
     setLoading(true);
@@ -45,11 +49,13 @@ export default function TrustedAdultInterventionsAdmin() {
         body: JSON.stringify({
           name: newName.trim(),
           category: newCategory.trim() || "Trusted Adult",
+          tier: newTier === "" ? null : newTier,
         }),
       });
       if (!r.ok) throw new Error(await r.text());
       setNewName("");
       setNewCategory("Trusted Adult");
+      setNewTier("");
       await load();
     } catch (e: unknown) {
       setMsg(e instanceof Error ? e.message : "Failed to add");
@@ -96,11 +102,11 @@ export default function TrustedAdultInterventionsAdmin() {
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "1fr 1fr auto",
+          gridTemplateColumns: "1fr 1fr 7rem auto",
           gap: "0.5rem",
           alignItems: "end",
           marginBottom: "0.75rem",
-          maxWidth: "48rem",
+          maxWidth: "52rem",
         }}
       >
         <label>
@@ -122,6 +128,18 @@ export default function TrustedAdultInterventionsAdmin() {
             placeholder="Trusted Adult"
             style={{ width: "100%" }}
           />
+        </label>
+        <label>
+          <div style={{ fontSize: "0.85rem" }}>Tier</div>
+          <select
+            value={newTier}
+            onChange={(e) => setNewTier(e.target.value as TierVal)}
+            style={{ width: "100%" }}
+          >
+            <option value="">— Any —</option>
+            <option value="2">Tier 2</option>
+            <option value="3">Tier 3</option>
+          </select>
         </label>
         <button type="button" onClick={add}>
           Add Intervention
@@ -150,6 +168,7 @@ export default function TrustedAdultInterventionsAdmin() {
             <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
               <th style={{ padding: "0.4rem" }}>Category</th>
               <th style={{ padding: "0.4rem" }}>Name</th>
+              <th style={{ padding: "0.4rem" }}>Tier</th>
               <th style={{ padding: "0.4rem" }}>Active</th>
               <th style={{ padding: "0.4rem" }}></th>
             </tr>
@@ -166,6 +185,40 @@ export default function TrustedAdultInterventionsAdmin() {
                 <tr key={r.id} style={{ borderBottom: "1px solid #eee" }}>
                   <td style={{ padding: "0.4rem" }}>{r.category}</td>
                   <td style={{ padding: "0.4rem" }}>{r.name}</td>
+                  <td style={{ padding: "0.4rem" }}>
+                    <select
+                      value={r.tier ?? ""}
+                      onChange={async (e) => {
+                        const v = e.target.value;
+                        try {
+                          const res = await authFetch(
+                            `/api/trusted-adult-interventions/${r.id}`,
+                            {
+                              method: "PATCH",
+                              headers: {
+                                "Content-Type": "application/json",
+                              },
+                              body: JSON.stringify({
+                                tier: v === "" ? null : v,
+                              }),
+                            },
+                          );
+                          if (!res.ok) throw new Error(await res.text());
+                          await load();
+                        } catch (err) {
+                          setMsg(
+                            err instanceof Error
+                              ? err.message
+                              : "Failed to update tier",
+                          );
+                        }
+                      }}
+                    >
+                      <option value="">— Any —</option>
+                      <option value="2">Tier 2</option>
+                      <option value="3">Tier 3</option>
+                    </select>
+                  </td>
                   <td style={{ padding: "0.4rem" }}>
                     {r.active ? "Yes" : "No"}
                   </td>

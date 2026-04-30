@@ -100,6 +100,55 @@ function parseOptionalInt(v: unknown): number | null | "BAD" {
   return n;
 }
 
+// ---- TEACHER PROBE ----
+// Lightweight endpoint that lets any signed-in staff member ask
+// "what tier is the active plan for this student?" without needing the
+// Core Team gate. Returns only `{tier, interventionSubType,
+// trackSchoolWideExpectations}` (no notes / goal text / strategy
+// history) so it's safe to expose to rank-and-file teachers — exactly
+// what the LogInterventionLauncher needs to route to Tier 2 vs Tier 3.
+//
+// School scoping is still enforced via requireSchool; teachers can
+// only probe students in their own school. We don't filter by
+// `assignedTeacherIds` here because a teacher who picks the wrong
+// student would otherwise get a confusing fall-through to Tier 2 — we
+// want them to see "this is a Tier 3 student, please log the weekly
+// record" even if they aren't on the official assigned list (the
+// weekly record submit will then 403 if they really aren't allowed).
+router.get("/mtss-plans/probe/:studentId", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const studentId = String(req.params.studentId).trim();
+  if (!studentId) {
+    res.status(400).json({ error: "studentId required" });
+    return;
+  }
+  const rows = await db
+    .select({
+      tier: studentMtssPlansTable.tier,
+      interventionSubType: studentMtssPlansTable.interventionSubType,
+      trackSchoolWideExpectations:
+        studentMtssPlansTable.trackSchoolWideExpectations,
+      closedAt: studentMtssPlansTable.closedAt,
+    })
+    .from(studentMtssPlansTable)
+    .where(
+      and(
+        eq(studentMtssPlansTable.schoolId, schoolId),
+        eq(studentMtssPlansTable.studentId, studentId),
+        sql`${studentMtssPlansTable.closedAt} IS NULL`,
+      ),
+    );
+  // If multiple active plans exist (shouldn't, but defensively), prefer
+  // Tier 3 over Tier 2 over Tier 1.
+  const sorted = rows
+    .filter((r) => !r.closedAt)
+    .sort((a, b) => Number(b.tier) - Number(a.tier));
+  res.json({ plan: sorted[0] ?? null });
+});
+
 // ---- LIST ----
 router.get("/mtss-plans", async (req, res) => {
   const staff = await loadStaff(req, res);

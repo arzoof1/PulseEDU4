@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, uniqueIndex } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 
 // Per-school operational settings. As of D4 there is exactly one row per
 // school (enforced by `school_settings_school_id_unique`). Routes
@@ -62,6 +62,25 @@ export const schoolSettingsTable = pgTable(
   superFeatureAccommodations: boolean("super_feature_accommodations").notNull().default(true),
   superFeatureLogIntervention: boolean("super_feature_log_intervention").notNull().default(true),
   superFeatureRequestPullout: boolean("super_feature_request_pullout").notNull().default(true),
+  // -----------------------------------------------------------------
+  // School-wide expectations (PRIDE / equivalent). Used as the optional
+  // row on the Tier 3 weekly form when a plan opts in. The acronym is
+  // displayed as the row label; `letters` is the per-letter breakdown
+  // shown in tooltips and on the school's printable expectations page.
+  // -----------------------------------------------------------------
+  schoolWideExpectationAcronym: text("school_wide_expectation_acronym")
+    .notNull()
+    .default("PRIDE"),
+  schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
+    .$type<Array<{ letter: string; word: string }>>()
+    .notNull()
+    .default([
+      { letter: "P", word: "Prepared" },
+      { letter: "R", word: "Respectful" },
+      { letter: "I", word: "Integrity" },
+      { letter: "D", word: "Determined" },
+      { letter: "E", word: "Engaged" },
+    ]),
   },
   (t) => ({
     schoolIdUnique: uniqueIndex("school_settings_school_id_unique").on(
