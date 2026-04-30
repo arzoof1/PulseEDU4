@@ -96,6 +96,8 @@ interface RecordRow {
   prideThu: number | null;
   prideFri: number | null;
   goalScores?: Record<string, Record<string, number | null>> | null;
+  absentDays?: Record<string, boolean> | null;
+  submittedAt?: string | null;
   strategyUsage?: UsageRow[];
 }
 
@@ -147,6 +149,17 @@ export default function Tier3WeeklyForm({
     fri: null,
   });
   const [goalScores, setGoalScores] = useState<Record<number, DayScores>>({});
+  // Per-day "student was absent" toggles. Defaults to all-false. An
+  // absent day disables its score buttons and is excluded from the
+  // weekly % of points earned + the bell's missing-day count.
+  const [absentDays, setAbsentDays] = useState<Record<Day, boolean>>({
+    mon: false,
+    tue: false,
+    wed: false,
+    thu: false,
+    fri: false,
+  });
+  const [submittedAt, setSubmittedAt] = useState<string | null>(null);
   const [pride, setPride] = useState<Record<Day, number | null>>({
     mon: null,
     tue: null,
@@ -293,6 +306,16 @@ export default function Tier3WeeklyForm({
     } else {
       setGoalScores({});
     }
+    // Per-day absent flags + submission state.
+    const ad = (r.absentDays ?? {}) as Record<string, unknown>;
+    setAbsentDays({
+      mon: Boolean(ad.mon),
+      tue: Boolean(ad.tue),
+      wed: Boolean(ad.wed),
+      thu: Boolean(ad.thu),
+      fri: Boolean(ad.fri),
+    });
+    setSubmittedAt(r.submittedAt ?? null);
     setPride({
       mon: r.prideMon,
       tue: r.prideTue,
@@ -370,7 +393,13 @@ export default function Tier3WeeklyForm({
     }
   }
 
-  async function submit() {
+  // Persist the form. `mode` decides the submission flag:
+  //  - "draft": save in place, leave submittedAt alone — teachers can
+  //    come back any time during the week.
+  //  - "submit": stamp submittedAt so the report can flag the row as
+  //    final. Edits after submission still allowed (re-submit bumps
+  //    the timestamp).
+  async function persist(mode: "draft" | "submit") {
     setSubmitting(true);
     setMsg(null);
     try {
@@ -398,6 +427,8 @@ export default function Tier3WeeklyForm({
         weeklyComment,
         strategyUsage,
         goalScores: goalScoresPayload,
+        absentDays,
+        submitted: mode === "submit",
       };
       for (const d of DAYS) {
         body[`${d}Comment`] = comments[d];
@@ -411,13 +442,50 @@ export default function Tier3WeeklyForm({
         body: JSON.stringify(body),
       });
       if (!res.ok) throw new Error((await res.text()) || "Save failed");
-      onSaved();
+      // Keep the form open after a draft save so teachers can keep
+      // adding to it; close it on a final submission.
+      if (mode === "submit") {
+        onSaved();
+      } else {
+        // Hydrate directly from the POST response so we get the
+        // server-derived overall day scores + the canonical
+        // submittedAt without a second round-trip (and without the
+        // race condition that a follow-up GET could lose to a
+        // concurrent save).
+        try {
+          const saved = (await res.json()) as RecordRow;
+          hydrateFromRecord(saved);
+        } catch {
+          // Non-JSON responses are unexpected but non-fatal — the
+          // local state is already consistent with what we sent.
+        }
+        setMsg("Draft saved.");
+      }
     } catch (err) {
       setMsg(err instanceof Error ? err.message : "Save failed");
     } finally {
       setSubmitting(false);
     }
   }
+  const submit = () => persist("submit");
+  const saveDraft = () => persist("draft");
+
+  // True iff every weekday has at least one goal scored OR is marked
+  // absent. Drives whether the "Submit" button is enabled.
+  const allDaysAccounted = useMemo(() => {
+    for (const d of DAYS) {
+      if (absentDays[d]) continue;
+      let scoredAtLeastOneGoal = false;
+      for (const slot of Object.values(goalScores)) {
+        if (typeof slot[d] === "number") {
+          scoredAtLeastOneGoal = true;
+          break;
+        }
+      }
+      if (!scoredAtLeastOneGoal) return false;
+    }
+    return true;
+  }, [absentDays, goalScores]);
 
   const buttonStyle = (active: boolean): React.CSSProperties => ({
     width: 28,
@@ -502,6 +570,69 @@ export default function Tier3WeeklyForm({
             </tr>
           </thead>
           <tbody>
+            {/* Per-day absence row. Toggling a day to "Absent" disables
+                its score buttons and excludes the day from the % of
+                points earned + the bell's missing-day count. */}
+            <tr>
+              <td
+                style={{
+                  padding: "0.4rem",
+                  fontWeight: 600,
+                  borderBottom: "1px solid #e2e8f0",
+                  background: "#fafafa",
+                }}
+              >
+                Absent?
+                <div
+                  style={{
+                    fontSize: "0.7rem",
+                    color: "#64748b",
+                    fontWeight: 400,
+                  }}
+                >
+                  Won&rsquo;t count toward weekly %
+                </div>
+              </td>
+              {DAYS.map((d, i) => (
+                <td
+                  key={d}
+                  style={{
+                    padding: "0.4rem",
+                    borderBottom: "1px solid #e2e8f0",
+                    borderLeft: "1px solid #e2e8f0",
+                    borderRight:
+                      i === DAYS.length - 1
+                        ? "1px solid #e2e8f0"
+                        : undefined,
+                    background: absentDays[d] ? "#fef3c7" : "#fafafa",
+                    textAlign: "center",
+                  }}
+                >
+                  <label
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 4,
+                      fontSize: "0.8rem",
+                      cursor: "pointer",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={absentDays[d]}
+                      onChange={(e) =>
+                        setAbsentDays({
+                          ...absentDays,
+                          [d]: e.target.checked,
+                        })
+                      }
+                    />
+                    Absent
+                  </label>
+                </td>
+              ))}
+            </tr>
+
             {activeGoals.map(({ slot, goal }) => {
               const slotScores = goalScores[slot] ?? emptyDayScores();
               return (
@@ -579,55 +710,72 @@ export default function Tier3WeeklyForm({
                       </div>
                     )}
                   </td>
-                  {DAYS.map((d, i) => (
-                    <td
-                      key={d}
-                      style={{
-                        padding: "0.4rem",
-                        borderBottom: "1px solid #e2e8f0",
-                        borderLeft: "1px solid #e2e8f0",
-                        borderRight:
-                          i === DAYS.length - 1
-                            ? "1px solid #e2e8f0"
-                            : undefined,
-                        verticalAlign: "middle",
-                      }}
-                    >
-                      <div
+                  {DAYS.map((d, i) => {
+                    const isAbsent = absentDays[d];
+                    return (
+                      <td
+                        key={d}
                         style={{
-                          display: "flex",
-                          gap: 3,
-                          justifyContent: "center",
-                          flexWrap: "wrap",
+                          padding: "0.4rem",
+                          borderBottom: "1px solid #e2e8f0",
+                          borderLeft: "1px solid #e2e8f0",
+                          borderRight:
+                            i === DAYS.length - 1
+                              ? "1px solid #e2e8f0"
+                              : undefined,
+                          verticalAlign: "middle",
+                          background: isAbsent ? "#fef3c7" : undefined,
                         }}
                       >
-                        {[1, 2, 3, 4, 5].map((v) => (
-                          <button
-                            key={v}
-                            type="button"
-                            onClick={() => {
-                              const cur = slotScores[d];
-                              const next: Record<number, DayScores> = {
-                                ...goalScores,
-                                [slot]: {
-                                  ...slotScores,
-                                  [d]: cur === v ? null : v,
-                                },
-                              };
-                              setGoalScores(next);
+                        {isAbsent ? (
+                          <div
+                            style={{
+                              fontSize: "0.75rem",
+                              color: "#92400e",
+                              textAlign: "center",
+                              fontStyle: "italic",
                             }}
-                            style={buttonStyle(slotScores[d] === v)}
-                            title={
-                              SCORE_LEGEND.find((l) => l.value === v)?.label ??
-                              ""
-                            }
                           >
-                            {v}
-                          </button>
-                        ))}
-                      </div>
-                    </td>
-                  ))}
+                            Absent
+                          </div>
+                        ) : (
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 3,
+                              justifyContent: "center",
+                              flexWrap: "wrap",
+                            }}
+                          >
+                            {[1, 2, 3, 4, 5].map((v) => (
+                              <button
+                                key={v}
+                                type="button"
+                                onClick={() => {
+                                  const cur = slotScores[d];
+                                  const next: Record<number, DayScores> = {
+                                    ...goalScores,
+                                    [slot]: {
+                                      ...slotScores,
+                                      [d]: cur === v ? null : v,
+                                    },
+                                  };
+                                  setGoalScores(next);
+                                }}
+                                style={buttonStyle(slotScores[d] === v)}
+                                title={
+                                  SCORE_LEGEND.find((l) => l.value === v)
+                                    ?.label ?? ""
+                                }
+                              >
+                                {v}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </td>
+                    );
+                  })}
                 </tr>
               );
             })}
@@ -848,24 +996,86 @@ export default function Tier3WeeklyForm({
         </div>
       )}
 
-      <div style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}>
+      {/* Submission status: shows whether the record is a draft or
+          has been submitted, plus a small hint about why "Submit"
+          might be disabled. */}
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: "0.5rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ fontSize: "0.85rem", color: "#475569" }}>
+          {submittedAt ? (
+            <span>
+              <strong style={{ color: "#047857" }}>Submitted</strong> on{" "}
+              {new Date(submittedAt).toLocaleString()} — edits still allowed.
+            </span>
+          ) : (
+            <span>
+              <strong style={{ color: "#b45309" }}>Draft</strong> — save as
+              you go through the week, submit when finished.
+            </span>
+          )}
+        </div>
+        {!allDaysAccounted && !submittedAt && (
+          <div style={{ fontSize: "0.75rem", color: "#64748b" }}>
+            Submit becomes available once every weekday has a score or is
+            marked Absent.
+          </div>
+        )}
+      </div>
+
+      <div
+        style={{ display: "flex", gap: "0.5rem", justifyContent: "flex-end" }}
+      >
         <button type="button" onClick={onCancel} disabled={submitting}>
           Cancel
         </button>
         <button
           type="button"
-          onClick={submit}
+          onClick={saveDraft}
           disabled={submitting}
           style={{
-            background: "#2563eb",
+            background: "white",
+            color: "#1e293b",
+            padding: "0.45rem 0.9rem",
+            borderRadius: 6,
+            border: "1px solid #cbd5e1",
+            cursor: submitting ? "not-allowed" : "pointer",
+            fontWeight: 500,
+          }}
+        >
+          {submitting ? "Saving…" : "Save draft"}
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={submitting || !allDaysAccounted}
+          title={
+            !allDaysAccounted
+              ? "Score every day or mark it Absent before submitting."
+              : ""
+          }
+          style={{
+            background: !allDaysAccounted ? "#94a3b8" : "#2563eb",
             color: "white",
             padding: "0.45rem 0.9rem",
             borderRadius: 6,
             border: "none",
-            cursor: "pointer",
+            cursor:
+              submitting || !allDaysAccounted ? "not-allowed" : "pointer",
+            fontWeight: 600,
           }}
         >
-          {submitting ? "Saving…" : "Save weekly record"}
+          {submitting
+            ? "Saving…"
+            : submittedAt
+              ? "Re-submit"
+              : "Submit week"}
         </button>
       </div>
     </div>

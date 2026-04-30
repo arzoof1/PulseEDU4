@@ -249,8 +249,13 @@ router.get("/interventions/owed-today", async (req, res) => {
       const dayScores = rec
         ? [rec.monScore, rec.tueScore, rec.wedScore, rec.thuScore, rec.friScore]
         : [null, null, null, null, null];
+      // Days the teacher explicitly marked the student absent for
+      // shouldn't count as "missing" — there's nothing to score.
+      const absent = (rec?.absentDays ?? {}) as Record<string, boolean>;
+      const dayKeys = ["mon", "tue", "wed", "thu", "fri"] as const;
       let missing = 0;
       for (let i = 0; i <= reachedIdx; i++) {
+        if (absent[dayKeys[i]]) continue;
         if (dayScores[i] === null || dayScores[i] === undefined) missing++;
       }
       if (missing > 0) {
@@ -430,10 +435,23 @@ router.get("/interventions/completion-report", async (req, res) => {
               rec.friScore,
             ]
           : [];
-        const valid = scores.filter(
-          (v): v is number => typeof v === "number",
-        );
-        completed = valid.length;
+        // Days the teacher explicitly marked the student absent are
+        // counted as fulfilled obligations: they don't need a score
+        // and they don't lower the expected denominator either, since
+        // we still want admins to see "5/5 — 2 absent" not "3/5".
+        const absent = (rec?.absentDays ?? {}) as Record<string, boolean>;
+        const dayKeys = ["mon", "tue", "wed", "thu", "fri"] as const;
+        const valid: number[] = [];
+        let absentCount = 0;
+        for (let i = 0; i < dayKeys.length; i++) {
+          if (absent[dayKeys[i]]) {
+            absentCount++;
+            continue;
+          }
+          const v = scores[i];
+          if (typeof v === "number") valid.push(v);
+        }
+        completed = valid.length + absentCount;
         expected = 5;
         scoreAvg =
           valid.length > 0

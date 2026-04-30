@@ -317,6 +317,8 @@ router.post("/tier3-records", async (req, res) => {
     prideFri,
     strategyUsage,
     goalScores,
+    absentDays,
+    submitted,
   } = req.body ?? {};
 
   const cleanStudentId =
@@ -413,6 +415,28 @@ router.post("/tier3-records", async (req, res) => {
   // every dashboard query.
   const DAY_KEYS = ["mon", "tue", "wed", "thu", "fri"] as const;
   type DayKey = (typeof DAY_KEYS)[number];
+
+  // Per-day absence map { mon:true, ... }. Only mon..fri keys are
+  // honored; values coerced to boolean. We need the parsed value
+  // BEFORE deriving the day-overall scores so absent days stay null
+  // even when the teacher accidentally left a score on them.
+  let parsedAbsent: Record<DayKey, boolean> | undefined;
+  if ("absentDays" in (req.body ?? {})) {
+    const out: Record<DayKey, boolean> = {
+      mon: false,
+      tue: false,
+      wed: false,
+      thu: false,
+      fri: false,
+    };
+    if (absentDays && typeof absentDays === "object") {
+      for (const d of DAY_KEYS) {
+        out[d] = Boolean((absentDays as Record<string, unknown>)[d]);
+      }
+    }
+    parsedAbsent = out;
+  }
+
   let parsedGoalScores:
     | Record<string, Record<DayKey, number | null>>
     | undefined;
@@ -442,13 +466,9 @@ router.post("/tier3-records", async (req, res) => {
     }
     // Derive overall day score = rounded mean across goals that have
     // a score for that day. This OVERRIDES any explicit monScore..
-    // friScore that came in the same request body.
+    // friScore that came in the same request body. Absent days are
+    // forced to null so they're excluded from the % of points calc.
     for (const d of DAY_KEYS) {
-      const values: number[] = [];
-      for (const slot of Object.values(parsedGoalScores)) {
-        const v = slot[d];
-        if (typeof v === "number") values.push(v);
-      }
       const colName =
         d === "mon"
           ? "monScore"
@@ -459,6 +479,15 @@ router.post("/tier3-records", async (req, res) => {
               : d === "thu"
                 ? "thuScore"
                 : "friScore";
+      if (parsedAbsent && parsedAbsent[d]) {
+        scoreFields[colName as keyof typeof scoreFields] = null;
+        continue;
+      }
+      const values: number[] = [];
+      for (const slot of Object.values(parsedGoalScores)) {
+        const v = slot[d];
+        if (typeof v === "number") values.push(v);
+      }
       if (values.length > 0) {
         const mean = values.reduce((a, b) => a + b, 0) / values.length;
         scoreFields[colName as keyof typeof scoreFields] = Math.round(mean);
@@ -483,6 +512,15 @@ router.post("/tier3-records", async (req, res) => {
     )
     .limit(1);
   const maxSlot = plan ? plan.tier3GoalSlots : 5;
+  // Drop any per-goal scores aimed at slots that don't exist on the
+  // student's active plan. Without this a misbehaving client could
+  // litter the JSONB column with phantom slots that later confuse
+  // reports that iterate over the keys.
+  if (parsedGoalScores) {
+    for (const slotKey of Object.keys(parsedGoalScores)) {
+      if (Number(slotKey) > maxSlot) delete parsedGoalScores[slotKey];
+    }
+  }
   const today = new Date().toISOString().slice(0, 10);
   const goalVersionIds = await snapshotActiveGoalIds(
     schoolId,
@@ -549,6 +587,34 @@ router.post("/tier3-records", async (req, res) => {
     cols.thuScore = scoreFields.thuScore;
     cols.friScore = scoreFields.friScore;
   }
+  if (parsedAbsent !== undefined) {
+    cols.absentDays = parsedAbsent;
+    // If the caller didn't also send goalScores in the same payload
+    // we still want to null-out the overall score columns for any
+    // newly-absent day so the bell + reports stop counting them.
+    if (parsedGoalScores === undefined) {
+      for (const d of DAY_KEYS) {
+        if (!parsedAbsent[d]) continue;
+        const colName =
+          d === "mon"
+            ? "monScore"
+            : d === "tue"
+              ? "tueScore"
+              : d === "wed"
+                ? "wedScore"
+                : d === "thu"
+                  ? "thuScore"
+                  : "friScore";
+        cols[colName] = null;
+      }
+    }
+  }
+  // Submission flag. `submitted: true` stamps submittedAt = NOW();
+  // `submitted: false` reverts it to null (rare, but allows a Core
+  // Team un-submit). Omitting the key leaves the existing state alone.
+  if ("submitted" in (req.body ?? {})) {
+    cols.submittedAt = submitted ? new Date() : null;
+  }
 
   let recordId: number;
   if (existing) {
@@ -586,6 +652,15 @@ router.post("/tier3-records", async (req, res) => {
         prideFri: (cols.prideFri as number | null) ?? null,
         goalVersionIds,
         goalScores: parsedGoalScores ?? {},
+        absentDays: parsedAbsent ?? {
+          mon: false,
+          tue: false,
+          wed: false,
+          thu: false,
+          fri: false,
+        },
+        submittedAt:
+          "submitted" in (req.body ?? {}) && submitted ? new Date() : null,
       })
       .returning();
     recordId = row.id;

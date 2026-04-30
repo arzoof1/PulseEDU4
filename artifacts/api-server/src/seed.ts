@@ -460,6 +460,19 @@ export async function ensureMtssPlansSchema() {
   await db.execute(
     sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS goal_scores JSONB NOT NULL DEFAULT '{}'::jsonb`,
   );
+  // ---- Per-day absent flag map { mon: true, ... }. Absent days are
+  // excluded from any "% of points earned" calc and from the bell's
+  // missing-day count so teachers aren't pestered to score days the
+  // student wasn't present for.
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS absent_days JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
+  // ---- Submitted-at timestamp distinguishing a working draft (NULL)
+  // from a teacher's final Friday submission (timestamp). Edits are
+  // still allowed after submission — the timestamp just refreshes.
+  await db.execute(
+    sql`ALTER TABLE tier3_weekly_records ADD COLUMN IF NOT EXISTS submitted_at TIMESTAMPTZ`,
+  );
 }
 
 export async function seedMtssPlansIfEmpty() {

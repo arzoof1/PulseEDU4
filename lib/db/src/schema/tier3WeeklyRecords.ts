@@ -76,6 +76,25 @@ export const tier3WeeklyRecordsTable = pgTable(
       .notNull()
       .default({}),
 
+    // Per-day absence map. Shape: { mon: true, tue: false, ... }.
+    // An absent day is excluded from BOTH the numerator and denominator
+    // of any weekly percentage calculation, and the "missing day"
+    // count on the notification bell skips it (so teachers aren't
+    // pestered to score a day the student wasn't present for). Keys
+    // are mon..fri; missing or false means "present (or not yet
+    // marked)".
+    absentDays: jsonb("absent_days")
+      .$type<Record<string, boolean>>()
+      .notNull()
+      .default({}),
+
+    // When the teacher clicks "Submit" on the weekly form. NULL means
+    // the record is still a working draft — the teacher can save and
+    // come back to it any number of times before submitting on Friday.
+    // Submitting is non-destructive: edits are still allowed, the
+    // timestamp just gets bumped on a re-submit.
+    submittedAt: timestamp("submitted_at", { withTimezone: true }),
+
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
