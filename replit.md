@@ -1616,6 +1616,34 @@ render correctly.
   Don't act until the user opens the door — they explicitly said it is
   not part of the current build.
 
+## Parked: School-wide HeartBEAT as a Signage Displays toggle (captured Apr 30, 2026)
+
+The school-wide HeartBEAT screen already exists at `/signage/heartbeat`
+(`artifacts/client/src/signage/HeartbeatSignage.tsx`) — red/green
+"mood meter" slider, live activity ticker (passes/tardies/PBIS/etc.),
+and a per-student variant. It's reachable from the Signage Launcher
+view but is **not** exposed as a toggle inside the **Signage Displays**
+playlist editor (`display_playlists` / `display_playlist_items`),
+so admins can't drop it into a TV rotation alongside houses,
+announcements, etc.
+
+User wants this surfaced as:
+
+1. A first-class playlist item type ("School-wide HeartBEAT") in the
+   Signage Displays editor — selectable like any other slide.
+2. Optional duration knob (e.g. show for 30s before rotating).
+3. Same screen reused for individual students when launched from a
+   student profile (already partially supported via
+   `StudentTimelineSignage.tsx`).
+
+User flagged this Apr 30 while building the new tier-aware Intervention
+system. They could not initially find the screen — confirm with them
+that `/signage/heartbeat` IS what they remembered before scoping the
+playlist-toggle work, in case they actually want a redesign.
+
+**Don't act until the user opens the door — they explicitly said this
+is the *next* thing after the Intervention history work.**
+
 ## Parked: Bathroom Queue (kiosk station)
 
 User wants a kiosk-style "bathroom queue" tied to the existing kiosk
