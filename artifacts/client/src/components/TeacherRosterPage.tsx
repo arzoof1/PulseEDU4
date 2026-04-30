@@ -1025,6 +1025,15 @@ export default function TeacherRosterPage({
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Student
                 </th>
+                {visibility.programs && (
+                  <th
+                    rowSpan={2}
+                    style={{ padding: "8px 10px", verticalAlign: "bottom" }}
+                    title="ESE / 504 / ELL designations from the SIS"
+                  >
+                    Programs
+                  </th>
+                )}
                 <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                   Grade
                 </th>
@@ -1063,15 +1072,6 @@ export default function TeacherRosterPage({
                 {visibility.bq && (
                   <th rowSpan={2} style={{ padding: "8px 10px", verticalAlign: "bottom" }}>
                     BQ
-                  </th>
-                )}
-                {visibility.programs && (
-                  <th
-                    rowSpan={2}
-                    style={{ padding: "8px 10px", verticalAlign: "bottom" }}
-                    title="ESE / 504 / ELL designations from the SIS"
-                  >
-                    Programs
                   </th>
                 )}
               </tr>
@@ -1173,6 +1173,11 @@ export default function TeacherRosterPage({
                       )}
                     </span>
                   </td>
+                  {visibility.programs && (
+                    <td style={{ padding: "6px 10px" }}>
+                      <ProgramPills row={row} />
+                    </td>
+                  )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
                   <SubjectCells
                     block={row.ela}
