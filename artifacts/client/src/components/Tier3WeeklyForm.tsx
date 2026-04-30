@@ -496,8 +496,12 @@ export default function Tier3WeeklyForm({
     width: 28,
     height: 28,
     borderRadius: 6,
-    border: active ? "2px solid #2563eb" : "1px solid #cbd5e1",
-    background: active ? "#dbeafe" : "white",
+    // Match the app's purple accent (same hue as the notification
+    // bell glow). When selected, fill solid purple with white text
+    // for the strongest contrast.
+    border: active ? "2px solid #7e22ce" : "1px solid #cbd5e1",
+    background: active ? "#a855f7" : "white",
+    color: active ? "white" : "#1e293b",
     cursor: "pointer",
     fontWeight: active ? 700 : 500,
   });
