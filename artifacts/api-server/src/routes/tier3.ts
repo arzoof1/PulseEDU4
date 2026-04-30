@@ -67,15 +67,21 @@ async function loadStaff(
   return staff;
 }
 
-function clampScore15(v: unknown): number | null | "BAD" {
-  if (v === undefined) return "BAD";
+// `undefined` here means "the caller didn't send this key at all" —
+// callers that only push the per-goal `goalScores` map intentionally
+// omit the legacy day-level monScore..friScore fields. Treat that as
+// "leave alone" rather than a validation failure. Explicit `null` or
+// "" still means "clear the value"; out-of-range non-null values are
+// the only thing that should be rejected as "BAD".
+function clampScore15(v: unknown): number | null | "BAD" | undefined {
+  if (v === undefined) return undefined;
   if (v === null || v === "") return null;
   const n = Number(v);
   if (!Number.isInteger(n) || n < 1 || n > 5) return "BAD";
   return n;
 }
-function clampPride02(v: unknown): number | null | "BAD" {
-  if (v === undefined) return "BAD";
+function clampPride02(v: unknown): number | null | "BAD" | undefined {
+  if (v === undefined) return undefined;
   if (v === null || v === "") return null;
   const n = Number(v);
   if (!Number.isInteger(n) || n < 0 || n > 2) return "BAD";
@@ -378,10 +384,10 @@ router.post("/tier3-records", async (req, res) => {
   // present but malformed; undefined means the caller didn't send the
   // key (we leave the existing column alone on update / set null on
   // insert).
-  function readScore(v: unknown): number | null | "BAD" {
+  function readScore(v: unknown): number | null | "BAD" | undefined {
     return clampScore15(v);
   }
-  function readPride(v: unknown): number | null | "BAD" {
+  function readPride(v: unknown): number | null | "BAD" | undefined {
     return clampPride02(v);
   }
   const scoreFields = {
