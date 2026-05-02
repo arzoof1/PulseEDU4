@@ -22,6 +22,7 @@ import PbisPointsHub, {
   SchoolStoreView,
 } from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
+import LogoGeneratorPage from "./components/LogoGeneratorPage";
 import ParentAccess from "./components/ParentAccess";
 import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
@@ -17419,6 +17420,18 @@ function App() {
                   "Districts, schools, and per-school data assignment. SuperUser only.",
                 group: "admin-tenancy",
               });
+              // Brand Logo Generator — SuperUser only. Spins out animated
+              // SVG / static SVG / PNG / favicon variants for sister
+              // apps (PulseTV, PulseKinetics, …) using the same EKG +
+              // gradient-wordmark mark as PulseEDU.
+              tiles.push({
+                id: "logo-generator",
+                icon: "🎨",
+                title: "Brand Logo Generator",
+                subtitle:
+                  "Generate animated/static/favicon logos for sister apps. SuperUser only.",
+                group: "admin-tenancy",
+              });
             }
             // Data Imports — gated on isAdmin (which includes SuperUser
             // + District Admin via the role flags). The route layer
@@ -17445,6 +17458,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "tenancy" && isSuperUser && (
         <TenancyPanel />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "logo-generator" && isSuperUser && (
+        <LogoGeneratorPage />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "data-imports" && (

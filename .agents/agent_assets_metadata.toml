@@ -60,3 +60,81 @@ id = "pSqCl0W3x619Q5fizRD_z"
 uri = "file://attached_assets/pulse-logo-generator.tar.gz"
 type = "unspecified"
 title = "Pulse logo generator (download, extract, open the HTML in any browser)"
+
+[[outputs]]
+id = "xAiG9FmB-mD_n3LAvLv-a"
+uri = "file://attached_assets/HOW-TO-USE-LOGO.md"
+type = "text"
+title = "How to drop these logos into another app"
+
+[[outputs]]
+id = "hKMk4NeBC6KIVqZfdLN3B"
+uri = "file://attached_assets/logo-presets/pulse-tv-animated.svg"
+type = "image"
+title = "PulseTV — animated header"
+
+[[outputs]]
+id = "Zvhui7nFitgFdXcff9Z26"
+uri = "file://attached_assets/logo-presets/pulse-tv-static.png"
+type = "image"
+title = "PulseTV — static PNG (4×)"
+
+[[outputs]]
+id = "rpxE94M4sP2rsakOFRawD"
+uri = "file://attached_assets/logo-presets/pulse-tv-favicon.svg"
+type = "image"
+title = "PulseTV — 180×180 favicon SVG"
+
+[[outputs]]
+id = "-aORD7Kh4a4WCSWXHacXd"
+uri = "file://attached_assets/logo-presets/pulse-tv-favicon.png"
+type = "image"
+title = "PulseTV — 512×512 favicon PNG"
+
+[[outputs]]
+id = "0Zt8lT3rGuPCQf4IAf-yM"
+uri = "file://attached_assets/logo-presets/pulse-kinetics-animated.svg"
+type = "image"
+title = "PulseKinetics — animated header"
+
+[[outputs]]
+id = "JvnWCgJNSuIc8hafDFEmT"
+uri = "file://attached_assets/logo-presets/pulse-kinetics-static.png"
+type = "image"
+title = "PulseKinetics — static PNG (4×)"
+
+[[outputs]]
+id = "ATdyS5Z5m2NJp7VhFWdHZ"
+uri = "file://attached_assets/logo-presets/pulse-kinetics-favicon.svg"
+type = "image"
+title = "PulseKinetics — 180×180 favicon SVG"
+
+[[outputs]]
+id = "cVGVNM_hHAlx57XOOYdaj"
+uri = "file://attached_assets/logo-presets/pulse-kinetics-favicon.png"
+type = "image"
+title = "PulseKinetics — 512×512 favicon PNG"
+
+[[outputs]]
+id = "QrfEv3BM5KAXaT8I10_4W"
+uri = "file://attached_assets/logo-presets/pulse-athletics-animated.svg"
+type = "image"
+title = "PulseAthletics — animated header"
+
+[[outputs]]
+id = "gt--092OEZhQNv1fNA4tu"
+uri = "file://attached_assets/logo-presets/pulse-athletics-static.png"
+type = "image"
+title = "PulseAthletics — static PNG (4×)"
+
+[[outputs]]
+id = "zT7ndSFps-SNNY0QD68l8"
+uri = "file://attached_assets/logo-presets/pulse-athletics-favicon.svg"
+type = "image"
+title = "PulseAthletics — 180×180 favicon SVG"
+
+[[outputs]]
+id = "OznfLnzmVpf3wvIpiHz7v"
+uri = "file://attached_assets/logo-presets/pulse-athletics-favicon.png"
+type = "image"
+title = "PulseAthletics — 512×512 favicon PNG"

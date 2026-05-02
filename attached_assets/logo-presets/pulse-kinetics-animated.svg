@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 294 40" width="294" height="40" role="img" aria-label="PulseKinetics">
+  <title>PulseKinetics</title>
+  <defs>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(45 0.5 0.5)">
+      <stop offset="0%" stop-color="#f97316"/><stop offset="60%" stop-color="#ef4444"/><stop offset="100%" stop-color="#be123c"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-50%" width="140%" height="200%">
+      <feGaussianBlur stdDeviation="0.9" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .wordmark, .accent { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; fill: url(#wm); }
+      .wordmark { font-weight: 800; font-size: 24px; letter-spacing: -0.02em; }
+      .accent   { font-weight: 900; font-size: 24px; letter-spacing: -0.03em; font-style: italic; }
+      .ekg-pulse { stroke-dasharray:38 334; stroke-dashoffset:372; animation: pulse-sweep 2.2s linear infinite; } @keyframes pulse-sweep { from { stroke-dashoffset:372; } to { stroke-dashoffset:0; } }
+    </style>
+  </defs>
+  <path d="M0 20 H205.2 L211.2 16 L215.2 24 L219.2 5 L223.2 35 L227.2 16 L231.2 20 H294" fill="none" stroke="#fbbf24" stroke-opacity="0.3" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+  <path class="ekg-pulse" d="M0 20 H205.2 L211.2 16 L215.2 24 L219.2 5 L223.2 35 L227.2 16 L231.2 20 H294" fill="none" stroke="#fbbf24" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+  <text x="12" y="28" class="wordmark">Pulse<tspan class="accent" dx="1">Kinetics</tspan></text>
+</svg>
