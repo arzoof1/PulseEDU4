@@ -138,3 +138,27 @@ id = "OznfLnzmVpf3wvIpiHz7v"
 uri = "file://attached_assets/logo-presets/pulse-athletics-favicon.png"
 type = "image"
 title = "PulseAthletics — 512×512 favicon PNG"
+
+[[outputs]]
+id = "e4tJKkk2fJU30RxZ7uus6"
+uri = "file://attached_assets/pulse-tv-kit.tar.gz"
+type = "unspecified"
+title = "PulseTV — full kit (all formats + how-to)"
+
+[[outputs]]
+id = "ZejNXxjkDaF1iZFMoIGKS"
+uri = "file://attached_assets/pulse-kinetics-kit.tar.gz"
+type = "unspecified"
+title = "PulseKinetics — full kit (all formats + how-to)"
+
+[[outputs]]
+id = "TGkfG8bx5_5Osaf_IHehB"
+uri = "file://attached_assets/pulse-athletics-kit.tar.gz"
+type = "unspecified"
+title = "PulseAthletics — full kit (all formats + how-to)"
+
+[[outputs]]
+id = "fR2_0TPI28Rc_ksOfcC1S"
+uri = "file://attached_assets/pulse-all-brands-kit.tar.gz"
+type = "unspecified"
+title = "All three brands in one bundle"
