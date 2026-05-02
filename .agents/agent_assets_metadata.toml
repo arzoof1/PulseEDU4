@@ -54,3 +54,9 @@ id = "NYMDPnfIlRpDqR0jbBBUq"
 uri = "file://attached_assets/pulseedu-logo.png"
 type = "image"
 title = "PulseEDU logo — high-res PNG (for slides/social)"
+
+[[outputs]]
+id = "pSqCl0W3x619Q5fizRD_z"
+uri = "file://attached_assets/pulse-logo-generator.tar.gz"
+type = "unspecified"
+title = "Pulse logo generator (download, extract, open the HTML in any browser)"
