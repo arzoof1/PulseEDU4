@@ -1,12 +1,16 @@
 // "What interventions do I owe today?" + completion report.
 //
+// NOTE: Tier 2 cadence is now WEEKLY (one entry per student-teacher per
+// Mon-Fri week). The endpoint name is kept for backward compatibility
+// but "owed today" really means "still owed by end of this week".
+//
 // Routes:
 //   GET /api/interventions/owed-today
 //      Returns the per-student rows the *current teacher* still has to
-//      submit today (Tier 2 daily) and this week (Tier 3 weekly). Empty
-//      array when there's nothing owed; the bell hides itself in that
-//      state. Core Team callers always get an empty list — they do not
-//      see the bell.
+//      submit this week (Tier 2 weekly + Tier 3 weekly). Empty array
+//      when there's nothing owed; the bell hides itself in that state.
+//      Core Team callers always get an empty list — they do not see
+//      the bell.
 //
 //   GET /api/interventions/completion-report?weekStartDate=YYYY-MM-DD
 //      Core-Team-only. Returns roster of all students with active Tier 2
@@ -73,25 +77,22 @@ function todayDowLocal(): number {
   return ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].indexOf(wd);
 }
 
-// Monday-of-the-week containing `today`, in school-local terms. Treat the
-// server clock as authoritative — the platform runs in UTC and PulseEDU
-// is single-state (FL) so the offset is small enough not to shift the
-// week boundary in practice.
-function mondayOf(today: Date): string {
-  const d = new Date(
-    Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), today.getUTCDate()),
-  );
+// Monday-of-the-week containing `localDateStr` (YYYY-MM-DD already in
+// school-local terms — pass `todayStr()`). Sunday is treated as part
+// of the PRIOR Mon-Sun week (shift = -6) so weekend visits to the
+// bell or completion-report still show the week the user just lived
+// through. This matches the convention in `mtssReports.ts`.
+//
+// Crucially we do NOT use UTC `new Date()` here — that would roll the
+// effective day forward one between ~7pm ET (UTC midnight) and
+// midnight ET, shifting the week boundary on Friday/Saturday/Sunday
+// evenings.
+function mondayOf(localDateStr: string): string {
+  const d = new Date(`${localDateStr}T00:00:00Z`);
   const dow = d.getUTCDay(); // 0 Sun..6 Sat
-  // Monday = 1. If today is Sunday(0), Monday is +1 day forward (next
-  // week). If Monday(1), shift 0. Otherwise back (dow - 1) days.
-  const shift = dow === 0 ? 1 : -(dow - 1);
+  const shift = dow === 0 ? -6 : 1 - dow;
   d.setUTCDate(d.getUTCDate() + shift);
   return d.toISOString().slice(0, 10);
-}
-
-function isWeekend(today: Date): boolean {
-  const dow = today.getUTCDay();
-  return dow === 0 || dow === 6;
 }
 
 function parseTeacherCsv(csv: string): number[] {
@@ -137,21 +138,20 @@ router.get("/interventions/owed-today", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
 
+  const todayDate = todayStr();
   // Core Team and SuperUser do not see the bell.
   if (isCoreTeam(staff)) {
     res.json({
       tier2: [],
       tier3: [],
-      todayDate: todayStr(),
-      weekStartDate: mondayOf(new Date()),
+      todayDate,
+      weekStartDate: mondayOf(todayDate),
       visible: false,
     });
     return;
   }
 
-  const today = new Date();
-  const todayDate = todayStr();
-  const weekStartDate = mondayOf(today);
+  const weekStartDate = mondayOf(todayDate);
 
   // Pull every active plan in this school, then resolve each to its
   // effective teacher list (live schedule ∪ additional interventionists,
@@ -209,8 +209,20 @@ router.get("/interventions/owed-today", async (req, res) => {
           );
   const studentMap = new Map(studentRows.map((s) => [s.studentId, s]));
 
-  // ----- Tier 2 (daily) -----
-  // Skip on weekends — Tier 2 is school-day-only.
+  // ----- Tier 2 (weekly) -----
+  // One entry per (student, teacher) per Mon-Fri week. Show "owed"
+  // until the teacher logs at least one matching entry anywhere in the
+  // current week (we keep the bell visible on the weekend too — the
+  // teacher might still be wrapping up the week's documentation).
+  const weekDayDates: string[] = [];
+  {
+    const ws = new Date(`${weekStartDate}T00:00:00.000Z`);
+    for (let i = 0; i < 5; i++) {
+      const d = new Date(ws);
+      d.setUTCDate(d.getUTCDate() + i);
+      weekDayDates.push(d.toISOString().slice(0, 10));
+    }
+  }
   let tier2Owed: Array<{
     studentId: string;
     studentName: string;
@@ -218,7 +230,7 @@ router.get("/interventions/owed-today", async (req, res) => {
     subType: string | null;
     planId: number;
   }> = [];
-  if (!isWeekend(today) && tier2Plans.length > 0) {
+  if (tier2Plans.length > 0) {
     const studentIdsT2 = tier2Plans.map((p) => p.studentId);
     const submitted = await db
       .select({
@@ -230,7 +242,7 @@ router.get("/interventions/owed-today", async (req, res) => {
         and(
           eq(tier2InterventionEntriesTable.schoolId, schoolId),
           eq(tier2InterventionEntriesTable.teacherStaffId, staff.id),
-          eq(tier2InterventionEntriesTable.entryDate, todayDate),
+          inArray(tier2InterventionEntriesTable.entryDate, weekDayDates),
           inArray(tier2InterventionEntriesTable.studentId, studentIdsT2),
         ),
       );
@@ -345,7 +357,7 @@ router.get("/interventions/completion-report", async (req, res) => {
     typeof req.query.weekStartDate === "string" &&
     /^\d{4}-\d{2}-\d{2}$/.test(req.query.weekStartDate)
       ? req.query.weekStartDate
-      : mondayOf(new Date());
+      : mondayOf(todayStr());
 
   // Active plans this school for any tier >= 2.
   const plans = await db
@@ -521,8 +533,12 @@ router.get("/interventions/completion-report", async (req, res) => {
       let expected = 0;
       let scoreAvg: number | null = null;
       if (p.tier === 2) {
-        expected = 5; // Mon-Fri
-        completed = t2Counts.get(key)?.size ?? 0;
+        // Tier 2 is one-per-week-per-(student, teacher). Either the
+        // teacher has at least one entry this week (1/1) or they don't
+        // (0/1). The actual count of distinct dates submitted is left
+        // for the per-day report.
+        expected = 1;
+        completed = (t2Counts.get(key)?.size ?? 0) > 0 ? 1 : 0;
       } else {
         const rec = t3ByKey.get(key);
         const scores = rec

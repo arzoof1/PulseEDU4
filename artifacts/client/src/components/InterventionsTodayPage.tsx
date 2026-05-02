@@ -1,8 +1,8 @@
-// "My Interventions Today" page. Lists every (student, tier) row the
-// signed-in teacher still owes a log on for today (Tier 2) or this week
-// (Tier 3 day-of-week). Each row has a "Log now" button that opens the
-// matching form via the LogInterventionLauncher (which the parent
-// renders).
+// "My Interventions This Week" page. Lists every (student, tier) row
+// the signed-in teacher still owes a log on for the current Mon-Fri
+// week (Tier 2 weekly check-in + Tier 3 day-of-week scoring). Each
+// row has a "Log now" button that opens the matching form via the
+// LogInterventionLauncher (which the parent renders).
 //
 // Refreshing is delegated to the parent via onLogged so the bell badge
 // also stays in sync.
@@ -93,7 +93,7 @@ export default function InterventionsTodayPage({
           marginBottom: "1rem",
         }}
       >
-        <h2 style={{ margin: 0 }}>My Interventions Today</h2>
+        <h2 style={{ margin: 0 }}>My Interventions This Week</h2>
         <button type="button" onClick={onBack}>
           ← Back
         </button>
@@ -131,7 +131,12 @@ export default function InterventionsTodayPage({
 
       {tier2.length > 0 && (
         <div style={{ marginBottom: "1.25rem" }}>
-          <h3 style={{ margin: "0 0 0.4rem 0" }}>Tier 2 — daily</h3>
+          <h3 style={{ margin: "0 0 0.4rem 0" }}>
+            Tier 2 — weekly check-in
+            {payload?.weekStartDate
+              ? ` · week of ${payload.weekStartDate}`
+              : ""}
+          </h3>
           <ul style={{ listStyle: "none", padding: 0, margin: 0 }}>
             {tier2.map((r) => (
               <li
@@ -162,7 +167,7 @@ export default function InterventionsTodayPage({
                     ) : null}
                   </div>
                   <div style={{ fontSize: "0.8rem", color: "#64748b" }}>
-                    Tier 2 daily
+                    Tier 2 weekly
                     {r.subType
                       ? ` · ${r.subType === "cico" ? "Check-In/Check-Out" : "Behavior Group"}`
                       : ""}

@@ -1,6 +1,11 @@
-// Tier 2 daily intervention form. Renders inside a modal (or wherever
-// the parent slots it) and posts to /api/tier2-entries. The parent owns
+// Tier 2 weekly check-in form. Renders inside a modal (or wherever the
+// parent slots it) and posts to /api/tier2-entries. The parent owns
 // the open/close + which student is being logged.
+//
+// Cadence: Tier 2 is now WEEKLY (one entry per student-teacher per
+// Mon-Fri week). The teacher picks the date their meeting actually
+// happened, but only this week or last week (a 14-day backfill window).
+// Core Team is exempt from the date window on the server.
 //
 // Behavior:
 //   - For a teacher, sub-type is auto-filled from the student's active
@@ -8,7 +13,8 @@
 //   - The "Trusted Adult Intervention" picker is filtered to entries
 //     tagged tier='2' (legacy untagged entries are also shown so existing
 //     catalogs remain usable).
-//   - The date defaults to today; the teacher can rewind to backfill.
+//   - The date input is constrained to weekdays in the
+//     [thisMonday - 7 days, today] window.
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
@@ -45,6 +51,27 @@ function todayLocalISO(): string {
     .slice(0, 10);
 }
 
+function addDaysIso(dateStr: string, n: number): string {
+  const d = new Date(`${dateStr}T00:00:00`);
+  d.setDate(d.getDate() + n);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
+// Monday-of-the-week containing today (in local time). Used as the
+// floor of the back-date window: teachers can log this week or last
+// week, so the earliest valid date is mondayOfThisWeek - 7 days.
+function mondayOfThisWeek(): string {
+  const d = new Date();
+  const dow = d.getDay(); // 0 Sun..6 Sat
+  const shift = dow === 0 ? -6 : 1 - dow;
+  d.setDate(d.getDate() + shift);
+  return new Date(d.getTime() - d.getTimezoneOffset() * 60_000)
+    .toISOString()
+    .slice(0, 10);
+}
+
 export default function Tier2DailyForm({
   studentId,
   studentName,
@@ -54,6 +81,18 @@ export default function Tier2DailyForm({
   onCancel,
 }: Props) {
   const [date, setDate] = useState<string>(defaultDate ?? todayLocalISO());
+  // Non-Core-Team teachers are clamped to "this week + last week"
+  // (matches the server-side back-date guard). Core Team is exempt
+  // server-side, so we don't constrain the picker for them either —
+  // they sometimes need to repair history.
+  const minDate = useMemo(
+    () => (isCoreTeam ? undefined : addDaysIso(mondayOfThisWeek(), -7)),
+    [isCoreTeam],
+  );
+  const maxDate = useMemo(
+    () => (isCoreTeam ? undefined : todayLocalISO()),
+    [isCoreTeam],
+  );
   const [subType, setSubType] = useState<"cico" | "group">("cico");
   const [subTypeLocked, setSubTypeLocked] = useState(false);
   const [tais, setTais] = useState<TaiRow[]>([]);
@@ -139,14 +178,22 @@ export default function Tier2DailyForm({
   return (
     <div style={{ display: "grid", gap: "0.85rem" }}>
       <div style={{ fontSize: "1.1rem", fontWeight: 600 }}>
-        Tier 2 — Daily log for {studentName}
+        Tier 2 — Weekly check-in for {studentName}
+      </div>
+      <div style={{ fontSize: "0.8rem", color: "#64748b", marginTop: -4 }}>
+        Log one check-in per week. You can back-date to last week if the
+        meeting already happened.
       </div>
 
       <label style={{ display: "grid", gap: 4 }}>
-        <span style={{ fontSize: "0.85rem", color: "#475569" }}>Date</span>
+        <span style={{ fontSize: "0.85rem", color: "#475569" }}>
+          Meeting date
+        </span>
         <input
           type="date"
           value={date}
+          min={minDate}
+          max={maxDate}
           onChange={(e) => setDate(e.target.value)}
           style={{ padding: "0.4rem 0.6rem", borderRadius: 6, border: "1px solid #cbd5e1" }}
         />
@@ -215,7 +262,7 @@ export default function Tier2DailyForm({
           onChange={(e) => setNotes(e.target.value)}
           rows={3}
           maxLength={2000}
-          placeholder="Optional notes about today's check-in..."
+          placeholder="What did you discuss this week? Which curriculum or program (e.g. WhyTry, Zones of Regulation) did you use?"
           style={{ padding: "0.4rem 0.6rem", borderRadius: 6, border: "1px solid #cbd5e1" }}
         />
       </label>
@@ -252,7 +299,7 @@ export default function Tier2DailyForm({
             cursor: "pointer",
           }}
         >
-          {submitting ? "Saving…" : "Save Tier 2 entry"}
+          {submitting ? "Saving…" : "Save weekly check-in"}
         </button>
       </div>
     </div>

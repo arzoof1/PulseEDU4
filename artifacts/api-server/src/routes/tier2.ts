@@ -1,4 +1,11 @@
-// Tier 2 daily intervention entries.
+// Tier 2 weekly intervention entries.
+//
+// Cadence model (changed from daily → weekly): the bell and reports
+// expect ONE entry per (student, teacher) per Mon-Fri week. Teachers
+// may back-date the entry to the meeting's actual date as long as the
+// date is within the last 14 calendar days (this week + last week)
+// and is a weekday. Core Team may insert on behalf of others without
+// the back-date restriction.
 //
 // Routes:
 //   GET    /api/tier2-entries?studentId=&date=YYYY-MM-DD&teacherStaffId=
@@ -56,6 +63,25 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 function clampNotes(v: unknown): string {
   if (typeof v !== "string") return "";
   return v.trim().slice(0, 2000);
+}
+
+// School-local "today" in YYYY-MM-DD. Florida-only deployment, so the
+// en-CA locale gives us a reliable yyyy-mm-dd in NY time.
+function todayLocalISO(): string {
+  return new Date().toLocaleDateString("en-CA", {
+    timeZone: "America/New_York",
+  });
+}
+
+function addDays(dateStr: string, n: number): string {
+  const d = new Date(`${dateStr}T00:00:00Z`);
+  d.setUTCDate(d.getUTCDate() + n);
+  return d.toISOString().slice(0, 10);
+}
+
+function isWeekdayIso(dateStr: string): boolean {
+  const dow = new Date(`${dateStr}T00:00:00Z`).getUTCDay();
+  return dow >= 1 && dow <= 5;
 }
 
 // ---- LIST ----
@@ -133,6 +159,30 @@ router.post("/tier2-entries", async (req, res) => {
       .status(400)
       .json({ error: "entryDate (YYYY-MM-DD) is required" });
     return;
+  }
+  // Weekly cadence guard: teachers may only log a Mon-Fri date within
+  // the last 14 days (this week + last week) and never in the future.
+  // Core Team is exempt (they sometimes need to repair history).
+  if (!isCoreTeam(staff)) {
+    if (!isWeekdayIso(cleanDate)) {
+      res
+        .status(400)
+        .json({ error: "Tier 2 entries must be on a weekday (Mon-Fri)" });
+      return;
+    }
+    const today = todayLocalISO();
+    if (cleanDate > today) {
+      res.status(400).json({ error: "entryDate cannot be in the future" });
+      return;
+    }
+    const earliest = addDays(today, -14);
+    if (cleanDate < earliest) {
+      res.status(400).json({
+        error:
+          "entryDate is too far back — teachers can only log this week or last week",
+      });
+      return;
+    }
   }
   const cleanSubType =
     typeof subType === "string" ? subType.toLowerCase() : "";

@@ -406,17 +406,35 @@ router.get("/mtss-reports/summary", async (req, res) => {
           );
 
   // ---- build lookup keyed maps ----
-  // T2 entry presence keyed by (studentId, teacherId, subType, date).
-  const t2Has = new Set<string>();
+  // T2 cadence is WEEKLY: one entry per (student, teacher) per Mon-Fri
+  // week. Index entry presence by (studentId, teacherId, subType,
+  // weekStart) so a single entry on Wednesday counts as that whole
+  // week's obligation. Also keep a per-(studentId, teacherId,
+  // subType, dow) tally for the day-of-week chart so we can show
+  // which weekday teachers actually log on.
+  const t2HasByWeek = new Set<string>();
+  const t2DowCount = new Map<number, number>();
   for (const e of t2Entries) {
-    t2Has.add(
-      `${e.studentId}::${e.teacherStaffId}::${e.subType ?? ""}::${e.entryDate}`,
+    const wk = mondayOf(e.entryDate);
+    t2HasByWeek.add(
+      `${e.studentId}::${e.teacherStaffId}::${e.subType ?? ""}::${wk}`,
     );
+    const dow = dayOfWeek(e.entryDate);
+    if (dow >= 1 && dow <= 5) {
+      t2DowCount.set(dow, (t2DowCount.get(dow) ?? 0) + 1);
+    }
   }
 
-  // ---- compute schoolDayCount ----
+  // ---- compute schoolDayCount + week list ----
   const schoolDays = weekdayRange(rangeStart, rangeEnd);
   const schoolDayCount = schoolDays.length;
+  // De-duped, ordered list of week-start (Monday) strings that have at
+  // least one in-range school day. T2 expected/completed math iterates
+  // over THIS list (not schoolDays) since each plan only owes one
+  // entry per week now.
+  const schoolWeeks = Array.from(
+    new Set(schoolDays.map((d) => mondayOf(d))),
+  ).sort();
 
   // ---- weeklyTrend (T2 + T3) ----
   const weeklyMap = new Map<
@@ -442,15 +460,18 @@ router.get("/mtss-reports/summary", async (req, res) => {
     return v;
   }
 
-  // T2 expected/completed by week.
-  for (const day of schoolDays) {
-    const wk = mondayOf(day);
+  // T2 expected/completed by week. Each (week, plan, teacher) is one
+  // obligation; completed if at least one entry exists in that week
+  // for that (student, teacher, subType). A plan contributes to a
+  // given week only if its openedAt falls on or before the week's
+  // Friday and (if closed) its closedAt falls on or after the week's
+  // Monday — i.e. the plan was open for some portion of the week.
+  for (const wk of schoolWeeks) {
+    const wkEnd = addDays(wk, 4); // Friday
     for (const p of tier2Plans) {
-      // Plans contribute to expected only on/after openedAt and
-      // before closedAt (or forever, if still active).
       const openedDay = isoDate(p.openedAt);
-      if (day < openedDay) continue;
-      if (p.closedAt && day > isoDate(p.closedAt)) continue;
+      if (openedDay > wkEnd) continue;
+      if (p.closedAt && isoDate(p.closedAt) < wk) continue;
       const tids = effectivePlanTeachers.get(p.id) ?? [];
       const filteredTids = teacherStaffId
         ? tids.filter((id) => id === teacherStaffId)
@@ -458,8 +479,8 @@ router.get("/mtss-reports/summary", async (req, res) => {
       for (const tid of filteredTids) {
         const slot = bumpWeek(wk);
         slot.t2Expected += 1;
-        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${day}`;
-        if (t2Has.has(key)) slot.t2Completed += 1;
+        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${wk}`;
+        if (t2HasByWeek.has(key)) slot.t2Completed += 1;
       }
     }
   }
@@ -534,19 +555,20 @@ router.get("/mtss-reports/summary", async (req, res) => {
     }
     return v;
   }
-  // T2.
-  for (const day of schoolDays) {
+  // T2 — per-teacher, per-week (one obligation per week).
+  for (const wk of schoolWeeks) {
+    const wkEnd = addDays(wk, 4);
     for (const p of tier2Plans) {
       const openedDay = isoDate(p.openedAt);
-      if (day < openedDay) continue;
-      if (p.closedAt && day > isoDate(p.closedAt)) continue;
+      if (openedDay > wkEnd) continue;
+      if (p.closedAt && isoDate(p.closedAt) < wk) continue;
       const tids = effectivePlanTeachers.get(p.id) ?? [];
       for (const tid of tids) {
         if (teacherStaffId && tid !== teacherStaffId) continue;
         const slot = teacherSlot(tid);
         slot.t2Expected += 1;
-        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${day}`;
-        if (t2Has.has(key)) slot.t2Completed += 1;
+        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${wk}`;
+        if (t2HasByWeek.has(key)) slot.t2Completed += 1;
       }
     }
   }
@@ -639,11 +661,13 @@ router.get("/mtss-reports/summary", async (req, res) => {
     string,
     { t2Completed: number; t2Expected: number }
   >();
-  for (const day of schoolDays) {
+  // Per-subject — per-week obligation.
+  for (const wk of schoolWeeks) {
+    const wkEnd = addDays(wk, 4);
     for (const p of tier2Plans) {
       const openedDay = isoDate(p.openedAt);
-      if (day < openedDay) continue;
-      if (p.closedAt && day > isoDate(p.closedAt)) continue;
+      if (openedDay > wkEnd) continue;
+      if (p.closedAt && isoDate(p.closedAt) < wk) continue;
       const tids = effectivePlanTeachers.get(p.id) ?? [];
       for (const tid of tids) {
         if (teacherStaffId && tid !== teacherStaffId) continue;
@@ -656,8 +680,8 @@ router.get("/mtss-reports/summary", async (req, res) => {
           perSubjectMap.set(subj, slot);
         }
         slot.t2Expected += 1;
-        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${day}`;
-        if (t2Has.has(key)) slot.t2Completed += 1;
+        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${wk}`;
+        if (t2HasByWeek.has(key)) slot.t2Completed += 1;
       }
     }
   }
@@ -674,43 +698,44 @@ router.get("/mtss-reports/summary", async (req, res) => {
     .sort((a, b) => a.courseName.localeCompare(b.courseName));
 
   // ---- dayOfWeek (T2 only) ----
-  const dowMap = new Map<
-    number,
-    { t2Completed: number; t2Expected: number }
-  >();
-  for (let i = 1; i <= 5; i += 1) {
-    dowMap.set(i, { t2Completed: 0, t2Expected: 0 });
-  }
-  for (const day of schoolDays) {
-    const dow = dayOfWeek(day);
-    if (dow < 1 || dow > 5) continue;
-    for (const p of tier2Plans) {
-      const openedDay = isoDate(p.openedAt);
-      if (day < openedDay) continue;
-      if (p.closedAt && day > isoDate(p.closedAt)) continue;
-      const tids = effectivePlanTeachers.get(p.id) ?? [];
-      for (const tid of tids) {
-        if (teacherStaffId && tid !== teacherStaffId) continue;
-        const slot = dowMap.get(dow)!;
-        slot.t2Expected += 1;
-        const key = `${p.studentId}::${tid}::${p.interventionSubType ?? ""}::${day}`;
-        if (t2Has.has(key)) slot.t2Completed += 1;
+  // Under weekly cadence, the per-day "expected" denominator no longer
+  // makes sense (each plan owes one entry per week, not per day). So
+  // this panel now shows the DISTRIBUTION of which weekday teachers
+  // actually logged their weekly check-in on. Total across all 5 days
+  // = number of completed weekly entries. Apply the teacher filter
+  // by re-deriving from the entry list when one is set.
+  let dowFilteredCount = t2DowCount;
+  if (teacherStaffId) {
+    dowFilteredCount = new Map();
+    for (const e of t2Entries) {
+      if (e.teacherStaffId !== teacherStaffId) continue;
+      const dow = dayOfWeek(e.entryDate);
+      if (dow >= 1 && dow <= 5) {
+        dowFilteredCount.set(dow, (dowFilteredCount.get(dow) ?? 0) + 1);
       }
     }
   }
   const dowLabels = ["", "Mon", "Tue", "Wed", "Thu", "Fri"];
-  const dayOfWeekOut = Array.from(dowMap.entries())
-    .sort(([a], [b]) => a - b)
-    .map(([dow, v]) => ({
-      dow,
-      label: dowLabels[dow] ?? String(dow),
-      t2Completed: v.t2Completed,
-      t2Expected: v.t2Expected,
-      t2CompletionPct:
-        v.t2Expected > 0
-          ? Math.round((v.t2Completed / v.t2Expected) * 1000) / 10
-          : null,
-    }));
+  const dowTotal = Array.from({ length: 5 }, (_, i) => i + 1).reduce(
+    (sum, d) => sum + (dowFilteredCount.get(d) ?? 0),
+    0,
+  );
+  const dayOfWeekOut = Array.from({ length: 5 }, (_, i) => i + 1).map(
+    (dow) => {
+      const completed = dowFilteredCount.get(dow) ?? 0;
+      return {
+        dow,
+        label: dowLabels[dow] ?? String(dow),
+        t2Completed: completed,
+        // Kept for client wire compat; under weekly cadence we now
+        // expose a "% of weekly entries logged on this day" via
+        // t2CompletionPct so the bar chart can stay the same shape.
+        t2Expected: dowTotal,
+        t2CompletionPct:
+          dowTotal > 0 ? Math.round((completed / dowTotal) * 1000) / 10 : null,
+      };
+    },
+  );
 
   // ---- t3GoalTrend (weekly avg score for T3 plans) ----
   // Same teacher-filter behavior as the weekly trend above so the

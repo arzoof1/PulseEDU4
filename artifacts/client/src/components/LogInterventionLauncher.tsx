@@ -4,8 +4,8 @@
 // matching form:
 //
 //    plan.tier === 3   → Tier 3 weekly form
-//    plan.tier === 2   → Tier 2 daily form
-//    no plan / tier 1  → Tier 2 daily form is offered as a starter
+//    plan.tier === 2   → Tier 2 weekly check-in form
+//    no plan / tier 1  → Tier 2 weekly form is offered as a starter
 //                          (Core Team likely needs to create a plan).
 //
 // The CheckInOutModal lives on as a "Quick Check-in" secondary link on

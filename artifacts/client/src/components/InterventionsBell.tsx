@@ -1,7 +1,7 @@
 // Notification bell for the global header. Shows the count of
-// "owed-today" intervention rows for the signed-in teacher (Tier 2 daily
-// + Tier 3 weekly day-of-week). Hidden for Core Team users (the server
-// returns visible:false in that case).
+// intervention rows the signed-in teacher still owes this week
+// (Tier 2 weekly + Tier 3 weekly day-of-week). Hidden for Core Team
+// users (the server returns visible:false in that case).
 //
 // Polls every 60s plus on a manual refresh trigger so callers can force
 // a re-poll after saving an entry.
@@ -120,7 +120,7 @@ export default function InterventionsBell({ refreshKey, onClick }: Props) {
       type="button"
       onClick={onClick}
       className="interventions-bell-btn"
-      title={`${count} intervention${count === 1 ? "" : "s"} to log today`}
+      title={`${count} intervention${count === 1 ? "" : "s"} to log this week`}
       style={{
         position: "relative",
         background: "rgba(168, 85, 247, 0.12)",
@@ -131,7 +131,7 @@ export default function InterventionsBell({ refreshKey, onClick }: Props) {
         borderRadius: 999,
         marginRight: "0.25rem",
       }}
-      aria-label={`${count} interventions owed today`}
+      aria-label={`${count} interventions owed this week`}
     >
       <span className="interventions-bell-icon" aria-hidden="true">
         🔔

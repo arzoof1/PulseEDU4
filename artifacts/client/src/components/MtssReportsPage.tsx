@@ -701,7 +701,9 @@ export default function MtssReportsPage({
       {/* ---- day-of-week heatmap ---- */}
       {data && data.dayOfWeek.length > 0 && (
         <div className="mtss-reports-card" style={cardStyle}>
-          <h3 style={{ marginTop: 0 }}>Completion by day of week (Tier 2)</h3>
+          <h3 style={{ marginTop: 0 }}>
+            Weekly check-in: which day teachers log on (Tier 2)
+          </h3>
           <div
             style={{
               display: "grid",

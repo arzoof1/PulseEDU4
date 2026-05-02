@@ -4585,3 +4585,59 @@ needs it.)
   Print-to-PDF button backed by a `@media print` stylesheet that
   hides the back button and filters so the PDF is
   presentation-ready.
+
+## Tier 2 weekly cadence (May 2 2026)
+
+Tier 2 documentation switched from DAILY to WEEKLY. One entry per
+(student, teacher) per Mon-Fri week is the obligation; the bell, the
+completion-report and the Reports page all use this denominator.
+
+**Server changes:**
+- `artifacts/api-server/src/routes/tier2.ts` — POST validates that
+  non-Core-Team teachers can only log a weekday date in the last 14
+  calendar days (this week + last week) and never in the future.
+  Core Team is exempt so they can repair history.
+- `artifacts/api-server/src/routes/interventionsBell.ts`:
+  - `owed-today` Tier 2: queries entries across the current Mon-Fri
+    week (not just today) and shows owed if no entry exists for the
+    (student, subType) pair anywhere in the week. Weekend skip
+    removed — the bell stays visible Sat/Sun.
+  - `completion-report` Tier 2: `expected = 1`, `completed = 1` if
+    any entry exists in the report week (formerly `expected = 5` and
+    `completed = count of distinct dates`).
+  - Unused `isWeekend` helper deleted.
+- `artifacts/api-server/src/routes/mtssReports.ts` — every Tier 2
+  loop (weeklyTrend, perTeacher, perSubject) iterates over
+  `schoolWeeks` (de-duped Mondays in range) instead of `schoolDays`,
+  with one obligation per (week, plan, teacher). The `dayOfWeek`
+  panel was repurposed: instead of "% completion per Mon-Fri" it now
+  shows the DISTRIBUTION of which weekday teachers actually log
+  their weekly check-in on (% of total weekly entries falling on
+  each day). Plan inclusion now uses week-overlap (openedAt ≤
+  Friday and closedAt ≥ Monday) instead of day-by-day.
+
+**Client changes:**
+- `Tier2DailyForm.tsx` (filename kept for stability):
+  - Title is "Tier 2 — Weekly check-in for {studentName}".
+  - Date input now constrained `min = mondayOfThisWeek - 7 days`,
+    `max = today`. Notes placeholder asks about discussion topic
+    and curriculum/program (e.g. WhyTry, Zones of Regulation).
+  - Submit button label is "Save weekly check-in".
+- `InterventionsTodayPage.tsx` — page title "My Interventions This
+  Week", section heading "Tier 2 — weekly check-in · week of
+  {weekStartDate}", per-row label "Tier 2 weekly".
+- `InterventionsBell.tsx` — bell title/aria changed from
+  "to log today" → "to log this week".
+- `LogInterventionLauncher.tsx` — comment updated.
+- `MtssReportsPage.tsx` — day-of-week chart heading rewritten to
+  "Weekly check-in: which day teachers log on (Tier 2)" so the
+  chart's new meaning is clear.
+
+**Demo data re-seed (Apr 26 → May 2 2026):**
+All 667,240 daily Tier 2 entries were deleted. A new SQL seed (run
+in code_execution) inserted ONE entry per (active T2 plan ×
+effective teacher × Monday in last 60 days) at ~90% completion,
+with a deterministic random weekday placement and weekly notes. All
+7 schools with active T2 plans (1, 2, 3, 4, 5, 36, 220) now have
+weekly demo data. Total: 121,839 entries, perfectly uniform Mon-Fri
+distribution at school 2 (5074/4914/5140/5161/5032).
