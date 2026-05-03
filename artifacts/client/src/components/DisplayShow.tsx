@@ -45,11 +45,13 @@ pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
 interface PublicItem {
   id: number;
-  kind: "image" | "video" | "audio" | "pdf";
-  mimeType: string;
+  kind: "image" | "video" | "audio" | "pdf" | "url";
+  mimeType: string | null;
   durationSeconds: number | null;
   orderIndex: number;
   mediaUrl: string;
+  // Only set for kind=url; the page to embed in an iframe.
+  url: string | null;
 }
 
 interface HouseTotals {
@@ -501,7 +503,52 @@ function ItemSlide({
   if (item.kind === "pdf") {
     return <PdfSlide item={item} defaultDuration={defaultDuration} onDone={onDone} />;
   }
+  if (item.kind === "url") {
+    return <UrlSlide item={item} defaultDuration={defaultDuration} onDone={onDone} />;
+  }
   return null;
+}
+
+// URL slide — embeds the page in a sandboxed iframe and advances after
+// `durationSeconds` (or playlist default). We can't observe load state
+// for cross-origin frames, so the timer starts immediately.
+function UrlSlide({
+  item,
+  defaultDuration,
+  onDone,
+}: {
+  item: PublicItem;
+  defaultDuration: number;
+  onDone: () => void;
+}) {
+  // If the server somehow shipped a url-kind without a url, advance
+  // immediately (capped at 1s) instead of holding the loop hostage.
+  // Calling useTimer unconditionally keeps the hook order stable.
+  useTimer(
+    item.url ? item.durationSeconds ?? defaultDuration : 1,
+    onDone,
+  );
+  if (!item.url) return null;
+  return (
+    <iframe
+      src={item.url}
+      title="Embedded URL slide"
+      // Deliberately omit `allow-same-origin` — combining it with
+      // `allow-scripts` lets a same-origin embed remove the sandbox
+      // entirely. Most public dashboards, weather widgets, and news
+      // sites still render fine without it; if a particular page
+      // refuses to load (cookies / login) the admin should pick a
+      // different URL or upload a screenshot instead.
+      sandbox="allow-scripts allow-forms allow-popups"
+      referrerPolicy="no-referrer"
+      style={{
+        width: "100%",
+        height: "100%",
+        border: 0,
+        background: "white",
+      }}
+    />
+  );
 }
 
 function useTimer(durationSeconds: number, onDone: () => void) {

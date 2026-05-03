@@ -26,6 +26,46 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Per-display schedule overrides — edit + URL slides (May 2026)
+
+Follow-on to the override feature below. Two additions:
+
+1. **Editable overrides** — each row in the weekly grid now has Edit
+   and Delete. Edit reuses `AddOverrideDialog` in a new `mode="edit"`
+   variant that PATCHes the existing row instead of POSTing a new one.
+2. **URL slides** — playlist items now support `kind = "url"`. The
+   "+ Add URL" button next to "+ Upload file" prompts for an
+   https:// URL + label and registers a URL slide. The cycler
+   embeds it via a sandboxed iframe (`allow-scripts allow-forms
+   allow-popups`, *no* `allow-same-origin` — combining those two
+   defeats the sandbox) and advances after the per-item duration.
+3. **Quick-create playlist from the override dialog** — "+ New
+   playlist" inside `AddOverrideDialog` POSTs `/displays/playlists`,
+   auto-selects the new playlist, and bubbles a refresh up so the
+   dropdown updates. Designed for the "make a passing-period playlist
+   in seconds" workflow.
+
+Schema changes:
+- `display_playlist_items`: added `url text` (nullable), dropped
+  `NOT NULL` on `object_path` / `original_filename` / `mime_type`,
+  added CHECK constraint
+  `display_playlist_items_url_xor_object_check` enforcing
+  `(kind='url' AND url IS NOT NULL AND object_path IS NULL)
+   OR (kind<>'url' AND object_path/original_filename/mime_type IS NOT NULL AND url IS NULL)`.
+
+Server changes (`routes/displays.ts`):
+- `isValidEmbedUrl()` enforces http/https AND blocks
+  `localhost`/`*.localhost`/`0.0.0.0`/`127.x`/`10.x`/`192.168.x`/
+  `172.16-31.x`/`::1`/`fe80:`/`fc*`/`fd*` so an admin can't embed an
+  internal admin panel reachable from the TV's switch port.
+- POST `/playlists/:id/items` now branches: `{kind:"url", url, originalFilename?}`
+  inserts a url-kind item; the legacy upload payload still works
+  unchanged.
+- Public fetch returns `url` on every item (and on every override
+  target item).
+- `GET /displays/public/media/:itemId` short-circuits with 404 for
+  url-kind items (they have no backing object_path).
+
 ## Per-display schedule overrides (May 2026)
 
 A display (a `display_playlists` row whose public URL the TV opens) plays

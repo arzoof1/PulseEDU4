@@ -95,6 +95,39 @@ function detectKind(mimeType: string): "image" | "video" | "audio" | "pdf" | nul
   return null;
 }
 
+// Lightweight URL validator. We allow http/https only — `file://`
+// and other schemes have no place on a hallway TV. We also reject
+// localhost / loopback / private-network hostnames so an admin can't
+// (accidentally or otherwise) embed an internal admin panel that
+// might be reachable from the TV's switch port.
+function isValidEmbedUrl(s: string): boolean {
+  try {
+    const u = new URL(s);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase();
+    if (
+      host === "localhost" ||
+      host === "0.0.0.0" ||
+      host.endsWith(".localhost") ||
+      // IPv4 loopback + RFC1918 private ranges
+      /^127\./.test(host) ||
+      /^10\./.test(host) ||
+      /^192\.168\./.test(host) ||
+      /^172\.(1[6-9]|2\d|3[01])\./.test(host) ||
+      // IPv6 loopback / link-local / unique-local
+      host === "::1" ||
+      host.startsWith("fe80:") ||
+      host.startsWith("fc") ||
+      host.startsWith("fd")
+    ) {
+      return false;
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Look up a playlist and confirm the caller can edit it. Returns the
 // row on success, or null after writing the appropriate error response.
 async function loadPlaylistForEdit(
@@ -493,29 +526,12 @@ router.post("/displays/playlists/:id/items", async (req, res) => {
     const pl = await loadPlaylistForEdit(req, res, staff);
     if (!pl) return;
 
-    const objectPath =
-      typeof req.body?.objectPath === "string" ? req.body.objectPath : "";
-    const originalFilename =
-      typeof req.body?.originalFilename === "string"
-        ? req.body.originalFilename.slice(0, 200)
-        : "";
-    const mimeType =
-      typeof req.body?.mimeType === "string" ? req.body.mimeType : "";
-    const sizeBytesRaw = Number.parseInt(String(req.body?.sizeBytes ?? 0), 10);
-    const sizeBytes = Number.isFinite(sizeBytesRaw) && sizeBytesRaw > 0 ? sizeBytesRaw : 0;
-    if (!objectPath.startsWith("/objects/") || !mimeType || !originalFilename) {
-      res.status(400).json({
-        error: "objectPath, mimeType, and originalFilename are required",
-      });
-      return;
-    }
-    const kind = detectKind(mimeType);
-    if (!kind) {
-      res.status(400).json({
-        error: `Unsupported file type: ${mimeType}. Allowed: PNG/JPG, MP4, WAV/MP3, PDF.`,
-      });
-      return;
-    }
+    // Two payload shapes:
+    //   - upload  → { objectPath, originalFilename, mimeType, sizeBytes }
+    //   - url     → { kind: "url", url, originalFilename? }
+    // We branch up front so callers don't have to provide unused fields.
+    const isUrl =
+      req.body?.kind === "url" || typeof req.body?.url === "string";
 
     let durationSeconds: number | null = null;
     if (req.body?.durationSeconds !== undefined && req.body.durationSeconds !== null) {
@@ -538,20 +554,71 @@ router.post("/displays/playlists/:id/items", async (req, res) => {
       .from(displayPlaylistItemsTable)
       .where(eq(displayPlaylistItemsTable.playlistId, pl.id));
 
-    const [inserted] = await db
-      .insert(displayPlaylistItemsTable)
-      .values({
-        playlistId: pl.id,
-        orderIndex: maxIdx + 1,
-        kind,
-        objectPath,
-        originalFilename,
-        mimeType,
-        sizeBytes,
-        durationSeconds,
-        enabled: true,
-      })
-      .returning();
+    let inserted;
+    if (isUrl) {
+      const url = typeof req.body?.url === "string" ? req.body.url.trim() : "";
+      if (!isValidEmbedUrl(url)) {
+        res.status(400).json({ error: "url must be a valid http(s) URL" });
+        return;
+      }
+      const label =
+        typeof req.body?.originalFilename === "string" && req.body.originalFilename.trim()
+          ? req.body.originalFilename.trim().slice(0, 200)
+          : url.slice(0, 200);
+      [inserted] = await db
+        .insert(displayPlaylistItemsTable)
+        .values({
+          playlistId: pl.id,
+          orderIndex: maxIdx + 1,
+          kind: "url",
+          objectPath: null,
+          originalFilename: label,
+          mimeType: "text/url",
+          sizeBytes: 0,
+          url,
+          durationSeconds,
+          enabled: true,
+        })
+        .returning();
+    } else {
+      const objectPath =
+        typeof req.body?.objectPath === "string" ? req.body.objectPath : "";
+      const originalFilename =
+        typeof req.body?.originalFilename === "string"
+          ? req.body.originalFilename.slice(0, 200)
+          : "";
+      const mimeType =
+        typeof req.body?.mimeType === "string" ? req.body.mimeType : "";
+      const sizeBytesRaw = Number.parseInt(String(req.body?.sizeBytes ?? 0), 10);
+      const sizeBytes = Number.isFinite(sizeBytesRaw) && sizeBytesRaw > 0 ? sizeBytesRaw : 0;
+      if (!objectPath.startsWith("/objects/") || !mimeType || !originalFilename) {
+        res.status(400).json({
+          error: "objectPath, mimeType, and originalFilename are required",
+        });
+        return;
+      }
+      const kind = detectKind(mimeType);
+      if (!kind) {
+        res.status(400).json({
+          error: `Unsupported file type: ${mimeType}. Allowed: PNG/JPG, MP4, WAV/MP3, PDF.`,
+        });
+        return;
+      }
+      [inserted] = await db
+        .insert(displayPlaylistItemsTable)
+        .values({
+          playlistId: pl.id,
+          orderIndex: maxIdx + 1,
+          kind,
+          objectPath,
+          originalFilename,
+          mimeType,
+          sizeBytes,
+          durationSeconds,
+          enabled: true,
+        })
+        .returning();
+    }
     await bumpUpdatedAt(pl.id);
     res.status(201).json({ item: inserted });
   } catch (e) {
@@ -750,6 +817,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         mimeType: displayPlaylistItemsTable.mimeType,
         durationSeconds: displayPlaylistItemsTable.durationSeconds,
         orderIndex: displayPlaylistItemsTable.orderIndex,
+        url: displayPlaylistItemsTable.url,
       })
       .from(displayPlaylistItemsTable)
       .where(
@@ -873,11 +941,12 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       number,
       Array<{
         id: number;
-        kind: "image" | "video" | "audio" | "pdf";
-        mimeType: string;
+        kind: "image" | "video" | "audio" | "pdf" | "url";
+        mimeType: string | null;
         durationSeconds: number | null;
         orderIndex: number;
         mediaUrl: string;
+        url: string | null;
       }>
     >();
     if (overrideTargetIds.length > 0) {
@@ -889,6 +958,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
           mimeType: displayPlaylistItemsTable.mimeType,
           durationSeconds: displayPlaylistItemsTable.durationSeconds,
           orderIndex: displayPlaylistItemsTable.orderIndex,
+          url: displayPlaylistItemsTable.url,
         })
         .from(displayPlaylistItemsTable)
         .where(
@@ -900,10 +970,11 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         .orderBy(asc(displayPlaylistItemsTable.orderIndex))) as Array<{
           id: number;
           playlistId: number;
-          kind: "image" | "video" | "audio" | "pdf";
-          mimeType: string;
+          kind: "image" | "video" | "audio" | "pdf" | "url";
+          mimeType: string | null;
           durationSeconds: number | null;
           orderIndex: number;
+          url: string | null;
         }>;
       for (const it of allOverrideItems) {
         let bucket = overrideItemsByPlaylistId.get(it.playlistId);
@@ -918,6 +989,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
           durationSeconds: it.durationSeconds,
           orderIndex: it.orderIndex,
           mediaUrl: `/api/displays/public/media/${it.id}`,
+          url: it.url,
         });
       }
     }
@@ -949,6 +1021,9 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         // Always serve via the public media endpoint, never the
         // raw `/api/storage/objects/*` path (that one is auth-gated).
         mediaUrl: `/api/displays/public/media/${it.id}`,
+        // For kind=url items the cycler embeds this directly; null
+        // for uploaded media.
+        url: it.url,
       })),
       overrides: overrideRows.map((o) => ({
         id: o.id,
@@ -1004,6 +1079,7 @@ router.get("/displays/public/media/:itemId", async (req, res) => {
     }
     const [item] = await db
       .select({
+        kind: displayPlaylistItemsTable.kind,
         objectPath: displayPlaylistItemsTable.objectPath,
         mimeType: displayPlaylistItemsTable.mimeType,
       })
@@ -1011,6 +1087,13 @@ router.get("/displays/public/media/:itemId", async (req, res) => {
       .where(eq(displayPlaylistItemsTable.id, itemId));
     if (!item) {
       res.status(404).json({ error: "Not found" });
+      return;
+    }
+    // url-kind items have no backing object — the cycler embeds the
+    // page directly via iframe, so this endpoint should never be hit
+    // for them. Return 404 instead of crashing on a null object_path.
+    if (item.kind === "url" || !item.objectPath) {
+      res.status(404).json({ error: "No media for this item" });
       return;
     }
     try {

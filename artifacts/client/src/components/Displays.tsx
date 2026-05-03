@@ -33,14 +33,19 @@ interface PlaylistItem {
   id: number;
   playlistId: number;
   orderIndex: number;
-  kind: "image" | "video" | "audio" | "pdf";
-  objectPath: string;
-  originalFilename: string;
-  mimeType: string;
+  kind: "image" | "video" | "audio" | "pdf" | "url";
+  // For uploaded media these come back from object storage. For
+  // kind=url items they are NULL on the server and we substitute a
+  // sensible label client-side.
+  objectPath: string | null;
+  originalFilename: string | null;
+  mimeType: string | null;
   sizeBytes: number;
   durationSeconds: number | null;
   enabled: boolean;
   createdAt: string;
+  // Only populated for kind=url.
+  url: string | null;
 }
 
 interface PlaylistDetail {
@@ -132,6 +137,8 @@ function kindIcon(kind: PlaylistItem["kind"]): string {
       return "🔊";
     case "pdf":
       return "📄";
+    case "url":
+      return "🔗";
   }
 }
 
@@ -466,6 +473,54 @@ function PlaylistEditor({
     await patchPlaylist({ itemOrder: items.map((i) => i.id) });
   }
 
+  async function handleAddUrl() {
+    // Lightweight prompt-based flow — keeps the editor pageful but
+    // lets staff drop in a Slides / weather / district news embed in
+    // seconds. We pre-validate the protocol client-side too.
+    const raw = window.prompt(
+      "Paste an https:// URL to embed as a slide:",
+      "https://",
+    );
+    if (!raw) return;
+    const url = raw.trim();
+    try {
+      const u = new URL(url);
+      if (u.protocol !== "http:" && u.protocol !== "https:") {
+        throw new Error("Only http:// or https:// URLs are allowed");
+      }
+    } catch {
+      window.alert("That doesn't look like a valid URL.");
+      return;
+    }
+    const label = window.prompt(
+      "Optional label (shown in the editor list):",
+      url,
+    );
+    try {
+      const r = await authFetch(
+        `/api/displays/playlists/${playlistId}/items`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            kind: "url",
+            url,
+            originalFilename: label ?? url,
+          }),
+        },
+      );
+      const j = (await r.json()) as
+        | { item: PlaylistItem }
+        | { error: string };
+      if (!r.ok || "error" in j) {
+        throw new Error(("error" in j && j.error) || "Failed to add URL");
+      }
+      await refresh();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to add URL");
+    }
+  }
+
   async function handleUpload(file: File) {
     setUploading(true);
     try {
@@ -753,7 +808,14 @@ function PlaylistEditor({
               }}
             />
             <button
-              style={btnPrimary}
+              style={btn}
+              onClick={() => void handleAddUrl()}
+              title="Embed any web page as a slide"
+            >
+              + Add URL
+            </button>
+            <button
+              style={{ ...btnPrimary, marginLeft: 8 }}
               disabled={uploading}
               onClick={() => fileInputRef.current?.click()}
             >
@@ -812,11 +874,13 @@ function PlaylistEditor({
                       textOverflow: "ellipsis",
                       whiteSpace: "nowrap",
                     }}
-                    title={it.originalFilename}
+                    title={it.url ?? it.originalFilename ?? ""}
                   >
-                    {it.originalFilename}
+                    {it.kind === "url"
+                      ? (it.originalFilename ?? it.url ?? "URL")
+                      : it.originalFilename}
                     <div style={{ fontSize: 11, color: "#9ca3af" }}>
-                      {it.mimeType}
+                      {it.kind === "url" ? it.url : it.mimeType}
                     </div>
                   </td>
                   <td style={{ padding: "8px 6px" }}>
@@ -929,6 +993,8 @@ function OverridesEditor({
   const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState<"single" | "bulk" | null>(null);
+  // When set, the dialog opens in EDIT mode for this row.
+  const [editing, setEditing] = useState<OverrideRow | null>(null);
 
   async function refresh() {
     setLoading(true);
@@ -1066,19 +1132,31 @@ function OverridesEditor({
                         >
                           → {nameFor(row.playlistId)}
                         </div>
-                        <button
-                          style={{
-                            ...btn,
-                            padding: "2px 6px",
-                            fontSize: 10,
-                            marginTop: 4,
-                            color: "#b91c1c",
-                            borderColor: "#fca5a5",
-                          }}
-                          onClick={() => void deleteRow(row)}
-                        >
-                          Delete
-                        </button>
+                        <div style={{ display: "flex", gap: 4, marginTop: 4 }}>
+                          <button
+                            style={{
+                              ...btn,
+                              padding: "2px 6px",
+                              fontSize: 10,
+                              flex: 1,
+                            }}
+                            onClick={() => setEditing(row)}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            style={{
+                              ...btn,
+                              padding: "2px 6px",
+                              fontSize: 10,
+                              color: "#b91c1c",
+                              borderColor: "#fca5a5",
+                            }}
+                            onClick={() => void deleteRow(row)}
+                          >
+                            Delete
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -1092,11 +1170,28 @@ function OverridesEditor({
       {showAdd && (
         <AddOverrideDialog
           mode={showAdd}
+          schoolId={schoolId}
           displayId={displayId}
           playlists={playlists}
+          onPlaylistsChanged={refresh}
           onClose={() => setShowAdd(null)}
           onSaved={async () => {
             setShowAdd(null);
+            await refresh();
+          }}
+        />
+      )}
+      {editing && (
+        <AddOverrideDialog
+          mode="edit"
+          schoolId={schoolId}
+          displayId={displayId}
+          playlists={playlists}
+          editing={editing}
+          onPlaylistsChanged={refresh}
+          onClose={() => setEditing(null)}
+          onSaved={async () => {
+            setEditing(null);
             await refresh();
           }}
         />
@@ -1107,23 +1202,35 @@ function OverridesEditor({
 
 function AddOverrideDialog({
   mode,
+  schoolId,
   displayId,
   playlists,
+  editing,
+  onPlaylistsChanged,
   onClose,
   onSaved,
 }: {
-  mode: "single" | "bulk";
+  mode: "single" | "bulk" | "edit";
+  schoolId: number;
   displayId: number;
   playlists: PlaylistRow[];
+  // Pre-populated row when mode === "edit". Ignored otherwise.
+  editing?: OverrideRow;
+  // Called after a quick-create so the parent re-fetches the dropdown.
+  onPlaylistsChanged?: () => void | Promise<void>;
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
   const [playlistId, setPlaylistId] = useState<number | "">(
-    playlists[0]?.id ?? "",
+    editing?.playlistId ?? playlists[0]?.id ?? "",
   );
-  const [days, setDays] = useState<Set<number>>(new Set([1, 2, 3, 4, 5]));
-  const [startTime, setStartTime] = useState("08:30");
-  const [endTime, setEndTime] = useState("09:00");
+  const [days, setDays] = useState<Set<number>>(
+    editing
+      ? new Set([editing.dayOfWeek])
+      : new Set([1, 2, 3, 4, 5]),
+  );
+  const [startTime, setStartTime] = useState(editing?.startTime ?? "08:30");
+  const [endTime, setEndTime] = useState(editing?.endTime ?? "09:00");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -1132,6 +1239,35 @@ function AddOverrideDialog({
     if (n.has(idx)) n.delete(idx);
     else n.add(idx);
     setDays(n);
+  }
+
+  // Quick-create: spin up a new playlist for this period (e.g.
+  // "Passing Period 8:30") and select it. Saves the staff a trip to
+  // the playlist list.
+  async function quickCreatePlaylist() {
+    const suggested = `Override ${startTime}–${endTime}`;
+    const name = window.prompt(
+      "Name for the new playlist (you can add images / URLs to it after):",
+      suggested,
+    );
+    if (!name || !name.trim()) return;
+    try {
+      const r = await authFetch(`/api/displays/playlists`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ schoolId, name: name.trim() }),
+      });
+      const j = (await r.json()) as
+        | { playlist: PlaylistRow }
+        | { error: string };
+      if (!r.ok || "error" in j) {
+        throw new Error(("error" in j && j.error) || "Failed to create");
+      }
+      setPlaylistId(j.playlist.id);
+      await onPlaylistsChanged?.();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to create playlist");
+    }
   }
 
   async function save() {
@@ -1148,13 +1284,31 @@ function AddOverrideDialog({
       setErr("Pick at least one day");
       return;
     }
+    if (mode === "edit" && days.size !== 1) {
+      setErr("Pick exactly one day");
+      return;
+    }
     if (endTime <= startTime) {
       setErr("End time must be after start time");
       return;
     }
     setSaving(true);
     try {
-      if (mode === "single") {
+      if (mode === "edit" && editing) {
+        const day = Array.from(days)[0];
+        const r = await authFetch(
+          `/api/displays/playlists/${displayId}/overrides/${editing.id}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ playlistId, dayOfWeek: day, startTime, endTime }),
+          },
+        );
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(j?.error ?? "Failed");
+        }
+      } else if (mode === "single") {
         const day = Array.from(days)[0];
         const r = await authFetch(
           `/api/displays/playlists/${displayId}/overrides`,
@@ -1220,16 +1374,42 @@ function AddOverrideDialog({
         onClick={(e) => e.stopPropagation()}
       >
         <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
-          {mode === "single" ? "Add override" : "Bulk add overrides"}
+          {mode === "edit"
+            ? "Edit override"
+            : mode === "single"
+              ? "Add override"
+              : "Bulk add overrides"}
         </div>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
-          {mode === "single"
-            ? "One window on one day."
-            : "Same window applied to every selected day (one row per day)."}
+          {mode === "edit"
+            ? "Change the day, time, or playlist for this window."
+            : mode === "single"
+              ? "One window on one day."
+              : "Same window applied to every selected day (one row per day)."}
         </div>
         <div style={{ display: "grid", gap: 12 }}>
-          <label>
-            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Play this playlist</div>
+          <div>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                marginBottom: 4,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              }}
+            >
+              <span>Play this playlist</span>
+              <button
+                type="button"
+                style={{ ...btn, padding: "2px 8px", fontSize: 11 }}
+                onClick={() => void quickCreatePlaylist()}
+                disabled={saving}
+                title="Create a brand new playlist for this period — you'll add images and URLs to it from the main displays list."
+              >
+                + New playlist
+              </button>
+            </div>
             <select
               style={{ ...inputStyle, width: "100%" }}
               value={playlistId}
@@ -1244,7 +1424,11 @@ function AddOverrideDialog({
                 </option>
               ))}
             </select>
-          </label>
+            <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+              Tip: open the new playlist from the displays list to add
+              images or URLs (e.g. a school news site, weather page).
+            </div>
+          </div>
           <div style={{ display: "flex", gap: 12 }}>
             <label style={{ flex: 1 }}>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Start</div>
