@@ -1,25 +1,28 @@
 @import "tailwindcss";
 
 @theme inline {
-  --color-primary: var(--slide-primary);
-  --color-accent: var(--slide-accent);
   --color-bg: var(--slide-bg);
   --color-text: var(--slide-text);
   --color-muted: var(--slide-muted);
+  --color-blue: var(--slide-blue);
+  --color-purple: var(--slide-purple);
+  --color-card: var(--slide-card);
+  --color-border: var(--slide-border);
   --font-display: var(--font-display-family);
   --font-body: var(--font-body-family);
 }
 
 :root {
-  /* Replace these with brand colors */
-  --slide-primary: #4f46e5;
-  --slide-accent: #06b6d4;
-  --slide-bg: #f8fafc;
-  --slide-text: #0f172a;
-  --slide-muted: #64748b;
+  --slide-bg: #0C0F1A;
+  --slide-text: #FFFFFF;
+  --slide-muted: rgba(255, 255, 255, 0.7);
+  --slide-blue: #4F7FFF;
+  --slide-purple: #7C6BF0;
+  --slide-card: #131726;
+  --slide-border: rgba(255, 255, 255, 0.1);
   --font-display-family: "Inter", system-ui, sans-serif;
   --font-body-family: "Inter", system-ui, sans-serif;
-  color-scheme: light;
+  color-scheme: dark;
 }
 
 html,

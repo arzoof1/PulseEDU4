@@ -168,3 +168,9 @@ id = "EGhZASfWPpspW3zvRcF22"
 uri = "file://.local/outputs/PulseEDU-School-Pitch-Deck.pptx"
 type = "slides"
 title = "PulseEDU School Pitch Deck (PPTX)"
+
+[[outputs]]
+id = "883DmHzpe0tFzN2-Ylz4M"
+uri = "file://.local/outputs/PulseEDU-Feature-Catalog.pdf"
+type = "pdf"
+title = "PulseEDU Feature Catalog (PDF)"

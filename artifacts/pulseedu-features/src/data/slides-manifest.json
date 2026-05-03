@@ -1,1 +1,22 @@
-[]
+[
+  { "id": "cover", "position": 1, "filepath": "src/pages/slides/Cover.tsx", "title": "PulseEDU Feature Catalog", "description": "Title slide", "speakerNotes": "" },
+  { "id": "tiers", "position": 2, "filepath": "src/pages/slides/Tiers.tsx", "title": "Three tiers, one app", "description": "Tier overview", "speakerNotes": "" },
+  { "id": "pbis", "position": 3, "filepath": "src/pages/slides/PbisPoints.tsx", "title": "PBIS Points & Store", "description": "Basic feature", "speakerNotes": "" },
+  { "id": "hall-passes", "position": 4, "filepath": "src/pages/slides/HallPasses.tsx", "title": "Hall Passes", "description": "Basic feature", "speakerNotes": "" },
+  { "id": "tardy-pass", "position": 5, "filepath": "src/pages/slides/TardyPass.tsx", "title": "Tardy Pass", "description": "Basic feature", "speakerNotes": "" },
+  { "id": "family-comm", "position": 6, "filepath": "src/pages/slides/FamilyComm.tsx", "title": "Family Comm", "description": "Basic feature", "speakerNotes": "" },
+  { "id": "mtss-plans", "position": 7, "filepath": "src/pages/slides/MtssPlans.tsx", "title": "MTSS Plans", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "behavior-specialist", "position": 8, "filepath": "src/pages/slides/BehaviorSpecialist.tsx", "title": "Behavior Specialist Workspace", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "iss-dashboard", "position": 9, "filepath": "src/pages/slides/IssDashboard.tsx", "title": "ISS Dashboard", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "displays", "position": 10, "filepath": "src/pages/slides/Displays.tsx", "title": "Displays", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "bell-schedule", "position": 11, "filepath": "src/pages/slides/BellSchedule.tsx", "title": "Bell Schedule", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "early-warning", "position": 12, "filepath": "src/pages/slides/EarlyWarning.tsx", "title": "Early Warning", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "academics", "position": 13, "filepath": "src/pages/slides/Academics.tsx", "title": "Academics", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "houses", "position": 14, "filepath": "src/pages/slides/Houses.tsx", "title": "Houses", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "parent-portal", "position": 15, "filepath": "src/pages/slides/ParentPortal.tsx", "title": "Parent Portal (HeartBEAT)", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "accommodations", "position": 16, "filepath": "src/pages/slides/Accommodations.tsx", "title": "Accommodations", "description": "Pro feature", "speakerNotes": "" },
+  { "id": "data-imports", "position": 17, "filepath": "src/pages/slides/DataImports.tsx", "title": "Data Imports", "description": "Enterprise feature", "speakerNotes": "" },
+  { "id": "log-intervention", "position": 18, "filepath": "src/pages/slides/LogIntervention.tsx", "title": "Log Intervention", "description": "Enterprise feature", "speakerNotes": "" },
+  { "id": "request-pullout", "position": 19, "filepath": "src/pages/slides/RequestPullout.tsx", "title": "Request Pullout", "description": "Enterprise feature", "speakerNotes": "" },
+  { "id": "cross-school", "position": 20, "filepath": "src/pages/slides/CrossSchoolAdmin.tsx", "title": "Cross-School Admin", "description": "Enterprise feature", "speakerNotes": "" }
+]
