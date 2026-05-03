@@ -26,6 +26,70 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Display overrides — date-range scheduling + calendar (May 2026)
+
+Override rows now carry an optional `effective_from` / `effective_until`
+date pair that gates *which* dates the row fires on, on top of the
+existing `day_of_week` weekly recurrence.
+
+Schema (`display_playlist_overrides`):
+- `effective_from date` / `effective_until date` (drizzle `mode:"string"`,
+  both nullable). Three legal states (validator enforces — one-sided
+  bounds are rejected):
+  - `(null, null)` → recurring weekly forever ("until removed")
+  - `(d, d)` → one specific date
+  - `(from, until)` with `from < until` → bounded date range
+    (typically Mon–Sun for "one specific week")
+- Stored as strings to compare directly against today's local
+  `YYYY-MM-DD`; we never `new Date("YYYY-MM-DD")` them (UTC pitfall).
+
+Server (`displayOverrides.ts`):
+- `parseOptionalDate` checks both regex AND real-calendar validity
+  (rejects 2026-02-31 etc., which `new Date(y,m-1,d)` would silently
+  roll over).
+- `validateOverrideInput` enforces the 3 legal recurrence states and
+  is wired into single POST, bulk POST, single PATCH (with merge
+  from existing), and group PATCH.
+- Group PATCH (`/group/:groupId`) intentionally does NOT touch
+  `effective_from` / `effective_until`. Each row in a passing-period
+  group keeps its own date range; collapsing them all to one value
+  would silently lose per-row bounds the user can't see in the
+  group-scope edit dialog.
+- New `GET /displays/calendar?fromDate=YYYY-MM-DD&days=28` (max 56,
+  `canManageDisplays`-gated) does the (date × display) rollup
+  server-side: walks each date in the range, matches each override
+  against `dayOfWeek === weekday(date)` AND date ∈ [from, until],
+  and returns `{ fromDate, days, displays, cells: [{date, dayOfWeek,
+  displayId, displayName, windows: [...] }] }`. Each window is
+  flagged `isOneOff` (from===until) or `isBoundedWeek` (from<until).
+
+Public read API (`displays.ts`):
+- `/displays/public/playlists/:id` includes `effectiveFrom` /
+  `effectiveUntil` on every override so the cycler can apply the
+  same date-gate offline.
+
+Cycler (`DisplayShow.tsx`):
+- `pickActiveOverride` skips rows where today's local
+  `YYYY-MM-DD` is outside the row's bounds. `toLocalISODate(now)`
+  formats today without a UTC trip.
+
+Client UI (`Displays.tsx`):
+- `AddOverrideDialog` gained a "Repeat" picker with three pills:
+  - "Every week (until removed)" → `(null, null)`
+  - "One specific week" → snaps the picked date to that ISO week's
+    Monday and sets `until = from + 6` days; the day-picker still
+    applies inside that week
+  - "One specific day" → `from = until = picked date`; the
+    day-picker is hidden and `dayOfWeek` is auto-derived from the
+    picked date's weekday
+- The picker is hidden in group-scope edit (per-row dates preserved
+  server-side regardless).
+- New 📅 Calendar button on the displays-list header opens
+  `DisplaysCalendarModal` — read-only 4-week grid (current week +
+  3 ahead, Mon–Sun rows) showing every display × every day with
+  resolved override windows. Today is highlighted; windows render
+  with badges: ⛓ (group), ★ (one-off), ⏳ (bounded week).
+
 ## Per-display overrides — passing-period groups (May 2026)
 
 Bulk-add now stitches the inserted rows together as a "passing period

@@ -125,7 +125,21 @@ interface PublicOverride {
   dayOfWeek: number;
   startTime: string;
   endTime: string;
+  // Date-range gating (YYYY-MM-DD). Both null = recurs every matching
+  // dayOfWeek forever. Either set = the row only fires on a date that
+  // falls within [effectiveFrom, effectiveUntil] inclusive.
+  effectiveFrom: string | null;
+  effectiveUntil: string | null;
   items: PublicItem[];
+}
+
+// Local YYYY-MM-DD for the given Date (used to compare against the
+// override's date bounds, which are stored as strings without TZ).
+function toLocalISODate(d: Date): string {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
 }
 
 // Returns the override that should be playing right now, or null for
@@ -137,9 +151,12 @@ function pickActiveOverride(
 ): PublicOverride | null {
   const today = now.getDay();
   const cur = now.getHours() * 60 + now.getMinutes();
+  const todayISO = toLocalISODate(now);
   let best: { ov: PublicOverride; startMin: number } | null = null;
   for (const ov of overrides) {
     if (ov.dayOfWeek !== today) continue;
+    if (ov.effectiveFrom && todayISO < ov.effectiveFrom) continue;
+    if (ov.effectiveUntil && todayISO > ov.effectiveUntil) continue;
     const [sh, sm] = ov.startTime.split(":").map((n) => Number.parseInt(n, 10));
     const [eh, em] = ov.endTime.split(":").map((n) => Number.parseInt(n, 10));
     if (

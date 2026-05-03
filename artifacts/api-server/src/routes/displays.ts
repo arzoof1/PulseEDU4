@@ -1031,6 +1031,11 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         dayOfWeek: o.dayOfWeek,
         startTime: o.startTime,
         endTime: o.endTime,
+        // Date-range gating. Both null = the override recurs every
+        // matching dayOfWeek forever. The cycler must drop a row whose
+        // bounds don't include "today" (in school-local time).
+        effectiveFrom: o.effectiveFrom,
+        effectiveUntil: o.effectiveUntil,
         items: overrideItemsByPlaylistId.get(o.playlistId) ?? [],
       })),
       houseData,

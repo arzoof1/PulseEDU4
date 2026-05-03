@@ -97,6 +97,33 @@ async function loadDisplayForEdit(
 
 const HHMM_RE = /^([01]\d|2[0-3]):([0-5]\d)$/;
 
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+// Parses an optional ISO date (YYYY-MM-DD). Accepts null/undefined/"" as
+// null. Returns { ok:false } on a malformed non-empty string. The cycler
+// uses these as inclusive bounds — a row with both nulls recurs forever.
+function parseOptionalDate(
+  v: unknown,
+): { ok: true; value: string | null } | { ok: false; error: string } {
+  if (v === null || v === undefined || v === "") return { ok: true, value: null };
+  if (typeof v !== "string" || !DATE_RE.test(v)) {
+    return { ok: false, error: "Date must be YYYY-MM-DD" };
+  }
+  // Reject impossible calendar dates like 2026-02-31. Date(y,m-1,d)
+  // would silently roll those into the next month, which would then
+  // mismatch what the cycler does when it re-stringifies "today".
+  const [y, m, d] = v.split("-").map((n) => Number.parseInt(n, 10));
+  const dt = new Date(y, m - 1, d);
+  if (
+    dt.getFullYear() !== y ||
+    dt.getMonth() !== m - 1 ||
+    dt.getDate() !== d
+  ) {
+    return { ok: false, error: "Date is not a real calendar date" };
+  }
+  return { ok: true, value: v };
+}
+
 function validateOverrideInput(body: unknown): {
   ok: true;
   value: {
@@ -104,6 +131,8 @@ function validateOverrideInput(body: unknown): {
     dayOfWeek: number;
     startTime: string;
     endTime: string;
+    effectiveFrom: string | null;
+    effectiveUntil: string | null;
   };
 } | { ok: false; error: string } {
   const b = (body ?? {}) as Record<string, unknown>;
@@ -125,7 +154,39 @@ function validateOverrideInput(body: unknown): {
         "endTime must be after startTime. Split overnight windows into two rows (one each side of midnight).",
     };
   }
-  return { ok: true, value: { playlistId, dayOfWeek, startTime, endTime } };
+  const f = parseOptionalDate(b.effectiveFrom);
+  if (!f.ok) return { ok: false, error: `effectiveFrom: ${f.error}` };
+  const u = parseOptionalDate(b.effectiveUntil);
+  if (!u.ok) return { ok: false, error: `effectiveUntil: ${u.error}` };
+  if (f.value && u.value && u.value < f.value) {
+    return { ok: false, error: "effectiveUntil must be on or after effectiveFrom" };
+  }
+  // Only the three documented modes are legal:
+  //   (null,null)          → recurring weekly forever
+  //   (d,d)                → one specific day
+  //   (from,until) f<until → bounded date range
+  // Reject one-sided bounds — they're ambiguous (does "from-only"
+  // mean "from this date forever" or "starting this date for one
+  // week"?) and would create rows the recurrence picker can't
+  // round-trip.
+  if ((f.value && !u.value) || (!f.value && u.value)) {
+    return {
+      ok: false,
+      error:
+        "effectiveFrom and effectiveUntil must both be set or both be null",
+    };
+  }
+  return {
+    ok: true,
+    value: {
+      playlistId,
+      dayOfWeek,
+      startTime,
+      endTime,
+      effectiveFrom: f.value,
+      effectiveUntil: u.value,
+    },
+  };
 }
 
 // Confirms the override-target playlist exists and lives at the same
@@ -204,6 +265,8 @@ router.post("/displays/playlists/:id/overrides", async (req, res) => {
         dayOfWeek: v.value.dayOfWeek,
         startTime: v.value.startTime,
         endTime: v.value.endTime,
+        effectiveFrom: v.value.effectiveFrom,
+        effectiveUntil: v.value.effectiveUntil,
       })
       .returning();
     res.status(201).json({ override: inserted });
@@ -246,6 +309,8 @@ router.post("/displays/playlists/:id/overrides/bulk", async (req, res) => {
       dayOfWeek: number;
       startTime: string;
       endTime: string;
+      effectiveFrom: string | null;
+      effectiveUntil: string | null;
     }> = [];
     const targetIds = new Set<number>();
     for (let i = 0; i < list.length; i++) {
@@ -278,6 +343,8 @@ router.post("/displays/playlists/:id/overrides/bulk", async (req, res) => {
           dayOfWeek: v.dayOfWeek,
           startTime: v.startTime,
           endTime: v.endTime,
+          effectiveFrom: v.effectiveFrom,
+          effectiveUntil: v.effectiveUntil,
           groupId,
           groupName,
         })),
@@ -326,6 +393,14 @@ router.patch(
         dayOfWeek: req.body?.dayOfWeek ?? existing.dayOfWeek,
         startTime: req.body?.startTime ?? existing.startTime,
         endTime: req.body?.endTime ?? existing.endTime,
+        effectiveFrom:
+          req.body?.effectiveFrom !== undefined
+            ? req.body.effectiveFrom
+            : existing.effectiveFrom,
+        effectiveUntil:
+          req.body?.effectiveUntil !== undefined
+            ? req.body.effectiveUntil
+            : existing.effectiveUntil,
       };
       const v = validateOverrideInput(merged);
       if (!v.ok) {
@@ -345,6 +420,8 @@ router.patch(
           dayOfWeek: v.value.dayOfWeek,
           startTime: v.value.startTime,
           endTime: v.value.endTime,
+          effectiveFrom: v.value.effectiveFrom,
+          effectiveUntil: v.value.effectiveUntil,
           updatedAt: new Date(),
         })
         .where(eq(displayPlaylistOverridesTable.id, overrideId))
@@ -410,13 +487,22 @@ router.patch(
           : typeof b.groupName === "string" && b.groupName.trim()
             ? b.groupName.trim().slice(0, 100)
             : null;
+      // Group PATCH intentionally does NOT touch effectiveFrom /
+      // effectiveUntil. Each row in the group keeps its own date
+      // range — collapsing them all to one value would silently
+      // rewrite per-row bounds the user can't see in this dialog.
+      // (The recurrence picker is hidden in group-scope edit; we
+      // also defensively ignore the fields if the client sends them.)
       // Validate by piggybacking on validateOverrideInput (we feed a
-      // fake dayOfWeek=0 since it's not changing here).
+      // fake dayOfWeek=0 since it's not changing here, and pass
+      // existing dates through so the validator doesn't reject).
       const v = validateOverrideInput({
         playlistId: nextPlaylistId,
         dayOfWeek: 0,
         startTime: nextStartTime,
         endTime: nextEndTime,
+        effectiveFrom: existing[0].effectiveFrom,
+        effectiveUntil: existing[0].effectiveUntil,
       });
       if (!v.ok) {
         res.status(400).json({ error: v.error });
@@ -533,5 +619,136 @@ router.delete(
     }
   },
 );
+
+// ---------- CALENDAR (cross-display rollup) --------------------------------
+// "What is going to play across every display in my school over the next
+// N days?". Walks dates from `fromDate` for `days` (max 56), and for each
+// (date, display) returns the override windows that match
+//   dayOfWeek === weekday(date)
+//   AND date is within [effective_from, effective_until] (inclusive,
+//       null bounds treated as open-ended)
+// Server-side rollup keeps the client cheap (one fetch per modal open
+// instead of one per display).
+router.get("/displays/calendar", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const schoolId = activeSchoolId(staff);
+    const fromDate = String(req.query.fromDate ?? "");
+    const days = Math.min(
+      Math.max(Number.parseInt(String(req.query.days ?? "28"), 10) || 28, 1),
+      56,
+    );
+    const parsedFrom = parseOptionalDate(fromDate);
+    if (!parsedFrom.ok || !parsedFrom.value) {
+      res
+        .status(400)
+        .json({ error: "fromDate must be a real YYYY-MM-DD calendar date" });
+      return;
+    }
+    // Load every display + every override at this school in parallel
+    // along with playlist names for both base displays and override
+    // targets.
+    const [displays, overrides] = await Promise.all([
+      db
+        .select({
+          id: displayPlaylistsTable.id,
+          name: displayPlaylistsTable.name,
+        })
+        .from(displayPlaylistsTable)
+        .where(eq(displayPlaylistsTable.schoolId, schoolId))
+        .orderBy(asc(displayPlaylistsTable.name)),
+      db
+        .select()
+        .from(displayPlaylistOverridesTable)
+        .innerJoin(
+          displayPlaylistsTable,
+          eq(displayPlaylistOverridesTable.displayId, displayPlaylistsTable.id),
+        )
+        .where(eq(displayPlaylistsTable.schoolId, schoolId)),
+    ]);
+    // Override targets are themselves display_playlists at the same
+    // school (verifyOverrideTarget enforces that), so we can label
+    // each window from the `displays` list we already have.
+    const targetNameById = new Map(displays.map((t) => [t.id, t.name] as const));
+    const overrideRowsByDisplay = new Map<number, typeof overrides>();
+    for (const row of overrides) {
+      const did = row.display_playlist_overrides.displayId;
+      const list = overrideRowsByDisplay.get(did) ?? [];
+      list.push(row);
+      overrideRowsByDisplay.set(did, list);
+    }
+    // Build the (date, display, windows) matrix.
+    const [fy, fm, fd] = fromDate.split("-").map((n) => Number.parseInt(n, 10));
+    const start = new Date(fy, fm - 1, fd);
+    type Window = {
+      overrideId: number;
+      startTime: string;
+      endTime: string;
+      playlistName: string;
+      groupName: string | null;
+      isOneOff: boolean; // effective_from === effective_until
+      isBoundedWeek: boolean; // both set, different
+    };
+    type DayCell = {
+      date: string; // YYYY-MM-DD
+      dayOfWeek: number;
+      displayId: number;
+      displayName: string;
+      windows: Window[];
+    };
+    const cells: DayCell[] = [];
+    for (let i = 0; i < days; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+      const dow = d.getDay();
+      for (const display of displays) {
+        const rows = overrideRowsByDisplay.get(display.id) ?? [];
+        const windows: Window[] = [];
+        for (const r of rows) {
+          const o = r.display_playlist_overrides;
+          if (o.dayOfWeek !== dow) continue;
+          if (o.effectiveFrom && iso < o.effectiveFrom) continue;
+          if (o.effectiveUntil && iso > o.effectiveUntil) continue;
+          windows.push({
+            overrideId: o.id,
+            startTime: o.startTime,
+            endTime: o.endTime,
+            playlistName: targetNameById.get(o.playlistId) ?? `#${o.playlistId}`,
+            groupName: o.groupName,
+            isOneOff: !!(
+              o.effectiveFrom &&
+              o.effectiveUntil &&
+              o.effectiveFrom === o.effectiveUntil
+            ),
+            isBoundedWeek: !!(
+              o.effectiveFrom &&
+              o.effectiveUntil &&
+              o.effectiveFrom !== o.effectiveUntil
+            ),
+          });
+        }
+        windows.sort((a, b) => a.startTime.localeCompare(b.startTime));
+        cells.push({
+          date: iso,
+          dayOfWeek: dow,
+          displayId: display.id,
+          displayName: display.name,
+          windows,
+        });
+      }
+    }
+    res.json({ fromDate, days, displays, cells });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[display-overrides] calendar failed", e);
+    res.status(500).json({ error: "Failed to load calendar" });
+  }
+});
 
 export default router;

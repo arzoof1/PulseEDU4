@@ -4,6 +4,7 @@ import {
   integer,
   text,
   timestamp,
+  date,
   index,
 } from "drizzle-orm/pg-core";
 
@@ -43,6 +44,15 @@ export const displayPlaylistOverridesTable = pgTable(
     // whose group was later edited per-day).
     groupId: text("group_id"),
     groupName: text("group_name"),
+    // Date-range gating. Both null = the row recurs every week
+    // forever ("until changed"). Either set = the row only fires on
+    // a date that falls within [effectiveFrom, effectiveUntil]
+    // inclusive (and still must match dayOfWeek + the time window).
+    // For a one-day override, both are equal to the picked date.
+    // Stored as YYYY-MM-DD strings (drizzle's `date` mode "string")
+    // because the cycler compares against a school-local date.
+    effectiveFrom: date("effective_from", { mode: "string" }),
+    effectiveUntil: date("effective_until", { mode: "string" }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

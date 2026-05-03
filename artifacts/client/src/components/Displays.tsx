@@ -151,6 +151,7 @@ export default function Displays() {
   const [loading, setLoading] = useState(true);
   const [editingId, setEditingId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [showCalendar, setShowCalendar] = useState(false);
 
   async function refreshList() {
     setLoading(true);
@@ -245,10 +246,18 @@ export default function Displays() {
             on a smart TV's browser — no login required on the TV.
           </div>
         </div>
-        <button style={btnPrimary} onClick={() => void createPlaylist()}>
-          + New playlist
-        </button>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={btn} onClick={() => setShowCalendar(true)}>
+            📅 Calendar
+          </button>
+          <button style={btnPrimary} onClick={() => void createPlaylist()}>
+            + New playlist
+          </button>
+        </div>
       </div>
+      {showCalendar && (
+        <DisplaysCalendarModal onClose={() => setShowCalendar(false)} />
+      )}
 
       {error && (
         <div
@@ -986,6 +995,327 @@ interface OverrideRow {
   // "edit/delete this day only vs the entire passing period".
   groupId: string | null;
   groupName: string | null;
+  // Date-range gating (YYYY-MM-DD strings or null). Both null = the
+  // row recurs every matching weekday forever ("until changed"). When
+  // set, the row only fires on dates within [from, until] inclusive
+  // — letting admins schedule a one-day fire-drill announcement or a
+  // single-week assembly playlist without it leaking into prior weeks.
+  effectiveFrom: string | null;
+  effectiveUntil: string | null;
+}
+
+// ===================================================================
+// Calendar modal — cross-display rollup of every override window over
+// the next 4 weeks (current week + 3 ahead). Read-only. Server does
+// the (date × display) matrix; client just renders.
+// ===================================================================
+
+interface CalendarWindow {
+  overrideId: number;
+  startTime: string;
+  endTime: string;
+  playlistName: string;
+  groupName: string | null;
+  isOneOff: boolean;
+  isBoundedWeek: boolean;
+}
+interface CalendarCell {
+  date: string;
+  dayOfWeek: number;
+  displayId: number;
+  displayName: string;
+  windows: CalendarWindow[];
+}
+interface CalendarPayload {
+  fromDate: string;
+  days: number;
+  displays: Array<{ id: number; name: string }>;
+  cells: CalendarCell[];
+}
+
+function startOfThisWeekISO(): string {
+  // Monday of the current local week.
+  const d = new Date();
+  const offsetToMon = (d.getDay() + 6) % 7;
+  d.setDate(d.getDate() - offsetToMon);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+function DisplaysCalendarModal({ onClose }: { onClose: () => void }) {
+  const [data, setData] = useState<CalendarPayload | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      try {
+        const r = await authFetch(
+          `/api/displays/calendar?fromDate=${startOfThisWeekISO()}&days=28`,
+        );
+        if (!r.ok) throw new Error("Failed to load calendar");
+        const j = (await r.json()) as CalendarPayload;
+        if (!cancelled) {
+          setData(j);
+          setErr(null);
+        }
+      } catch (e) {
+        if (!cancelled) setErr(e instanceof Error ? e.message : "Failed");
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Group cells by week (rows of 7 days), then by date within each week.
+  const weeks = useMemo(() => {
+    if (!data) return [];
+    const byDate = new Map<string, CalendarCell[]>();
+    for (const c of data.cells) {
+      const list = byDate.get(c.date) ?? [];
+      list.push(c);
+      byDate.set(c.date, list);
+    }
+    const dates = Array.from(byDate.keys()).sort();
+    const out: Array<{ dates: string[]; cellsByDate: typeof byDate }> = [];
+    for (let i = 0; i < dates.length; i += 7) {
+      out.push({ dates: dates.slice(i, i + 7), cellsByDate: byDate });
+    }
+    return out;
+  }, [data]);
+
+  const todayISO = useMemo(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }, []);
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 60,
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(96vw, 1200px)",
+          maxHeight: "92vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.35)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            padding: "16px 20px",
+            borderBottom: "1px solid #e5e7eb",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 18, fontWeight: 700 }}>
+              Display schedule — next 4 weeks
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+              Resolved override windows across every display in your school.
+              Empty cells fall back to the display's normal loop. Today is
+              highlighted.
+            </div>
+          </div>
+          <button style={btn} onClick={onClose}>
+            Close
+          </button>
+        </div>
+        <div style={{ overflow: "auto", padding: 16 }}>
+          {loading ? (
+            <div style={{ color: "#6b7280" }}>Loading…</div>
+          ) : err ? (
+            <div style={{ color: "#b91c1c" }}>{err}</div>
+          ) : !data || data.displays.length === 0 ? (
+            <div style={{ color: "#6b7280" }}>
+              No displays at this school yet.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 24 }}>
+              {weeks.map((wk, wi) => (
+                <div key={wi}>
+                  <div
+                    style={{
+                      fontSize: 12,
+                      fontWeight: 700,
+                      color: "#6b7280",
+                      marginBottom: 6,
+                      textTransform: "uppercase",
+                      letterSpacing: 0.5,
+                    }}
+                  >
+                    {wi === 0 ? "This week" : `Week of ${wk.dates[0]}`}
+                  </div>
+                  <div
+                    style={{
+                      display: "grid",
+                      gridTemplateColumns: "repeat(7, minmax(0, 1fr))",
+                      gap: 6,
+                    }}
+                  >
+                    {wk.dates.map((iso) => {
+                      const cells = wk.cellsByDate.get(iso) ?? [];
+                      const dow = cells[0]?.dayOfWeek ?? 0;
+                      const isToday = iso === todayISO;
+                      return (
+                        <div
+                          key={iso}
+                          style={{
+                            border: isToday
+                              ? "2px solid #2563eb"
+                              : "1px solid #e5e7eb",
+                            borderRadius: 8,
+                            padding: 8,
+                            minHeight: 120,
+                            background: isToday ? "#eff6ff" : "#fafafa",
+                          }}
+                        >
+                          <div
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              alignItems: "baseline",
+                              marginBottom: 6,
+                            }}
+                          >
+                            <span
+                              style={{
+                                fontSize: 11,
+                                fontWeight: 700,
+                                color: "#374151",
+                              }}
+                            >
+                              {WEEKDAY_LABELS[dow]?.label ?? ""}
+                            </span>
+                            <span
+                              style={{ fontSize: 11, color: "#6b7280" }}
+                            >
+                              {iso.slice(5)}
+                            </span>
+                          </div>
+                          <div style={{ display: "grid", gap: 6 }}>
+                            {cells
+                              .filter((c) => c.windows.length > 0)
+                              .map((c) => (
+                                <div
+                                  key={c.displayId}
+                                  style={{
+                                    background: "white",
+                                    border: "1px solid #d1d5db",
+                                    borderRadius: 6,
+                                    padding: 5,
+                                    fontSize: 10,
+                                  }}
+                                >
+                                  <div
+                                    style={{
+                                      fontWeight: 700,
+                                      color: "#111827",
+                                      overflow: "hidden",
+                                      textOverflow: "ellipsis",
+                                      whiteSpace: "nowrap",
+                                    }}
+                                    title={c.displayName}
+                                  >
+                                    {c.displayName}
+                                  </div>
+                                  {c.windows.map((w) => (
+                                    <div
+                                      key={w.overrideId}
+                                      style={{
+                                        marginTop: 2,
+                                        color: "#374151",
+                                        overflow: "hidden",
+                                        textOverflow: "ellipsis",
+                                        whiteSpace: "nowrap",
+                                      }}
+                                      title={`${w.startTime}–${w.endTime} → ${w.playlistName}`}
+                                    >
+                                      <span style={{ color: "#1d4ed8" }}>
+                                        {w.startTime}–{w.endTime}
+                                      </span>{" "}
+                                      → {w.playlistName}
+                                      {w.groupName && (
+                                        <span
+                                          style={{
+                                            color: "#0369a1",
+                                            marginLeft: 4,
+                                          }}
+                                        >
+                                          ⛓
+                                        </span>
+                                      )}
+                                      {w.isOneOff && (
+                                        <span
+                                          style={{
+                                            color: "#a16207",
+                                            marginLeft: 4,
+                                          }}
+                                          title="One-off date override"
+                                        >
+                                          ★
+                                        </span>
+                                      )}
+                                      {w.isBoundedWeek && (
+                                        <span
+                                          style={{
+                                            color: "#7e22ce",
+                                            marginLeft: 4,
+                                          }}
+                                          title="Bounded date range"
+                                        >
+                                          ⏳
+                                        </span>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              ))}
+                            {cells.every((c) => c.windows.length === 0) && (
+                              <div
+                                style={{
+                                  fontSize: 11,
+                                  color: "#9ca3af",
+                                  fontStyle: "italic",
+                                }}
+                              >
+                                No overrides
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function OverridesEditor({
@@ -1336,6 +1666,38 @@ function AddOverrideDialog({
   // Optional friendly name for a passing-period group. Only shown in
   // bulk mode and in edit mode for an already-grouped row.
   const [groupName, setGroupName] = useState<string>(editing?.groupName ?? "");
+  // Recurrence mode picker. Drives the date-range payload the server
+  // stores in effective_from / effective_until.
+  //   "until-changed"  → both null (default; classic recurring-weekly)
+  //   "specific-week"  → from = picked Monday, until = from + 6 days
+  //                      (days picker still applies inside that week)
+  //   "specific-day"   → from = until = picked date; day picker is
+  //                      locked to that date's weekday
+  // Pre-populates from the existing row in edit mode.
+  function inferRecurrence(
+    f: string | null | undefined,
+    u: string | null | undefined,
+  ): "until-changed" | "specific-week" | "specific-day" {
+    if (!f && !u) return "until-changed";
+    if (f && u && f === u) return "specific-day";
+    return "specific-week";
+  }
+  const [recurrence, setRecurrence] = useState<
+    "until-changed" | "specific-week" | "specific-day"
+  >(inferRecurrence(editing?.effectiveFrom, editing?.effectiveUntil));
+  // The single anchor date the user picks. For "specific-day" it's the
+  // exact date; for "specific-week" it's snapped to that week's Monday.
+  // Stored as YYYY-MM-DD because we hand it straight to <input type=date>.
+  function todayISO(): string {
+    const d = new Date();
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const dd = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${dd}`;
+  }
+  const [anchorDate, setAnchorDate] = useState<string>(
+    editing?.effectiveFrom ?? todayISO(),
+  );
   // For edit mode on a grouped row: choose whether the change applies
   // to just this one day or to every day sharing the groupId.
   const siblingCount = editingSiblingIds?.length ?? 0;
@@ -1388,23 +1750,52 @@ function AddOverrideDialog({
       setErr("Pick a playlist");
       return;
     }
-    if (mode === "single" && days.size !== 1) {
+    // For "specific-day" recurrence the day picker is hidden and the
+    // server day-of-week is derived from the anchor date.
+    let effectiveDays = days;
+    if (recurrence === "specific-day") {
+      const [y, m, d] = anchorDate.split("-").map((n) => Number.parseInt(n, 10));
+      effectiveDays = new Set([new Date(y, m - 1, d).getDay()]);
+    }
+    if (mode === "single" && effectiveDays.size !== 1) {
       setErr("Pick exactly one day (or use Bulk add)");
       return;
     }
-    if (mode === "bulk" && days.size === 0) {
+    if (mode === "bulk" && effectiveDays.size === 0) {
       setErr("Pick at least one day");
       return;
     }
     // In edit mode, day picker is per-day-only edits. Group-scope
     // edits keep the original day set untouched on the server.
-    if (mode === "edit" && editScope === "single" && days.size !== 1) {
+    if (mode === "edit" && editScope === "single" && effectiveDays.size !== 1) {
       setErr("Pick exactly one day");
       return;
     }
     if (endTime <= startTime) {
       setErr("End time must be after start time");
       return;
+    }
+    // Resolve the date range payload from the recurrence picker.
+    // Parsing as Y/M/D avoids the new Date("YYYY-MM-DD") UTC pitfall
+    // that would otherwise shift the day in negative-UTC timezones.
+    let effectiveFrom: string | null = null;
+    let effectiveUntil: string | null = null;
+    if (recurrence === "specific-day") {
+      effectiveFrom = anchorDate;
+      effectiveUntil = anchorDate;
+    } else if (recurrence === "specific-week") {
+      const [y, m, d] = anchorDate.split("-").map((n) => Number.parseInt(n, 10));
+      const dt = new Date(y, m - 1, d);
+      // Snap to that ISO week's Monday (getDay: Sun=0..Sat=6).
+      const offsetToMon = (dt.getDay() + 6) % 7;
+      const mon = new Date(dt);
+      mon.setDate(dt.getDate() - offsetToMon);
+      const sun = new Date(mon);
+      sun.setDate(mon.getDate() + 6);
+      const fmt = (x: Date) =>
+        `${x.getFullYear()}-${String(x.getMonth() + 1).padStart(2, "0")}-${String(x.getDate()).padStart(2, "0")}`;
+      effectiveFrom = fmt(mon);
+      effectiveUntil = fmt(sun);
     }
     setSaving(true);
     try {
@@ -1417,6 +1808,11 @@ function AddOverrideDialog({
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
+            // Group-scope edit: deliberately omit effectiveFrom /
+            // effectiveUntil — each row in the group keeps its own
+            // date range (the recurrence picker is hidden in this
+            // mode, and overwriting all rows to one value would
+            // silently lose per-row bounds).
             body: JSON.stringify({
               playlistId,
               startTime,
@@ -1437,7 +1833,8 @@ function AddOverrideDialog({
         editingSiblingIds.length > 1
       ) {
         // Legacy / implicit group — fan out per-row PATCHes so each row
-        // keeps its own day. We deliberately do NOT send dayOfWeek.
+        // keeps its own day AND its own date range. We deliberately
+        // do NOT send dayOfWeek, effectiveFrom, or effectiveUntil.
         await Promise.all(
           editingSiblingIds.map((id) =>
             authFetch(
@@ -1445,7 +1842,11 @@ function AddOverrideDialog({
               {
                 method: "PATCH",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ playlistId, startTime, endTime }),
+                body: JSON.stringify({
+                  playlistId,
+                  startTime,
+                  endTime,
+                }),
               },
             ).then(async (r) => {
               if (!r.ok) {
@@ -1456,13 +1857,20 @@ function AddOverrideDialog({
           ),
         );
       } else if (mode === "edit" && editing) {
-        const day = Array.from(days)[0];
+        const day = Array.from(effectiveDays)[0];
         const r = await authFetch(
           `/api/displays/playlists/${displayId}/overrides/${editing.id}`,
           {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ playlistId, dayOfWeek: day, startTime, endTime }),
+            body: JSON.stringify({
+              playlistId,
+              dayOfWeek: day,
+              startTime,
+              endTime,
+              effectiveFrom,
+              effectiveUntil,
+            }),
           },
         );
         if (!r.ok) {
@@ -1470,13 +1878,20 @@ function AddOverrideDialog({
           throw new Error(j?.error ?? "Failed");
         }
       } else if (mode === "single") {
-        const day = Array.from(days)[0];
+        const day = Array.from(effectiveDays)[0];
         const r = await authFetch(
           `/api/displays/playlists/${displayId}/overrides`,
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ playlistId, dayOfWeek: day, startTime, endTime }),
+            body: JSON.stringify({
+              playlistId,
+              dayOfWeek: day,
+              startTime,
+              endTime,
+              effectiveFrom,
+              effectiveUntil,
+            }),
           },
         );
         if (!r.ok) {
@@ -1484,11 +1899,13 @@ function AddOverrideDialog({
           throw new Error(j?.error ?? "Failed");
         }
       } else {
-        const overrides = Array.from(days).map((d) => ({
+        const overrides = Array.from(effectiveDays).map((d) => ({
           playlistId,
           dayOfWeek: d,
           startTime,
           endTime,
+          effectiveFrom,
+          effectiveUntil,
         }));
         const r = await authFetch(
           `/api/displays/playlists/${displayId}/overrides/bulk`,
@@ -1680,9 +2097,67 @@ function AddOverrideDialog({
               </div>
             </div>
           )}
-          {/* Day picker. Hidden when editing the whole passing-period
-              group, since each row keeps its own day on the server. */}
+          {/* Recurrence picker — drives effective_from / effective_until
+              on the server. Hidden in group-scope edit (each row keeps
+              its own dates; bulk-changing dates across a passing
+              period via this dialog would be confusing). */}
           {!(mode === "edit" && editScope === "group") && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                Repeat
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                {(
+                  [
+                    { v: "until-changed", label: "Every week (until removed)" },
+                    { v: "specific-week", label: "One specific week" },
+                    { v: "specific-day", label: "One specific day" },
+                  ] as const
+                ).map((opt) => (
+                  <button
+                    key={opt.v}
+                    type="button"
+                    onClick={() => setRecurrence(opt.v)}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border:
+                        recurrence === opt.v
+                          ? "1px solid #2563eb"
+                          : "1px solid #d1d5db",
+                      background: recurrence === opt.v ? "#dbeafe" : "white",
+                      color: recurrence === opt.v ? "#1d4ed8" : "#374151",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {opt.label}
+                  </button>
+                ))}
+              </div>
+              {recurrence !== "until-changed" && (
+                <div style={{ marginTop: 8 }}>
+                  <input
+                    type="date"
+                    style={{ ...inputStyle, width: "100%" }}
+                    value={anchorDate}
+                    onChange={(e) => setAnchorDate(e.currentTarget.value)}
+                  />
+                  <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+                    {recurrence === "specific-day"
+                      ? "Plays only on this date. The day picker below is auto-set."
+                      : "Plays only during this calendar week (Mon–Sun containing the picked date) on the days you select below."}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+          {/* Day picker. Hidden when editing the whole passing-period
+              group OR when recurrence is "specific-day" (the date
+              already determines the weekday). */}
+          {!(mode === "edit" && editScope === "group") &&
+            recurrence !== "specific-day" && (
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
               {mode === "single" || mode === "edit" ? "Day" : "Days"}
