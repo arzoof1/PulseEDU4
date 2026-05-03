@@ -1,0 +1,31 @@
+kind = "slides"
+previewPath = "/pulseedu-pitch/"
+title = "PulseEDU School Pitch Deck"
+version = "1.0.0"
+id = "artifacts/pulseedu-pitch"
+router = "path"
+
+[[integratedSkills]]
+name = "slides"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/pulseedu-pitch/" ]
+localPort = 19980
+
+[services.development]
+run = "pnpm --filter @workspace/pulseedu-pitch run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/pulseedu-pitch", "run", "build" ]
+publicDir = "artifacts/pulseedu-pitch/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "19980"
+BASE_PATH = "/pulseedu-pitch/"
