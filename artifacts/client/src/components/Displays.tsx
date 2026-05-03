@@ -1141,8 +1141,8 @@ function OverridesEditor({
           </div>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
-          <button style={btn} onClick={() => setShowAdd("bulk")}>+ Bulk add</button>
-          <button style={btnPrimary} onClick={() => setShowAdd("single")}>+ Add</button>
+          <button style={btn} onClick={() => setShowAdd("bulk")}>+ Passing period</button>
+          <button style={btnPrimary} onClick={() => setShowAdd("single")}>+ Single override</button>
         </div>
       </div>
 
