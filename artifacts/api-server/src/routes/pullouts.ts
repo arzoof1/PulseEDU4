@@ -288,9 +288,16 @@ router.post(
   },
 );
 
-// Verifier (admin / dean / MTSS) actions.
+// Verifier actions — open to the full Core Team so any of them can log
+// a "teacher called instead of using the app" pullout and route it.
+// Mirrors the client-side `canVerifyPullouts` gate in App.tsx.
 const isVerifier = (s: StaffRow) =>
-  s.isSuperUser || s.isAdmin || s.isDean || s.isMtssCoordinator;
+  s.isSuperUser ||
+  s.isAdmin ||
+  s.isDean ||
+  s.isMtssCoordinator ||
+  s.isBehaviorSpecialist ||
+  s.isPbisCoordinator;
 
 router.patch(
   "/pullouts/:id/verify",

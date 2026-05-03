@@ -7378,7 +7378,12 @@ function App() {
   const isIssTeacher = authUser?.isIssTeacher === true || isAdmin;
   const isDean = authUser?.isDean === true || isAdmin;
   const isMtss = authUser?.isMtssCoordinator === true || isAdmin;
-  const canVerifyPullouts = isAdmin || isDean || isMtss;
+  // Verify Pullouts admits the full Core Team (admin + dean + behavior
+  // specialist + MTSS coordinator + PBIS coordinator) so any of them can
+  // log a "teacher called instead of using the app" pullout and route it.
+  // Mirrors the server-side `isVerifier` gate in routes/pullouts.ts.
+  const canVerifyPullouts =
+    isAdmin || isDean || isMtss || isBehaviorSpec || isPbisCoord;
   const canAccessPbisHub =
     Boolean(authUser?.isSuperUser) ||
     isAdmin ||
