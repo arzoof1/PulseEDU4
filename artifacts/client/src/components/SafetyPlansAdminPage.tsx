@@ -76,6 +76,9 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
   const [picking, setPicking] = useState(false);
   const [students, setStudents] = useState<Student[]>([]);
   const [pickerFilter, setPickerFilter] = useState("");
+  // Library modal — opens the school-wide checklist catalog editor.
+  // Same edit gate (canManage) as creating a plan.
+  const [showingLibrary, setShowingLibrary] = useState(false);
 
   const reload = () => {
     setLoading(true);
@@ -244,26 +247,47 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
             }}
           />
           {canManage && (
-            <button
-              type="button"
-              onClick={() => {
-                setPickerFilter("");
-                setPicking(true);
-              }}
-              style={{
-                background: "#dc2626",
-                color: "white",
-                border: "none",
-                borderRadius: 6,
-                padding: "0.5rem 1rem",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              + New Safety Plan
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => setShowingLibrary(true)}
+                style={{
+                  background: "white",
+                  color: "#374151",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  padding: "0.5rem 0.9rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+                title="Edit the school-wide list of default safety-plan checkboxes."
+              >
+                Manage library
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setPickerFilter("");
+                  setPicking(true);
+                }}
+                style={{
+                  background: "#dc2626",
+                  color: "white",
+                  border: "none",
+                  borderRadius: 6,
+                  padding: "0.5rem 1rem",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                + New Safety Plan
+              </button>
+            </>
           )}
         </div>
+        {showingLibrary && (
+          <SafetyPlanLibraryModal onClose={() => setShowingLibrary(false)} />
+        )}
 
         {error && (
           <div
@@ -593,5 +617,366 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
         />
       )}
     </>
+  );
+}
+
+// =====================================================================
+// SafetyPlanLibraryModal — school-wide checklist catalog editor.
+// Counselors / Core Team can:
+//   - Add a new custom checkbox (POST /safety-plans/library)
+//   - Toggle any item on/off (PATCH active=…). Built-ins can be turned
+//     off but not deleted or renamed (server enforces the rename block).
+//   - Rename a custom (non-built-in) item (PATCH label=…).
+// Items appear as default checkboxes in every Safety Plan editor at
+// the school. Existing plans are NOT mutated when the library changes
+// — they keep whatever items were on them at last save.
+// =====================================================================
+interface LibraryRow {
+  id: number;
+  schoolId: number;
+  label: string;
+  isBuiltIn: boolean;
+  active: boolean;
+  sortOrder: number;
+  createdAt: string;
+}
+
+function SafetyPlanLibraryModal({ onClose }: { onClose: () => void }) {
+  const [items, setItems] = useState<LibraryRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState("");
+  const [newLabel, setNewLabel] = useState("");
+  const [adding, setAdding] = useState(false);
+  // Per-row "renaming" state — only one row at a time.
+  const [renamingId, setRenamingId] = useState<number | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+
+  async function reload() {
+    setLoading(true);
+    setErr("");
+    try {
+      const r = await authFetch("/api/safety-plans/library");
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${r.status}`);
+      }
+      const j = (await r.json()) as { items: LibraryRow[] };
+      setItems(j.items ?? []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to load library");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+  }, []);
+
+  async function addItem() {
+    const label = newLabel.trim();
+    if (!label) return;
+    setAdding(true);
+    setErr("");
+    try {
+      const r = await authFetch("/api/safety-plans/library", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${r.status}`);
+      }
+      setNewLabel("");
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to add item");
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function toggleActive(row: LibraryRow) {
+    // Optimistic flip with rollback so the checkbox feels instant.
+    const next = !row.active;
+    setItems((rows) =>
+      rows.map((r) => (r.id === row.id ? { ...r, active: next } : r)),
+    );
+    try {
+      const r = await authFetch(`/api/safety-plans/library/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: next }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${r.status}`);
+      }
+    } catch (e) {
+      setItems((rows) =>
+        rows.map((rr) => (rr.id === row.id ? { ...rr, active: row.active } : rr)),
+      );
+      setErr(e instanceof Error ? e.message : "Failed to update item");
+    }
+  }
+
+  async function commitRename(row: LibraryRow) {
+    const label = renameDraft.trim();
+    if (!label || label === row.label) {
+      setRenamingId(null);
+      return;
+    }
+    try {
+      const r = await authFetch(`/api/safety-plans/library/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ label }),
+      });
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error ?? `HTTP ${r.status}`);
+      }
+      setRenamingId(null);
+      await reload();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed to rename item");
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.5)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 60,
+        padding: 20,
+      }}
+      onClick={onClose}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label="Safety Plan library"
+        style={{
+          background: "white",
+          borderRadius: 12,
+          width: "min(92vw, 640px)",
+          maxHeight: "88vh",
+          display: "flex",
+          flexDirection: "column",
+          boxShadow: "0 16px 48px rgba(0,0,0,0.35)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          style={{
+            padding: "14px 18px",
+            borderBottom: "1px solid #e5e7eb",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+        >
+          <div>
+            <div style={{ fontSize: 16, fontWeight: 700 }}>
+              Safety Plan library
+            </div>
+            <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+              School-wide default checkboxes. Active items appear in every
+              new Safety Plan. Existing plans are not changed.
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              border: "1px solid #d1d5db",
+              background: "white",
+              borderRadius: 6,
+              padding: "4px 10px",
+              cursor: "pointer",
+              fontSize: 13,
+            }}
+          >
+            Close
+          </button>
+        </div>
+
+        <div style={{ padding: 16, overflow: "auto" }}>
+          {err && (
+            <div
+              style={{
+                background: "#fef2f2",
+                color: "#991b1b",
+                padding: "0.5rem 0.75rem",
+                borderRadius: 6,
+                marginBottom: 10,
+                fontSize: 13,
+              }}
+            >
+              {err}
+            </div>
+          )}
+
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              marginBottom: 12,
+            }}
+          >
+            <input
+              type="text"
+              placeholder="New checkbox label (e.g. 'No phone access')"
+              value={newLabel}
+              onChange={(e) => setNewLabel(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void addItem();
+              }}
+              maxLength={200}
+              style={{
+                flex: 1,
+                padding: "0.45rem 0.6rem",
+                border: "1px solid #cbd5e1",
+                borderRadius: 6,
+                fontSize: 14,
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => void addItem()}
+              disabled={!newLabel.trim() || adding}
+              style={{
+                background: "#2563eb",
+                color: "white",
+                border: "none",
+                borderRadius: 6,
+                padding: "0.45rem 0.9rem",
+                fontWeight: 600,
+                cursor: newLabel.trim() && !adding ? "pointer" : "not-allowed",
+                opacity: newLabel.trim() && !adding ? 1 : 0.5,
+              }}
+            >
+              {adding ? "Adding…" : "Add"}
+            </button>
+          </div>
+
+          {loading ? (
+            <div style={{ color: "#6b7280" }}>Loading…</div>
+          ) : items.length === 0 ? (
+            <div style={{ color: "#6b7280", fontSize: 13 }}>
+              No library items yet. Add your first one above.
+            </div>
+          ) : (
+            <div
+              style={{
+                border: "1px solid #e5e7eb",
+                borderRadius: 8,
+                overflow: "hidden",
+              }}
+            >
+              {items.map((row, idx) => (
+                <div
+                  key={row.id}
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: "8px 12px",
+                    borderTop: idx === 0 ? "none" : "1px solid #f1f5f9",
+                    background: row.active ? "white" : "#f9fafb",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={row.active}
+                    onChange={() => void toggleActive(row)}
+                    title={
+                      row.active
+                        ? "Turn off — this checkbox will no longer appear in new plans."
+                        : "Turn on — this checkbox will appear in new plans again."
+                    }
+                  />
+                  {renamingId === row.id ? (
+                    <input
+                      type="text"
+                      value={renameDraft}
+                      autoFocus
+                      onChange={(e) => setRenameDraft(e.target.value)}
+                      onBlur={() => void commitRename(row)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void commitRename(row);
+                        if (e.key === "Escape") setRenamingId(null);
+                      }}
+                      maxLength={200}
+                      style={{
+                        flex: 1,
+                        padding: "0.25rem 0.5rem",
+                        border: "1px solid #cbd5e1",
+                        borderRadius: 4,
+                        fontSize: 14,
+                      }}
+                    />
+                  ) : (
+                    <span
+                      style={{
+                        flex: 1,
+                        fontSize: 14,
+                        color: row.active ? "#111827" : "#9ca3af",
+                        textDecoration: row.active ? "none" : "line-through",
+                      }}
+                    >
+                      {row.label}
+                    </span>
+                  )}
+                  {row.isBuiltIn && (
+                    <span
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.4,
+                        background: "#eef2ff",
+                        color: "#4338ca",
+                        border: "1px solid #c7d2fe",
+                        borderRadius: 999,
+                        padding: "1px 7px",
+                      }}
+                      title="Built-in items can be turned off but not renamed."
+                    >
+                      Built-in
+                    </span>
+                  )}
+                  {!row.isBuiltIn && renamingId !== row.id && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRenameDraft(row.label);
+                        setRenamingId(row.id);
+                      }}
+                      style={{
+                        fontSize: 12,
+                        background: "white",
+                        border: "1px solid #d1d5db",
+                        borderRadius: 4,
+                        padding: "2px 8px",
+                        cursor: "pointer",
+                      }}
+                    >
+                      Rename
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
   );
 }

@@ -247,6 +247,16 @@ Guidance Counselor + Core Team.
   gated by `canEditSafetyPlanClient` = Guidance Counselor / Admin /
   Behavior Specialist / MTSS Coordinator / School Psychologist /
   SuperUser, mirroring `canEditSafetyPlan` in `lib/coreTeam.ts`.
+- **Manage library modal** (same admin page, "Manage library" button
+  next to "+ New Safety Plan"): `SafetyPlanLibraryModal` reads the
+  school-wide checklist catalog from `GET /safety-plans/library` and
+  lets editors add new items (POST), toggle any item active/inactive
+  with optimistic-flip + rollback (PATCH), and rename custom items
+  (PATCH). Built-in items show a "Built-in" pill and are
+  rename-locked (the server returns 409 if you try). Existing plans
+  are not mutated when the library changes — they keep whatever
+  items were saved on them. Open the modal from the Safety Plans
+  page; it inherits the same edit gate (`canManage`).
 - **Student Profile entry**: header card now shows an "Edit safety
   plan" / "View safety plan" button next to the demographic chips.
   Visible to every staff member (so teachers always have an in-context
