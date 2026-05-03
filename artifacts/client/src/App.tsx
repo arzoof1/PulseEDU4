@@ -742,7 +742,7 @@ type PulloutNoteTemplate = {
 // for a pullout that has no `parent_message` set yet. Mirrors the
 // canonical wording from the spec.
 const DEFAULT_PARENT_MESSAGE_TEMPLATE =
-  "Your student, {firstName} {lastName}, has received a classroom pullout from {teacherName} for {reason}. They will return to their regular schedule at the end of this period.";
+  "Your student, {firstName} {lastName}, has received a classroom pullout from {teacherName} for {reason}. They will be placed in ISS and will return to their regular schedule at the end of this period. Additional classroom pullouts will result in a referral to the Dean of Students.";
 
 function substitutePulloutPlaceholders(
   template: string,

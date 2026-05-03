@@ -637,7 +637,9 @@ old modal was removed):
    `pullouts.parent_message` if present, otherwise from the canonical
    default template *"Your student, {firstName} {lastName}, has
    received a classroom pullout from {teacherName} for {reason}. They
-   will return to their regular schedule at the end of this period."*
+   will be placed in ISS and will return to their regular schedule at
+   the end of this period. Additional classroom pullouts will result
+   in a referral to the Dean of Students."*
    Placeholders are substituted client-side from the row's draft
    fields. A "Reset" button re-renders the default template against
    the current draft if the verifier wants to start over.
