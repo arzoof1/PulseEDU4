@@ -115,32 +115,31 @@ export async function sendPulloutArrivalEmail(
     : "";
   const arrivedTime = new Date(p.arrivedAt ?? nowIso).toLocaleString();
 
-  const subject = `${schoolName}: ${studentName} pulled from class today`;
-  // If the verifier authored a parent message in the Verify modal, use
-  // it verbatim (placeholders were already substituted client-side).
-  // Otherwise fall back to the auto-generated wording so older pullouts
-  // with no parent_message still produce a useful email.
-  const customMessage = p.parentMessage?.trim() ?? "";
-  const body = customMessage
-    ? `${greeting}\n\n${customMessage}\n\n${signature}`
-    : `${greeting}\n\n` +
-      `We are writing to let you know that ${studentName} was pulled from class${teacherText}${periodText} today and arrived in our intervention room at ${arrivedTime}. ` +
-      `The reason given was: "${reasonText}".\n\n` +
-      `Our staff will work with ${studentName} and follow up with you if any further action is needed. Please reach out if you have questions.\n\n` +
-      `${signature}`;
-  // HTML body: the parent_message is staff-supplied free text, so we
-  // HTML-escape it before injecting into the template (newlines still
-  // become <br>). Without this, a verifier could inject script/img
-  // tags that would render in the parent's email client.
-  const html = customMessage
-    ? `<p>${escapeHtml(greeting).replace(/\n/g, "<br>")}</p>` +
-      `<p>${escapeHtml(customMessage).replace(/\n/g, "<br>")}</p>` +
-      `<p>${escapeHtml(signature).replace(/\n/g, "<br>")}</p>`
-    : `<p>${greeting.replace(/\n/g, "<br>")}</p>` +
-      `<p>We are writing to let you know that <strong>${studentName}</strong> was pulled from class${teacherText}${periodText} today and arrived in our intervention room at <strong>${arrivedTime}</strong>. ` +
-      `The reason given was: <em>"${reasonText}"</em>.</p>` +
-      `<p>Our staff will work with ${studentName} and follow up with you if any further action is needed. Please reach out if you have questions.</p>` +
-      `<p>${signature.replace(/\n/g, "<br>")}</p>`;
+  const subject = `${schoolName}: ${studentName} arrived at ISS`;
+  // Canonical arrival message — distinct from the verify-time
+  // send-to-ISS email which used p.parentMessage. The arrival email
+  // is shorter and confirms the student is now physically in ISS.
+  // Discard `reasonText` / `teacherText` / `periodText` / `arrivedTime`
+  // here — they are surfaced in the earlier send-to-ISS email; the
+  // arrival note is intentionally minimal and reassuring.
+  void reasonText;
+  void teacherText;
+  void periodText;
+  void arrivedTime;
+  const arrivalLine =
+    `Your student, ${studentName}, has arrived at ISS and will remain ` +
+    `for the rest of the period. They will return to their regular ` +
+    `schedule at the end of this period.`;
+  const body =
+    `${greeting}\n\n` +
+    `${arrivalLine}\n\n` +
+    `Please reach out if you have any questions.\n\n` +
+    `${signature}`;
+  const html =
+    `<p>${greeting.replace(/\n/g, "<br>")}</p>` +
+    `<p>${arrivalLine}</p>` +
+    `<p>Please reach out if you have any questions.</p>` +
+    `<p>${signature.replace(/\n/g, "<br>")}</p>`;
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
@@ -174,6 +173,150 @@ export async function sendPulloutArrivalEmail(
         parentEmailStatus: "error",
         parentEmailTo: parentEmail,
         parentEmailErrorMsg: errMsg,
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return { status: "error", emailTo: parentEmail, errorMsg: errMsg };
+  }
+}
+
+/**
+ * Send the parent send-to-ISS email at verify time. Uses the
+ * verifier-authored `parent_message` body (which already has
+ * placeholders substituted client-side). Idempotent on
+ * sentToIssEmailSentAt so re-verifying or refreshing the dashboard
+ * won't double-send.
+ *
+ * If the verifier did not author a message, falls back to the
+ * canonical default wording so a parent always gets some context.
+ */
+export async function sendPulloutSendToIssEmail(
+  pulloutId: number,
+): Promise<PulloutEmailResult> {
+  const [p] = await db
+    .select()
+    .from(pulloutsTable)
+    .where(eq(pulloutsTable.id, pulloutId));
+  if (!p) {
+    return { status: "skipped", emailTo: null, errorMsg: "Pullout not found" };
+  }
+  if (p.sentToIssEmailSentAt) {
+    return {
+      status:
+        (p.sentToIssEmailStatus as "sent" | "skipped" | "error" | null) ??
+        "skipped",
+      emailTo: p.sentToIssEmailTo,
+      errorMsg: p.sentToIssEmailErrorMsg,
+    };
+  }
+  const nowIso = new Date().toISOString();
+
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, p.studentId),
+        eq(studentsTable.schoolId, p.schoolId),
+      ),
+    );
+  if (!student) {
+    await db
+      .update(pulloutsTable)
+      .set({
+        sentToIssEmailSentAt: nowIso,
+        sentToIssEmailStatus: "skipped",
+        sentToIssEmailTo: null,
+        sentToIssEmailErrorMsg: "Student not found in roster",
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return {
+      status: "skipped",
+      emailTo: null,
+      errorMsg: "Student not found in roster",
+    };
+  }
+  const parentEmail = student.parentEmail?.trim() || null;
+  if (!parentEmail) {
+    await db
+      .update(pulloutsTable)
+      .set({
+        sentToIssEmailSentAt: nowIso,
+        sentToIssEmailStatus: "skipped",
+        sentToIssEmailTo: null,
+        sentToIssEmailErrorMsg: "No parent email on file",
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return {
+      status: "skipped",
+      emailTo: null,
+      errorMsg: "No parent email on file",
+    };
+  }
+
+  const [settings] = await db
+    .select()
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, p.schoolId));
+  const schoolName = settings?.schoolName ?? "PulseED";
+  const fromName = settings?.fromName ?? schoolName;
+  const signature = settings?.emailSignature ?? `Thank you,\n${schoolName}`;
+  const studentName = `${student.firstName} ${student.lastName}`;
+  const greeting = student.parentName
+    ? `Dear ${student.parentName},`
+    : "Dear Parent or Guardian,";
+
+  // Verifier-authored message body (placeholders already substituted
+  // client-side). Falls back to a minimal canonical line so the
+  // parent always receives meaningful context even if the verifier
+  // somehow cleared the textarea.
+  const customMessage =
+    p.parentMessage?.trim() ||
+    `Your student, ${studentName}, has been pulled from class and ` +
+      `is being placed in ISS. They will return to their regular ` +
+      `schedule at the end of this period.`;
+
+  const subject = `${schoolName}: ${studentName} pulled from class — sent to ISS`;
+  const body = `${greeting}\n\n${customMessage}\n\n${signature}`;
+  // HTML-escape staff-supplied free text before injecting into the
+  // template (newlines become <br>). Same treatment as the original
+  // arrival email had for parent_message.
+  const html =
+    `<p>${escapeHtml(greeting).replace(/\n/g, "<br>")}</p>` +
+    `<p>${escapeHtml(customMessage).replace(/\n/g, "<br>")}</p>` +
+    `<p>${escapeHtml(signature).replace(/\n/g, "<br>")}</p>`;
+
+  try {
+    const { client, fromEmail } = await getUncachableResendClient();
+    const fromHeader = `${fromName} <${fromEmail}>`;
+    const sendRes = await client.emails.send({
+      from: fromHeader,
+      to: parentEmail,
+      subject,
+      text: body,
+      html,
+    });
+    if (sendRes.error) {
+      throw new Error(sendRes.error.message ?? "Resend error");
+    }
+    await db
+      .update(pulloutsTable)
+      .set({
+        sentToIssEmailSentAt: nowIso,
+        sentToIssEmailStatus: "sent",
+        sentToIssEmailTo: parentEmail,
+        sentToIssEmailErrorMsg: null,
+      })
+      .where(eq(pulloutsTable.id, pulloutId));
+    return { status: "sent", emailTo: parentEmail, errorMsg: null };
+  } catch (e) {
+    const errMsg = e instanceof Error ? e.message : String(e);
+    await db
+      .update(pulloutsTable)
+      .set({
+        sentToIssEmailSentAt: nowIso,
+        sentToIssEmailStatus: "error",
+        sentToIssEmailTo: parentEmail,
+        sentToIssEmailErrorMsg: errMsg,
       })
       .where(eq(pulloutsTable.id, pulloutId));
     return { status: "error", emailTo: parentEmail, errorMsg: errMsg };

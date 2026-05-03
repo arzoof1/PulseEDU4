@@ -650,15 +650,24 @@ old modal was removed):
 3. The per-row **Send to ISS** button posts the existing
    `PATCH /pullouts/:id/verify` with the inline `parentMessage` (max
    4000 chars). The string is stored verbatim on
-   `pullouts.parent_message` and used as the body of the parent
-   arrival email; if null, the auto-generated arrival wording is used.
-4. The Return-to-Class email body now reads *"Your student, {name},
+   `pullouts.parent_message` and the server immediately fires
+   `sendPulloutSendToIssEmail(id)` — that's the **first** parent
+   email and uses `parent_message` as its body verbatim. Idempotent
+   on `pullouts.sent_to_iss_email_sent_at`.
+4. When the student is later marked **arrived** at ISS,
+   `sendPulloutArrivalEmail(id)` fires a **second**, distinct
+   parent email with a fixed canonical wording: *"Your student,
+   {name}, has arrived at ISS and will remain for the rest of the
+   period. They will return to their regular schedule at the end of
+   this period."* This email no longer reuses `parent_message` — the
+   send-to-ISS email already carried the verifier's note.
+5. The Return-to-Class email body still reads *"Your student, {name},
    has returned to their regular class schedule."* and the canonical
    string is also stashed on `pullouts.return_message` so a future
    SMS sender can replay it. SMS itself is a TODO marked inline in
    `routes/pullouts.ts` near `/returned` — Twilio is intentionally not
    wired up yet.
-5. The Verify Pullouts page also has a collapsible **"Teacher called
+6. The Verify Pullouts page also has a collapsible **"Teacher called
    instead of using the app?"** panel. In the normal flow the student
    name is pre-populated from the teacher's submission, but when a
    teacher phones or walks down for an admin/dean/MTSS, that verifier

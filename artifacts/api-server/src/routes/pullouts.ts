@@ -17,6 +17,7 @@ import {
   sendPulloutArrivalEmail,
   sendPulloutDispatchEmail,
   sendPulloutReturnEmail,
+  sendPulloutSendToIssEmail,
 } from "../lib/pulloutEmail";
 import { upsertIssAttendance } from "./issAttendance";
 import { requireSchool } from "../lib/scope.js";
@@ -369,7 +370,18 @@ router.patch(
       .set(updates)
       .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
-    res.json(row);
+    // Fire the parent send-to-ISS email synchronously so the verifier
+    // sees the result inline with the row update. Idempotent on
+    // pullouts.sent_to_iss_email_sent_at, so a second verify (e.g.
+    // re-edit + Send to ISS again) won't double-send.
+    const sendToIssEmail = await sendPulloutSendToIssEmail(id);
+    if (sendToIssEmail.status === "error") {
+      console.error(
+        `[pullouts] send-to-ISS email failed (pulloutId=${id}):`,
+        sendToIssEmail.errorMsg,
+      );
+    }
+    res.json({ ...row, sendToIssEmail });
   },
 );
 

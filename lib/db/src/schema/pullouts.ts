@@ -39,6 +39,14 @@ export const pulloutsTable = pgTable(
     dispatchEmailStatus: text("dispatch_email_status"),
     dispatchEmailTo: text("dispatch_email_to"),
     dispatchEmailErrorMsg: text("dispatch_email_error_msg"),
+    // Parent send-to-ISS email — fired once at verify time using
+    // the verifier-authored parent_message body. Idempotent on
+    // sentToIssEmailSentAt so re-verifying or refreshing won't
+    // double-send.
+    sentToIssEmailSentAt: text("sent_to_iss_email_sent_at"),
+    sentToIssEmailStatus: text("sent_to_iss_email_status"),
+    sentToIssEmailTo: text("sent_to_iss_email_to"),
+    sentToIssEmailErrorMsg: text("sent_to_iss_email_error_msg"),
     // Parent-facing message captured at the Verify step. Editable by the
     // verifier in a notes panel; if set, the arrival email uses this as
     // its body verbatim (with template placeholders already substituted

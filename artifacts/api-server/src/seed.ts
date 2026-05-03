@@ -808,6 +808,21 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
   await db.execute(
     sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS return_message TEXT`,
   );
+  // Parent send-to-ISS email tracking — separate from the arrival
+  // email so we can send both (one at verify, one at arrival) and
+  // each stays idempotent on its own column.
+  await db.execute(
+    sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS sent_to_iss_email_sent_at TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS sent_to_iss_email_status TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS sent_to_iss_email_to TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS sent_to_iss_email_error_msg TEXT`,
+  );
   // School-scoped library of canned parent messages for the Verify
   // modal. Managed from the Behavior Dashboard.
   await db.execute(sql`

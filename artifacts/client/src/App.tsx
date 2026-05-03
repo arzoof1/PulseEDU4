@@ -1477,8 +1477,10 @@ function VerifyPulloutsSection({
                             fontWeight: 600,
                           }}
                         >
-                          Parent message preview (editable — this is what
-                          will be emailed)
+                          Send-to-ISS parent message (editable — this is
+                          what will be emailed when you click Send to ISS;
+                          a separate confirmation goes out when the
+                          student arrives)
                         </span>
                         <div
                           style={{
