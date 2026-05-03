@@ -628,22 +628,26 @@ stamps `school_id` on every INSERT:
   `verify`, `reject`, `arrived`, `returned`, `closed`, `review` — now match
   `id AND school_id`),
 
-**Pull-out Verify modal + parent message templates.** The per-row
-"Verify & send to ISS" button on the Verify Pullouts section was split
-into two steps:
+**Pull-out Verify inline parent-message preview + templates.** The
+per-row "Verify & send to ISS" button on the Verify Pullouts section
+now shows the parent email body **inline** on each pending row (the
+old modal was removed):
 
-1. **Verify** opens a modal pre-filled with an editable parent message:
-   *"Your student, {firstName} {lastName}, has received a classroom
-   pullout from {teacherName} for {reason}. They will return to their
-   regular schedule at the end of this period."* Placeholders are
-   substituted client-side from the row's draft fields before display.
-2. The modal has an **Insert template** dropdown that pulls from a
+1. Each row renders an editable parent-message textarea seeded from
+   `pullouts.parent_message` if present, otherwise from the canonical
+   default template *"Your student, {firstName} {lastName}, has
+   received a classroom pullout from {teacherName} for {reason}. They
+   will return to their regular schedule at the end of this period."*
+   Placeholders are substituted client-side from the row's draft
+   fields. A "Reset" button re-renders the default template against
+   the current draft if the verifier wants to start over.
+2. Each row has an **Insert template…** dropdown that pulls from a
    per-school catalog (`pullout_note_templates`) managed by Behavior
    Specialist / Admin / MTSS / Dean / SuperUser from a new section at
    the bottom of the Behavior Dashboard (`PulloutNoteTemplatesAdmin`).
-3. The bottom **Send to ISS** button posts the existing
-   `PATCH /pullouts/:id/verify` with a new optional `parentMessage`
-   field (max 4000 chars). The string is stored verbatim on
+3. The per-row **Send to ISS** button posts the existing
+   `PATCH /pullouts/:id/verify` with the inline `parentMessage` (max
+   4000 chars). The string is stored verbatim on
    `pullouts.parent_message` and used as the body of the parent
    arrival email; if null, the auto-generated arrival wording is used.
 4. The Return-to-Class email body now reads *"Your student, {name},
@@ -670,7 +674,8 @@ in `seed.ts` `ensureSchoolSettingsFeatureFlagsSchema`, new route
 `routes/pullouts.ts` `/verify` extension + `/returned` stash,
 `lib/pulloutEmail.ts` (arrival uses `parent_message` if set, return
 uses canonical line), client `App.tsx` `VerifyPulloutsSection`
-modal + new `components/PulloutNoteTemplatesAdmin.tsx` mounted in
+inline preview + Send-to-ISS per row + new
+`components/PulloutNoteTemplatesAdmin.tsx` mounted in
 `BehaviorDashboard`.
 
 Continuing the per-school scoping list:

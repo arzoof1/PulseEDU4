@@ -787,11 +787,14 @@ function VerifyPulloutsSection({
   >({});
   const [busyId, setBusyId] = useState<number | null>(null);
 
-  // Verify modal state — opened from the per-row "Verify" button.
-  // Holds the pullout being verified and the editable parent message
-  // (with placeholders already substituted from the row's draft).
-  const [verifyFor, setVerifyFor] = useState<PulloutRow | null>(null);
-  const [parentMessageDraft, setParentMessageDraft] = useState("");
+  // Parent message previews are kept per-row (keyed by pullout id) so
+  // the verifier can see and edit, in-line, the exact email body that
+  // will be sent to the parent. Seeded the first time a row appears
+  // (from any persisted parent_message, otherwise the canonical
+  // default template with placeholders substituted).
+  const [parentMsgDrafts, setParentMsgDrafts] = useState<
+    Record<number, string>
+  >({});
   const [templates, setTemplates] = useState<PulloutNoteTemplate[]>([]);
 
   // "Called-in" pullout form state — used when a teacher calls or
@@ -991,40 +994,58 @@ function VerifyPulloutsSection({
     };
   };
 
-  // Open the Verify modal. Pre-fills the parent message: if the
-  // pullout already has one stashed (e.g. the verifier reopened it),
-  // reuse that string verbatim; otherwise substitute placeholders
-  // into the canonical default template.
-  const openVerify = (p: PulloutRow) => {
-    setMsg(null);
-    setVerifyFor(p);
+  // Compute the seed body for a row's parent-message preview: any
+  // already-persisted parent_message wins, otherwise substitute the
+  // current draft fields into the canonical default template.
+  const seedParentMessage = (p: PulloutRow): string => {
+    if (p.parentMessage && p.parentMessage.trim()) return p.parentMessage;
     const ctx = buildSubstitutionCtx(p);
-    const initial =
-      p.parentMessage && p.parentMessage.trim()
-        ? p.parentMessage
-        : substitutePulloutPlaceholders(
-            DEFAULT_PARENT_MESSAGE_TEMPLATE,
-            ctx,
-          );
-    setParentMessageDraft(initial);
+    return substitutePulloutPlaceholders(
+      DEFAULT_PARENT_MESSAGE_TEMPLATE,
+      ctx,
+    );
   };
 
-  // Insert one of the school's templates into the textarea, with
-  // placeholders substituted from the current row's draft.
-  const insertTemplate = (templateId: number) => {
-    if (!verifyFor) return;
+  // Insert one of the school's templates into a row's textarea, with
+  // placeholders substituted from that row's current draft fields.
+  const insertTemplate = (p: PulloutRow, templateId: number) => {
     const tpl = templates.find((t) => t.id === templateId);
     if (!tpl) return;
-    const ctx = buildSubstitutionCtx(verifyFor);
-    setParentMessageDraft(substitutePulloutPlaceholders(tpl.body, ctx));
+    const ctx = buildSubstitutionCtx(p);
+    setParentMsgDrafts((prev) => ({
+      ...prev,
+      [p.id]: substitutePulloutPlaceholders(tpl.body, ctx),
+    }));
+  };
+
+  // Reset a row's parent message back to the default template with
+  // placeholders re-substituted from current draft fields. Useful
+  // after the verifier edits the reason/teacher/period so the preview
+  // can be refreshed without typing it back from scratch.
+  const resetParentMessage = (p: PulloutRow) => {
+    const ctx = buildSubstitutionCtx(p);
+    setParentMsgDrafts((prev) => ({
+      ...prev,
+      [p.id]: substitutePulloutPlaceholders(
+        DEFAULT_PARENT_MESSAGE_TEMPLATE,
+        ctx,
+      ),
+    }));
   };
 
   // Send-to-ISS handler — posts the existing /verify endpoint with the
-  // edited row fields plus the new parentMessage from the modal.
-  const confirmVerify = async () => {
-    const p = verifyFor;
-    if (!p) return;
+  // edited row fields plus the inline parent message preview.
+  const sendToIss = async (p: PulloutRow) => {
     const draft = edits[p.id];
+    const parentMessage = (parentMsgDrafts[p.id] ?? seedParentMessage(p))
+      .trim();
+    if (!parentMessage) {
+      setMsg({
+        ok: false,
+        text: "Parent message is empty — write a note before sending.",
+      });
+      return;
+    }
     setBusyId(p.id);
     setMsg(null);
     try {
@@ -1035,7 +1056,7 @@ function VerifyPulloutsSection({
           editedReason: draft?.editedReason ?? "",
           period: draft?.period === "" ? null : Number(draft?.period ?? ""),
           referringTeacherName: draft?.referringTeacherName ?? "",
-          parentMessage: parentMessageDraft,
+          parentMessage,
         }),
       });
       const data = await r.json().catch(() => ({}));
@@ -1044,10 +1065,13 @@ function VerifyPulloutsSection({
       } else {
         setMsg({
           ok: true,
-          text: `Verified pullout #${p.id} for ${studentName(p.studentId)}.`,
+          text: `Sent to ISS — pullout #${p.id} for ${studentName(p.studentId)}.`,
         });
-        setVerifyFor(null);
-        setParentMessageDraft("");
+        setParentMsgDrafts((prev) => {
+          const next = { ...prev };
+          delete next[p.id];
+          return next;
+        });
         await refresh();
         onChange();
       }
@@ -1417,6 +1441,123 @@ function VerifyPulloutsSection({
                     />
                   </label>
                 </div>
+                {/* Inline parent-message preview. This is the exact body
+                    the parent will receive when the verifier clicks
+                    "Send to ISS". Editable in place; "Insert template"
+                    swaps in a school-managed canned message with
+                    placeholders substituted from the current draft. */}
+                {(() => {
+                  const parentMsg =
+                    parentMsgDrafts[p.id] ?? seedParentMessage(p);
+                  return (
+                    <div
+                      style={{
+                        marginTop: "0.75rem",
+                        background: "#f8fafc",
+                        border: "1px solid #e2e8f0",
+                        borderRadius: 6,
+                        padding: "0.6rem 0.75rem",
+                        display: "grid",
+                        gap: 6,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <span
+                          style={{
+                            fontSize: 12,
+                            color: "#475569",
+                            fontWeight: 600,
+                          }}
+                        >
+                          Parent message preview (editable — this is what
+                          will be emailed)
+                        </span>
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 6,
+                            alignItems: "center",
+                          }}
+                        >
+                          <select
+                            defaultValue=""
+                            onChange={(e) => {
+                              const v = e.target.value;
+                              if (v) {
+                                insertTemplate(p, Number(v));
+                                e.currentTarget.value = "";
+                              }
+                            }}
+                            style={{
+                              padding: "0.3rem 0.5rem",
+                              border: "1px solid #cbd5e1",
+                              borderRadius: 6,
+                              background: "white",
+                              fontSize: 12,
+                            }}
+                          >
+                            <option value="">
+                              {templates.length === 0
+                                ? "No templates"
+                                : "Insert template…"}
+                            </option>
+                            {templates.map((t) => (
+                              <option key={t.id} value={t.id}>
+                                {t.title}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() => resetParentMessage(p)}
+                            style={{
+                              background: "white",
+                              color: "#475569",
+                              border: "1px solid #cbd5e1",
+                              borderRadius: 6,
+                              padding: "0.3rem 0.6rem",
+                              fontSize: 12,
+                              cursor: "pointer",
+                            }}
+                            title="Reset to default with current reason / period / teacher filled in"
+                          >
+                            Reset
+                          </button>
+                        </div>
+                      </div>
+                      <textarea
+                        rows={5}
+                        value={parentMsg}
+                        maxLength={4000}
+                        onChange={(e) =>
+                          setParentMsgDrafts((prev) => ({
+                            ...prev,
+                            [p.id]: e.target.value,
+                          }))
+                        }
+                        style={{
+                          padding: "0.5rem 0.65rem",
+                          border: "1px solid #cbd5e1",
+                          borderRadius: 6,
+                          font: "inherit",
+                          minHeight: 110,
+                          background: "white",
+                        }}
+                      />
+                      <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                        {parentMsg.length} / 4000
+                      </span>
+                    </div>
+                  );
+                })()}
                 <div
                   style={{
                     display: "flex",
@@ -1430,9 +1571,9 @@ function VerifyPulloutsSection({
                     type="button"
                     className="btn-primary"
                     disabled={busyId === p.id}
-                    onClick={() => openVerify(p)}
+                    onClick={() => void sendToIss(p)}
                   >
-                    {busyId === p.id ? "Working…" : "Verify"}
+                    {busyId === p.id ? "Sending…" : "Send to ISS"}
                   </button>
                   <input
                     type="text"
@@ -1465,168 +1606,6 @@ function VerifyPulloutsSection({
         </div>
       )}
 
-      {/* Verify modal — opens from the per-row "Verify" button. The
-          textarea is the editable parent message; "Insert template"
-          drops a school-managed canned message into it (with
-          placeholders substituted from the row's draft fields).
-          "Send to ISS" calls the existing /verify endpoint with the
-          new parentMessage payload. */}
-      {verifyFor && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-label="Verify pullout and send parent message"
-          style={{
-            position: "fixed",
-            inset: 0,
-            background: "rgba(15,23,42,0.55)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            zIndex: 1000,
-            padding: 16,
-          }}
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setVerifyFor(null);
-              setParentMessageDraft("");
-            }
-          }}
-        >
-          <div
-            style={{
-              background: "white",
-              borderRadius: 10,
-              boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
-              width: "min(640px, 100%)",
-              maxHeight: "90vh",
-              display: "flex",
-              flexDirection: "column",
-            }}
-          >
-            <div
-              style={{
-                padding: "1rem 1.25rem",
-                borderBottom: "1px solid #e2e8f0",
-              }}
-            >
-              <h3 style={{ margin: 0, fontSize: "1.15rem" }}>
-                Verify pullout for {studentName(verifyFor.studentId)}
-              </h3>
-              <p
-                style={{
-                  margin: "0.25rem 0 0",
-                  color: "#64748b",
-                  fontSize: 13,
-                }}
-              >
-                Review and edit the message that will be emailed to
-                the parent when the student arrives at ISS.
-              </p>
-            </div>
-            <div
-              style={{
-                padding: "1rem 1.25rem",
-                overflowY: "auto",
-                display: "grid",
-                gap: 12,
-              }}
-            >
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={{ fontSize: 12, color: "#475569" }}>
-                  Insert template
-                </span>
-                <select
-                  defaultValue=""
-                  onChange={(e) => {
-                    const v = e.target.value;
-                    if (v) {
-                      insertTemplate(Number(v));
-                      e.currentTarget.value = "";
-                    }
-                  }}
-                  style={{
-                    padding: "0.4rem 0.6rem",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 6,
-                    background: "white",
-                  }}
-                >
-                  <option value="">
-                    {templates.length === 0
-                      ? "No templates yet — Behavior Specialist can add some"
-                      : "Choose a template…"}
-                  </option>
-                  {templates.map((t) => (
-                    <option key={t.id} value={t.id}>
-                      {t.title}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label style={{ display: "grid", gap: 6 }}>
-                <span style={{ fontSize: 12, color: "#475569" }}>
-                  Parent message
-                </span>
-                <textarea
-                  rows={8}
-                  value={parentMessageDraft}
-                  onChange={(e) => setParentMessageDraft(e.target.value)}
-                  maxLength={4000}
-                  style={{
-                    padding: "0.5rem 0.75rem",
-                    border: "1px solid #cbd5e1",
-                    borderRadius: 6,
-                    font: "inherit",
-                    minHeight: 160,
-                  }}
-                />
-                <span style={{ fontSize: 11, color: "#94a3b8" }}>
-                  {parentMessageDraft.length} / 4000
-                </span>
-              </label>
-            </div>
-            <div
-              style={{
-                padding: "0.75rem 1.25rem",
-                borderTop: "1px solid #e2e8f0",
-                display: "flex",
-                justifyContent: "flex-end",
-                gap: 8,
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => {
-                  setVerifyFor(null);
-                  setParentMessageDraft("");
-                }}
-                disabled={busyId === verifyFor.id}
-                style={{
-                  background: "white",
-                  color: "#374151",
-                  border: "1px solid #d1d5db",
-                  borderRadius: 6,
-                  padding: "0.45rem 0.9rem",
-                  cursor: "pointer",
-                }}
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                className="btn-primary"
-                onClick={() => void confirmVerify()}
-                disabled={
-                  busyId === verifyFor.id || !parentMessageDraft.trim()
-                }
-              >
-                {busyId === verifyFor.id ? "Sending…" : "Send to ISS"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
     </section>
   );
 }
