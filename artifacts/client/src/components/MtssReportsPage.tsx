@@ -541,90 +541,124 @@ export default function MtssReportsPage({
       )}
 
       {/* ---- summary tiles ---- */}
+      {/*
+        Three discrete rows so each tier reads as a unit:
+          Row 1 — Date range  +  Plans included
+          Row 2 — Tier 2 completion (overall)  +  Tier 2 completion (this week)
+          Row 3 — Tier 3 avg score (overall)   +  Tier 3 avg score (this week)
+        Each row uses an explicit 2-column grid so the pair stays on
+        the same line on desktop, then collapses to stacked tiles
+        below ~640px via auto-fit minmax for mobile.
+      */}
       {data && (
         <div
           className="mtss-reports-card"
           style={{
             ...cardStyle,
             display: "grid",
-            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
             gap: 12,
           }}
         >
-          <SummaryTile
-            label="Date range"
-            value={`${data.rangeStart} → ${data.rangeEnd}`}
-            sub={`${data.schoolDayCount} school days`}
-          />
-          <SummaryTile
-            label="Plans included"
-            value={String(data.plansIncluded)}
-          />
-          <SummaryTile
-            label="T2 completion (overall)"
-            value={fmtPct(overallT2)}
-            tone={
-              overallT2 == null
-                ? "neutral"
-                : overallT2 >= 80
-                  ? "good"
-                  : overallT2 >= 60
-                    ? "warn"
-                    : "bad"
-            }
-          />
-          <SummaryTile
-            label="T3 avg score (overall)"
-            value={fmtScore(overallT3)}
-            sub={overallT3 != null ? "/ 5" : undefined}
-            tone={
-              overallT3 == null
-                ? "neutral"
-                : overallT3 >= 4
-                  ? "good"
-                  : overallT3 >= 3
-                    ? "warn"
-                    : "bad"
-            }
-          />
-          <SummaryTile
-            label="T2 completion (this week)"
-            value={fmtPct(thisWeek.t2Pct)}
-            sub={
-              thisWeek.weekStartDate
-                ? `Week of ${thisWeek.weekStartDate}`
-                : undefined
-            }
-            tone={
-              thisWeek.t2Pct == null
-                ? "neutral"
-                : thisWeek.t2Pct >= 80
-                  ? "good"
-                  : thisWeek.t2Pct >= 60
-                    ? "warn"
-                    : "bad"
-            }
-          />
-          <SummaryTile
-            label="T3 avg score (this week)"
-            value={fmtScore(thisWeek.t3Avg)}
-            sub={
-              thisWeek.weekStartDate
-                ? `Week of ${thisWeek.weekStartDate}${thisWeek.t3Avg != null ? " · / 5" : ""}`
-                : thisWeek.t3Avg != null
-                  ? "/ 5"
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <SummaryTile
+              label="Date range"
+              value={`${data.rangeStart} → ${data.rangeEnd}`}
+              sub={`${data.schoolDayCount} school days`}
+            />
+            <SummaryTile
+              label="Plans included"
+              value={String(data.plansIncluded)}
+            />
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <SummaryTile
+              label="Tier 2 completion (overall)"
+              value={fmtPct(overallT2)}
+              tone={
+                overallT2 == null
+                  ? "neutral"
+                  : overallT2 >= 80
+                    ? "good"
+                    : overallT2 >= 60
+                      ? "warn"
+                      : "bad"
+              }
+            />
+            <SummaryTile
+              label="Tier 2 completion (this week)"
+              value={fmtPct(thisWeek.t2Pct)}
+              sub={
+                thisWeek.weekStartDate
+                  ? `Week of ${thisWeek.weekStartDate}`
                   : undefined
-            }
-            tone={
-              thisWeek.t3Avg == null
-                ? "neutral"
-                : thisWeek.t3Avg >= 4
-                  ? "good"
-                  : thisWeek.t3Avg >= 3
-                    ? "warn"
-                    : "bad"
-            }
-          />
+              }
+              tone={
+                thisWeek.t2Pct == null
+                  ? "neutral"
+                  : thisWeek.t2Pct >= 80
+                    ? "good"
+                    : thisWeek.t2Pct >= 60
+                      ? "warn"
+                      : "bad"
+              }
+            />
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 12,
+            }}
+          >
+            <SummaryTile
+              label="Tier 3 avg score (overall)"
+              value={fmtScore(overallT3)}
+              sub={overallT3 != null ? "/ 5" : undefined}
+              tone={
+                overallT3 == null
+                  ? "neutral"
+                  : overallT3 >= 4
+                    ? "good"
+                    : overallT3 >= 3
+                      ? "warn"
+                      : "bad"
+              }
+            />
+            <SummaryTile
+              label="Tier 3 avg score (this week)"
+              value={fmtScore(thisWeek.t3Avg)}
+              sub={
+                thisWeek.weekStartDate
+                  ? `Week of ${thisWeek.weekStartDate}${thisWeek.t3Avg != null ? " · / 5" : ""}`
+                  : thisWeek.t3Avg != null
+                    ? "/ 5"
+                    : undefined
+              }
+              tone={
+                thisWeek.t3Avg == null
+                  ? "neutral"
+                  : thisWeek.t3Avg >= 4
+                    ? "good"
+                    : thisWeek.t3Avg >= 3
+                      ? "warn"
+                      : "bad"
+              }
+            />
+          </div>
         </div>
       )}
 
