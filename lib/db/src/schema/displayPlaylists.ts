@@ -38,6 +38,13 @@ export const displayPlaylistsTable = pgTable("display_playlists", {
   // at the existing /signage/heartbeat page (no server-side data fetch
   // is needed — the heartbeat page polls for itself).
   showHeartbeat: boolean("show_heartbeat").notNull().default(false),
+  // Manual on/off kill switch independent of `scheduleEnabled`. When
+  // false the public cycler returns an "off-air" payload (no items,
+  // active=false) so any TV pointed at /display/<id> shows the Off-air
+  // card immediately. The display row + its overrides are preserved
+  // so admins can flip it back on without losing any configuration.
+  // The cross-display calendar hides inactive displays from its grid.
+  active: boolean("active").notNull().default(true),
   // Optional play-window schedule (v2). When `scheduleEnabled` is true and
   // *any* of (current day-of-week ∉ days, current time-of-day < start, or
   // ≥ end) holds, the cycler shows an "Off-air" slide instead of content.

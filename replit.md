@@ -195,6 +195,18 @@ slideshow".
 - Admin UI (`Displays.tsx` `OverridesEditor`): weekly 7-column grid +
   Add (single day) and Bulk add (one window applied to N days at once)
   modal. v1 is delete + re-add, no inline edit.
+- **Per-display Active/Inactive kill switch** (`display_playlists.active`,
+  default TRUE): each display URL card on the admin list shows a green
+  "Active" / red "Inactive" pill plus a Turn off / Turn on button.
+  When flipped OFF the public cycler endpoint returns a minimal
+  off-air payload (no items, all synthetic slides disabled) so any TV
+  pointed at `/display/<id>` shows its built-in Off-air card without
+  breaking its poll. Items, schedule, and overrides are preserved.
+  The cross-display **Calendar modal** (`GET /api/displays/calendar`)
+  filters to active displays only and resolves override target names
+  against the same active-only list, so an inactive playlist never
+  appears in the grid even if another display has an override pointing
+  at it.
 
 ## Safety Plans (May 2026)
 

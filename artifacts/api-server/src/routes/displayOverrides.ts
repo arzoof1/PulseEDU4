@@ -653,6 +653,14 @@ router.get("/displays/calendar", async (req, res) => {
     // Load every display + every override at this school in parallel
     // along with playlist names for both base displays and override
     // targets.
+    // The grid only shows displays that are currently turned ON
+    // (active = true). Inactive displays are hidden entirely along
+    // with their overrides — the calendar is a "what will play this
+    // week" view, and an off-air display will play nothing. Override
+    // *target* names are resolved from the same active-only display
+    // list, so an override pointing at an inactive playlist falls
+    // back to "#<id>" rather than implying the off-air playlist will
+    // be played mid-window.
     const [displays, overrides] = await Promise.all([
       db
         .select({
@@ -660,7 +668,12 @@ router.get("/displays/calendar", async (req, res) => {
           name: displayPlaylistsTable.name,
         })
         .from(displayPlaylistsTable)
-        .where(eq(displayPlaylistsTable.schoolId, schoolId))
+        .where(
+          and(
+            eq(displayPlaylistsTable.schoolId, schoolId),
+            eq(displayPlaylistsTable.active, true),
+          ),
+        )
         .orderBy(asc(displayPlaylistsTable.name)),
       db
         .select()
@@ -669,7 +682,12 @@ router.get("/displays/calendar", async (req, res) => {
           displayPlaylistsTable,
           eq(displayPlaylistOverridesTable.displayId, displayPlaylistsTable.id),
         )
-        .where(eq(displayPlaylistsTable.schoolId, schoolId)),
+        .where(
+          and(
+            eq(displayPlaylistsTable.schoolId, schoolId),
+            eq(displayPlaylistsTable.active, true),
+          ),
+        ),
     ]);
     // Override targets are themselves display_playlists at the same
     // school (verifyOverrideTarget enforces that), so we can label

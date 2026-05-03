@@ -791,6 +791,14 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tier_preset_id INTEGER`,
     ),
   );
+  // Manual on/off kill switch for an entire display URL (separate from
+  // the time-window `schedule_enabled`). Defaults TRUE so existing
+  // displays keep playing without any admin action. When FALSE the
+  // public cycler returns an off-air payload and the cross-display
+  // calendar hides the row.
+  await db.execute(
+    sql`ALTER TABLE display_playlists ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
 }
 
 // Tier-preset table + the three built-in Basic/Pro/Enterprise rows.

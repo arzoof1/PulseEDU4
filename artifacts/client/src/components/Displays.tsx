@@ -24,6 +24,10 @@ interface PlaylistRow {
   name: string;
   defaultDurationSeconds: number;
   showPbisHousePage: boolean;
+  // Manual on/off kill switch (independent of the time-window
+  // `scheduleEnabled`). When false the public URL serves an
+  // "off-air" payload and the cross-display calendar hides the row.
+  active: boolean;
   createdAt: string;
   updatedAt: string;
   itemCount: number;
@@ -198,6 +202,37 @@ export default function Displays() {
     }
   }
 
+  async function toggleActive(p: PlaylistRow) {
+    // Optimistic flip with on-error rollback. We don't refetch the
+    // whole list because nothing else on the card depends on the
+    // server's response — only `active` changes.
+    const next = !p.active;
+    setPlaylists((rows) =>
+      rows.map((r) => (r.id === p.id ? { ...r, active: next } : r)),
+    );
+    try {
+      const r = await authFetch(`/api/displays/playlists/${p.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: next }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => null)) as
+          | { error?: string }
+          | null;
+        throw new Error(j?.error || "Failed");
+      }
+    } catch (e) {
+      // Rollback on failure so the UI reflects DB state.
+      setPlaylists((rows) =>
+        rows.map((r) => (r.id === p.id ? { ...r, active: p.active } : r)),
+      );
+      window.alert(
+        e instanceof Error ? e.message : "Failed to update display",
+      );
+    }
+  }
+
   async function deletePlaylist(p: PlaylistRow) {
     if (
       !window.confirm(
@@ -331,7 +366,46 @@ export default function Displays() {
                   </div>
                 </div>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  marginTop: 10,
+                }}
+              >
+                <span
+                  style={{
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                    background: p.active ? "#dcfce7" : "#fee2e2",
+                    color: p.active ? "#166534" : "#991b1b",
+                    border: `1px solid ${p.active ? "#86efac" : "#fca5a5"}`,
+                    textTransform: "uppercase",
+                    letterSpacing: 0.4,
+                  }}
+                >
+                  {p.active ? "Active" : "Inactive"}
+                </span>
+                <button
+                  style={{
+                    ...btn,
+                    fontSize: 12,
+                    padding: "4px 10px",
+                  }}
+                  onClick={() => void toggleActive(p)}
+                  title={
+                    p.active
+                      ? "Turn this display off — the public URL will show 'Off-air' until you re-enable it."
+                      : "Turn this display back on — items and overrides have been preserved."
+                  }
+                >
+                  {p.active ? "Turn off" : "Turn on"}
+                </button>
+              </div>
+              <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
                 <button style={btn} onClick={() => setEditingId(p.id)}>
                   Edit
                 </button>

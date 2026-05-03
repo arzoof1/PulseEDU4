@@ -195,6 +195,7 @@ router.get("/displays/playlists", async (req, res) => {
         scheduleStartTime: displayPlaylistsTable.scheduleStartTime,
         scheduleEndTime: displayPlaylistsTable.scheduleEndTime,
         scheduleDaysOfWeek: displayPlaylistsTable.scheduleDaysOfWeek,
+        active: displayPlaylistsTable.active,
         createdAt: displayPlaylistsTable.createdAt,
         updatedAt: displayPlaylistsTable.updatedAt,
         itemCount: sql<number>`(
@@ -370,6 +371,12 @@ router.patch("/displays/playlists/:id", async (req, res) => {
     }
     if (req.body?.showPbisHousePage !== undefined) {
       update.showPbisHousePage = Boolean(req.body.showPbisHousePage);
+    }
+    // Manual kill switch — toggling this OFF makes the public cycler
+    // serve "off-air" immediately and hides the display from the
+    // cross-display calendar. Items and overrides are preserved.
+    if (req.body?.active !== undefined) {
+      update.active = Boolean(req.body.active);
     }
     if (req.body?.showActiveHallPasses !== undefined) {
       update.showActiveHallPasses = Boolean(req.body.showActiveHallPasses);
@@ -808,6 +815,31 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       .where(eq(displayPlaylistsTable.id, id));
     if (!pl) {
       res.status(404).json({ error: "Not found" });
+      return;
+    }
+    // Manual kill switch — return a minimal off-air payload (no items,
+    // no synthetic slides, no media) so the cycler renders its own
+    // "Off-air" card. We still 200 so the TV doesn't break its poll.
+    if (!pl.active) {
+      res.json({
+        playlist: {
+          id: pl.id,
+          name: pl.name,
+          defaultDurationSeconds: pl.defaultDurationSeconds,
+          showPbisHousePage: false,
+          showActiveHallPasses: false,
+          showHeartbeat: false,
+          scheduleEnabled: false,
+          scheduleStartTime: null,
+          scheduleEndTime: null,
+          scheduleDaysOfWeek: null,
+          updatedAt: pl.updatedAt,
+          active: false,
+        },
+        items: [],
+        overrides: [],
+        houseData: null,
+      });
       return;
     }
     const items = await db
