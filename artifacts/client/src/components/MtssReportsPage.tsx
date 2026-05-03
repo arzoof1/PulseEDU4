@@ -605,79 +605,95 @@ export default function MtssReportsPage({
             />
           </div>
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 12,
-            }}
-          >
-            <SummaryTile
-              label="Tier 2 completion"
-              value={fmtPct(overallT2)}
-              sub="Entries logged ÷ entries expected"
-              tone={
-                overallT2 == null
-                  ? "neutral"
-                  : overallT2 >= 80
-                    ? "good"
-                    : overallT2 >= 60
-                      ? "warn"
-                      : "bad"
-              }
-            />
-            <SummaryTile
-              label="Tier 2 avg score"
-              value={fmtPct(t2AvgWeeklyScore)}
-              sub="Mean of weekly completion %"
-              tone={
-                t2AvgWeeklyScore == null
-                  ? "neutral"
-                  : t2AvgWeeklyScore >= 80
-                    ? "good"
-                    : t2AvgWeeklyScore >= 60
-                      ? "warn"
-                      : "bad"
-              }
-            />
-          </div>
+          {/*
+            Per-plan view (planId set) → only the tier that matches the
+            plan is meaningful, and inside a single plan the entry-
+            weighted overall == the mean-of-weekly% (every week has the
+            same expected count), so the second tile would be redundant.
+            Show ONE accurate tile per tier in per-plan mode and the full
+            two-tile pair only in the aggregate view.
+          */}
+          {(!isPerPlan || data.planMeta?.tier === 2) && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+              }}
+            >
+              <SummaryTile
+                label="Tier 2 completion"
+                value={fmtPct(overallT2)}
+                sub="Entries logged ÷ entries expected"
+                tone={
+                  overallT2 == null
+                    ? "neutral"
+                    : overallT2 >= 80
+                      ? "good"
+                      : overallT2 >= 60
+                        ? "warn"
+                        : "bad"
+                }
+              />
+              {!isPerPlan && (
+                <SummaryTile
+                  label="Tier 2 avg score"
+                  value={fmtPct(t2AvgWeeklyScore)}
+                  sub="Mean of weekly completion %"
+                  tone={
+                    t2AvgWeeklyScore == null
+                      ? "neutral"
+                      : t2AvgWeeklyScore >= 80
+                        ? "good"
+                        : t2AvgWeeklyScore >= 60
+                          ? "warn"
+                          : "bad"
+                  }
+                />
+              )}
+            </div>
+          )}
 
-          <div
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-              gap: 12,
-            }}
-          >
-            <SummaryTile
-              label="Tier 3 completion"
-              value={fmtPct(t3Completion)}
-              sub="Weeks with scores ÷ weeks in range"
-              tone={
-                t3Completion == null
-                  ? "neutral"
-                  : t3Completion >= 80
-                    ? "good"
-                    : t3Completion >= 60
-                      ? "warn"
-                      : "bad"
-              }
-            />
-            <SummaryTile
-              label="Tier 3 avg score"
-              value={fmtScore(overallT3)}
-              sub={overallT3 != null ? "Mean score · out of 5" : "Out of 5"}
-              tone={
-                overallT3 == null
-                  ? "neutral"
-                  : overallT3 >= 4
-                    ? "good"
-                    : overallT3 >= 3
-                      ? "warn"
-                      : "bad"
-              }
-            />
-          </div>
+          {(!isPerPlan || data.planMeta?.tier === 3) && (
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                gap: 12,
+              }}
+            >
+              {!isPerPlan && (
+                <SummaryTile
+                  label="Tier 3 completion"
+                  value={fmtPct(t3Completion)}
+                  sub="Weeks with scores ÷ weeks in range"
+                  tone={
+                    t3Completion == null
+                      ? "neutral"
+                      : t3Completion >= 80
+                        ? "good"
+                        : t3Completion >= 60
+                          ? "warn"
+                          : "bad"
+                  }
+                />
+              )}
+              <SummaryTile
+                label="Tier 3 avg score"
+                value={fmtScore(overallT3)}
+                sub={overallT3 != null ? "Mean score · out of 5" : "Out of 5"}
+                tone={
+                  overallT3 == null
+                    ? "neutral"
+                    : overallT3 >= 4
+                      ? "good"
+                      : overallT3 >= 3
+                        ? "warn"
+                        : "bad"
+                }
+              />
+            </div>
+          )}
         </div>
       )}
 
