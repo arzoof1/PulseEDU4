@@ -2555,7 +2555,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
             <div style={{ display: "grid", gap: "0.75rem" }}>
               {arrived.map((p) =>
                 renderCard(p, [
-                  { label: "Mark Returned", action: "returned" },
+                  { label: "Mark as Returned to Class", action: "returned" },
                   { label: "Close", action: "closed" },
                 ]),
               )}
