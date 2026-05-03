@@ -46,6 +46,7 @@ import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
 import EarlyWarningDashboard from "./components/EarlyWarningDashboard";
 import StudentProfile from "./components/StudentProfile";
+import SafetyPlansAdminPage from "./components/SafetyPlansAdminPage";
 import TrustedAdultsAdmin from "./components/TrustedAdultsAdmin";
 import SettingsHub, {
   SettingsBackBar,
@@ -3584,6 +3585,7 @@ function App() {
     | "mtssCoordinator"
     | "mtssTemplates"
     | "mtssPlans"
+    | "safetyPlans"
     | "teacherRoster"
     | "settings"
     | "staffRoles"
@@ -6844,6 +6846,19 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     isPbisCoord;
+  // Safety Plans edit/read access — kept in sync with the server's
+  // canEditSafetyPlan helper in lib/coreTeam.ts. Includes Guidance
+  // Counselor on top of the Core Team set. Used to gate the dedicated
+  // Safety Plans sidebar entry + the "Edit safety plan" button on
+  // Student Profile. The roster pill itself is intentionally NOT gated
+  // — every staff member sees it (read-only with hover popover).
+  const canEditSafetyPlanClient =
+    Boolean(authUser?.isGuidanceCounselor) ||
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    Boolean(authUser?.isSchoolPsychologist);
   // School Store edit access — kept in sync with the server's
   // requireWriteAccess gate in routes/schoolStore.ts. SuperUser is
   // included so a SuperUser entering the BS or MTSS hub (both of which
@@ -7028,6 +7043,9 @@ function App() {
     }
     // MTSS Plans is core-team only — bounce anyone who lost access while
     // sitting on it.
+    if (!canEditSafetyPlanClient && activeSection === "safetyPlans") {
+      setActiveSection("hallPasses");
+    }
     if (!canManageMtssPlans && activeSection === "mtssPlans") {
       setActiveSection("hallPasses");
     }
@@ -7774,6 +7792,12 @@ function App() {
                   renderNavItem({
                     key: "mtssPlans",
                     label: "MTSS Plans",
+                    icon: IconClipboard,
+                  })}
+                {canEditSafetyPlanClient &&
+                  renderNavItem({
+                    key: "safetyPlans",
+                    label: "Safety Plans",
                     icon: IconClipboard,
                   })}
                 {canManageMtssPlans &&
@@ -15115,6 +15139,13 @@ function App() {
         />
       )}
 
+      {activeSection === "safetyPlans" && canEditSafetyPlanClient && (
+        <SafetyPlansAdminPage
+          canManage={canEditSafetyPlanClient}
+          onBack={() => setActiveSection("hallPasses")}
+        />
+      )}
+
       {activeSection === "teacherRoster" && (
         <TeacherRosterPage
           isCoreTeam={
@@ -15131,7 +15162,10 @@ function App() {
             setStudentProfileReturnTo("teacherRoster");
             setActiveSection("studentProfile");
           }}
-          onOpenSafetyPlan={(studentId) => setSafetyPlanStudentId(studentId)}
+          /* SP pill is intentionally read-only on the roster for every
+             role. Counselors / Core Team manage plans from the dedicated
+             Safety Plans page or from Student Profile. The hover popover
+             still works because SafetyPlanPill renders without onOpen. */
         />
       )}
 
@@ -17821,6 +17855,8 @@ function App() {
           // Coordinator and would hide the affordance for an
           // authorized actor; canManageMtssPlans matches the server.
           canManage={canManageMtssPlans}
+          canEditSafetyPlan={canEditSafetyPlanClient}
+          onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}
           onBack={() => {
             const target = studentProfileReturnTo;
             setSelectedInsightsStudentId(null);

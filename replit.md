@@ -220,8 +220,25 @@ Guidance Counselor + Core Team.
   `safetyPlan: {itemCount, items, notes, updatedAt, updatedByName} | null`
   per row. The TeacherRosterPage renders a red "SP" pill immediately
   after each student's name with a hover popover listing the active
-  items + notes. Click opens `SafetyPlanEditor` modal (read-only when
-  the viewer lacks edit rights).
+  items + notes. The pill is **read-only for every role** (teachers and
+  counselors alike); the hover popover always works because the pill
+  degrades from `<button>` to `<span>` when no `onOpen` handler is
+  passed. Counselors / Core Team manage plans from the dedicated Safety
+  Plans page or from Student Profile, not from the teacher roster.
+- **Dedicated admin page** (`SafetyPlansAdminPage.tsx`, sidebar entry
+  "Safety Plans", section key `safetyPlans`): mirrors the MTSS Plans
+  workflow. Status filter (Active / Archived / All), name+ID search,
+  "+ New Safety Plan" opens a student picker (students with an active
+  plan are disabled). Edit button opens `SafetyPlanEditor` per row.
+  Backed by new `GET /api/safety-plans/list?status=active|inactive|all`
+  which joins `students` for name + grade. Sidebar entry + render are
+  gated by `canEditSafetyPlanClient` = Guidance Counselor / Admin /
+  Behavior Specialist / MTSS Coordinator / School Psychologist /
+  SuperUser, mirroring `canEditSafetyPlan` in `lib/coreTeam.ts`.
+- **Student Profile entry**: header card now shows an "Edit safety
+  plan" / "View safety plan" button next to the demographic chips.
+  Visible to every staff member (so teachers always have an in-context
+  read-only view); writes are still server-gated by `canEditSafetyPlan`.
 - **Hidden from Parent Portal** — no parent-facing surfaces touch
   these tables. No automatic family messages on plan creation.
 - **Demo seed** (`seedSafetyPlanLibraryIfEmpty` +

@@ -476,12 +476,21 @@ interface Props {
   // PATCH /api/students/:studentId/flags. Server still enforces the same
   // gate; this just hides the affordance for everyone else.
   canManage?: boolean;
+  // True when the signed-in user can edit safety plans (Counselor /
+  // Admin / Core Team). When provided alongside onOpenSafetyPlan, the
+  // header card shows an "Edit safety plan" / "Create safety plan"
+  // button. Without this flag, the button shows as "View safety plan"
+  // (read-only) so every staff member still has an in-context entry.
+  canEditSafetyPlan?: boolean;
+  onOpenSafetyPlan?: (studentId: string) => void;
 }
 
 export default function StudentProfile({
   studentId,
   onBack,
   canManage = false,
+  canEditSafetyPlan = false,
+  onOpenSafetyPlan,
 }: Props) {
   const [data, setData] = useState<ProfilePayload | null>(null);
   const [loading, setLoading] = useState(true);
@@ -707,6 +716,32 @@ export default function StudentProfile({
                   label={`${header.activeMtssPlanCount} active plan${header.activeMtssPlanCount === 1 ? "" : "s"}`}
                   sev="watch"
                 />
+              )}
+              {onOpenSafetyPlan && (
+                <button
+                  type="button"
+                  onClick={() => onOpenSafetyPlan(studentId)}
+                  style={{
+                    marginLeft: 4,
+                    background: canEditSafetyPlan ? "#fee2e2" : "transparent",
+                    border: `1px solid ${canEditSafetyPlan ? "#fecaca" : "#d1d5db"}`,
+                    color: canEditSafetyPlan ? "#991b1b" : "#374151",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  title={
+                    canEditSafetyPlan
+                      ? "Open the safety plan editor"
+                      : "View safety plan (read-only)"
+                  }
+                >
+                  {canEditSafetyPlan
+                    ? "Edit safety plan"
+                    : "View safety plan"}
+                </button>
               )}
               {canManage && !editing && (
                 <button

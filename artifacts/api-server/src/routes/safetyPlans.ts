@@ -477,4 +477,84 @@ router.get(
   },
 );
 
+// Admin list endpoint used by the dedicated Safety Plans page.
+// Counselor / Admin / Core Team only — returns plans across the school
+// joined with student name + grade so the page can show a caseload-style
+// table without N+1 lookups. Status filter mirrors the MTSS Plans page.
+router.get(
+  "/safety-plans/list",
+  async (req: Request, res: Response) => {
+    const staff = await loadStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!canEditSafetyPlan(staff)) {
+      res.status(403).json({ error: "Edit access required." });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const statusParam =
+      typeof req.query.status === "string" ? req.query.status : "active";
+    const where =
+      statusParam === "all"
+        ? eq(safetyPlansTable.schoolId, schoolId)
+        : statusParam === "inactive"
+          ? and(
+              eq(safetyPlansTable.schoolId, schoolId),
+              eq(safetyPlansTable.status, "inactive"),
+            )
+          : and(
+              eq(safetyPlansTable.schoolId, schoolId),
+              eq(safetyPlansTable.status, "active"),
+            );
+    const rows = await db
+      .select({
+        id: safetyPlansTable.id,
+        studentId: safetyPlansTable.studentId,
+        status: safetyPlansTable.status,
+        items: safetyPlansTable.items,
+        notes: safetyPlansTable.notes,
+        startDate: safetyPlansTable.startDate,
+        endDate: safetyPlansTable.endDate,
+        updatedAt: safetyPlansTable.updatedAt,
+        updatedByName: safetyPlansTable.updatedByName,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(safetyPlansTable)
+      .leftJoin(
+        studentsTable,
+        and(
+          eq(studentsTable.studentId, safetyPlansTable.studentId),
+          eq(studentsTable.schoolId, safetyPlansTable.schoolId),
+        ),
+      )
+      .where(where);
+    res.json({
+      plans: rows.map((r) => ({
+        id: r.id,
+        studentId: r.studentId,
+        studentName:
+          r.firstName || r.lastName
+            ? `${r.lastName ?? ""}, ${r.firstName ?? ""}`.replace(
+                /^, |, $/g,
+                "",
+              )
+            : null,
+        studentGrade: r.grade ?? null,
+        status: r.status,
+        items: r.items,
+        notes: r.notes,
+        startDate: r.startDate,
+        endDate: r.endDate,
+        updatedAt: r.updatedAt,
+        updatedByName: r.updatedByName,
+      })),
+    });
+  },
+);
+
 export default router;
