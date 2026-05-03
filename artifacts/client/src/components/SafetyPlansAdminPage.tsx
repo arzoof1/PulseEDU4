@@ -947,12 +947,12 @@ function SafetyPlanLibraryModal({ onClose }: { onClose: () => void }) {
                         borderRadius: 999,
                         padding: "1px 7px",
                       }}
-                      title="Built-in items can be turned off but not renamed."
+                      title="Seeded as a default item. You can still rename or turn it off."
                     >
                       Built-in
                     </span>
                   )}
-                  {!row.isBuiltIn && renamingId !== row.id && (
+                  {renamingId !== row.id && (
                     <button
                       type="button"
                       onClick={() => {

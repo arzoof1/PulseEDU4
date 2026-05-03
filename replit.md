@@ -251,9 +251,10 @@ Guidance Counselor + Core Team.
   next to "+ New Safety Plan"): `SafetyPlanLibraryModal` reads the
   school-wide checklist catalog from `GET /safety-plans/library` and
   lets editors add new items (POST), toggle any item active/inactive
-  with optimistic-flip + rollback (PATCH), and rename custom items
-  (PATCH). Built-in items show a "Built-in" pill and are
-  rename-locked (the server returns 409 if you try). Existing plans
+  with optimistic-flip + rollback (PATCH), and rename any item
+  including built-ins (PATCH). Built-in items show a "Built-in" pill
+  so admins know which were seeded defaults, but they can be reworded
+  or turned off freely. Existing plans
   are not mutated when the library changes — they keep whatever
   items were saved on them. Open the modal from the Safety Plans
   page; it inherits the same edit gate (`canManage`).

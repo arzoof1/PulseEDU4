@@ -170,12 +170,10 @@ router.patch(
       res.status(404).json({ error: "Not found" });
       return;
     }
-    if (existing.isBuiltIn && updates.label && updates.label !== existing.label) {
-      res
-        .status(409)
-        .json({ error: "Built-in items cannot be renamed." });
-      return;
-    }
+    // Built-in items used to be rename-locked; admins now want to be
+    // able to reword them (e.g. "Clear backpack" → "Transparent backpack
+    // only"). We keep the isBuiltIn flag so the UI can still show the
+    // "Built-in" pill and so the seeder knows not to re-insert them.
     const [row] = await db
       .update(safetyPlanLibraryTable)
       .set(updates)
