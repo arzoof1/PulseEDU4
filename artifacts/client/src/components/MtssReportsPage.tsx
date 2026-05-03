@@ -563,6 +563,30 @@ export default function MtssReportsPage({
             gap: 12,
           }}
         >
+          {/* Inline "showing data for…" caption so the student name
+              stays anchored to the tiles even after scrolling past
+              the page header and the plan-meta panel. */}
+          {isPerPlan && data.planMeta && (
+            <div
+              style={{
+                fontSize: "0.85rem",
+                color: "#475569",
+                paddingBottom: 4,
+                borderBottom: "1px solid #f1f5f9",
+              }}
+            >
+              Showing data for{" "}
+              <strong style={{ color: "#0f172a" }}>
+                {data.planMeta.studentName}
+              </strong>
+              {data.planMeta.grade ? ` (Grade ${data.planMeta.grade})` : ""}
+              {" · "}
+              <span style={{ color: "#64748b" }}>
+                T{data.planMeta.tier}
+                {data.planMeta.subType ? ` — ${data.planMeta.subType}` : ""}
+              </span>
+            </div>
+          )}
           <div
             style={{
               display: "grid",
