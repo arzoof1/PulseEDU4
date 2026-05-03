@@ -251,22 +251,26 @@ export default function MtssReportsPage({
     return n > 0 ? Math.round((s / n) * 100) / 100 : null;
   }, [data]);
 
-  // "This week" = the most recent week in the loaded trend (which is
-  // sorted oldest → newest by the API). Surfaces the latest snapshot
-  // alongside the date-range overall so an admin can see at a glance
-  // whether the current week is tracking with, above, or below trend.
-  const thisWeek = useMemo(() => {
-    if (!data || data.weeklyTrend.length === 0) {
-      return { weekStartDate: null as string | null, t2Pct: null as number | null, t3Avg: null as number | null };
-    }
-    const w = data.weeklyTrend[data.weeklyTrend.length - 1];
-    const t2Pct =
-      w.t2Expected > 0
-        ? Math.round((w.t2Completed / w.t2Expected) * 1000) / 10
-        : null;
-    const t3Avg =
-      w.t3Scored > 0 ? Math.round((w.t3ScoreSum / w.t3Scored) * 100) / 100 : null;
-    return { weekStartDate: w.weekStartDate, t2Pct, t3Avg };
+  // Tier-2 average score:
+  //   T2 has no numeric outcome score — the closest equivalent is the
+  //   per-week completion %, averaged across the weeks in range. Lets
+  //   the admin spot a tier where most weeks were OK but one or two
+  //   crashed (the entry-weighted overall would mask that).
+  // Tier-3 completion:
+  //   % of weeks in range where at least one teacher logged scores.
+  //   Acts as the "did anyone show up?" engagement signal that pairs
+  //   naturally with the outcome avg score on the same row.
+  const t2AvgWeeklyScore = useMemo(() => {
+    if (!data || data.weeklyTrend.length === 0) return null;
+    const weeks = data.weeklyTrend.filter((w) => w.t2CompletionPct !== null);
+    if (weeks.length === 0) return null;
+    const sum = weeks.reduce((a, w) => a + (w.t2CompletionPct ?? 0), 0);
+    return Math.round((sum / weeks.length) * 10) / 10;
+  }, [data]);
+  const t3Completion = useMemo(() => {
+    if (!data || data.weeklyTrend.length === 0) return null;
+    const weeksWithScores = data.weeklyTrend.filter((w) => w.t3Scored > 0).length;
+    return Math.round((weeksWithScores / data.weeklyTrend.length) * 1000) / 10;
   }, [data]);
 
   // ---- styles ----
@@ -585,8 +589,9 @@ export default function MtssReportsPage({
             }}
           >
             <SummaryTile
-              label="Tier 2 completion (overall)"
+              label="Tier 2 completion"
               value={fmtPct(overallT2)}
+              sub="Entries logged ÷ entries expected"
               tone={
                 overallT2 == null
                   ? "neutral"
@@ -598,19 +603,15 @@ export default function MtssReportsPage({
               }
             />
             <SummaryTile
-              label="Tier 2 completion (this week)"
-              value={fmtPct(thisWeek.t2Pct)}
-              sub={
-                thisWeek.weekStartDate
-                  ? `Week of ${thisWeek.weekStartDate}`
-                  : undefined
-              }
+              label="Tier 2 avg score"
+              value={fmtPct(t2AvgWeeklyScore)}
+              sub="Mean of weekly completion %"
               tone={
-                thisWeek.t2Pct == null
+                t2AvgWeeklyScore == null
                   ? "neutral"
-                  : thisWeek.t2Pct >= 80
+                  : t2AvgWeeklyScore >= 80
                     ? "good"
-                    : thisWeek.t2Pct >= 60
+                    : t2AvgWeeklyScore >= 60
                       ? "warn"
                       : "bad"
               }
@@ -625,35 +626,29 @@ export default function MtssReportsPage({
             }}
           >
             <SummaryTile
-              label="Tier 3 avg score (overall)"
+              label="Tier 3 completion"
+              value={fmtPct(t3Completion)}
+              sub="Weeks with scores ÷ weeks in range"
+              tone={
+                t3Completion == null
+                  ? "neutral"
+                  : t3Completion >= 80
+                    ? "good"
+                    : t3Completion >= 60
+                      ? "warn"
+                      : "bad"
+              }
+            />
+            <SummaryTile
+              label="Tier 3 avg score"
               value={fmtScore(overallT3)}
-              sub={overallT3 != null ? "/ 5" : undefined}
+              sub={overallT3 != null ? "Mean score · out of 5" : "Out of 5"}
               tone={
                 overallT3 == null
                   ? "neutral"
                   : overallT3 >= 4
                     ? "good"
                     : overallT3 >= 3
-                      ? "warn"
-                      : "bad"
-              }
-            />
-            <SummaryTile
-              label="Tier 3 avg score (this week)"
-              value={fmtScore(thisWeek.t3Avg)}
-              sub={
-                thisWeek.weekStartDate
-                  ? `Week of ${thisWeek.weekStartDate}${thisWeek.t3Avg != null ? " · / 5" : ""}`
-                  : thisWeek.t3Avg != null
-                    ? "/ 5"
-                    : undefined
-              }
-              tone={
-                thisWeek.t3Avg == null
-                  ? "neutral"
-                  : thisWeek.t3Avg >= 4
-                    ? "good"
-                    : thisWeek.t3Avg >= 3
                       ? "warn"
                       : "bad"
               }
