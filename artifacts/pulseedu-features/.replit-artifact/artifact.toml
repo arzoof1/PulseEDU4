@@ -1,0 +1,31 @@
+kind = "slides"
+previewPath = "/pulseedu-features/"
+title = "PulseEDU Feature Catalog"
+version = "1.0.0"
+id = "artifacts/pulseedu-features"
+router = "path"
+
+[[integratedSkills]]
+name = "slides"
+version = "1.0.0"
+
+[[services]]
+name = "web"
+paths = [ "/pulseedu-features/" ]
+localPort = 26140
+
+[services.development]
+run = "pnpm --filter @workspace/pulseedu-features run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/pulseedu-features", "run", "build" ]
+publicDir = "artifacts/pulseedu-features/dist/public"
+serve = "static"
+
+[[services.production.rewrites]]
+from = "/*"
+to = "/index.html"
+
+[services.env]
+PORT = "26140"
+BASE_PATH = "/pulseedu-features/"
