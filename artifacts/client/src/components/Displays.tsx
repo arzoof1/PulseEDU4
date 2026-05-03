@@ -980,6 +980,12 @@ interface OverrideRow {
   dayOfWeek: number;
   startTime: string;
   endTime: string;
+  // Set when this row was created as part of a multi-day bulk add
+  // (e.g. "passing period 8:55, M–F"). All five rows share the same
+  // groupId and groupName, which lets the UI offer
+  // "edit/delete this day only vs the entire passing period".
+  groupId: string | null;
+  groupName: string | null;
 }
 
 function OverridesEditor({
@@ -1023,12 +1029,37 @@ function OverridesEditor({
   }, [displayId]);
 
   async function deleteRow(row: OverrideRow) {
-    if (!window.confirm(`Delete override on ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}?`)) return;
-    try {
-      const r = await authFetch(
-        `/api/displays/playlists/${displayId}/overrides/${row.id}`,
-        { method: "DELETE" },
+    // Grouped rows (created via bulk add) get a 3-way prompt:
+    // "all days in this period" | "this day only" | cancel.
+    let url = `/api/displays/playlists/${displayId}/overrides/${row.id}`;
+    if (row.groupId) {
+      const label = row.groupName ?? `${row.startTime}–${row.endTime}`;
+      const groupCount = rows.filter((r) => r.groupId === row.groupId).length;
+      // window.confirm only gives us yes/no, so two prompts: first ask
+      // about scope, then confirm the destructive action.
+      const wholeGroup = window.confirm(
+        `Delete the ENTIRE "${label}" passing period (${groupCount} days)?\n\n` +
+          `OK = delete all ${groupCount} days.\n` +
+          `Cancel = delete only ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}.`,
       );
+      if (wholeGroup) {
+        url = `/api/displays/playlists/${displayId}/overrides/group/${row.groupId}`;
+      } else if (
+        !window.confirm(
+          `Delete override on ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}?`,
+        )
+      ) {
+        return;
+      }
+    } else if (
+      !window.confirm(
+        `Delete override on ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}?`,
+      )
+    ) {
+      return;
+    }
+    try {
+      const r = await authFetch(url, { method: "DELETE" });
       if (!r.ok) throw new Error("Failed");
       await refresh();
     } catch (e) {
@@ -1120,6 +1151,27 @@ function OverridesEditor({
                         <div style={{ fontWeight: 600 }}>
                           {row.startTime}–{row.endTime}
                         </div>
+                        {row.groupName && (
+                          <div
+                            style={{
+                              fontSize: 10,
+                              color: "#0369a1",
+                              background: "#e0f2fe",
+                              border: "1px solid #bae6fd",
+                              borderRadius: 4,
+                              padding: "1px 4px",
+                              marginTop: 3,
+                              display: "inline-block",
+                              maxWidth: "100%",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                              whiteSpace: "nowrap",
+                            }}
+                            title={`Part of "${row.groupName}" — applied to multiple days`}
+                          >
+                            ⛓ {row.groupName}
+                          </div>
+                        )}
                         <div
                           style={{
                             color: "#374151",
@@ -1231,8 +1283,17 @@ function AddOverrideDialog({
   );
   const [startTime, setStartTime] = useState(editing?.startTime ?? "08:30");
   const [endTime, setEndTime] = useState(editing?.endTime ?? "09:00");
+  // Optional friendly name for a passing-period group. Only shown in
+  // bulk mode and in edit mode for an already-grouped row.
+  const [groupName, setGroupName] = useState<string>(editing?.groupName ?? "");
+  // For edit mode on a grouped row: choose whether the change applies
+  // to just this one day or to every day sharing the groupId.
+  const [editScope, setEditScope] = useState<"single" | "group">(
+    editing?.groupId ? "group" : "single",
+  );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const isGroupedEdit = mode === "edit" && Boolean(editing?.groupId);
 
   function toggleDay(idx: number) {
     const n = new Set(days);
@@ -1284,7 +1345,9 @@ function AddOverrideDialog({
       setErr("Pick at least one day");
       return;
     }
-    if (mode === "edit" && days.size !== 1) {
+    // In edit mode, day picker is per-day-only edits. Group-scope
+    // edits keep the original day set untouched on the server.
+    if (mode === "edit" && editScope === "single" && days.size !== 1) {
       setErr("Pick exactly one day");
       return;
     }
@@ -1294,7 +1357,28 @@ function AddOverrideDialog({
     }
     setSaving(true);
     try {
-      if (mode === "edit" && editing) {
+      if (mode === "edit" && editing && editScope === "group" && editing.groupId) {
+        // Group PATCH — applies playlistId/start/end/groupName to every
+        // row sharing this groupId. dayOfWeek is intentionally NOT
+        // sent (each row keeps its own day).
+        const r = await authFetch(
+          `/api/displays/playlists/${displayId}/overrides/group/${editing.groupId}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              playlistId,
+              startTime,
+              endTime,
+              groupName: groupName.trim() || null,
+            }),
+          },
+        );
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(j?.error ?? "Failed");
+        }
+      } else if (mode === "edit" && editing) {
         const day = Array.from(days)[0];
         const r = await authFetch(
           `/api/displays/playlists/${displayId}/overrides/${editing.id}`,
@@ -1334,7 +1418,10 @@ function AddOverrideDialog({
           {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ overrides }),
+            body: JSON.stringify({
+              overrides,
+              groupName: groupName.trim() || null,
+            }),
           },
         );
         if (!r.ok) {
@@ -1382,11 +1469,55 @@ function AddOverrideDialog({
         </div>
         <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
           {mode === "edit"
-            ? "Change the day, time, or playlist for this window."
+            ? isGroupedEdit && editScope === "group"
+              ? "Change time / playlist for every day in this passing period."
+              : "Change the day, time, or playlist for this window."
             : mode === "single"
               ? "One window on one day."
-              : "Same window applied to every selected day (one row per day)."}
+              : "Same window applied to every selected day. They'll be linked as one passing period so you can edit them together later."}
         </div>
+        {isGroupedEdit && (
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              padding: 4,
+              background: "#f3f4f6",
+              borderRadius: 8,
+              marginBottom: 12,
+            }}
+          >
+            {(
+              [
+                { v: "group", label: "Entire passing period" },
+                { v: "single", label: "Just this day" },
+              ] as const
+            ).map((opt) => (
+              <button
+                key={opt.v}
+                type="button"
+                onClick={() => setEditScope(opt.v)}
+                style={{
+                  flex: 1,
+                  padding: "6px 10px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: editScope === opt.v ? "white" : "transparent",
+                  color: editScope === opt.v ? "#1d4ed8" : "#374151",
+                  boxShadow:
+                    editScope === opt.v
+                      ? "0 1px 2px rgba(0,0,0,0.08)"
+                      : "none",
+                  fontSize: 12,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        )}
         <div style={{ display: "grid", gap: 12 }}>
           <div>
             <div
@@ -1449,9 +1580,32 @@ function AddOverrideDialog({
               />
             </label>
           </div>
+          {(mode === "bulk" ||
+            (mode === "edit" && editScope === "group")) && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+                Passing period name (optional)
+              </div>
+              <input
+                type="text"
+                placeholder='e.g. "1st period passing"'
+                style={{ ...inputStyle, width: "100%" }}
+                value={groupName}
+                onChange={(e) => setGroupName(e.currentTarget.value)}
+                maxLength={100}
+              />
+              <div style={{ fontSize: 11, color: "#6b7280", marginTop: 4 }}>
+                Shows on each day's tile so you can spot grouped rows at
+                a glance.
+              </div>
+            </div>
+          )}
+          {/* Day picker. Hidden when editing the whole passing-period
+              group, since each row keeps its own day on the server. */}
+          {!(mode === "edit" && editScope === "group") && (
           <div>
             <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
-              {mode === "single" ? "Day" : "Days"}
+              {mode === "single" || mode === "edit" ? "Day" : "Days"}
             </div>
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
               {WEEKDAY_LABELS.map((d) => {
@@ -1461,7 +1615,7 @@ function AddOverrideDialog({
                     type="button"
                     key={d.idx}
                     onClick={() => {
-                      if (mode === "single") {
+                      if (mode === "single" || mode === "edit") {
                         setDays(new Set([d.idx]));
                       } else {
                         toggleDay(d.idx);
@@ -1484,6 +1638,7 @@ function AddOverrideDialog({
               })}
             </div>
           </div>
+          )}
           {err && (
             <div
               style={{

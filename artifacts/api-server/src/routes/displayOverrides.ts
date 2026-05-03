@@ -20,6 +20,7 @@ import {
   displayPlaylistOverridesTable,
 } from "@workspace/db";
 import { and, eq, asc } from "drizzle-orm";
+import { randomUUID } from "node:crypto";
 
 const router: IRouter = Router();
 
@@ -227,7 +228,11 @@ router.post("/displays/playlists/:id/overrides/bulk", async (req, res) => {
     }
     const pl = await loadDisplayForEdit(req, res, staff);
     if (!pl) return;
-    const list = (req.body as { overrides?: unknown[] })?.overrides;
+    const body = (req.body ?? {}) as {
+      overrides?: unknown[];
+      groupName?: unknown;
+    };
+    const list = body.overrides;
     if (!Array.isArray(list) || list.length === 0) {
       res.status(400).json({ error: "overrides[] required" });
       return;
@@ -256,6 +261,14 @@ router.post("/displays/playlists/:id/overrides/bulk", async (req, res) => {
     for (const tid of targetIds) {
       if (!(await verifyOverrideTarget(res, pl.schoolId, tid))) return;
     }
+    // Stamp every row with the same group_id so the UI can offer
+    // "edit / delete the entire passing period". Admins may also
+    // supply a friendly groupName ("1st period passing").
+    const groupId = randomUUID();
+    const groupName =
+      typeof body.groupName === "string" && body.groupName.trim()
+        ? body.groupName.trim().slice(0, 100)
+        : null;
     const inserted = await db
       .insert(displayPlaylistOverridesTable)
       .values(
@@ -265,10 +278,12 @@ router.post("/displays/playlists/:id/overrides/bulk", async (req, res) => {
           dayOfWeek: v.dayOfWeek,
           startTime: v.startTime,
           endTime: v.endTime,
+          groupId,
+          groupName,
         })),
       )
       .returning();
-    res.status(201).json({ overrides: inserted });
+    res.status(201).json({ overrides: inserted, groupId, groupName });
   } catch (e) {
     // eslint-disable-next-line no-console
     console.error("[display-overrides] bulk failed", e);
@@ -339,6 +354,141 @@ router.patch(
       // eslint-disable-next-line no-console
       console.error("[display-overrides] patch failed", e);
       res.status(500).json({ error: "Failed to update override" });
+    }
+  },
+);
+
+// ---------- PATCH whole group ----------------------------------------------
+// Apply the same change (playlistId / startTime / endTime / groupName) to
+// every row sharing this group_id under the same display. dayOfWeek is
+// intentionally NOT patchable in bulk — the whole point of a passing-period
+// group is that each row already targets a specific day.
+router.patch(
+  "/displays/playlists/:id/overrides/group/:groupId",
+  async (req, res) => {
+    try {
+      const staff = await loadStaff(req, res);
+      if (!staff) return;
+      if (!canManageDisplays(staff)) {
+        res.status(403).json({ error: "Not authorized" });
+        return;
+      }
+      const pl = await loadDisplayForEdit(req, res, staff);
+      if (!pl) return;
+      const groupId = String(req.params.groupId);
+      if (!groupId) {
+        res.status(400).json({ error: "Invalid group id" });
+        return;
+      }
+      // Load every row in the group so we can validate the merged
+      // start/end window per row (each row keeps its own dayOfWeek).
+      const existing = await db
+        .select()
+        .from(displayPlaylistOverridesTable)
+        .where(
+          and(
+            eq(displayPlaylistOverridesTable.displayId, pl.id),
+            eq(displayPlaylistOverridesTable.groupId, groupId),
+          ),
+        );
+      if (existing.length === 0) {
+        res.status(404).json({ error: "Group not found" });
+        return;
+      }
+      const b = (req.body ?? {}) as Record<string, unknown>;
+      const nextPlaylistId =
+        b.playlistId !== undefined
+          ? Number.parseInt(String(b.playlistId), 10)
+          : existing[0].playlistId;
+      const nextStartTime =
+        typeof b.startTime === "string" ? b.startTime : existing[0].startTime;
+      const nextEndTime =
+        typeof b.endTime === "string" ? b.endTime : existing[0].endTime;
+      const nextGroupName =
+        b.groupName === undefined
+          ? existing[0].groupName
+          : typeof b.groupName === "string" && b.groupName.trim()
+            ? b.groupName.trim().slice(0, 100)
+            : null;
+      // Validate by piggybacking on validateOverrideInput (we feed a
+      // fake dayOfWeek=0 since it's not changing here).
+      const v = validateOverrideInput({
+        playlistId: nextPlaylistId,
+        dayOfWeek: 0,
+        startTime: nextStartTime,
+        endTime: nextEndTime,
+      });
+      if (!v.ok) {
+        res.status(400).json({ error: v.error });
+        return;
+      }
+      if (
+        nextPlaylistId !== existing[0].playlistId &&
+        !(await verifyOverrideTarget(res, pl.schoolId, nextPlaylistId))
+      ) {
+        return;
+      }
+      const updated = await db
+        .update(displayPlaylistOverridesTable)
+        .set({
+          playlistId: nextPlaylistId,
+          startTime: nextStartTime,
+          endTime: nextEndTime,
+          groupName: nextGroupName,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(displayPlaylistOverridesTable.displayId, pl.id),
+            eq(displayPlaylistOverridesTable.groupId, groupId),
+          ),
+        )
+        .returning();
+      res.json({ overrides: updated });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[display-overrides] group patch failed", e);
+      res.status(500).json({ error: "Failed to update passing period" });
+    }
+  },
+);
+
+// ---------- DELETE whole group ---------------------------------------------
+router.delete(
+  "/displays/playlists/:id/overrides/group/:groupId",
+  async (req, res) => {
+    try {
+      const staff = await loadStaff(req, res);
+      if (!staff) return;
+      if (!canManageDisplays(staff)) {
+        res.status(403).json({ error: "Not authorized" });
+        return;
+      }
+      const pl = await loadDisplayForEdit(req, res, staff);
+      if (!pl) return;
+      const groupId = String(req.params.groupId);
+      if (!groupId) {
+        res.status(400).json({ error: "Invalid group id" });
+        return;
+      }
+      const result = await db
+        .delete(displayPlaylistOverridesTable)
+        .where(
+          and(
+            eq(displayPlaylistOverridesTable.displayId, pl.id),
+            eq(displayPlaylistOverridesTable.groupId, groupId),
+          ),
+        )
+        .returning({ id: displayPlaylistOverridesTable.id });
+      if (result.length === 0) {
+        res.status(404).json({ error: "Group not found" });
+        return;
+      }
+      res.json({ ok: true, deleted: result.length });
+    } catch (e) {
+      // eslint-disable-next-line no-console
+      console.error("[display-overrides] group delete failed", e);
+      res.status(500).json({ error: "Failed to delete passing period" });
     }
   },
 );

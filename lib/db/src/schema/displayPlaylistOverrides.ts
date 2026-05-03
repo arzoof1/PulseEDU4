@@ -35,6 +35,14 @@ export const displayPlaylistOverridesTable = pgTable(
     dayOfWeek: integer("day_of_week").notNull(),
     startTime: text("start_time").notNull(),
     endTime: text("end_time").notNull(),
+    // Optional grouping. When admins bulk-add a "passing period" the
+    // server stamps every row with the same UUID + a friendly name
+    // (e.g. "1st period passing"). The client uses this to offer
+    // "edit/delete this day only vs the entire period". A null
+    // group_id means the row is a one-off (single-day add or a row
+    // whose group was later edited per-day).
+    groupId: text("group_id"),
+    groupName: text("group_name"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -44,6 +52,7 @@ export const displayPlaylistOverridesTable = pgTable(
   },
   (t) => ({
     displayIdx: index("display_overrides_display_idx").on(t.displayId),
+    groupIdx: index("display_overrides_group_idx").on(t.groupId),
   }),
 );
 

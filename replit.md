@@ -26,6 +26,40 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Per-display overrides — passing-period groups (May 2026)
+
+Bulk-add now stitches the inserted rows together as a "passing period
+group" so admins can manage them as one unit instead of N independent
+rows.
+
+Schema (`display_playlist_overrides`):
+- `group_id text` (nullable, indexed) — UUID stamped on every row in
+  one bulk insert. Null for one-off single-day adds.
+- `group_name text` (nullable) — friendly label ("1st period
+  passing"). Stored on every row in the group; mirrored to the cell
+  badge in the weekly view.
+
+API (`/api/displays/playlists/:id/overrides`):
+- POST `/bulk` accepts an optional `groupName` and stamps every row
+  with a fresh `randomUUID()` group_id and the same name.
+- New PATCH `/group/:groupId` updates `playlistId` / `startTime` /
+  `endTime` / `groupName` for every row sharing the group_id.
+  `dayOfWeek` is intentionally not patchable here — group rows keep
+  their own day; if the admin needs to change a single day's window
+  they edit that one row.
+- New DELETE `/group/:groupId` removes every row in the group at
+  once. Both group endpoints are scoped to the requesting display so
+  one display can't touch another's rows.
+
+Client (`Displays.tsx` → `OverridesEditor` + `AddOverrideDialog`):
+- Bulk dialog shows a "Passing period name" field; the group label
+  appears as a small ⛓ pill on every day's tile.
+- Edit on a grouped row opens a scope toggle: "Entire passing period"
+  (PATCH /group/...) vs "Just this day" (PATCH /:overrideId). Group
+  scope hides the day picker since each row keeps its own day.
+- Delete on a grouped row prompts: OK = delete the whole period
+  (group DELETE), Cancel = fall through to per-row confirm.
+
 ## Per-display schedule overrides — edit + URL slides (May 2026)
 
 Follow-on to the override feature below. Two additions:
