@@ -36,8 +36,9 @@ import {
   hallPassesTable,
   displayPlaylistsTable,
   displayPlaylistItemsTable,
+  displayPlaylistOverridesTable,
 } from "@workspace/db";
-import { and, eq, sql, desc, asc } from "drizzle-orm";
+import { and, eq, sql, desc, asc, inArray } from "drizzle-orm";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
@@ -852,6 +853,75 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       hallPassData = await loadActiveHallPasses(pl.schoolId);
     }
 
+    // Per-display schedule overrides. Each override row points at ANOTHER
+    // playlist whose items get cycled in place of the base loop during a
+    // (dayOfWeek, startTime, endTime) window. We pre-resolve the items
+    // here so the public TV doesn't need to do N+1 fetches.
+    const overrideRows = await db
+      .select()
+      .from(displayPlaylistOverridesTable)
+      .where(eq(displayPlaylistOverridesTable.displayId, pl.id))
+      .orderBy(
+        asc(displayPlaylistOverridesTable.dayOfWeek),
+        asc(displayPlaylistOverridesTable.startTime),
+      );
+
+    const overrideTargetIds = Array.from(
+      new Set(overrideRows.map((o) => o.playlistId)),
+    );
+    const overrideItemsByPlaylistId = new Map<
+      number,
+      Array<{
+        id: number;
+        kind: "image" | "video" | "audio" | "pdf";
+        mimeType: string;
+        durationSeconds: number | null;
+        orderIndex: number;
+        mediaUrl: string;
+      }>
+    >();
+    if (overrideTargetIds.length > 0) {
+      const allOverrideItems = (await db
+        .select({
+          id: displayPlaylistItemsTable.id,
+          playlistId: displayPlaylistItemsTable.playlistId,
+          kind: displayPlaylistItemsTable.kind,
+          mimeType: displayPlaylistItemsTable.mimeType,
+          durationSeconds: displayPlaylistItemsTable.durationSeconds,
+          orderIndex: displayPlaylistItemsTable.orderIndex,
+        })
+        .from(displayPlaylistItemsTable)
+        .where(
+          and(
+            inArray(displayPlaylistItemsTable.playlistId, overrideTargetIds),
+            eq(displayPlaylistItemsTable.enabled, true),
+          ),
+        )
+        .orderBy(asc(displayPlaylistItemsTable.orderIndex))) as Array<{
+          id: number;
+          playlistId: number;
+          kind: "image" | "video" | "audio" | "pdf";
+          mimeType: string;
+          durationSeconds: number | null;
+          orderIndex: number;
+        }>;
+      for (const it of allOverrideItems) {
+        let bucket = overrideItemsByPlaylistId.get(it.playlistId);
+        if (!bucket) {
+          bucket = [];
+          overrideItemsByPlaylistId.set(it.playlistId, bucket);
+        }
+        bucket.push({
+          id: it.id,
+          kind: it.kind,
+          mimeType: it.mimeType,
+          durationSeconds: it.durationSeconds,
+          orderIndex: it.orderIndex,
+          mediaUrl: `/api/displays/public/media/${it.id}`,
+        });
+      }
+    }
+
     res.json({
       playlist: {
         id: pl.id,
@@ -879,6 +949,14 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         // Always serve via the public media endpoint, never the
         // raw `/api/storage/objects/*` path (that one is auth-gated).
         mediaUrl: `/api/displays/public/media/${it.id}`,
+      })),
+      overrides: overrideRows.map((o) => ({
+        id: o.id,
+        playlistId: o.playlistId,
+        dayOfWeek: o.dayOfWeek,
+        startTime: o.startTime,
+        endTime: o.endTime,
+        items: overrideItemsByPlaylistId.get(o.playlistId) ?? [],
       })),
       houseData,
       hallPassData,

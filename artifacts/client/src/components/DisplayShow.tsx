@@ -105,11 +105,58 @@ interface PublicPlaylist {
     scheduleDaysOfWeek: string | null;
   };
   items: PublicItem[];
+  // Per-display schedule overrides. When the current local time falls
+  // inside an override window, we play that override's items instead
+  // of the base loop. Server pre-resolves items so we don't need a
+  // second fetch per override target.
+  overrides: PublicOverride[];
   houseData: {
     houses: HouseTotals[];
     recent: RecentRecognition[];
   } | null;
   hallPassData: HallPassData | null;
+}
+
+interface PublicOverride {
+  id: number;
+  playlistId: number;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+  items: PublicItem[];
+}
+
+// Returns the override that should be playing right now, or null for
+// the base loop. Tie-breaker: lowest startTime wins (matches the API's
+// ORDER BY day_of_week, start_time).
+function pickActiveOverride(
+  overrides: PublicOverride[],
+  now: Date = new Date(),
+): PublicOverride | null {
+  const today = now.getDay();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  let best: { ov: PublicOverride; startMin: number } | null = null;
+  for (const ov of overrides) {
+    if (ov.dayOfWeek !== today) continue;
+    const [sh, sm] = ov.startTime.split(":").map((n) => Number.parseInt(n, 10));
+    const [eh, em] = ov.endTime.split(":").map((n) => Number.parseInt(n, 10));
+    if (
+      !Number.isFinite(sh) ||
+      !Number.isFinite(sm) ||
+      !Number.isFinite(eh) ||
+      !Number.isFinite(em)
+    ) {
+      continue;
+    }
+    const startMin = sh * 60 + sm;
+    const endMin = eh * 60 + em;
+    if (cur >= startMin && cur < endMin) {
+      if (!best || startMin < best.startMin) {
+        best = { ov, startMin };
+      }
+    }
+  }
+  return best?.ov ?? null;
 }
 
 // A "slide" is what the cycler actually displays. We expand the
@@ -232,9 +279,42 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
     };
   }, [playlistId]);
 
+  // Tick once a minute so the off-air check + override scope re-evaluates
+  // without waiting on the next 60s playlist poll. The state is also used
+  // by `currentScope` below so a brand-new override window starts on the
+  // minute boundary.
+  const [minuteTick, setMinuteTick] = useState(0);
+  useEffect(() => {
+    const t = window.setInterval(() => setMinuteTick((n) => n + 1), 60_000);
+    return () => window.clearInterval(t);
+  }, []);
+
+  // Determine which scope is active right now: "base" or "override:<id>".
+  // Recomputed every minuteTick and on playlist refetch.
+  const activeOverride = useMemo(
+    () =>
+      playlist
+        ? pickActiveOverride(playlist.overrides ?? [])
+        : null,
+    // minuteTick is intentional — we want a fresh time check every minute.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [playlist, minuteTick],
+  );
+  const currentScope = activeOverride ? `override:${activeOverride.id}` : "base";
+
   const slides = useMemo<Slide[]>(() => {
     if (!playlist) return [];
     const list: Slide[] = [];
+    if (activeOverride) {
+      // Override scope: play ONLY the override playlist's items. We
+      // intentionally skip house / hall-pass / heartbeat injections
+      // here so a "fire drill" or assembly-time override is exactly
+      // what the admin uploaded — no surprises.
+      for (const item of activeOverride.items) {
+        list.push({ kind: "item", item });
+      }
+      return list;
+    }
     if (playlist.playlist.showPbisHousePage && playlist.houseData) {
       list.push({ kind: "house", data: playlist.houseData });
     }
@@ -251,16 +331,19 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
       list.push({ kind: "item", item });
     }
     return list;
-  }, [playlist]);
+  }, [playlist, activeOverride]);
 
-  // Tick once a minute so the off-air check re-evaluates without
-  // waiting on the next 60s playlist poll. The state is otherwise
-  // unused — we just want a re-render at minute boundaries.
-  const [, setMinuteTick] = useState(0);
+  // Hard-reset to slide 0 whenever the scope changes (base ↔ override, or
+  // override A ↔ override B). Otherwise a 30-min override starting at
+  // 8:30 would resume at "wherever the base loop happened to be" and an
+  // admin couldn't reason about what staff are seeing.
+  const lastScopeRef = useRef<string>(currentScope);
   useEffect(() => {
-    const t = window.setInterval(() => setMinuteTick((n) => n + 1), 60_000);
-    return () => window.clearInterval(t);
-  }, []);
+    if (lastScopeRef.current !== currentScope) {
+      lastScopeRef.current = currentScope;
+      setSlideIdx(0);
+    }
+  }, [currentScope]);
 
   // Whenever the slide list changes (admin reorder, item add/remove)
   // and the current index falls off the end, snap back to 0 so the

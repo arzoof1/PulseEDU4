@@ -26,6 +26,38 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Per-display schedule overrides (May 2026)
+
+A display (a `display_playlists` row whose public URL the TV opens) plays
+its own items as the BASE loop. Admins can now define weekly override
+windows that swap in a different playlist's items during a `(dayOfWeek,
+startTime, endTime)` window — e.g. "weekdays 8:30–9:00 play the
+morning-announcements playlist; the rest of the day play the lobby
+slideshow".
+
+- Schema: new `display_playlist_overrides` table — `display_id` +
+  `playlist_id` (both FK `display_playlists`, ON DELETE CASCADE),
+  `day_of_week` (0=Sun..6=Sat), `start_time`/`end_time` text HH:MM.
+- API (admin, `canManageDisplays` + same-school + owner gates, mounted
+  in `routes/displayOverrides.ts`):
+  `GET/POST /api/displays/playlists/:id/overrides`,
+  `POST .../overrides/bulk`, `PATCH/DELETE .../overrides/:overrideId`.
+  Validation: HH:MM regex, `endTime > startTime` (overnight wraps must
+  be split into two rows), override target must be at the same school.
+- Public fetch (`/api/displays/public/playlists/:id`) now returns
+  `overrides: [{id, playlistId, dayOfWeek, startTime, endTime, items[]}]`
+  with items pre-resolved (single batched `inArray` query).
+- Cycler (`DisplayShow.tsx`): `pickActiveOverride()` picks the row whose
+  window contains "now"; tie-break is lowest `startTime`. Recomputed on
+  every minute tick. On scope change (base ↔ override or override A ↔
+  override B) `lastScopeRef` resets `slideIdx` to 0 so staff get a
+  predictable loop start. During an override the house / hall-passes /
+  heartbeat injections are intentionally dropped — what the admin
+  uploaded is exactly what plays.
+- Admin UI (`Displays.tsx` `OverridesEditor`): weekly 7-column grid +
+  Add (single day) and Bulk add (one window applied to N days at once)
+  modal. v1 is delete + re-add, no inline edit.
+
 ## Safety Plans (May 2026)
 
 Per-student behavioral / physical safety checklist owned by the school's

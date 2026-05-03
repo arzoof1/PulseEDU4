@@ -51,6 +51,7 @@ export * from "./houses";
 export * from "./teacherWatchlistEntries";
 export * from "./teacherWatchlistGroups";
 export * from "./displayPlaylists";
+export * from "./displayPlaylistOverrides";
 export * from "./displayPlaylistItems";
 export * from "./tier2InterventionEntries";
 export * from "./tier3Goals";

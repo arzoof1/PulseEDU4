@@ -723,6 +723,11 @@ function PlaylistEditor({
         </div>
       </div>
 
+      {/* Schedule overrides */}
+      <div style={{ marginBottom: 16 }}>
+        <OverridesEditor displayId={playlistId} schoolId={detail.playlist.schoolId} />
+      </div>
+
       {/* Items table */}
       <div style={card}>
         <div
@@ -888,6 +893,436 @@ function PlaylistEditor({
             </tbody>
           </table>
         )}
+      </div>
+    </div>
+  );
+}
+
+// ===================================================================
+// OverridesEditor — list / add / edit / delete schedule overrides for a
+// single display. An override row says "on day X between HH:MM and
+// HH:MM, play THIS OTHER playlist instead of my own items".
+//
+// Two add modes:
+//   - Single: pick day + start + end + playlist
+//   - Bulk:   pick playlist + start + end + multiple days at once
+//             (uses POST /overrides/bulk so all-or-nothing)
+// ===================================================================
+
+interface OverrideRow {
+  id: number;
+  displayId: number;
+  playlistId: number;
+  dayOfWeek: number;
+  startTime: string;
+  endTime: string;
+}
+
+function OverridesEditor({
+  displayId,
+  schoolId,
+}: {
+  displayId: number;
+  schoolId: number;
+}) {
+  const [rows, setRows] = useState<OverrideRow[]>([]);
+  const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [showAdd, setShowAdd] = useState<"single" | "bulk" | null>(null);
+
+  async function refresh() {
+    setLoading(true);
+    try {
+      const [r1, r2] = await Promise.all([
+        authFetch(`/api/displays/playlists/${displayId}/overrides`),
+        authFetch(`/api/displays/playlists`),
+      ]);
+      const j1 = (await r1.json()) as { overrides: OverrideRow[] };
+      const j2 = (await r2.json()) as { playlists: PlaylistRow[] };
+      setRows(j1.overrides ?? []);
+      // Only same-school playlists are valid override targets.
+      setPlaylists(
+        (j2.playlists ?? []).filter((p) => p.schoolId === schoolId),
+      );
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to load overrides");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void refresh();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [displayId]);
+
+  async function deleteRow(row: OverrideRow) {
+    if (!window.confirm(`Delete override on ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}?`)) return;
+    try {
+      const r = await authFetch(
+        `/api/displays/playlists/${displayId}/overrides/${row.id}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) throw new Error("Failed");
+      await refresh();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed");
+    }
+  }
+
+  // Group rows by day so the weekly view is scannable.
+  const byDay = useMemo(() => {
+    const m = new Map<number, OverrideRow[]>();
+    for (const r of rows) {
+      const list = m.get(r.dayOfWeek) ?? [];
+      list.push(r);
+      m.set(r.dayOfWeek, list);
+    }
+    return m;
+  }, [rows]);
+
+  function nameFor(playlistId: number): string {
+    return playlists.find((p) => p.id === playlistId)?.name ?? `#${playlistId}`;
+  }
+
+  return (
+    <div style={card}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginBottom: 12,
+        }}
+      >
+        <div>
+          <div style={{ fontSize: 16, fontWeight: 600 }}>Schedule overrides</div>
+          <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+            Replace this display's normal loop with another playlist during
+            specific weekly windows. Tie-break: earliest start wins. The
+            cycler restarts at slide 1 whenever the active window changes.
+          </div>
+        </div>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button style={btn} onClick={() => setShowAdd("bulk")}>+ Bulk add</button>
+          <button style={btnPrimary} onClick={() => setShowAdd("single")}>+ Add</button>
+        </div>
+      </div>
+
+      {loading ? (
+        <div style={{ color: "#6b7280" }}>Loading…</div>
+      ) : rows.length === 0 ? (
+        <div style={{ color: "#6b7280", textAlign: "center", padding: 16, fontSize: 13 }}>
+          No overrides yet. The display plays its own items 24/7 (subject to
+          its schedule above).
+        </div>
+      ) : (
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(7, 1fr)", gap: 8 }}>
+          {WEEKDAY_LABELS.map((d) => {
+            const dayRows = (byDay.get(d.idx) ?? []).slice().sort((a, b) =>
+              a.startTime.localeCompare(b.startTime),
+            );
+            return (
+              <div
+                key={d.idx}
+                style={{
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 8,
+                  padding: 8,
+                  minHeight: 80,
+                  background: "#fafafa",
+                }}
+              >
+                <div style={{ fontSize: 12, fontWeight: 700, color: "#374151", marginBottom: 6 }}>
+                  {d.label}
+                </div>
+                {dayRows.length === 0 ? (
+                  <div style={{ fontSize: 11, color: "#9ca3af", fontStyle: "italic" }}>—</div>
+                ) : (
+                  <div style={{ display: "grid", gap: 6 }}>
+                    {dayRows.map((row) => (
+                      <div
+                        key={row.id}
+                        style={{
+                          background: "white",
+                          border: "1px solid #d1d5db",
+                          borderRadius: 6,
+                          padding: 6,
+                          fontSize: 11,
+                        }}
+                      >
+                        <div style={{ fontWeight: 600 }}>
+                          {row.startTime}–{row.endTime}
+                        </div>
+                        <div
+                          style={{
+                            color: "#374151",
+                            marginTop: 2,
+                            overflow: "hidden",
+                            textOverflow: "ellipsis",
+                            whiteSpace: "nowrap",
+                          }}
+                          title={nameFor(row.playlistId)}
+                        >
+                          → {nameFor(row.playlistId)}
+                        </div>
+                        <button
+                          style={{
+                            ...btn,
+                            padding: "2px 6px",
+                            fontSize: 10,
+                            marginTop: 4,
+                            color: "#b91c1c",
+                            borderColor: "#fca5a5",
+                          }}
+                          onClick={() => void deleteRow(row)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {showAdd && (
+        <AddOverrideDialog
+          mode={showAdd}
+          displayId={displayId}
+          playlists={playlists}
+          onClose={() => setShowAdd(null)}
+          onSaved={async () => {
+            setShowAdd(null);
+            await refresh();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function AddOverrideDialog({
+  mode,
+  displayId,
+  playlists,
+  onClose,
+  onSaved,
+}: {
+  mode: "single" | "bulk";
+  displayId: number;
+  playlists: PlaylistRow[];
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+}) {
+  const [playlistId, setPlaylistId] = useState<number | "">(
+    playlists[0]?.id ?? "",
+  );
+  const [days, setDays] = useState<Set<number>>(new Set([1, 2, 3, 4, 5]));
+  const [startTime, setStartTime] = useState("08:30");
+  const [endTime, setEndTime] = useState("09:00");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  function toggleDay(idx: number) {
+    const n = new Set(days);
+    if (n.has(idx)) n.delete(idx);
+    else n.add(idx);
+    setDays(n);
+  }
+
+  async function save() {
+    setErr(null);
+    if (playlistId === "") {
+      setErr("Pick a playlist");
+      return;
+    }
+    if (mode === "single" && days.size !== 1) {
+      setErr("Pick exactly one day (or use Bulk add)");
+      return;
+    }
+    if (mode === "bulk" && days.size === 0) {
+      setErr("Pick at least one day");
+      return;
+    }
+    if (endTime <= startTime) {
+      setErr("End time must be after start time");
+      return;
+    }
+    setSaving(true);
+    try {
+      if (mode === "single") {
+        const day = Array.from(days)[0];
+        const r = await authFetch(
+          `/api/displays/playlists/${displayId}/overrides`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ playlistId, dayOfWeek: day, startTime, endTime }),
+          },
+        );
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(j?.error ?? "Failed");
+        }
+      } else {
+        const overrides = Array.from(days).map((d) => ({
+          playlistId,
+          dayOfWeek: d,
+          startTime,
+          endTime,
+        }));
+        const r = await authFetch(
+          `/api/displays/playlists/${displayId}/overrides/bulk`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ overrides }),
+          },
+        );
+        if (!r.ok) {
+          const j = (await r.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(j?.error ?? "Failed");
+        }
+      }
+      await onSaved();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.45)",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        zIndex: 50,
+      }}
+      onClick={onClose}
+    >
+      <div
+        style={{
+          background: "white",
+          borderRadius: 12,
+          padding: 20,
+          width: "min(92vw, 480px)",
+          boxShadow: "0 12px 36px rgba(0,0,0,0.3)",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ fontSize: 18, fontWeight: 700, marginBottom: 4 }}>
+          {mode === "single" ? "Add override" : "Bulk add overrides"}
+        </div>
+        <div style={{ fontSize: 12, color: "#6b7280", marginBottom: 16 }}>
+          {mode === "single"
+            ? "One window on one day."
+            : "Same window applied to every selected day (one row per day)."}
+        </div>
+        <div style={{ display: "grid", gap: 12 }}>
+          <label>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Play this playlist</div>
+            <select
+              style={{ ...inputStyle, width: "100%" }}
+              value={playlistId}
+              onChange={(e) =>
+                setPlaylistId(e.currentTarget.value === "" ? "" : Number(e.currentTarget.value))
+              }
+            >
+              <option value="">Pick a playlist…</option>
+              {playlists.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div style={{ display: "flex", gap: 12 }}>
+            <label style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>Start</div>
+              <input
+                type="time"
+                style={{ ...inputStyle, width: "100%" }}
+                value={startTime}
+                onChange={(e) => setStartTime(e.currentTarget.value)}
+              />
+            </label>
+            <label style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>End</div>
+              <input
+                type="time"
+                style={{ ...inputStyle, width: "100%" }}
+                value={endTime}
+                onChange={(e) => setEndTime(e.currentTarget.value)}
+              />
+            </label>
+          </div>
+          <div>
+            <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
+              {mode === "single" ? "Day" : "Days"}
+            </div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {WEEKDAY_LABELS.map((d) => {
+                const on = days.has(d.idx);
+                return (
+                  <button
+                    type="button"
+                    key={d.idx}
+                    onClick={() => {
+                      if (mode === "single") {
+                        setDays(new Set([d.idx]));
+                      } else {
+                        toggleDay(d.idx);
+                      }
+                    }}
+                    style={{
+                      padding: "4px 10px",
+                      borderRadius: 999,
+                      border: on ? "1px solid #2563eb" : "1px solid #d1d5db",
+                      background: on ? "#dbeafe" : "white",
+                      color: on ? "#1d4ed8" : "#374151",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    {d.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          {err && (
+            <div
+              style={{
+                background: "#fef2f2",
+                border: "1px solid #fecaca",
+                color: "#b91c1c",
+                borderRadius: 8,
+                padding: 8,
+                fontSize: 13,
+              }}
+            >
+              {err}
+            </div>
+          )}
+        </div>
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button style={btn} onClick={onClose} disabled={saving}>
+            Cancel
+          </button>
+          <button style={btnPrimary} onClick={() => void save()} disabled={saving}>
+            {saving ? "Saving…" : "Save"}
+          </button>
+        </div>
       </div>
     </div>
   );
