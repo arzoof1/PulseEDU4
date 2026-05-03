@@ -62,6 +62,8 @@ import parentHeartbeatPrefsRouter from "./parentHeartbeatPrefs";
 import parentSnapshotPdfRouter from "./parentSnapshotPdf";
 import displaysRouter from "./displays";
 import uiPrefsRouter from "./uiPrefs";
+import schoolPlansRouter from "./schoolPlans";
+import tierPresetsRouter from "./tierPresets";
 
 const router: IRouter = Router();
 
@@ -128,5 +130,7 @@ router.use(heartbeatSettingsRouter);
 router.use(parentHeartbeatPrefsRouter);
 router.use(parentSnapshotPdfRouter);
 router.use(displaysRouter);
+router.use(schoolPlansRouter);
+router.use(tierPresetsRouter);
 
 export default router;

@@ -10,15 +10,32 @@ const router: IRouter = Router();
 // `super_feature_*` column. A feature is "effective" only when both are
 // true. Centralizing the list here keeps the GET enrichment, the PUT
 // validation, and the response-side `effectiveFeatures` map in sync.
-const FEATURE_KEYS = [
+// Centralized list of every per-school feature flag. Keep in sync with
+// the columns in lib/db/src/schema/schoolSettings.ts and with the
+// client-side `effectiveFeatures` map in App.tsx. Adding a key here
+// automatically wires GET enrichment, PUT validation, and the
+// `/superuser/school-plans` PATCH validator.
+export const FEATURE_KEYS = [
   "FamilyComm",
   "Pbis",
   "SchoolStore",
   "Accommodations",
   "LogIntervention",
   "RequestPullout",
+  "HallPasses",
+  "TardyPass",
+  "MtssPlans",
+  "BehaviorSpecialist",
+  "IssDashboard",
+  "Displays",
+  "BellSchedule",
+  "EarlyWarning",
+  "Academics",
+  "DataImports",
+  "Houses",
+  "ParentPortal",
 ] as const;
-type FeatureKey = (typeof FEATURE_KEYS)[number];
+export type FeatureKey = (typeof FEATURE_KEYS)[number];
 type SettingsRow = typeof schoolSettingsTable.$inferSelect;
 
 function adminCol(k: FeatureKey): keyof SettingsRow {

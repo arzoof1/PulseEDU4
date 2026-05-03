@@ -1503,6 +1503,53 @@ Verify Pullouts too, add a 7th `feature_verify_pullout` /
 `super_feature_verify_pullout` pair and another `effectiveFeatures`
 entry — do not piggy-back on `RequestPullout`.
 
+### Cross-school SuperUser admin (shipped May 3, 2026)
+
+**Expanded catalog.** The 6 original feature pairs were extended to 18.
+Twelve new pairs added in `school_settings` (defaults TRUE; idempotent
+ALTER at boot in `ensureSchoolSettingsFeatureFlagsSchema`):
+HallPasses, TardyPass, MtssPlans, BehaviorSpecialist, IssDashboard,
+Displays, BellSchedule, EarlyWarning, Academics, DataImports, Houses,
+ParentPortal. The same names appear in `FEATURE_KEYS` in
+`routes/schoolSettings.ts` and the client `effectiveFeatures` map in
+`App.tsx`. Adding a new feature = add a column + add the key to
+`FEATURE_KEYS` + add it to the client map.
+
+**Tier presets.** New `tier_presets` table (`id`, `name`,
+`description`, `is_built_in`, `feature_keys` JSONB). Three built-in
+presets seeded at boot in `ensureTierPresetsSchema`:
+
+- Basic — HallPasses, TardyPass, FamilyComm, Pbis
+- Pro — Basic + SchoolStore, Accommodations, MTSS Plans, ISS
+  Dashboard, Displays, Houses, BellSchedule, ParentPortal,
+  LogIntervention, RequestPullout
+- Enterprise — every feature
+
+Built-in rows are flagged read-only for name/description; SuperUsers
+can still rebalance their feature_keys array. `school_settings.tier_preset_id`
+is an advisory pointer to the last-applied preset (cleared whenever
+any flag is hand-toggled, since the school no longer matches exactly).
+
+**SuperUser routes.** SuperUser-only, mounted in `routes/index.ts`:
+
+- `routes/schoolPlans.ts` — `GET /api/superuser/school-plans` returns
+  every school × every flag in one payload; `PATCH /:schoolId` sets
+  one or more `super_feature_*` columns; `POST /:schoolId/apply-preset`
+  bulk-sets every super flag from the preset's `featureKeys`.
+- `routes/tierPresets.ts` — full CRUD on tier presets. Built-ins
+  protected from delete + name/description edit.
+
+**SchoolPlansAdminPage.** New SuperUser-only settings tile
+(`SettingsTileId = "school-plans"`) renders a sticky-header table:
+rows = schools, cols = features. Each cell shows a check toggle. Per
+row a "Apply preset" dropdown bulk-sets every super flag from a
+chosen preset. Cell colors: green = available + admin enabled (live),
+yellow = available but admin turned off, gray = not in plan. Tab-2
+of the page is the preset editor (built-in pills + new-preset form).
+Flipping super off propagates instantly because the same column the
+admin's `effectiveFeatures` map reads from is what the SuperUser
+just wrote.
+
 ---
 
 ## HeartBEAT Snapshot — Parent Portal v1 (shipped Apr 24, 2026)

@@ -56,12 +56,41 @@ export const schoolSettingsTable = pgTable(
   featureAccommodations: boolean("feature_accommodations").notNull().default(true),
   featureLogIntervention: boolean("feature_log_intervention").notNull().default(true),
   featureRequestPullout: boolean("feature_request_pullout").notNull().default(true),
+  // Expanded sellable feature catalog (T1 of school-plans work).
+  featureHallPasses: boolean("feature_hall_passes").notNull().default(true),
+  featureTardyPass: boolean("feature_tardy_pass").notNull().default(true),
+  featureMtssPlans: boolean("feature_mtss_plans").notNull().default(true),
+  featureBehaviorSpecialist: boolean("feature_behavior_specialist").notNull().default(true),
+  featureIssDashboard: boolean("feature_iss_dashboard").notNull().default(true),
+  featureDisplays: boolean("feature_displays").notNull().default(true),
+  featureBellSchedule: boolean("feature_bell_schedule").notNull().default(true),
+  featureEarlyWarning: boolean("feature_early_warning").notNull().default(true),
+  featureAcademics: boolean("feature_academics").notNull().default(true),
+  featureDataImports: boolean("feature_data_imports").notNull().default(true),
+  featureHouses: boolean("feature_houses").notNull().default(true),
+  featureParentPortal: boolean("feature_parent_portal").notNull().default(true),
   superFeatureFamilyComm: boolean("super_feature_family_comm").notNull().default(true),
   superFeaturePbis: boolean("super_feature_pbis").notNull().default(true),
   superFeatureSchoolStore: boolean("super_feature_school_store").notNull().default(true),
   superFeatureAccommodations: boolean("super_feature_accommodations").notNull().default(true),
   superFeatureLogIntervention: boolean("super_feature_log_intervention").notNull().default(true),
   superFeatureRequestPullout: boolean("super_feature_request_pullout").notNull().default(true),
+  superFeatureHallPasses: boolean("super_feature_hall_passes").notNull().default(true),
+  superFeatureTardyPass: boolean("super_feature_tardy_pass").notNull().default(true),
+  superFeatureMtssPlans: boolean("super_feature_mtss_plans").notNull().default(true),
+  superFeatureBehaviorSpecialist: boolean("super_feature_behavior_specialist").notNull().default(true),
+  superFeatureIssDashboard: boolean("super_feature_iss_dashboard").notNull().default(true),
+  superFeatureDisplays: boolean("super_feature_displays").notNull().default(true),
+  superFeatureBellSchedule: boolean("super_feature_bell_schedule").notNull().default(true),
+  superFeatureEarlyWarning: boolean("super_feature_early_warning").notNull().default(true),
+  superFeatureAcademics: boolean("super_feature_academics").notNull().default(true),
+  superFeatureDataImports: boolean("super_feature_data_imports").notNull().default(true),
+  superFeatureHouses: boolean("super_feature_houses").notNull().default(true),
+  superFeatureParentPortal: boolean("super_feature_parent_portal").notNull().default(true),
+  // Advisory pointer to the tier_presets row last applied to this
+  // school. The actual flags above are still authoritative — this is
+  // purely so the School Plans grid can show "Currently: Pro" badges.
+  tierPresetId: integer("tier_preset_id"),
   // -----------------------------------------------------------------
   // School-wide expectations (PRIDE / equivalent). Used as the optional
   // row on the Tier 3 weekly form when a plan opts in. The acronym is

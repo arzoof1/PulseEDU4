@@ -23,6 +23,7 @@ import PbisPointsHub, {
 } from "./components/PbisPointsHub";
 import TenancyPanel from "./components/TenancyPanel";
 import LogoGeneratorPage from "./components/LogoGeneratorPage";
+import SchoolPlansAdminPage from "./components/SchoolPlansAdminPage";
 import ParentAccess from "./components/ParentAccess";
 import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
@@ -3647,12 +3648,36 @@ function App() {
     featureAccommodations: boolean;
     featureLogIntervention: boolean;
     featureRequestPullout: boolean;
+    featureHallPasses: boolean;
+    featureTardyPass: boolean;
+    featureMtssPlans: boolean;
+    featureBehaviorSpecialist: boolean;
+    featureIssDashboard: boolean;
+    featureDisplays: boolean;
+    featureBellSchedule: boolean;
+    featureEarlyWarning: boolean;
+    featureAcademics: boolean;
+    featureDataImports: boolean;
+    featureHouses: boolean;
+    featureParentPortal: boolean;
     superFeatureFamilyComm: boolean;
     superFeaturePbis: boolean;
     superFeatureSchoolStore: boolean;
     superFeatureAccommodations: boolean;
     superFeatureLogIntervention: boolean;
     superFeatureRequestPullout: boolean;
+    superFeatureHallPasses: boolean;
+    superFeatureTardyPass: boolean;
+    superFeatureMtssPlans: boolean;
+    superFeatureBehaviorSpecialist: boolean;
+    superFeatureIssDashboard: boolean;
+    superFeatureDisplays: boolean;
+    superFeatureBellSchedule: boolean;
+    superFeatureEarlyWarning: boolean;
+    superFeatureAcademics: boolean;
+    superFeatureDataImports: boolean;
+    superFeatureHouses: boolean;
+    superFeatureParentPortal: boolean;
   }>({
     schoolName: "",
     fromName: "",
@@ -3671,12 +3696,36 @@ function App() {
     featureAccommodations: true,
     featureLogIntervention: true,
     featureRequestPullout: true,
+    featureHallPasses: true,
+    featureTardyPass: true,
+    featureMtssPlans: true,
+    featureBehaviorSpecialist: true,
+    featureIssDashboard: true,
+    featureDisplays: true,
+    featureBellSchedule: true,
+    featureEarlyWarning: true,
+    featureAcademics: true,
+    featureDataImports: true,
+    featureHouses: true,
+    featureParentPortal: true,
     superFeatureFamilyComm: true,
     superFeaturePbis: true,
     superFeatureSchoolStore: true,
     superFeatureAccommodations: true,
     superFeatureLogIntervention: true,
     superFeatureRequestPullout: true,
+    superFeatureHallPasses: true,
+    superFeatureTardyPass: true,
+    superFeatureMtssPlans: true,
+    superFeatureBehaviorSpecialist: true,
+    superFeatureIssDashboard: true,
+    superFeatureDisplays: true,
+    superFeatureBellSchedule: true,
+    superFeatureEarlyWarning: true,
+    superFeatureAcademics: true,
+    superFeatureDataImports: true,
+    superFeatureHouses: true,
+    superFeatureParentPortal: true,
   });
   const [settingsStatus, setSettingsStatus] = useState<
     "idle" | "saving" | "saved" | "error"
@@ -5255,6 +5304,18 @@ function App() {
           featureAccommodations: boolOrTrue(data.featureAccommodations),
           featureLogIntervention: boolOrTrue(data.featureLogIntervention),
           featureRequestPullout: boolOrTrue(data.featureRequestPullout),
+          featureHallPasses: boolOrTrue(data.featureHallPasses),
+          featureTardyPass: boolOrTrue(data.featureTardyPass),
+          featureMtssPlans: boolOrTrue(data.featureMtssPlans),
+          featureBehaviorSpecialist: boolOrTrue(data.featureBehaviorSpecialist),
+          featureIssDashboard: boolOrTrue(data.featureIssDashboard),
+          featureDisplays: boolOrTrue(data.featureDisplays),
+          featureBellSchedule: boolOrTrue(data.featureBellSchedule),
+          featureEarlyWarning: boolOrTrue(data.featureEarlyWarning),
+          featureAcademics: boolOrTrue(data.featureAcademics),
+          featureDataImports: boolOrTrue(data.featureDataImports),
+          featureHouses: boolOrTrue(data.featureHouses),
+          featureParentPortal: boolOrTrue(data.featureParentPortal),
           superFeatureFamilyComm: boolOrTrue(data.superFeatureFamilyComm),
           superFeaturePbis: boolOrTrue(data.superFeaturePbis),
           superFeatureSchoolStore: boolOrTrue(data.superFeatureSchoolStore),
@@ -5267,6 +5328,18 @@ function App() {
           superFeatureRequestPullout: boolOrTrue(
             data.superFeatureRequestPullout,
           ),
+          superFeatureHallPasses: boolOrTrue(data.superFeatureHallPasses),
+          superFeatureTardyPass: boolOrTrue(data.superFeatureTardyPass),
+          superFeatureMtssPlans: boolOrTrue(data.superFeatureMtssPlans),
+          superFeatureBehaviorSpecialist: boolOrTrue(data.superFeatureBehaviorSpecialist),
+          superFeatureIssDashboard: boolOrTrue(data.superFeatureIssDashboard),
+          superFeatureDisplays: boolOrTrue(data.superFeatureDisplays),
+          superFeatureBellSchedule: boolOrTrue(data.superFeatureBellSchedule),
+          superFeatureEarlyWarning: boolOrTrue(data.superFeatureEarlyWarning),
+          superFeatureAcademics: boolOrTrue(data.superFeatureAcademics),
+          superFeatureDataImports: boolOrTrue(data.superFeatureDataImports),
+          superFeatureHouses: boolOrTrue(data.superFeatureHouses),
+          superFeatureParentPortal: boolOrTrue(data.superFeatureParentPortal),
         }),
       )
       .catch((err) => console.error("Failed to load school settings:", err));
@@ -5326,6 +5399,18 @@ function App() {
         featureAccommodations: boolOrTrue(data.featureAccommodations),
         featureLogIntervention: boolOrTrue(data.featureLogIntervention),
         featureRequestPullout: boolOrTrue(data.featureRequestPullout),
+        featureHallPasses: boolOrTrue(data.featureHallPasses),
+        featureTardyPass: boolOrTrue(data.featureTardyPass),
+        featureMtssPlans: boolOrTrue(data.featureMtssPlans),
+        featureBehaviorSpecialist: boolOrTrue(data.featureBehaviorSpecialist),
+        featureIssDashboard: boolOrTrue(data.featureIssDashboard),
+        featureDisplays: boolOrTrue(data.featureDisplays),
+        featureBellSchedule: boolOrTrue(data.featureBellSchedule),
+        featureEarlyWarning: boolOrTrue(data.featureEarlyWarning),
+        featureAcademics: boolOrTrue(data.featureAcademics),
+        featureDataImports: boolOrTrue(data.featureDataImports),
+        featureHouses: boolOrTrue(data.featureHouses),
+        featureParentPortal: boolOrTrue(data.featureParentPortal),
         superFeatureFamilyComm: boolOrTrue(data.superFeatureFamilyComm),
         superFeaturePbis: boolOrTrue(data.superFeaturePbis),
         superFeatureSchoolStore: boolOrTrue(data.superFeatureSchoolStore),
@@ -5334,6 +5419,18 @@ function App() {
           data.superFeatureLogIntervention,
         ),
         superFeatureRequestPullout: boolOrTrue(data.superFeatureRequestPullout),
+        superFeatureHallPasses: boolOrTrue(data.superFeatureHallPasses),
+        superFeatureTardyPass: boolOrTrue(data.superFeatureTardyPass),
+        superFeatureMtssPlans: boolOrTrue(data.superFeatureMtssPlans),
+        superFeatureBehaviorSpecialist: boolOrTrue(data.superFeatureBehaviorSpecialist),
+        superFeatureIssDashboard: boolOrTrue(data.superFeatureIssDashboard),
+        superFeatureDisplays: boolOrTrue(data.superFeatureDisplays),
+        superFeatureBellSchedule: boolOrTrue(data.superFeatureBellSchedule),
+        superFeatureEarlyWarning: boolOrTrue(data.superFeatureEarlyWarning),
+        superFeatureAcademics: boolOrTrue(data.superFeatureAcademics),
+        superFeatureDataImports: boolOrTrue(data.superFeatureDataImports),
+        superFeatureHouses: boolOrTrue(data.superFeatureHouses),
+        superFeatureParentPortal: boolOrTrue(data.superFeatureParentPortal),
       });
       setSettingsStatus("saved");
       setTimeout(() => setSettingsStatus("idle"), 2000);
@@ -7011,6 +7108,35 @@ function App() {
     RequestPullout:
       schoolSettings.featureRequestPullout &&
       schoolSettings.superFeatureRequestPullout,
+    HallPasses:
+      schoolSettings.featureHallPasses && schoolSettings.superFeatureHallPasses,
+    TardyPass:
+      schoolSettings.featureTardyPass && schoolSettings.superFeatureTardyPass,
+    MtssPlans:
+      schoolSettings.featureMtssPlans && schoolSettings.superFeatureMtssPlans,
+    BehaviorSpecialist:
+      schoolSettings.featureBehaviorSpecialist &&
+      schoolSettings.superFeatureBehaviorSpecialist,
+    IssDashboard:
+      schoolSettings.featureIssDashboard &&
+      schoolSettings.superFeatureIssDashboard,
+    Displays:
+      schoolSettings.featureDisplays && schoolSettings.superFeatureDisplays,
+    BellSchedule:
+      schoolSettings.featureBellSchedule &&
+      schoolSettings.superFeatureBellSchedule,
+    EarlyWarning:
+      schoolSettings.featureEarlyWarning &&
+      schoolSettings.superFeatureEarlyWarning,
+    Academics:
+      schoolSettings.featureAcademics && schoolSettings.superFeatureAcademics,
+    DataImports:
+      schoolSettings.featureDataImports &&
+      schoolSettings.superFeatureDataImports,
+    Houses: schoolSettings.featureHouses && schoolSettings.superFeatureHouses,
+    ParentPortal:
+      schoolSettings.featureParentPortal &&
+      schoolSettings.superFeatureParentPortal,
   };
   const allBaseNavSections: NavSection[] = [
     { key: "hallPasses", label: "Hall Passes", icon: IconDoor },
@@ -7033,6 +7159,8 @@ function App() {
   // Sidebar entries that map to a per-school feature flag. Anything not
   // in this map (Hall Passes, Tardy Pass, Teacher Roster) is always on.
   const navKeyFeatureMap: Partial<Record<typeof allBaseNavSections[number]["key"], keyof typeof effectiveFeatures>> = {
+    hallPasses: "HallPasses",
+    tardies: "TardyPass",
     student: "FamilyComm",
     pbis: "Pbis",
     schoolStore: "SchoolStore",
@@ -17432,6 +17560,18 @@ function App() {
                   "Generate animated/static/favicon logos for sister apps. SuperUser only.",
                 group: "admin-tenancy",
               });
+              // School Plans — cross-school feature/tier admin. SuperUser
+              // only. Lets you flip any super_feature_* on or off for
+              // any school, or apply a tier preset (Basic/Pro/Enterprise)
+              // in one click.
+              tiles.push({
+                id: "school-plans",
+                icon: "🗂️",
+                title: "School Plans",
+                subtitle:
+                  "Cross-school feature control + tier presets. SuperUser only.",
+                group: "admin-tenancy",
+              });
             }
             // Data Imports — gated on isAdmin (which includes SuperUser
             // + District Admin via the role flags). The route layer
@@ -17462,6 +17602,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "logo-generator" && isSuperUser && (
         <LogoGeneratorPage />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "school-plans" && isSuperUser && (
+        <SchoolPlansAdminPage />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "data-imports" && (

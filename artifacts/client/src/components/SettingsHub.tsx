@@ -13,6 +13,8 @@ export type SettingsTileId =
   | "branding"
   | "signage"
   | "tenancy"
+  | "logo-generator"
+  | "school-plans"
   | "data-imports"
   | "parent-portal-sections"
   | "school-wide-expectations"

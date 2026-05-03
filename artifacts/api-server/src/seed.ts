@@ -749,6 +749,31 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
     "super_feature_accommodations",
     "super_feature_log_intervention",
     "super_feature_request_pullout",
+    // Expanded catalog (School Plans work).
+    "feature_hall_passes",
+    "feature_tardy_pass",
+    "feature_mtss_plans",
+    "feature_behavior_specialist",
+    "feature_iss_dashboard",
+    "feature_displays",
+    "feature_bell_schedule",
+    "feature_early_warning",
+    "feature_academics",
+    "feature_data_imports",
+    "feature_houses",
+    "feature_parent_portal",
+    "super_feature_hall_passes",
+    "super_feature_tardy_pass",
+    "super_feature_mtss_plans",
+    "super_feature_behavior_specialist",
+    "super_feature_iss_dashboard",
+    "super_feature_displays",
+    "super_feature_bell_schedule",
+    "super_feature_early_warning",
+    "super_feature_academics",
+    "super_feature_data_imports",
+    "super_feature_houses",
+    "super_feature_parent_portal",
   ];
   for (const col of cols) {
     await db.execute(
@@ -756,6 +781,100 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
         `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS ${col} BOOLEAN NOT NULL DEFAULT TRUE`,
       ),
     );
+  }
+  // Advisory tier-preset pointer (nullable). Stored as plain integer —
+  // no FK so deleting a preset doesn't cascade to school_settings.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tier_preset_id INTEGER`,
+    ),
+  );
+}
+
+// Tier-preset table + the three built-in Basic/Pro/Enterprise rows.
+// Idempotent: existing rows are kept (in case the user has edited the
+// preset's feature_keys) but missing rows are inserted.
+export async function ensureTierPresetsSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tier_presets (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      is_built_in BOOLEAN NOT NULL DEFAULT FALSE,
+      feature_keys JSONB NOT NULL DEFAULT '[]'::jsonb
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tier_presets_name_unique ON tier_presets (name)`,
+  );
+
+  // Catalog used by the built-in presets. These strings are the
+  // FeatureKey PascalCase names from routes/schoolSettings.ts.
+  const ALL_FEATURES = [
+    "FamilyComm",
+    "Pbis",
+    "SchoolStore",
+    "Accommodations",
+    "LogIntervention",
+    "RequestPullout",
+    "HallPasses",
+    "TardyPass",
+    "MtssPlans",
+    "BehaviorSpecialist",
+    "IssDashboard",
+    "Displays",
+    "BellSchedule",
+    "EarlyWarning",
+    "Academics",
+    "DataImports",
+    "Houses",
+    "ParentPortal",
+  ];
+  const builtIns: Array<{
+    name: string;
+    description: string;
+    featureKeys: string[];
+  }> = [
+    {
+      name: "Basic",
+      description:
+        "Hall Passes, Tardy Pass, Family Communication, PBIS Points. Good for small pilots.",
+      featureKeys: ["HallPasses", "TardyPass", "FamilyComm", "Pbis"],
+    },
+    {
+      name: "Pro",
+      description:
+        "Basic plus PBIS Store, Accommodations, MTSS Plans, ISS Dashboard, Displays, Houses.",
+      featureKeys: [
+        "HallPasses",
+        "TardyPass",
+        "FamilyComm",
+        "Pbis",
+        "SchoolStore",
+        "Accommodations",
+        "LogIntervention",
+        "RequestPullout",
+        "MtssPlans",
+        "IssDashboard",
+        "Displays",
+        "Houses",
+        "BellSchedule",
+        "ParentPortal",
+      ],
+    },
+    {
+      name: "Enterprise",
+      description: "Everything PulseEDU has — full feature suite.",
+      featureKeys: ALL_FEATURES,
+    },
+  ];
+  for (const p of builtIns) {
+    await db.execute(sql`
+      INSERT INTO tier_presets (name, description, is_built_in, feature_keys)
+      VALUES (${p.name}, ${p.description}, TRUE, ${JSON.stringify(p.featureKeys)}::jsonb)
+      ON CONFLICT (name) DO UPDATE
+        SET is_built_in = TRUE
+    `);
   }
 }
 
@@ -837,6 +956,7 @@ function clamp(n: number, lo: number, hi: number): number {
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
+  await ensureTierPresetsSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

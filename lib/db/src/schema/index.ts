@@ -10,6 +10,7 @@ export * from "./students";
 export * from "./classSections";
 export * from "./sectionRoster";
 export * from "./schoolSettings";
+export * from "./tierPresets";
 export * from "./schoolAccommodations";
 export * from "./studentAccommodations";
 export * from "./locations";
