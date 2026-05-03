@@ -150,6 +150,63 @@ export default function InterventionReportsPage({ onBack }: Props) {
     };
   }, [selected, week, data]);
 
+  // Weekly overall summary across ALL active plans in the selected week.
+  // Two headline numbers:
+  //   • Tier 2 completion % — sum of completed entries / sum of expected.
+  //   • Tier 3 average score — mean of every non-null per-teacher
+  //     scoreAvg, weighted by completed entries so a teacher who logged
+  //     5 days counts more than one who logged 1.
+  // We also surface counts so the tiles aren't just floating percentages.
+  const summary = useMemo(() => {
+    if (!data) {
+      return {
+        t2Completed: 0,
+        t2Expected: 0,
+        t2Pct: null as number | null,
+        t2Plans: 0,
+        t3ScoreSum: 0,
+        t3ScoreWeight: 0,
+        t3Avg: null as number | null,
+        t3Plans: 0,
+        totalPlans: 0,
+      };
+    }
+    let t2Completed = 0;
+    let t2Expected = 0;
+    let t2Plans = 0;
+    let t3ScoreSum = 0;
+    let t3ScoreWeight = 0;
+    let t3Plans = 0;
+    for (const r of data.rows) {
+      if (r.tier === 2) {
+        t2Plans += 1;
+        for (const t of r.teachers) {
+          t2Completed += t.completed;
+          t2Expected += t.expected;
+        }
+      } else if (r.tier === 3) {
+        t3Plans += 1;
+        for (const t of r.teachers) {
+          if (t.scoreAvg !== null && t.completed > 0) {
+            t3ScoreSum += t.scoreAvg * t.completed;
+            t3ScoreWeight += t.completed;
+          }
+        }
+      }
+    }
+    return {
+      t2Completed,
+      t2Expected,
+      t2Pct: t2Expected > 0 ? (t2Completed / t2Expected) * 100 : null,
+      t2Plans,
+      t3ScoreSum,
+      t3ScoreWeight,
+      t3Avg: t3ScoreWeight > 0 ? t3ScoreSum / t3ScoreWeight : null,
+      t3Plans,
+      totalPlans: data.rows.length,
+    };
+  }, [data]);
+
   const visibleRows = useMemo(() => {
     if (!data) return [];
     const q = search.trim().toLowerCase();
@@ -299,6 +356,64 @@ export default function InterventionReportsPage({ onBack }: Props) {
           }}
         >
           {err}
+        </div>
+      )}
+
+      {data && summary.totalPlans > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+            gap: "0.6rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <SummaryTile
+            label="Tier 2 weekly completion"
+            value={
+              summary.t2Pct !== null ? `${Math.round(summary.t2Pct)}%` : "—"
+            }
+            sub={
+              summary.t2Expected > 0
+                ? `${summary.t2Completed} of ${summary.t2Expected} entries · ${summary.t2Plans} plan${summary.t2Plans === 1 ? "" : "s"}`
+                : `${summary.t2Plans} active plan${summary.t2Plans === 1 ? "" : "s"}`
+            }
+            tone={
+              summary.t2Pct === null
+                ? "neutral"
+                : summary.t2Pct >= 90
+                  ? "good"
+                  : summary.t2Pct >= 70
+                    ? "warn"
+                    : "bad"
+            }
+          />
+          <SummaryTile
+            label="Tier 3 weekly avg score"
+            value={
+              summary.t3Avg !== null ? `${summary.t3Avg.toFixed(2)} / 5` : "—"
+            }
+            sub={
+              summary.t3ScoreWeight > 0
+                ? `${summary.t3ScoreWeight} scored day${summary.t3ScoreWeight === 1 ? "" : "s"} · ${summary.t3Plans} plan${summary.t3Plans === 1 ? "" : "s"}`
+                : `${summary.t3Plans} active plan${summary.t3Plans === 1 ? "" : "s"}`
+            }
+            tone={
+              summary.t3Avg === null
+                ? "neutral"
+                : summary.t3Avg >= 4.5
+                  ? "good"
+                  : summary.t3Avg >= 3.5
+                    ? "warn"
+                    : "bad"
+            }
+          />
+          <SummaryTile
+            label="Active plans this week"
+            value={String(summary.totalPlans)}
+            sub={`${summary.t2Plans} Tier 2 · ${summary.t3Plans} Tier 3`}
+            tone="neutral"
+          />
         </div>
       )}
 
@@ -516,5 +631,64 @@ export default function InterventionReportsPage({ onBack }: Props) {
         </div>
       </div>
     </section>
+  );
+}
+
+// Small KPI tile used by the weekly summary row at the top of the
+// report. Color tone is purely informational — it nudges the eye but
+// the numeric value remains the source of truth.
+function SummaryTile({
+  label,
+  value,
+  sub,
+  tone,
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  tone: "good" | "warn" | "bad" | "neutral";
+}) {
+  const palette =
+    tone === "good"
+      ? { bg: "#dcfce7", border: "#86efac", fg: "#14532d" }
+      : tone === "warn"
+        ? { bg: "#fef9c3", border: "#fde047", fg: "#713f12" }
+        : tone === "bad"
+          ? { bg: "#fee2e2", border: "#fca5a5", fg: "#7f1d1d" }
+          : { bg: "#f1f5f9", border: "#cbd5e1", fg: "#0f172a" };
+  return (
+    <div
+      style={{
+        background: palette.bg,
+        border: `1px solid ${palette.border}`,
+        borderRadius: 8,
+        padding: "0.6rem 0.75rem",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "0.72rem",
+          textTransform: "uppercase",
+          letterSpacing: 0.4,
+          color: palette.fg,
+          opacity: 0.8,
+        }}
+      >
+        {label}
+      </div>
+      <div
+        style={{
+          fontSize: "1.4rem",
+          fontWeight: 700,
+          color: palette.fg,
+          marginTop: 2,
+        }}
+      >
+        {value}
+      </div>
+      <div style={{ fontSize: "0.75rem", color: palette.fg, opacity: 0.85 }}>
+        {sub}
+      </div>
+    </div>
   );
 }
