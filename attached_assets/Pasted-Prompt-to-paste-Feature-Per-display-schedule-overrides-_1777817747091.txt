@@ -1,0 +1,59 @@
+Prompt to paste
+Feature: Per-display schedule overrides
+
+Our signage app has displays (each tied to a base playlist) that loop content on a TV browser. Add the ability for an admin to interrupt that base loop on a recurring weekly schedule with a different playlist — without disturbing the base playlist itself.
+
+Concepts
+Display — already exists. Has a base playlist that plays whenever nothing else is active.
+Override — a row that says: on day X, between time A and time B, play playlist Y on this display instead of the base playlist.
+Active scope — what the display should be playing right now. Either the base playlist or whichever override matches the current local time. Overrides always win over base.
+Data model
+Add one table, display_overrides:
+
+column	type	notes
+id	serial PK	
+display_id	FK → displays, ON DELETE CASCADE	indexed
+playlist_id	FK → playlists, ON DELETE CASCADE	the override playlist
+day_of_week	int 0–6	0 = Sunday
+start_time	text HH:MM (24h)	school-local time
+end_time	text HH:MM (24h)	must be strictly greater than start_time (no overnight wraps — split them across two rows if needed)
+created_at, updated_at	timestamptz	
+One display can have many overrides; multiple overrides can match the same instant — when that happens, pick the one with the earliest start_time (deterministic tie-breaker).
+
+REST endpoints (all admin-scoped, scoped to the caller's school/tenant)
+GET /display-urls/{id}/overrides → list, joined to playlist name, sorted by dayOfWeek then startTime
+POST /display-urls/{id}/overrides → create one (body: {playlistId, dayOfWeek, startTime, endTime})
+POST /display-urls/{id}/overrides/bulk → create many in one shot (body: {playlistId, entries:[{dayOfWeek,startTime,endTime}]}, max 200) — used by the "repeat throughout the day" UI
+PATCH /display-urls/{id}/overrides/{overrideId} → edit any field
+DELETE /display-urls/{id}/overrides/{overrideId} → remove
+Validate: HH:MM regex ^([01]\d|2[0-3]):[0-5]\d$, 0 ≤ dayOfWeek ≤ 6, startTime < endTime, the display and playlist both belong to the caller's school. Return 400 on validation, 404 on cross-tenant access.
+
+Also extend the public display fetch (whatever endpoint your TV browser polls for its content) to include the display's overrides + their playlists' items, so the player has everything it needs offline.
+
+Player / cycler logic
+Every tick (or whenever the player polls), recompute the active scope from local time:
+
+Find the override row where dayOfWeek matches today AND startTime ≤ now < endTime. If multiple match, pick lowest startTime. Active scope = that override's playlist items.
+Otherwise, active scope = base playlist items.
+Critical UX rule: when the active scope changes (base → override, override → base, or one override → another), reset currentItemIndex to 0 so viewers always see the new playlist from item 1, not mid-loop. Use a stable scope key like override:<id> / base to detect the change.
+
+Admin UI — "Schedule" page
+Per-display weekly grid (Sun → Sat columns, time on the y-axis).
+Override blocks rendered in an accent color (orange/amber works well) over a muted base-color background so it's obvious where the loop gets interrupted.
+"Add override" dialog with: display picker, playlist picker, day(s) multi-select, start time, end time.
+"Repeat throughout the day" mode — two sub-modes that both POST to /overrides/bulk:
+Interval: start time, end time, every N minutes, duration. UI computes the list of {startTime, endTime} rows. (e.g. "every 30 min from 08:00 to 15:00, 5 min long" → 14 entries.)
+Custom times: free-form list of start times + a single duration. UI computes the rows.
+Click an existing override block → edit/delete dialog (PATCH/DELETE).
+Edge cases to get right
+Overnight windows (e.g. 22:00 → 06:00) are rejected at the API. Admins must split them into two rows. Documented in the validation error.
+Deleting a display or playlist cascades to its overrides (FK).
+The schedule grid uses school-local time, not the device's clock — be explicit about this in any tooltip.
+On scope change, the playlist must hard-reset to item 1 (don't preserve the index across scope boundaries).
+Acceptance test
+Create a display with base playlist A.
+Add an override for today, current-time-minus-1-min → current-time-plus-5-min, pointing at playlist B.
+Open the display URL on a second tab. Confirm playlist B is playing from item 1.
+Wait for the override to end. Confirm the player switches back to playlist A starting at item 1.
+Create three overrides via the bulk endpoint. Confirm all three appear on the grid and persist after reload.
+Drop that into the other app's agent. If anything in your other stack is named differently (e.g. screens instead of displays, loops instead of playlists), just rename the entities in the prompt before pasting.

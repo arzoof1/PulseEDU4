@@ -7177,6 +7177,10 @@ function App() {
     logIntervention: "LogIntervention",
     myInterventions: "LogIntervention",
     requestPullout: "RequestPullout",
+    behaviorSpecialist: "BehaviorSpecialist",
+    mtssCoordinator: "MtssPlans",
+    bellSchedule: "BellSchedule",
+    displays: "Displays",
   };
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
     const featureKey = navKeyFeatureMap[s.key];
