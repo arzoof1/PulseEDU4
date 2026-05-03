@@ -55,6 +55,15 @@ export const staffTable = pgTable("staff", {
   isSchoolPsychologist: boolean("is_school_psychologist")
     .notNull()
     .default(false),
+  // Guidance Counselor: owns student Safety Plans (clear backpack /
+  // no sharp objects / escort plan / etc). Edits the school-wide
+  // safety-plan item library and any per-student plan. Sees the red
+  // SP pill on every roster like everyone else but with click-through
+  // edit access. Not automatically a Core Team member — it's a
+  // narrower role focused on the safety-plan surface.
+  isGuidanceCounselor: boolean("is_guidance_counselor")
+    .notNull()
+    .default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with

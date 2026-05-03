@@ -13,6 +13,8 @@ import {
   seedPbisEntriesIfEmpty,
   seedStudentDemographicsIfEmpty,
   seedStudentRaceIfEmpty,
+  seedSafetyPlanLibraryIfEmpty,
+  seedSafetyPlansIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -86,6 +88,11 @@ async function runSeed(): Promise<void> {
   // race set, AND skipped for schools without the demo marker. Real SIS
   // imports remain untouched.
   await seedStudentRaceIfEmpty();
+  // Safety Plans: school-wide library catalog first, then per-student
+  // plans (~10% of each school's roster, plus at least one per teacher
+  // so the red SP pill appears on every teacher's roster on day-1).
+  await seedSafetyPlanLibraryIfEmpty();
+  await seedSafetyPlansIfEmpty();
 }
 
 // In production we MUST open the port within the platform's health-check

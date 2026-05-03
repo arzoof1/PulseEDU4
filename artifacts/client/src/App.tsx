@@ -14,6 +14,7 @@ import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
+import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
@@ -3484,6 +3485,8 @@ function App() {
     isMtssCoordinator: boolean;
     isCounselor?: boolean;
     isSocialWorker?: boolean;
+    isSchoolPsychologist?: boolean;
+    isGuidanceCounselor?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
@@ -3607,6 +3610,12 @@ function App() {
   // "studentProfile" with no id set we bounce back to the watchlist
   // (handled in the guard effect below).
   const [selectedInsightsStudentId, setSelectedInsightsStudentId] = useState<
+    string | null
+  >(null);
+  // Active student in the Safety Plan editor modal. Null = closed. Set
+  // by clicking the red "SP" pill on the Teacher Roster (or by future
+  // entry points like StudentProfile).
+  const [safetyPlanStudentId, setSafetyPlanStudentId] = useState<
     string | null
   >(null);
   // Where to return when the user clicks Back on the StudentProfile.
@@ -15117,6 +15126,18 @@ function App() {
             setSelectedInsightsStudentId(studentId);
             setStudentProfileReturnTo("teacherRoster");
             setActiveSection("studentProfile");
+          }}
+          onOpenSafetyPlan={(studentId) => setSafetyPlanStudentId(studentId)}
+        />
+      )}
+
+      {safetyPlanStudentId && (
+        <SafetyPlanEditor
+          studentId={safetyPlanStudentId}
+          onClose={() => setSafetyPlanStudentId(null)}
+          onSaved={() => {
+            // No-op; the roster auto-refetches on next mount. The pill
+            // popover will show fresh data when the user re-hovers.
           }}
         />
       )}

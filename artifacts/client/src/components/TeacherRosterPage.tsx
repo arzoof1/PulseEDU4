@@ -45,6 +45,20 @@ interface SubjectBlock {
   noChart: boolean;
 }
 
+interface SafetyPlanItem {
+  label: string;
+  active: boolean;
+  note?: string;
+}
+
+interface SafetyPlanSummary {
+  itemCount: number;
+  items: SafetyPlanItem[];
+  notes: string;
+  updatedAt: string | null;
+  updatedByName: string | null;
+}
+
 interface RosterRow {
   studentId: string;
   firstName: string;
@@ -52,6 +66,7 @@ interface RosterRow {
   grade: number | string;
   ela: SubjectBlock;
   math: SubjectBlock;
+  safetyPlan: SafetyPlanSummary | null;
   // Invisible Student Finder signals (server-computed). isInvisible =
   // 0 non-voided PBIS recognitions in the school's invisibleDays
   // window. mtssTier = highest active MTSS plan tier, or null.
@@ -93,6 +108,155 @@ interface Props {
   // the visibility check on every row. Caller is responsible for
   // navigation + back-routing.
   onOpenSpider?: (studentId: string) => void;
+  // When provided, clicking the red "SP" pill calls this with the
+  // studentId so the host can open the Safety Plan editor. When not
+  // provided, the pill is still visible (everyone needs to know about
+  // active safety plans) but is non-clickable — hover still shows the
+  // contents popover.
+  onOpenSafetyPlan?: (studentId: string) => void;
+}
+
+// Red "SP" pill that appears immediately after the student's name when
+// they have an active safety plan. Hover (or focus) shows a popover
+// listing the active items + notes — visible to every staff member who
+// can see the roster.
+function SafetyPlanPill({
+  plan,
+  studentName,
+  onOpen,
+}: {
+  plan: SafetyPlanSummary;
+  studentName: string;
+  onOpen?: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const updated = plan.updatedAt
+    ? new Date(plan.updatedAt).toLocaleDateString(undefined, {
+        month: "short",
+        day: "numeric",
+      })
+    : null;
+  const tooltip = `Active safety plan${updated ? ` — last updated ${updated}` : ""}${onOpen ? " (click to edit)" : ""}`;
+  const Tag = onOpen ? "button" : "span";
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <Tag
+        type={onOpen ? "button" : undefined}
+        onClick={onOpen}
+        title={tooltip}
+        aria-label={tooltip}
+        style={{
+          display: "inline-block",
+          padding: "2px 8px",
+          borderRadius: 999,
+          background: "#dc2626",
+          color: "#fff",
+          fontSize: 11,
+          fontWeight: 800,
+          letterSpacing: 0.4,
+          border: "none",
+          cursor: onOpen ? "pointer" : "default",
+          fontFamily: "inherit",
+          lineHeight: 1.4,
+        }}
+      >
+        SP
+      </Tag>
+      {open && (
+        <div
+          role="tooltip"
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: 4,
+            zIndex: 10,
+            background: "white",
+            border: "1px solid #fecaca",
+            borderTop: "3px solid #dc2626",
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 240,
+            maxWidth: 360,
+            color: "#111827",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: "#991b1b",
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 6,
+            }}
+          >
+            Safety plan — {studentName}
+          </div>
+          {plan.items.length === 0 ? (
+            <div style={{ color: "#6b7280", fontSize: 12 }}>
+              (No active items)
+            </div>
+          ) : (
+            <ul
+              style={{
+                margin: 0,
+                paddingLeft: 16,
+                fontSize: 12,
+                lineHeight: 1.5,
+              }}
+            >
+              {plan.items.map((it, i) => (
+                <li key={`${it.label}-${i}`}>
+                  {it.label}
+                  {it.note ? (
+                    <span style={{ color: "#6b7280" }}> — {it.note}</span>
+                  ) : null}
+                </li>
+              ))}
+            </ul>
+          )}
+          {plan.notes && (
+            <div
+              style={{
+                marginTop: 6,
+                paddingTop: 6,
+                borderTop: "1px solid #f3f4f6",
+                fontSize: 11,
+                color: "#374151",
+                whiteSpace: "pre-wrap",
+              }}
+            >
+              {plan.notes}
+            </div>
+          )}
+          {(plan.updatedAt || plan.updatedByName) && (
+            <div
+              style={{
+                marginTop: 6,
+                fontSize: 10,
+                color: "#9ca3af",
+              }}
+            >
+              Updated{" "}
+              {plan.updatedAt
+                ? new Date(plan.updatedAt).toLocaleDateString()
+                : ""}
+              {plan.updatedByName ? ` • ${plan.updatedByName}` : ""}
+            </div>
+          )}
+        </div>
+      )}
+    </span>
+  );
 }
 
 // Level → background color. Per product preference:
@@ -687,6 +851,7 @@ export default function TeacherRosterPage({
   defaultTeacherId,
   onBack,
   onOpenSpider,
+  onOpenSafetyPlan,
 }: Props) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [teacherId, setTeacherId] = useState<number | null>(
@@ -1253,6 +1418,17 @@ export default function TeacherRosterPage({
                       <span>
                         {row.lastName}, {row.firstName}
                       </span>
+                      {row.safetyPlan && (
+                        <SafetyPlanPill
+                          plan={row.safetyPlan}
+                          studentName={`${row.firstName} ${row.lastName}`}
+                          onOpen={
+                            onOpenSafetyPlan
+                              ? () => onOpenSafetyPlan(row.studentId)
+                              : undefined
+                          }
+                        />
+                      )}
                       {onOpenSpider && (
                         <button
                           type="button"

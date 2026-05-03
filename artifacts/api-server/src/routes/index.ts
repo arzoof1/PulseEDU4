@@ -64,6 +64,7 @@ import displaysRouter from "./displays";
 import uiPrefsRouter from "./uiPrefs";
 import schoolPlansRouter from "./schoolPlans";
 import tierPresetsRouter from "./tierPresets";
+import safetyPlansRouter from "./safetyPlans";
 
 const router: IRouter = Router();
 
@@ -132,5 +133,6 @@ router.use(parentSnapshotPdfRouter);
 router.use(displaysRouter);
 router.use(schoolPlansRouter);
 router.use(tierPresetsRouter);
+router.use(safetyPlansRouter);
 
 export default router;

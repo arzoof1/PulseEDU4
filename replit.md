@@ -26,6 +26,40 @@ pnpm workspace monorepo using TypeScript. Each package manages its own dependenc
 
 See the `pnpm-workspace` skill for workspace structure, TypeScript setup, and package details.
 
+## Safety Plans (May 2026)
+
+Per-student behavioral / physical safety checklist owned by the school's
+Guidance Counselor + Core Team.
+
+- **Schema** (`lib/db/src/schema/safetyPlans.ts`):
+  - `safety_plan_library` — school-scoped catalog of preset items
+    (Clear backpack, No sharp objects, Escort to bathroom, …).
+    Built-in items can be deactivated but not renamed.
+  - `safety_plans` — one row per (school, student); checklist stored
+    inline as `items JSONB` (array of `{label, active, note?}`). Status
+    `active` drives the red SP pill; `inactive` is history.
+  - `safety_plan_audit` — every create / update / activate / deactivate
+    logged with actor + JSON snapshot.
+- **New role**: `staff.is_guidance_counselor`. Combined gate
+  `canEditSafetyPlan(staff)` in `lib/coreTeam.ts` = guidance counselor
+  OR core team. View access is open to any signed-in staff (every
+  teacher needs to know what's on a student's safety plan).
+- **API** (`/api/safety-plans/*`): library CRUD, per-student GET/PUT/
+  deactivate, audit, and a lightweight `/active-summary` bulk endpoint.
+- **Roster integration**: `/api/teacher-roster` now attaches
+  `safetyPlan: {itemCount, items, notes, updatedAt, updatedByName} | null`
+  per row. The TeacherRosterPage renders a red "SP" pill immediately
+  after each student's name with a hover popover listing the active
+  items + notes. Click opens `SafetyPlanEditor` modal (read-only when
+  the viewer lacks edit rights).
+- **Hidden from Parent Portal** — no parent-facing surfaces touch
+  these tables. No automatic family messages on plan creation.
+- **Demo seed** (`seedSafetyPlanLibraryIfEmpty` +
+  `seedSafetyPlansIfEmpty`): seeds the 7 built-in library items per
+  school, then creates active plans for ~10% of each demo school's
+  students with a guarantee of ≥1 plan student per teacher's roster
+  so the SP pill shows up on every teacher's roster on day-1.
+
 ## Pulse signage screens (April 2026)
 
 Three live signage/dashboard surfaces for the School Operations app, served

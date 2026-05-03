@@ -36,6 +36,8 @@ import {
   housesTable,
   assessmentsTable,
   importJobsTable,
+  safetyPlanLibraryTable,
+  safetyPlansTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -2989,4 +2991,150 @@ async function chunkedInsertReturning<T>(
     out.push(...(inserted as T[]));
   }
   return out;
+}
+
+// -----------------------------------------------------------------------------
+// Safety Plans demo seed.
+//
+// Two-step idempotent seed:
+//   1. Library: every school gets the 7 default built-in items
+//      (Clear backpack / No sharp objects / Escort to bathroom / etc).
+//      Skipped per-school once any row exists.
+//   2. Per-student plans: ~10% of each school's students get an active
+//      plan, AND we guarantee each teacher in the school has at least
+//      one student-with-plan on their roster (so the SP pill shows up
+//      on every teacher's roster on day-1 of the demo).
+//      Skipped per-school once any plan exists.
+// -----------------------------------------------------------------------------
+
+const DEFAULT_SAFETY_PLAN_LIBRARY: { label: string; sortOrder: number }[] = [
+  { label: "Clear backpack required", sortOrder: 10 },
+  { label: "No sharp objects (including pencils with metal points)", sortOrder: 20 },
+  { label: "Escort to bathroom", sortOrder: 30 },
+  { label: "Escort between classes", sortOrder: 40 },
+  { label: "No outside food or drink", sortOrder: 50 },
+  { label: "Daily check-in with counselor", sortOrder: 60 },
+  { label: "Locker access restricted", sortOrder: 70 },
+];
+
+export async function seedSafetyPlanLibraryIfEmpty(): Promise<void> {
+  const schools = await db.select({ id: schoolsTable.id }).from(schoolsTable);
+  for (const s of schools) {
+    const [{ n }] = (await db.execute(
+      sql`SELECT COUNT(*)::int AS n FROM safety_plan_library WHERE school_id = ${s.id}`,
+    )).rows as { n: number }[];
+    if (n > 0) continue;
+    await db.insert(safetyPlanLibraryTable).values(
+      DEFAULT_SAFETY_PLAN_LIBRARY.map((it) => ({
+        schoolId: s.id,
+        label: it.label,
+        isBuiltIn: true,
+        active: true,
+        sortOrder: it.sortOrder,
+      })),
+    );
+  }
+  logger.info({ schools: schools.length }, "[seed] safety plan library ensured");
+}
+
+export async function seedSafetyPlansIfEmpty(): Promise<void> {
+  const schools = await db.select({ id: schoolsTable.id }).from(schoolsTable);
+  for (const s of schools) {
+    const [{ n }] = (await db.execute(
+      sql`SELECT COUNT(*)::int AS n FROM safety_plans WHERE school_id = ${s.id}`,
+    )).rows as { n: number }[];
+    if (n > 0) continue;
+
+    const rng = makeRng(0xa5a5a5 + s.id * 1009);
+
+    // Library labels available to draw from. Falls back to defaults if
+    // somehow not seeded (defensive — library seed runs first).
+    const libRows = await db
+      .select()
+      .from(safetyPlanLibraryTable)
+      .where(eq(safetyPlanLibraryTable.schoolId, s.id));
+    const libLabels = libRows.length
+      ? libRows.map((r) => r.label)
+      : DEFAULT_SAFETY_PLAN_LIBRARY.map((d) => d.label);
+
+    // All teacher staff for this school (anyone with a section).
+    const teacherStaff = await db
+      .selectDistinct({ teacherStaffId: classSectionsTable.teacherStaffId })
+      .from(classSectionsTable)
+      .where(eq(classSectionsTable.schoolId, s.id));
+
+    // Pull the full roster (section -> studentId pairs) so we can find
+    // one student per teacher.
+    const rosterRows = await db
+      .select({
+        studentId: sectionRosterTable.studentId,
+        teacherStaffId: classSectionsTable.teacherStaffId,
+      })
+      .from(sectionRosterTable)
+      .innerJoin(
+        classSectionsTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .where(eq(sectionRosterTable.schoolId, s.id));
+
+    const studentsByTeacher = new Map<number, string[]>();
+    for (const r of rosterRows) {
+      const list = studentsByTeacher.get(r.teacherStaffId) ?? [];
+      list.push(r.studentId);
+      studentsByTeacher.set(r.teacherStaffId, list);
+    }
+
+    const allStudents = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, s.id));
+
+    const targetCount = Math.max(1, Math.round(allStudents.length * 0.10));
+    const chosen = new Set<string>();
+
+    // Step 1: guarantee one per teacher.
+    for (const t of teacherStaff) {
+      const roster = studentsByTeacher.get(t.teacherStaffId) ?? [];
+      if (!roster.length) continue;
+      // Find a student on this teacher's roster who isn't already chosen.
+      const fresh = roster.find((sid) => !chosen.has(sid));
+      chosen.add(fresh ?? roster[Math.floor(rng() * roster.length)]);
+    }
+    // Step 2: top up to ~10% with random picks.
+    let safety = 0;
+    while (chosen.size < targetCount && safety < allStudents.length * 3) {
+      const pickIdx = Math.floor(rng() * allStudents.length);
+      chosen.add(allStudents[pickIdx].studentId);
+      safety += 1;
+    }
+
+    if (chosen.size === 0) continue;
+
+    type PlanInsert = typeof safetyPlansTable.$inferInsert;
+    const planRows: PlanInsert[] = [];
+    for (const studentId of chosen) {
+      // 2-4 active items per plan. Always include "Clear backpack"
+      // when present so the demo plans look representative.
+      const itemCount = 2 + Math.floor(rng() * 3);
+      const shuffled = [...libLabels].sort(() => rng() - 0.5);
+      const labels = shuffled.slice(0, Math.min(itemCount, shuffled.length));
+      planRows.push({
+        schoolId: s.id,
+        studentId,
+        status: "active",
+        items: labels.map((label) => ({ label, active: true })),
+        notes:
+          rng() < 0.4
+            ? "Plan in place; revisit at next IEP / 504 meeting."
+            : "",
+        createdByName: "Demo Seed",
+        updatedByName: "Demo Seed",
+      });
+    }
+    await db.insert(safetyPlansTable).values(planRows);
+    logger.info(
+      { schoolId: s.id, plans: planRows.length, teachers: teacherStaff.length },
+      "[seed] safety plans seeded",
+    );
+  }
 }

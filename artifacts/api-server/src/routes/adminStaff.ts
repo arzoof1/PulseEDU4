@@ -66,6 +66,8 @@ const ROLE_FLAGS = [
   "isMtssCoordinator",
   "isCounselor",
   "isSocialWorker",
+  "isSchoolPsychologist",
+  "isGuidanceCounselor",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -125,6 +127,8 @@ const STAFF_SELECT = {
   isMtssCoordinator: staffTable.isMtssCoordinator,
   isCounselor: staffTable.isCounselor,
   isSocialWorker: staffTable.isSocialWorker,
+  isSchoolPsychologist: staffTable.isSchoolPsychologist,
+  isGuidanceCounselor: staffTable.isGuidanceCounselor,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,
   capStudentActivity: staffTable.capStudentActivity,

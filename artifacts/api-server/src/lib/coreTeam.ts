@@ -28,3 +28,18 @@ export function isCoreTeam(staff: {
       staff.isSchoolPsychologist,
   );
 }
+
+// Safety Plan edit gate. Per spec: Admin, Guidance Counselor, and any
+// Core Team member can create / edit / deactivate a student's safety
+// plan and manage the school-wide item library.
+export function canEditSafetyPlan(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+}): boolean {
+  return Boolean(staff.isGuidanceCounselor) || isCoreTeam(staff);
+}

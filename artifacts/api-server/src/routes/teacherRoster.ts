@@ -31,6 +31,7 @@ import {
   schoolSettingsTable,
   studentAccommodationsTable,
   schoolAccommodationsTable,
+  safetyPlansTable,
 } from "@workspace/db";
 import { and, eq, gte, inArray, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -287,7 +288,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
   // Pull demographics + FAST scores + recent PBIS entries + active MTSS
   // plans in parallel. The PBIS query only returns studentId since
   // that's all we need to mark "has been recognized recently".
-  const [students, scores, recentPbis, activeMtss, accommodations] = await Promise.all([
+  const [students, scores, recentPbis, activeMtss, accommodations, safetyPlans] = await Promise.all([
     db
       .select()
       .from(studentsTable)
@@ -357,7 +358,29 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(studentAccommodationsTable.studentId, studentIds),
         ),
       ),
+    // Active safety plans for these students (status='active'). Used to
+    // render the red SP pill on each row + the hover popover with the
+    // checklist items.
+    db
+      .select({
+        studentId: safetyPlansTable.studentId,
+        items: safetyPlansTable.items,
+        notes: safetyPlansTable.notes,
+        updatedAt: safetyPlansTable.updatedAt,
+        updatedByName: safetyPlansTable.updatedByName,
+      })
+      .from(safetyPlansTable)
+      .where(
+        and(
+          eq(safetyPlansTable.schoolId, schoolId),
+          eq(safetyPlansTable.status, "active"),
+          inArray(safetyPlansTable.studentId, studentIds),
+        ),
+      ),
   ]);
+
+  const safetyPlanByStudent = new Map<string, (typeof safetyPlans)[number]>();
+  for (const p of safetyPlans) safetyPlanByStudent.set(p.studentId, p);
 
   // Group accommodations by studentId so the row builder can attach
   // them in O(1).
@@ -429,6 +452,22 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       // cell on the Teacher Roster page can pop up a category-grouped
       // list on hover. Empty array when the student has none.
       accommodations: accommodationsByStudent.get(stu.studentId) ?? [],
+      // Active safety plan summary (or null). The roster pill / hover
+      // popover use this directly — no extra round-trip needed.
+      safetyPlan: (() => {
+        const sp = safetyPlanByStudent.get(stu.studentId);
+        if (!sp) return null;
+        const activeItems = (sp.items ?? []).filter(
+          (i: { active?: boolean }) => i && i.active,
+        );
+        return {
+          itemCount: activeItems.length,
+          items: activeItems,
+          notes: sp.notes,
+          updatedAt: sp.updatedAt,
+          updatedByName: sp.updatedByName,
+        };
+      })(),
     };
   });
 
