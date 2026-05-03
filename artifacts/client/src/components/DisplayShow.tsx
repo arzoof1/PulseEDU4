@@ -431,7 +431,13 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
     );
   }
 
-  const slide = slides[slideIdx];
+  // Guard against the brief render where slides has just been
+  // recomputed (e.g. an override window opened or closed) and
+  // slideIdx still points past the end. The reset effect runs after
+  // render, so without this we'd crash on `slide.kind`.
+  const safeIdx = slideIdx < slides.length ? slideIdx : 0;
+  const slide = slides[safeIdx];
+  if (!slide) return null;
   const defaultDuration = playlist.playlist.defaultDurationSeconds;
 
   return (

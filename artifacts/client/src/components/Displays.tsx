@@ -1028,38 +1028,78 @@ function OverridesEditor({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [displayId]);
 
-  async function deleteRow(row: OverrideRow) {
-    // Grouped rows (created via bulk add) get a 3-way prompt:
-    // "all days in this period" | "this day only" | cancel.
-    let url = `/api/displays/playlists/${displayId}/overrides/${row.id}`;
+  // Returns rows that look like they belong to the same passing
+  // period as `row`. Either an explicit group_id match (rows added
+  // via bulk-add since the group_id column landed) OR an implicit
+  // match (older bulk-added rows whose playlistId + startTime +
+  // endTime line up across multiple days). Always includes `row`.
+  function siblingRows(row: OverrideRow): OverrideRow[] {
     if (row.groupId) {
-      const label = row.groupName ?? `${row.startTime}–${row.endTime}`;
-      const groupCount = rows.filter((r) => r.groupId === row.groupId).length;
-      // window.confirm only gives us yes/no, so two prompts: first ask
-      // about scope, then confirm the destructive action.
+      return rows.filter((r) => r.groupId === row.groupId);
+    }
+    return rows.filter(
+      (r) =>
+        r.playlistId === row.playlistId &&
+        r.startTime === row.startTime &&
+        r.endTime === row.endTime,
+    );
+  }
+
+  async function deleteRow(row: OverrideRow) {
+    const siblings = siblingRows(row);
+    const oneDayLabel = `${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}`;
+    if (siblings.length > 1) {
+      // Multi-day passing period — explicit OR implicit. Ask scope first.
+      const periodLabel =
+        row.groupName ?? `${row.startTime}–${row.endTime}`;
       const wholeGroup = window.confirm(
-        `Delete the ENTIRE "${label}" passing period (${groupCount} days)?\n\n` +
-          `OK = delete all ${groupCount} days.\n` +
-          `Cancel = delete only ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}.`,
+        `Delete the ENTIRE "${periodLabel}" passing period (${siblings.length} days)?\n\n` +
+          `OK = delete all ${siblings.length} days.\n` +
+          `Cancel = delete only ${oneDayLabel}.`,
       );
-      if (wholeGroup) {
-        url = `/api/displays/playlists/${displayId}/overrides/group/${row.groupId}`;
-      } else if (
-        !window.confirm(
-          `Delete override on ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}?`,
-        )
-      ) {
-        return;
+      try {
+        if (wholeGroup) {
+          if (row.groupId) {
+            const r = await authFetch(
+              `/api/displays/playlists/${displayId}/overrides/group/${row.groupId}`,
+              { method: "DELETE" },
+            );
+            if (!r.ok) throw new Error("Failed");
+          } else {
+            // Implicit group — delete each row individually so we never
+            // accidentally take down an unrelated row that happens to
+            // share a group_id elsewhere.
+            await Promise.all(
+              siblings.map((s) =>
+                authFetch(
+                  `/api/displays/playlists/${displayId}/overrides/${s.id}`,
+                  { method: "DELETE" },
+                ).then((r) => {
+                  if (!r.ok) throw new Error("Failed");
+                }),
+              ),
+            );
+          }
+        } else {
+          if (!window.confirm(`Delete override on ${oneDayLabel}?`)) return;
+          const r = await authFetch(
+            `/api/displays/playlists/${displayId}/overrides/${row.id}`,
+            { method: "DELETE" },
+          );
+          if (!r.ok) throw new Error("Failed");
+        }
+        await refresh();
+      } catch (e) {
+        window.alert(e instanceof Error ? e.message : "Failed");
       }
-    } else if (
-      !window.confirm(
-        `Delete override on ${WEEKDAY_LABELS[row.dayOfWeek].label} ${row.startTime}–${row.endTime}?`,
-      )
-    ) {
       return;
     }
+    if (!window.confirm(`Delete override on ${oneDayLabel}?`)) return;
     try {
-      const r = await authFetch(url, { method: "DELETE" });
+      const r = await authFetch(
+        `/api/displays/playlists/${displayId}/overrides/${row.id}`,
+        { method: "DELETE" },
+      );
       if (!r.ok) throw new Error("Failed");
       await refresh();
     } catch (e) {
@@ -1240,6 +1280,10 @@ function OverridesEditor({
           displayId={displayId}
           playlists={playlists}
           editing={editing}
+          // Pass every sibling row (explicit OR implicit group) so the
+          // dialog can offer the same "this day vs all matching days"
+          // toggle for legacy bulk-added rows that have no group_id.
+          editingSiblingIds={siblingRows(editing).map((r) => r.id)}
           onPlaylistsChanged={refresh}
           onClose={() => setEditing(null)}
           onSaved={async () => {
@@ -1258,6 +1302,7 @@ function AddOverrideDialog({
   displayId,
   playlists,
   editing,
+  editingSiblingIds,
   onPlaylistsChanged,
   onClose,
   onSaved,
@@ -1268,6 +1313,11 @@ function AddOverrideDialog({
   playlists: PlaylistRow[];
   // Pre-populated row when mode === "edit". Ignored otherwise.
   editing?: OverrideRow;
+  // Every row id (including `editing.id`) that the parent considers
+  // part of the same passing period — explicit `groupId` match OR
+  // implicit (same playlist + start + end on different days).
+  // Used to enable the scope toggle for legacy bulk-added rows.
+  editingSiblingIds?: number[];
   // Called after a quick-create so the parent re-fetches the dropdown.
   onPlaylistsChanged?: () => void | Promise<void>;
   onClose: () => void;
@@ -1288,12 +1338,13 @@ function AddOverrideDialog({
   const [groupName, setGroupName] = useState<string>(editing?.groupName ?? "");
   // For edit mode on a grouped row: choose whether the change applies
   // to just this one day or to every day sharing the groupId.
+  const siblingCount = editingSiblingIds?.length ?? 0;
+  const isGroupedEdit = mode === "edit" && siblingCount > 1;
   const [editScope, setEditScope] = useState<"single" | "group">(
-    editing?.groupId ? "group" : "single",
+    isGroupedEdit ? "group" : "single",
   );
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-  const isGroupedEdit = mode === "edit" && Boolean(editing?.groupId);
 
   function toggleDay(idx: number) {
     const n = new Set(days);
@@ -1378,6 +1429,32 @@ function AddOverrideDialog({
           const j = (await r.json().catch(() => null)) as { error?: string } | null;
           throw new Error(j?.error ?? "Failed");
         }
+      } else if (
+        mode === "edit" &&
+        editing &&
+        editScope === "group" &&
+        editingSiblingIds &&
+        editingSiblingIds.length > 1
+      ) {
+        // Legacy / implicit group — fan out per-row PATCHes so each row
+        // keeps its own day. We deliberately do NOT send dayOfWeek.
+        await Promise.all(
+          editingSiblingIds.map((id) =>
+            authFetch(
+              `/api/displays/playlists/${displayId}/overrides/${id}`,
+              {
+                method: "PATCH",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ playlistId, startTime, endTime }),
+              },
+            ).then(async (r) => {
+              if (!r.ok) {
+                const j = (await r.json().catch(() => null)) as { error?: string } | null;
+                throw new Error(j?.error ?? "Failed");
+              }
+            }),
+          ),
+        );
       } else if (mode === "edit" && editing) {
         const day = Array.from(days)[0];
         const r = await authFetch(
@@ -1580,8 +1657,11 @@ function AddOverrideDialog({
               />
             </label>
           </div>
+          {/* Group name input only applies when the row already carries
+              a server-side groupId (or for fresh bulk inserts). Legacy
+              implicit groups can't store a name without a groupId. */}
           {(mode === "bulk" ||
-            (mode === "edit" && editScope === "group")) && (
+            (mode === "edit" && editScope === "group" && editing?.groupId)) && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, marginBottom: 4 }}>
                 Passing period name (optional)
