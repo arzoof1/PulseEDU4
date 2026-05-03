@@ -794,6 +794,30 @@ function VerifyPulloutsSection({
   const [parentMessageDraft, setParentMessageDraft] = useState("");
   const [templates, setTemplates] = useState<PulloutNoteTemplate[]>([]);
 
+  // "Called-in" pullout form state — used when a teacher calls or
+  // walks down for an admin instead of submitting via the app. Same
+  // POST /api/pullouts endpoint, but the admin types in the student
+  // and the referring teacher's name themselves. In the normal flow
+  // the student name is pre-populated from the teacher's submission;
+  // this form is the manual escape hatch for the call-in case.
+  const [calledInOpen, setCalledInOpen] = useState(false);
+  const [calledInStudentSearch, setCalledInStudentSearch] = useState("");
+  const [calledInStudentId, setCalledInStudentId] = useState("");
+  const [calledInTeacherName, setCalledInTeacherName] = useState("");
+  const [calledInPeriod, setCalledInPeriod] = useState("");
+  const [calledInReason, setCalledInReason] = useState("");
+  const [calledInBusy, setCalledInBusy] = useState(false);
+
+  const sortedStudentsForCalledIn = useMemo(
+    () =>
+      [...students].sort((a, b) =>
+        `${a.lastName} ${a.firstName}`.localeCompare(
+          `${b.lastName} ${b.firstName}`,
+        ),
+      ),
+    [students],
+  );
+
   const studentName = (id: string) => {
     const s = students.find((x) => x.studentId === id);
     return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
@@ -872,6 +896,76 @@ function VerifyPulloutsSection({
       ...prev,
       [id]: { ...prev[id], ...patch },
     }));
+  };
+
+  // Submit a "called-in" pullout on behalf of a teacher who phoned
+  // or walked down rather than using the app. Reuses POST /pullouts;
+  // the server already accepts referringTeacherName for the
+  // verifier-creates-on-behalf case (admin / dean / MTSS / SuperUser
+  // are the only callers of this section, which matches the server's
+  // gate). We pass acknowledgeNoIntervention=true so the recent-
+  // intervention check doesn't block — the verifying admin is making
+  // the judgment call to create the pullout.
+  const submitCalledIn = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg(null);
+    if (!calledInStudentId) {
+      setMsg({
+        ok: false,
+        text: "Pick a student from the list before adding the pullout.",
+      });
+      return;
+    }
+    if (!calledInReason.trim()) {
+      setMsg({ ok: false, text: "Add a reason for the pullout." });
+      return;
+    }
+    if (!calledInTeacherName.trim()) {
+      setMsg({
+        ok: false,
+        text: "Enter the name of the teacher who called this in.",
+      });
+      return;
+    }
+    setCalledInBusy(true);
+    try {
+      const r = await authFetch("/api/pullouts", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: calledInStudentId,
+          reason: calledInReason.trim(),
+          period:
+            calledInPeriod === "" ? null : Number(calledInPeriod),
+          referringTeacherName: calledInTeacherName.trim(),
+          acknowledgeNoIntervention: true,
+        }),
+      });
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({
+          ok: false,
+          text: data?.error || "Could not add called-in pullout.",
+        });
+      } else {
+        setMsg({
+          ok: true,
+          text: `Called-in pullout #${data.id} added for ${studentName(calledInStudentId)} — ready to verify below.`,
+        });
+        setCalledInStudentSearch("");
+        setCalledInStudentId("");
+        setCalledInTeacherName("");
+        setCalledInPeriod("");
+        setCalledInReason("");
+        setCalledInOpen(false);
+        await refresh();
+        onChange();
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setCalledInBusy(false);
+    }
   };
 
   // Build the substitution context the modal uses to fill in
@@ -1016,6 +1110,190 @@ function VerifyPulloutsSection({
         referring teacher name before verifying — those edits become the
         record sent to the ISS room and to parents.
       </p>
+
+      {/* Called-in pullout form. Most pullouts arrive here pre-populated
+          from the teacher's app submission, but sometimes a teacher just
+          calls or walks down for an admin. This panel lets the verifier
+          (admin / dean / MTSS / SuperUser) capture that case manually:
+          they pick the student, type the teacher's name, and submit. The
+          new pullout then appears in the pending list below. */}
+      <div
+        style={{
+          marginBottom: "1rem",
+          border: "1px dashed #cbd5e1",
+          borderRadius: 8,
+          background: "#f8fafc",
+        }}
+      >
+        <button
+          type="button"
+          onClick={() => setCalledInOpen((v) => !v)}
+          style={{
+            width: "100%",
+            background: "transparent",
+            border: "none",
+            padding: "0.6rem 0.9rem",
+            textAlign: "left",
+            cursor: "pointer",
+            fontWeight: 600,
+            color: "#1f2937",
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+          }}
+          aria-expanded={calledInOpen}
+        >
+          <span>
+            ☎ Teacher called instead of using the app? Add a pullout
+            here.
+          </span>
+          <span style={{ color: "#64748b", fontSize: 18 }}>
+            {calledInOpen ? "−" : "+"}
+          </span>
+        </button>
+        {calledInOpen && (
+          <form
+            onSubmit={submitCalledIn}
+            style={{
+              padding: "0 0.9rem 0.9rem",
+              display: "grid",
+              gap: "0.6rem",
+            }}
+          >
+            <label style={{ display: "grid", gap: 4 }}>
+              <span style={{ fontSize: 12, color: "#475569" }}>
+                Student
+              </span>
+              <input
+                type="text"
+                list="called-in-pullout-students"
+                placeholder="Type name or ID…"
+                value={calledInStudentSearch}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setCalledInStudentSearch(v);
+                  const match = sortedStudentsForCalledIn.find(
+                    (s) =>
+                      `${s.firstName} ${s.lastName} (${s.studentId})` ===
+                        v || s.studentId === v.trim(),
+                  );
+                  setCalledInStudentId(match ? match.studentId : "");
+                }}
+                style={{
+                  padding: "0.4rem 0.6rem",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                }}
+              />
+              <datalist id="called-in-pullout-students">
+                {sortedStudentsForCalledIn.map((s) => (
+                  <option
+                    key={s.id}
+                    value={`${s.firstName} ${s.lastName} (${s.studentId})`}
+                  />
+                ))}
+              </datalist>
+            </label>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "minmax(0, 2fr) minmax(0, 1fr)",
+                gap: "0.5rem",
+              }}
+            >
+              <label style={{ display: "grid", gap: 4 }}>
+                <span style={{ fontSize: 12, color: "#475569" }}>
+                  Referring teacher (who called this in)
+                </span>
+                <input
+                  type="text"
+                  value={calledInTeacherName}
+                  onChange={(e) =>
+                    setCalledInTeacherName(e.target.value)
+                  }
+                  placeholder="e.g. Ms. Rivera"
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                  }}
+                />
+              </label>
+              <label style={{ display: "grid", gap: 4 }}>
+                <span style={{ fontSize: 12, color: "#475569" }}>
+                  Period
+                </span>
+                <select
+                  value={calledInPeriod}
+                  onChange={(e) => setCalledInPeriod(e.target.value)}
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    background: "white",
+                  }}
+                >
+                  <option value="">—</option>
+                  {[1, 2, 3, 4, 5, 6, 7, 8].map((n) => (
+                    <option key={n} value={n}>
+                      {n}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <label style={{ display: "grid", gap: 4 }}>
+              <span style={{ fontSize: 12, color: "#475569" }}>
+                Reason
+              </span>
+              <textarea
+                rows={2}
+                value={calledInReason}
+                onChange={(e) => setCalledInReason(e.target.value)}
+                placeholder="What's happening that requires the student to leave class?"
+                style={{
+                  padding: "0.4rem 0.6rem",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 6,
+                  font: "inherit",
+                }}
+              />
+            </label>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setCalledInOpen(false)}
+                disabled={calledInBusy}
+                style={{
+                  background: "white",
+                  color: "#374151",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  padding: "0.4rem 0.9rem",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={calledInBusy}
+                className="btn-primary"
+              >
+                {calledInBusy ? "Adding…" : "Add pullout"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+
       {msg && (
         <div
           style={{

@@ -652,6 +652,16 @@ into two steps:
    SMS sender can replay it. SMS itself is a TODO marked inline in
    `routes/pullouts.ts` near `/returned` — Twilio is intentionally not
    wired up yet.
+5. The Verify Pullouts page also has a collapsible **"Teacher called
+   instead of using the app?"** panel. In the normal flow the student
+   name is pre-populated from the teacher's submission, but when a
+   teacher phones or walks down for an admin/dean/MTSS, that verifier
+   can capture the pullout themselves: pick the student, type the
+   referring teacher's name, set period + reason, and submit. The form
+   reuses `POST /api/pullouts` (which already supports the
+   verifier-creates-on-behalf path via `referringTeacherName`) and
+   passes `acknowledgeNoIntervention: true` so the recent-intervention
+   gate doesn't block the manual capture.
 
 Files: `lib/db/src/schema/pullouts.ts` (new `parentMessage`,
 `returnMessage` cols + `pulloutNoteTemplatesTable`), idempotent ALTERs
