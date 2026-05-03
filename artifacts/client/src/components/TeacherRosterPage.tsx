@@ -673,24 +673,123 @@ const PROGRAM_META: Record<
   },
 };
 
-function ProgramChip({ kind }: { kind: "ese" | "504" | "ell" }) {
+// Self-contained hover/focus popover per pill, mirroring SafetyPlanPill so
+// the hover never depends on a shared row-level state. Each pill renders
+// its own popover with the program label, full title, and the student's
+// accommodations list (or a friendly empty-state when there are none).
+function ProgramPill({
+  kind,
+  row,
+}: {
+  kind: "ese" | "504" | "ell";
+  row: RosterRow;
+}) {
   const meta = PROGRAM_META[kind];
+  const [open, setOpen] = useState(false);
+  const sorted = [...row.accommodations].sort((a, b) =>
+    a.name.localeCompare(b.name),
+  );
   return (
     <span
-      title={meta.title}
-      aria-label={meta.title}
-      style={{
-        display: "inline-block",
-        padding: "2px 8px",
-        borderRadius: 6,
-        background: meta.bg,
-        color: meta.fg,
-        fontSize: 11,
-        fontWeight: 700,
-        letterSpacing: 0.2,
-      }}
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
     >
-      {meta.label}
+      <span
+        tabIndex={0}
+        title={meta.title}
+        aria-label={meta.title}
+        style={{
+          display: "inline-block",
+          padding: "2px 8px",
+          borderRadius: 6,
+          background: meta.bg,
+          color: meta.fg,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.2,
+          cursor: "default",
+          outline: "none",
+        }}
+      >
+        {meta.label}
+      </span>
+      {open && (
+        <div
+          role="tooltip"
+          style={{
+            position: "absolute",
+            top: "100%",
+            left: 0,
+            marginTop: 4,
+            zIndex: 10,
+            background: "white",
+            border: "1px solid #e5e7eb",
+            borderTop: `3px solid ${meta.fg}`,
+            borderRadius: 6,
+            padding: "0.55rem 0.75rem",
+            boxShadow: "0 6px 18px rgba(0,0,0,0.14)",
+            minWidth: 240,
+            maxWidth: 360,
+            color: "#111827",
+            textAlign: "left",
+          }}
+        >
+          <div
+            style={{
+              fontSize: 11,
+              fontWeight: 700,
+              color: meta.fg,
+              textTransform: "uppercase",
+              letterSpacing: 0.4,
+              marginBottom: 6,
+            }}
+          >
+            {meta.label} — {row.firstName} {row.lastName}
+          </div>
+          <div
+            style={{
+              fontSize: 11,
+              color: "#6b7280",
+              marginBottom: 6,
+            }}
+          >
+            {meta.title}
+          </div>
+          {sorted.length === 0 ? (
+            <div style={{ color: "#6b7280", fontSize: 12 }}>
+              No accommodations on file.
+            </div>
+          ) : (
+            <>
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 600,
+                  color: "#374151",
+                  marginBottom: 4,
+                }}
+              >
+                Accommodations
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  paddingLeft: 16,
+                  fontSize: 12,
+                  lineHeight: 1.5,
+                }}
+              >
+                {sorted.map((a) => (
+                  <li key={a.name}>{a.name}</li>
+                ))}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
     </span>
   );
 }
@@ -712,100 +811,8 @@ function ProgramPills({ row }: { row: RosterRow }) {
   return (
     <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
       {chips.map((c) => (
-        <ProgramChip key={c} kind={c} />
+        <ProgramPill key={c} kind={c} row={row} />
       ))}
-    </div>
-  );
-}
-
-function AccommodationsPopover({
-  row,
-}: {
-  row: RosterRow;
-}) {
-  // The popover lists accommodations as a flat bullet list. We
-  // intentionally do NOT group by the accommodation's school-catalog
-  // category here — that field describes what plan TYPE the
-  // accommodation is typically used for at the school level, NOT
-  // which plan THIS student is on. Showing "504" as a header above
-  // an ESE student's accommodations was misleading. Instead, we
-  // show the student's actual program badges (from row.ese /
-  // row.is504 / row.ell) at the top, then list their accommodations
-  // alphabetically.
-  const programBadges: Array<{ label: string; bg: string; fg: string }> = [];
-  if (row.ese)
-    programBadges.push({ label: "ESE", bg: "#dbeafe", fg: "#1e3a8a" });
-  if (row.is504)
-    programBadges.push({ label: "504", bg: "#ede9fe", fg: "#5b21b6" });
-  if (row.ell)
-    programBadges.push({ label: "ELL", bg: "#dcfce7", fg: "#14532d" });
-
-  const sorted = [...row.accommodations].sort((a, b) =>
-    a.name.localeCompare(b.name),
-  );
-
-  return (
-    <div
-      role="tooltip"
-      style={{
-        position: "absolute",
-        top: "100%",
-        left: 8,
-        marginTop: 4,
-        zIndex: 5,
-        background: "white",
-        border: "1px solid #e5e7eb",
-        borderRadius: 6,
-        padding: "0.5rem 0.7rem",
-        boxShadow: "0 4px 14px rgba(0,0,0,0.12)",
-        minWidth: 240,
-        maxWidth: 360,
-        color: "#111827",
-        textAlign: "left",
-      }}
-    >
-      <div
-        style={{
-          fontSize: 11,
-          color: "#6b7280",
-          marginBottom: programBadges.length > 0 ? 4 : 6,
-        }}
-      >
-        Accommodations for {row.firstName} {row.lastName}
-      </div>
-      {programBadges.length > 0 && (
-        <div style={{ display: "flex", gap: 4, marginBottom: 6 }}>
-          {programBadges.map((b) => (
-            <span
-              key={b.label}
-              style={{
-                display: "inline-block",
-                padding: "2px 8px",
-                borderRadius: 6,
-                background: b.bg,
-                color: b.fg,
-                fontSize: 11,
-                fontWeight: 700,
-                letterSpacing: 0.2,
-              }}
-            >
-              {b.label}
-            </span>
-          ))}
-        </div>
-      )}
-      <ul
-        style={{
-          margin: 0,
-          paddingLeft: 16,
-          fontSize: 12,
-          lineHeight: 1.5,
-        }}
-      >
-        {sorted.map((a) => (
-          <li key={a.name}>{a.name}</li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -861,12 +868,6 @@ export default function TeacherRosterPage({
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  // Which student's Programs cell is currently being hovered (or has
-  // been click-pinned). Mirrors the Accommodations Class View pattern
-  // so a teacher can either glance via hover or pin the popover open
-  // by clicking. Null = no popover.
-  const [programHoverId, setProgramHoverId] = useState<string | null>(null);
-
   // Per-user view toggles. Each maps to one optional column. Defaults
   // to all-on; persisted to localStorage so the teacher's preference
   // survives reloads. Bumped key to v2 since we added pm-level toggles.
@@ -1121,9 +1122,28 @@ export default function TeacherRosterPage({
         <span>BQ = Bottom Quartile (prior-year final scale score)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           Programs:
-          <ProgramChip kind="ese" />
-          <ProgramChip kind="504" />
-          <ProgramChip kind="ell" />
+          {(["ese", "504", "ell"] as const).map((k) => {
+            const m = PROGRAM_META[k];
+            return (
+              <span
+                key={k}
+                title={m.title}
+                aria-label={m.title}
+                style={{
+                  display: "inline-block",
+                  padding: "2px 8px",
+                  borderRadius: 6,
+                  background: m.bg,
+                  color: m.fg,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  letterSpacing: 0.2,
+                }}
+              >
+                {m.label}
+              </span>
+            );
+          })}
         </span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <InvisibleEyeIcon tier={null} windowDays={data?.invisibleDays ?? null} />
@@ -1457,38 +1477,8 @@ export default function TeacherRosterPage({
                     </span>
                   </td>
                   {visibility.programs && (
-                    <td
-                      style={{
-                        padding: "6px 10px",
-                        position: "relative",
-                        cursor:
-                          row.accommodations.length > 0 ? "pointer" : "default",
-                      }}
-                      onMouseEnter={() => {
-                        if (row.accommodations.length > 0) {
-                          setProgramHoverId(row.studentId);
-                        }
-                      }}
-                      onMouseLeave={() =>
-                        setProgramHoverId((cur) =>
-                          cur === row.studentId ? null : cur,
-                        )
-                      }
-                      onClick={() =>
-                        setProgramHoverId((cur) =>
-                          cur === row.studentId
-                            ? null
-                            : row.accommodations.length > 0
-                              ? row.studentId
-                              : cur,
-                        )
-                      }
-                    >
+                    <td style={{ padding: "6px 10px" }}>
                       <ProgramPills row={row} />
-                      {programHoverId === row.studentId &&
-                        row.accommodations.length > 0 && (
-                          <AccommodationsPopover row={row} />
-                        )}
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
