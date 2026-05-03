@@ -251,6 +251,24 @@ export default function MtssReportsPage({
     return n > 0 ? Math.round((s / n) * 100) / 100 : null;
   }, [data]);
 
+  // "This week" = the most recent week in the loaded trend (which is
+  // sorted oldest → newest by the API). Surfaces the latest snapshot
+  // alongside the date-range overall so an admin can see at a glance
+  // whether the current week is tracking with, above, or below trend.
+  const thisWeek = useMemo(() => {
+    if (!data || data.weeklyTrend.length === 0) {
+      return { weekStartDate: null as string | null, t2Pct: null as number | null, t3Avg: null as number | null };
+    }
+    const w = data.weeklyTrend[data.weeklyTrend.length - 1];
+    const t2Pct =
+      w.t2Expected > 0
+        ? Math.round((w.t2Completed / w.t2Expected) * 1000) / 10
+        : null;
+    const t3Avg =
+      w.t3Scored > 0 ? Math.round((w.t3ScoreSum / w.t3Scored) * 100) / 100 : null;
+    return { weekStartDate: w.weekStartDate, t2Pct, t3Avg };
+  }, [data]);
+
   // ---- styles ----
   const cardStyle: React.CSSProperties = {
     background: "white",
@@ -565,6 +583,44 @@ export default function MtssReportsPage({
                 : overallT3 >= 4
                   ? "good"
                   : overallT3 >= 3
+                    ? "warn"
+                    : "bad"
+            }
+          />
+          <SummaryTile
+            label="T2 completion (this week)"
+            value={fmtPct(thisWeek.t2Pct)}
+            sub={
+              thisWeek.weekStartDate
+                ? `Week of ${thisWeek.weekStartDate}`
+                : undefined
+            }
+            tone={
+              thisWeek.t2Pct == null
+                ? "neutral"
+                : thisWeek.t2Pct >= 80
+                  ? "good"
+                  : thisWeek.t2Pct >= 60
+                    ? "warn"
+                    : "bad"
+            }
+          />
+          <SummaryTile
+            label="T3 avg score (this week)"
+            value={fmtScore(thisWeek.t3Avg)}
+            sub={
+              thisWeek.weekStartDate
+                ? `Week of ${thisWeek.weekStartDate}${thisWeek.t3Avg != null ? " · / 5" : ""}`
+                : thisWeek.t3Avg != null
+                  ? "/ 5"
+                  : undefined
+            }
+            tone={
+              thisWeek.t3Avg == null
+                ? "neutral"
+                : thisWeek.t3Avg >= 4
+                  ? "good"
+                  : thisWeek.t3Avg >= 3
                     ? "warn"
                     : "bad"
             }
