@@ -8,6 +8,19 @@ import {
 import { and, eq, or } from "drizzle-orm";
 import { getUncachableResendClient } from "./resendClient";
 
+// Tiny HTML escaper used when interpolating staff-supplied free text
+// (e.g. parent_message authored in the Verify modal) into the HTML
+// email body. Mirrors the helper in weeklyHeartbeatEmail.ts so we
+// don't pull in a heavy sanitizer for one field.
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
 export type PulloutEmailResult = {
   status: "sent" | "skipped" | "error";
   emailTo: string | null;
@@ -103,18 +116,31 @@ export async function sendPulloutArrivalEmail(
   const arrivedTime = new Date(p.arrivedAt ?? nowIso).toLocaleString();
 
   const subject = `${schoolName}: ${studentName} pulled from class today`;
-  const body =
-    `${greeting}\n\n` +
-    `We are writing to let you know that ${studentName} was pulled from class${teacherText}${periodText} today and arrived in our intervention room at ${arrivedTime}. ` +
-    `The reason given was: "${reasonText}".\n\n` +
-    `Our staff will work with ${studentName} and follow up with you if any further action is needed. Please reach out if you have questions.\n\n` +
-    `${signature}`;
-  const html =
-    `<p>${greeting.replace(/\n/g, "<br>")}</p>` +
-    `<p>We are writing to let you know that <strong>${studentName}</strong> was pulled from class${teacherText}${periodText} today and arrived in our intervention room at <strong>${arrivedTime}</strong>. ` +
-    `The reason given was: <em>"${reasonText}"</em>.</p>` +
-    `<p>Our staff will work with ${studentName} and follow up with you if any further action is needed. Please reach out if you have questions.</p>` +
-    `<p>${signature.replace(/\n/g, "<br>")}</p>`;
+  // If the verifier authored a parent message in the Verify modal, use
+  // it verbatim (placeholders were already substituted client-side).
+  // Otherwise fall back to the auto-generated wording so older pullouts
+  // with no parent_message still produce a useful email.
+  const customMessage = p.parentMessage?.trim() ?? "";
+  const body = customMessage
+    ? `${greeting}\n\n${customMessage}\n\n${signature}`
+    : `${greeting}\n\n` +
+      `We are writing to let you know that ${studentName} was pulled from class${teacherText}${periodText} today and arrived in our intervention room at ${arrivedTime}. ` +
+      `The reason given was: "${reasonText}".\n\n` +
+      `Our staff will work with ${studentName} and follow up with you if any further action is needed. Please reach out if you have questions.\n\n` +
+      `${signature}`;
+  // HTML body: the parent_message is staff-supplied free text, so we
+  // HTML-escape it before injecting into the template (newlines still
+  // become <br>). Without this, a verifier could inject script/img
+  // tags that would render in the parent's email client.
+  const html = customMessage
+    ? `<p>${escapeHtml(greeting).replace(/\n/g, "<br>")}</p>` +
+      `<p>${escapeHtml(customMessage).replace(/\n/g, "<br>")}</p>` +
+      `<p>${escapeHtml(signature).replace(/\n/g, "<br>")}</p>`
+    : `<p>${greeting.replace(/\n/g, "<br>")}</p>` +
+      `<p>We are writing to let you know that <strong>${studentName}</strong> was pulled from class${teacherText}${periodText} today and arrived in our intervention room at <strong>${arrivedTime}</strong>. ` +
+      `The reason given was: <em>"${reasonText}"</em>.</p>` +
+      `<p>Our staff will work with ${studentName} and follow up with you if any further action is needed. Please reach out if you have questions.</p>` +
+      `<p>${signature.replace(/\n/g, "<br>")}</p>`;
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
@@ -204,16 +230,18 @@ export async function sendPulloutReturnEmail(
   const greeting = student.parentName
     ? `Dear ${student.parentName},`
     : "Dear Parent or Guardian,";
-  const returnedAt = new Date().toLocaleString();
   const subject = `${schoolName}: ${studentName} returned to class`;
+  // Canonical Return-to-Class message — same string a future SMS
+  // sender will read from pullouts.return_message.
+  const returnLine = `Your student, ${studentName}, has returned to their regular class schedule.`;
   const body =
     `${greeting}\n\n` +
-    `This is a follow-up to let you know that ${studentName} has returned to class from our intervention room at ${returnedAt}.\n\n` +
+    `${returnLine}\n\n` +
     `Please reach out if you have any questions.\n\n` +
     `${signature}`;
   const html =
     `<p>${greeting.replace(/\n/g, "<br>")}</p>` +
-    `<p>This is a follow-up to let you know that <strong>${studentName}</strong> has returned to class from our intervention room at <strong>${returnedAt}</strong>.</p>` +
+    `<p>${returnLine}</p>` +
     `<p>Please reach out if you have any questions.</p>` +
     `<p>${signature.replace(/\n/g, "<br>")}</p>`;
   try {

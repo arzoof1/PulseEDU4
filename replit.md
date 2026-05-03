@@ -627,6 +627,43 @@ stamps `school_id` on every INSERT:
 - `pullouts` (list, by-student, report, POST, **all 6 PATCH actions** —
   `verify`, `reject`, `arrived`, `returned`, `closed`, `review` — now match
   `id AND school_id`),
+
+**Pull-out Verify modal + parent message templates.** The per-row
+"Verify & send to ISS" button on the Verify Pullouts section was split
+into two steps:
+
+1. **Verify** opens a modal pre-filled with an editable parent message:
+   *"Your student, {firstName} {lastName}, has received a classroom
+   pullout from {teacherName} for {reason}. They will return to their
+   regular schedule at the end of this period."* Placeholders are
+   substituted client-side from the row's draft fields before display.
+2. The modal has an **Insert template** dropdown that pulls from a
+   per-school catalog (`pullout_note_templates`) managed by Behavior
+   Specialist / Admin / MTSS / Dean / SuperUser from a new section at
+   the bottom of the Behavior Dashboard (`PulloutNoteTemplatesAdmin`).
+3. The bottom **Send to ISS** button posts the existing
+   `PATCH /pullouts/:id/verify` with a new optional `parentMessage`
+   field (max 4000 chars). The string is stored verbatim on
+   `pullouts.parent_message` and used as the body of the parent
+   arrival email; if null, the auto-generated arrival wording is used.
+4. The Return-to-Class email body now reads *"Your student, {name},
+   has returned to their regular class schedule."* and the canonical
+   string is also stashed on `pullouts.return_message` so a future
+   SMS sender can replay it. SMS itself is a TODO marked inline in
+   `routes/pullouts.ts` near `/returned` — Twilio is intentionally not
+   wired up yet.
+
+Files: `lib/db/src/schema/pullouts.ts` (new `parentMessage`,
+`returnMessage` cols + `pulloutNoteTemplatesTable`), idempotent ALTERs
+in `seed.ts` `ensureSchoolSettingsFeatureFlagsSchema`, new route
+`routes/pulloutNoteTemplates.ts` (mounted in `routes/index.ts`),
+`routes/pullouts.ts` `/verify` extension + `/returned` stash,
+`lib/pulloutEmail.ts` (arrival uses `parent_message` if set, return
+uses canonical line), client `App.tsx` `VerifyPulloutsSection`
+modal + new `components/PulloutNoteTemplatesAdmin.tsx` mounted in
+`BehaviorDashboard`.
+
+Continuing the per-school scoping list:
 - `locations` (GET, POST),
 - `interventions` (GET + POST),
 - `reports/teachers` (filters by `staff.school_id`).

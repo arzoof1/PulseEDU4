@@ -305,10 +305,12 @@ router.patch(
       editedReason,
       period,
       referringTeacherName,
+      parentMessage,
     }: {
       editedReason?: unknown;
       period?: unknown;
       referringTeacherName?: unknown;
+      parentMessage?: unknown;
     } = req.body ?? {};
 
     const [existing] = await db
@@ -348,6 +350,18 @@ router.patch(
       referringTeacherName.trim()
     ) {
       updates.referringTeacherName = referringTeacherName.trim();
+    }
+    // Verify-modal parent message — already-substituted text the
+    // verifier authored (or accepted from a template). Stored verbatim
+    // and used as the body of the parent arrival email when the
+    // student is marked arrived at ISS.
+    if (typeof parentMessage === "string") {
+      const pm = parentMessage.trim();
+      if (pm.length > 4000) {
+        res.status(400).json({ error: "parentMessage too long (max 4000)" });
+        return;
+      }
+      updates.parentMessage = pm.length > 0 ? pm : null;
     }
 
     const [row] = await db
@@ -654,6 +668,26 @@ router.patch(
       .set({ status: "returned", returnedAt: new Date().toISOString() })
       .where(and(eq(pulloutsTable.id, id), eq(pulloutsTable.schoolId, req.schoolId!)))
       .returning();
+    // Persist the canonical Return-to-Class parent string so a future
+    // SMS sender can read it back without re-deriving. The actual
+    // email body is built inside sendPulloutReturnEmail.
+    // TODO(SMS): when Twilio is configured, also send `return_message`
+    // via SMS to verified parent phone numbers on file.
+    try {
+      await db
+        .update(pulloutsTable)
+        .set({
+          returnMessage: `Your student has returned to their regular class schedule.`,
+        })
+        .where(
+          and(
+            eq(pulloutsTable.id, id),
+            eq(pulloutsTable.schoolId, req.schoolId!),
+          ),
+        );
+    } catch (e) {
+      console.error("[pullouts] could not stash return_message:", e);
+    }
     // Remove from ISS roster + send parent return email.
     try {
       await db.delete(issRosterTable).where(eq(issRosterTable.pulloutId, id));

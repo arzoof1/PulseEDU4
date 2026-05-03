@@ -799,6 +799,32 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
   await db.execute(
     sql`ALTER TABLE display_playlists ADD COLUMN IF NOT EXISTS active BOOLEAN NOT NULL DEFAULT TRUE`,
   );
+  // Pullout Verify-modal additions: parent-facing message captured at
+  // verify time + return-to-class message captured at /returned. Both
+  // nullable so existing rows are untouched.
+  await db.execute(
+    sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS parent_message TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE pullouts ADD COLUMN IF NOT EXISTS return_message TEXT`,
+  );
+  // School-scoped library of canned parent messages for the Verify
+  // modal. Managed from the Behavior Dashboard.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pullout_note_templates (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      body TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active TEXT NOT NULL DEFAULT 'true',
+      created_at TEXT NOT NULL,
+      updated_at TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS pullout_note_templates_school_idx ON pullout_note_templates(school_id)`,
+  );
 }
 
 // Tier-preset table + the three built-in Basic/Pro/Enterprise rows.

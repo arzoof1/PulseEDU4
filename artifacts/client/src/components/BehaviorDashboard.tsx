@@ -21,6 +21,7 @@ import {
 } from "recharts";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
+import PulloutNoteTemplatesAdmin from "./PulloutNoteTemplatesAdmin";
 import InsightsFilterBar, {
   EMPTY_FILTERS,
   filtersToQuery,
@@ -301,6 +302,11 @@ export default function BehaviorDashboard({ onOpenProfile }: Props) {
       {data && !loading && !error && (
         <Body data={data} onOpenProfile={onOpenProfile} />
       )}
+
+      {/* Behavior Specialist tools: edit the canned parent messages
+          shown in the pullout Verify modal. Server gates writes to
+          admin / behavior specialist / MTSS / dean / SuperUser. */}
+      <PulloutNoteTemplatesAdmin />
     </div>
   );
 }

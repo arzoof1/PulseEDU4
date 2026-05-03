@@ -725,7 +725,44 @@ type PulloutRow = {
   reviewedById: number | null;
   reviewedByName: string | null;
   reviewNotes: string | null;
+  parentMessage: string | null;
+  returnMessage: string | null;
 };
+
+// Pullout note template — school-scoped canned parent message body the
+// verifier can drop into the Verify modal. Managed from the Behavior
+// Dashboard. Substitution placeholders are resolved client-side here.
+type PulloutNoteTemplate = {
+  id: number;
+  title: string;
+  body: string;
+};
+
+// Default parent message body used when the verifier opens the modal
+// for a pullout that has no `parent_message` set yet. Mirrors the
+// canonical wording from the spec.
+const DEFAULT_PARENT_MESSAGE_TEMPLATE =
+  "Your student, {firstName} {lastName}, has received a classroom pullout from {teacherName} for {reason}. They will return to their regular schedule at the end of this period.";
+
+function substitutePulloutPlaceholders(
+  template: string,
+  ctx: {
+    firstName: string;
+    lastName: string;
+    teacherName: string;
+    reason: string;
+    period: string;
+    schoolName: string;
+  },
+): string {
+  return template
+    .replace(/\{firstName\}/g, ctx.firstName)
+    .replace(/\{lastName\}/g, ctx.lastName)
+    .replace(/\{teacherName\}/g, ctx.teacherName)
+    .replace(/\{reason\}/g, ctx.reason)
+    .replace(/\{period\}/g, ctx.period)
+    .replace(/\{schoolName\}/g, ctx.schoolName);
+}
 
 function VerifyPulloutsSection({
   students,
@@ -750,10 +787,42 @@ function VerifyPulloutsSection({
   >({});
   const [busyId, setBusyId] = useState<number | null>(null);
 
+  // Verify modal state — opened from the per-row "Verify" button.
+  // Holds the pullout being verified and the editable parent message
+  // (with placeholders already substituted from the row's draft).
+  const [verifyFor, setVerifyFor] = useState<PulloutRow | null>(null);
+  const [parentMessageDraft, setParentMessageDraft] = useState("");
+  const [templates, setTemplates] = useState<PulloutNoteTemplate[]>([]);
+
   const studentName = (id: string) => {
     const s = students.find((x) => x.studentId === id);
     return s ? `${s.firstName} ${s.lastName}` : `Student ${id}`;
   };
+
+  const studentParts = (id: string) => {
+    const s = students.find((x) => x.studentId === id);
+    return s
+      ? { firstName: s.firstName, lastName: s.lastName }
+      : { firstName: `Student`, lastName: id };
+  };
+
+  // Load the school's pullout note templates once. The dropdown in
+  // the Verify modal reads from this list. Server returns [] if none.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/pullout-note-templates")
+      .then(async (r) => {
+        if (!r.ok || cancelled) return;
+        const data = (await r.json()) as PulloutNoteTemplate[];
+        if (!cancelled && Array.isArray(data)) setTemplates(data);
+      })
+      .catch(() => {
+        /* templates are optional — silently ignore */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const refresh = async () => {
     setLoading(true);
@@ -805,7 +874,62 @@ function VerifyPulloutsSection({
     }));
   };
 
-  const verify = async (p: PulloutRow) => {
+  // Build the substitution context the modal uses to fill in
+  // {firstName}, {lastName}, {teacherName}, {reason}, {period}.
+  // {schoolName} is left blank here — the server's email signature
+  // already includes the school name, so a duplicated mention in the
+  // body would read awkwardly.
+  const buildSubstitutionCtx = (p: PulloutRow) => {
+    const draft = edits[p.id];
+    const parts = studentParts(p.studentId);
+    return {
+      firstName: parts.firstName,
+      lastName: parts.lastName,
+      teacherName:
+        draft?.referringTeacherName?.trim() ||
+        p.referringTeacherName ||
+        "their teacher",
+      reason:
+        (draft?.editedReason ?? p.editedReason ?? p.reason ?? "").trim() ||
+        "a classroom concern",
+      period: draft?.period?.trim() || (p.period == null ? "" : String(p.period)),
+      schoolName: "",
+    };
+  };
+
+  // Open the Verify modal. Pre-fills the parent message: if the
+  // pullout already has one stashed (e.g. the verifier reopened it),
+  // reuse that string verbatim; otherwise substitute placeholders
+  // into the canonical default template.
+  const openVerify = (p: PulloutRow) => {
+    setMsg(null);
+    setVerifyFor(p);
+    const ctx = buildSubstitutionCtx(p);
+    const initial =
+      p.parentMessage && p.parentMessage.trim()
+        ? p.parentMessage
+        : substitutePulloutPlaceholders(
+            DEFAULT_PARENT_MESSAGE_TEMPLATE,
+            ctx,
+          );
+    setParentMessageDraft(initial);
+  };
+
+  // Insert one of the school's templates into the textarea, with
+  // placeholders substituted from the current row's draft.
+  const insertTemplate = (templateId: number) => {
+    if (!verifyFor) return;
+    const tpl = templates.find((t) => t.id === templateId);
+    if (!tpl) return;
+    const ctx = buildSubstitutionCtx(verifyFor);
+    setParentMessageDraft(substitutePulloutPlaceholders(tpl.body, ctx));
+  };
+
+  // Send-to-ISS handler — posts the existing /verify endpoint with the
+  // edited row fields plus the new parentMessage from the modal.
+  const confirmVerify = async () => {
+    const p = verifyFor;
+    if (!p) return;
     const draft = edits[p.id];
     setBusyId(p.id);
     setMsg(null);
@@ -817,6 +941,7 @@ function VerifyPulloutsSection({
           editedReason: draft?.editedReason ?? "",
           period: draft?.period === "" ? null : Number(draft?.period ?? ""),
           referringTeacherName: draft?.referringTeacherName ?? "",
+          parentMessage: parentMessageDraft,
         }),
       });
       const data = await r.json().catch(() => ({}));
@@ -827,6 +952,8 @@ function VerifyPulloutsSection({
           ok: true,
           text: `Verified pullout #${p.id} for ${studentName(p.studentId)}.`,
         });
+        setVerifyFor(null);
+        setParentMessageDraft("");
         await refresh();
         onChange();
       }
@@ -1025,9 +1152,9 @@ function VerifyPulloutsSection({
                     type="button"
                     className="btn-primary"
                     disabled={busyId === p.id}
-                    onClick={() => verify(p)}
+                    onClick={() => openVerify(p)}
                   >
-                    {busyId === p.id ? "Working…" : "Verify & send to ISS"}
+                    {busyId === p.id ? "Working…" : "Verify"}
                   </button>
                   <input
                     type="text"
@@ -1057,6 +1184,169 @@ function VerifyPulloutsSection({
               </div>
             );
           })}
+        </div>
+      )}
+
+      {/* Verify modal — opens from the per-row "Verify" button. The
+          textarea is the editable parent message; "Insert template"
+          drops a school-managed canned message into it (with
+          placeholders substituted from the row's draft fields).
+          "Send to ISS" calls the existing /verify endpoint with the
+          new parentMessage payload. */}
+      {verifyFor && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="Verify pullout and send parent message"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.55)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+            padding: 16,
+          }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) {
+              setVerifyFor(null);
+              setParentMessageDraft("");
+            }
+          }}
+        >
+          <div
+            style={{
+              background: "white",
+              borderRadius: 10,
+              boxShadow: "0 20px 50px rgba(0,0,0,0.3)",
+              width: "min(640px, 100%)",
+              maxHeight: "90vh",
+              display: "flex",
+              flexDirection: "column",
+            }}
+          >
+            <div
+              style={{
+                padding: "1rem 1.25rem",
+                borderBottom: "1px solid #e2e8f0",
+              }}
+            >
+              <h3 style={{ margin: 0, fontSize: "1.15rem" }}>
+                Verify pullout for {studentName(verifyFor.studentId)}
+              </h3>
+              <p
+                style={{
+                  margin: "0.25rem 0 0",
+                  color: "#64748b",
+                  fontSize: 13,
+                }}
+              >
+                Review and edit the message that will be emailed to
+                the parent when the student arrives at ISS.
+              </p>
+            </div>
+            <div
+              style={{
+                padding: "1rem 1.25rem",
+                overflowY: "auto",
+                display: "grid",
+                gap: 12,
+              }}
+            >
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "#475569" }}>
+                  Insert template
+                </span>
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    if (v) {
+                      insertTemplate(Number(v));
+                      e.currentTarget.value = "";
+                    }
+                  }}
+                  style={{
+                    padding: "0.4rem 0.6rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    background: "white",
+                  }}
+                >
+                  <option value="">
+                    {templates.length === 0
+                      ? "No templates yet — Behavior Specialist can add some"
+                      : "Choose a template…"}
+                  </option>
+                  {templates.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {t.title}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label style={{ display: "grid", gap: 6 }}>
+                <span style={{ fontSize: 12, color: "#475569" }}>
+                  Parent message
+                </span>
+                <textarea
+                  rows={8}
+                  value={parentMessageDraft}
+                  onChange={(e) => setParentMessageDraft(e.target.value)}
+                  maxLength={4000}
+                  style={{
+                    padding: "0.5rem 0.75rem",
+                    border: "1px solid #cbd5e1",
+                    borderRadius: 6,
+                    font: "inherit",
+                    minHeight: 160,
+                  }}
+                />
+                <span style={{ fontSize: 11, color: "#94a3b8" }}>
+                  {parentMessageDraft.length} / 4000
+                </span>
+              </label>
+            </div>
+            <div
+              style={{
+                padding: "0.75rem 1.25rem",
+                borderTop: "1px solid #e2e8f0",
+                display: "flex",
+                justifyContent: "flex-end",
+                gap: 8,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  setVerifyFor(null);
+                  setParentMessageDraft("");
+                }}
+                disabled={busyId === verifyFor.id}
+                style={{
+                  background: "white",
+                  color: "#374151",
+                  border: "1px solid #d1d5db",
+                  borderRadius: 6,
+                  padding: "0.45rem 0.9rem",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="btn-primary"
+                onClick={() => void confirmVerify()}
+                disabled={
+                  busyId === verifyFor.id || !parentMessageDraft.trim()
+                }
+              >
+                {busyId === verifyFor.id ? "Sending…" : "Send to ISS"}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </section>

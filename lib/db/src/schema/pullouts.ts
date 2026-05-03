@@ -39,6 +39,15 @@ export const pulloutsTable = pgTable(
     dispatchEmailStatus: text("dispatch_email_status"),
     dispatchEmailTo: text("dispatch_email_to"),
     dispatchEmailErrorMsg: text("dispatch_email_error_msg"),
+    // Parent-facing message captured at the Verify step. Editable by the
+    // verifier in a notes panel; if set, the arrival email uses this as
+    // its body verbatim (with template placeholders already substituted
+    // client-side). Null = fall back to the auto-generated arrival body.
+    parentMessage: text("parent_message"),
+    // Parent-facing message recorded when the student is marked
+    // "returned to class". Auto-filled on /returned with the standard
+    // wording so a future SMS sender can read the same string.
+    returnMessage: text("return_message"),
   },
   (t) => ({
     studentIdx: index("pullouts_student_idx").on(t.studentId),
@@ -47,3 +56,28 @@ export const pulloutsTable = pgTable(
 );
 
 export type PulloutRow = typeof pulloutsTable.$inferSelect;
+
+// School-scoped catalog of canned parent messages the verifier can
+// drop into the Verify modal's notes textarea. Managed by Behavior
+// Specialist / Admin / SuperUser from the Behavior Dashboard.
+// Templates support these substitution placeholders, all of which the
+// verifier already has on the pullout row:
+//   {firstName} {lastName} {teacherName} {reason} {period} {schoolName}
+export const pulloutNoteTemplatesTable = pgTable(
+  "pullout_note_templates",
+  {
+    id: serial("id").primaryKey(),
+    schoolId: integer("school_id").notNull(),
+    title: text("title").notNull(),
+    body: text("body").notNull(),
+    sortOrder: integer("sort_order").notNull().default(0),
+    active: text("active").notNull().default("true"),
+    createdAt: text("created_at").notNull(),
+    updatedAt: text("updated_at"),
+  },
+  (t) => ({
+    schoolIdx: index("pullout_note_templates_school_idx").on(t.schoolId),
+  }),
+);
+export type PulloutNoteTemplateRow =
+  typeof pulloutNoteTemplatesTable.$inferSelect;
