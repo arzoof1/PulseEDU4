@@ -162,3 +162,9 @@ id = "fR2_0TPI28Rc_ksOfcC1S"
 uri = "file://attached_assets/pulse-all-brands-kit.tar.gz"
 type = "unspecified"
 title = "All three brands in one bundle"
+
+[[outputs]]
+id = "EGhZASfWPpspW3zvRcF22"
+uri = "file://.local/outputs/PulseEDU-School-Pitch-Deck.pptx"
+type = "slides"
+title = "PulseEDU School Pitch Deck (PPTX)"
