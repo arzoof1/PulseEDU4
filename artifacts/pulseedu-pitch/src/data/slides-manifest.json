@@ -1,1 +1,20 @@
-[]
+[
+  { "id": "slide-01-title", "position": 1, "filepath": "src/pages/slides/Title.tsx", "title": "PulseEDU", "description": "Title slide", "speakerNotes": "" },
+  { "id": "slide-02-problem", "position": 2, "filepath": "src/pages/slides/Problem.tsx", "title": "The problem", "description": "Six disconnected systems", "speakerNotes": "" },
+  { "id": "slide-03-glance", "position": 3, "filepath": "src/pages/slides/Glance.tsx", "title": "PulseEDU at a glance", "description": "Headline numbers", "speakerNotes": "" },
+  { "id": "slide-04-standup", "position": 4, "filepath": "src/pages/slides/Standup.tsx", "title": "How a school stands it up", "description": "Four-week rollout", "speakerNotes": "" },
+  { "id": "slide-05-audiences", "position": 5, "filepath": "src/pages/slides/AudiencesDivider.tsx", "title": "Five audiences", "description": "Section divider", "speakerNotes": "" },
+  { "id": "slide-06-leadership", "position": 6, "filepath": "src/pages/slides/Leadership.tsx", "title": "Leadership", "description": "Admin & District Admin", "speakerNotes": "" },
+  { "id": "slide-07-teachers", "position": 7, "filepath": "src/pages/slides/Teachers.tsx", "title": "Teachers", "description": "Classroom workflows", "speakerNotes": "" },
+  { "id": "slide-08-behavior", "position": 8, "filepath": "src/pages/slides/BehaviorTeam.tsx", "title": "Behavior Team", "description": "BS, Dean, ISS, PBIS Coord", "speakerNotes": "" },
+  { "id": "slide-09-mtss", "position": 9, "filepath": "src/pages/slides/MtssTeam.tsx", "title": "MTSS / Student Support", "description": "MTSS, Counselor, SW, Psych, ESE", "speakerNotes": "" },
+  { "id": "slide-10-families", "position": 10, "filepath": "src/pages/slides/Families.tsx", "title": "Families", "description": "HeartBEAT Parent Portal", "speakerNotes": "" },
+  { "id": "slide-11-modules", "position": 11, "filepath": "src/pages/slides/ModulesDivider.tsx", "title": "Inside the modules", "description": "Section divider", "speakerNotes": "" },
+  { "id": "slide-12-behavior-pbis", "position": 12, "filepath": "src/pages/slides/BehaviorPbis.tsx", "title": "Behavior & PBIS", "description": "Module group", "speakerNotes": "" },
+  { "id": "slide-13-mtss-interventions", "position": 13, "filepath": "src/pages/slides/MtssInterventions.tsx", "title": "MTSS & Interventions", "description": "Module group", "speakerNotes": "" },
+  { "id": "slide-14-daily-ops", "position": 14, "filepath": "src/pages/slides/DailyOperations.tsx", "title": "Daily Operations", "description": "Module group", "speakerNotes": "" },
+  { "id": "slide-15-comm-data", "position": 15, "filepath": "src/pages/slides/CommunicationData.tsx", "title": "Communication & Data", "description": "Module group", "speakerNotes": "" },
+  { "id": "slide-16-pricing", "position": 16, "filepath": "src/pages/slides/PricingTiers.tsx", "title": "Pricing tiers", "description": "Basic, Pro, Enterprise", "speakerNotes": "" },
+  { "id": "slide-17-rollout", "position": 17, "filepath": "src/pages/slides/Rollout.tsx", "title": "Rollout", "description": "First 90 days", "speakerNotes": "" },
+  { "id": "slide-18-closing", "position": 18, "filepath": "src/pages/slides/Closing.tsx", "title": "Let's talk", "description": "Closing slide", "speakerNotes": "" }
+]

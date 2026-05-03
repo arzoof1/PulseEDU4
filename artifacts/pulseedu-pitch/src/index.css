@@ -11,12 +11,11 @@
 }
 
 :root {
-  /* Replace these with brand colors */
-  --slide-primary: #4f46e5;
-  --slide-accent: #06b6d4;
-  --slide-bg: #f8fafc;
-  --slide-text: #0f172a;
-  --slide-muted: #64748b;
+  --slide-primary: #1a1a2e;
+  --slide-accent: #e0e7ed;
+  --slide-bg: #f0f2f5;
+  --slide-text: #1a1a2e;
+  --slide-muted: #5a5a6e;
   --font-display-family: "Inter", system-ui, sans-serif;
   --font-body-family: "Inter", system-ui, sans-serif;
   color-scheme: light;
@@ -33,6 +32,7 @@ body,
 body {
   background: var(--slide-bg);
   color: var(--slide-text);
+  font-family: var(--font-body-family);
 }
 
 .slide {
