@@ -606,12 +606,9 @@ export default function MtssReportsPage({
           </div>
 
           {/*
-            Per-plan view (planId set) → only the tier that matches the
-            plan is meaningful, and inside a single plan the entry-
-            weighted overall == the mean-of-weekly% (every week has the
-            same expected count), so the second tile would be redundant.
-            Show ONE accurate tile per tier in per-plan mode and the full
-            two-tile pair only in the aggregate view.
+            Show full 2-tile pair for each tier. In per-plan mode hide
+            the tier that doesn't apply to this plan (T2 plan → no T3
+            row, T3 plan → no T2 row). Aggregate view shows both rows.
           */}
           {(!isPerPlan || data.planMeta?.tier === 2) && (
             <div
@@ -635,22 +632,20 @@ export default function MtssReportsPage({
                         : "bad"
                 }
               />
-              {!isPerPlan && (
-                <SummaryTile
-                  label="Tier 2 avg score"
-                  value={fmtPct(t2AvgWeeklyScore)}
-                  sub="Mean of weekly completion %"
-                  tone={
-                    t2AvgWeeklyScore == null
-                      ? "neutral"
-                      : t2AvgWeeklyScore >= 80
-                        ? "good"
-                        : t2AvgWeeklyScore >= 60
-                          ? "warn"
-                          : "bad"
-                  }
-                />
-              )}
+              <SummaryTile
+                label="Tier 2 avg score"
+                value={fmtPct(t2AvgWeeklyScore)}
+                sub="Mean of weekly completion %"
+                tone={
+                  t2AvgWeeklyScore == null
+                    ? "neutral"
+                    : t2AvgWeeklyScore >= 80
+                      ? "good"
+                      : t2AvgWeeklyScore >= 60
+                        ? "warn"
+                        : "bad"
+                }
+              />
             </div>
           )}
 
@@ -662,22 +657,20 @@ export default function MtssReportsPage({
                 gap: 12,
               }}
             >
-              {!isPerPlan && (
-                <SummaryTile
-                  label="Tier 3 completion"
-                  value={fmtPct(t3Completion)}
-                  sub="Weeks with scores ÷ weeks in range"
-                  tone={
-                    t3Completion == null
-                      ? "neutral"
-                      : t3Completion >= 80
-                        ? "good"
-                        : t3Completion >= 60
-                          ? "warn"
-                          : "bad"
-                  }
-                />
-              )}
+              <SummaryTile
+                label="Tier 3 completion"
+                value={fmtPct(t3Completion)}
+                sub="Weeks with scores ÷ weeks in range"
+                tone={
+                  t3Completion == null
+                    ? "neutral"
+                    : t3Completion >= 80
+                      ? "good"
+                      : t3Completion >= 60
+                        ? "warn"
+                        : "bad"
+                }
+              />
               <SummaryTile
                 label="Tier 3 avg score"
                 value={fmtScore(overallT3)}
