@@ -228,29 +228,50 @@ router.get(
 
     // Day-row counts so the recent list can show "3 days" without a
     // second client round trip.
+    // Day-row counts via the drizzle query builder. The earlier raw
+    // `ANY(${array})` form failed at runtime — node-pg binds the array
+    // as a single parameter, so Postgres saw `ANY(($2))` (a row, not an
+    // array) and rejected the query. `inArray()` expands to an IN list
+    // with one placeholder per id, which is correct and well-typed.
     const issIds = issLogs.map((l) => l.id);
-    const issDayCounts = issIds.length
-      ? ((await db.execute(
-          sql`SELECT admin_log_id AS id, COUNT(*)::int AS days
-              FROM iss_attendance_day
-              WHERE school_id = ${schoolId}
-                AND admin_log_id = ANY(${issIds})
-              GROUP BY admin_log_id`,
-        )).rows as { id: number; days: number }[])
+    const issDayRows = issIds.length
+      ? await db
+          .select({
+            id: issAttendanceDayTable.adminLogId,
+            days: sql<number>`COUNT(*)::int`,
+          })
+          .from(issAttendanceDayTable)
+          .where(
+            and(
+              eq(issAttendanceDayTable.schoolId, schoolId),
+              inArray(issAttendanceDayTable.adminLogId, issIds),
+            ),
+          )
+          .groupBy(issAttendanceDayTable.adminLogId)
       : [];
-    const issDayMap = new Map(issDayCounts.map((r) => [r.id, r.days]));
+    const issDayMap = new Map(
+      issDayRows
+        .filter((r): r is { id: number; days: number } => r.id !== null)
+        .map((r) => [r.id, r.days]),
+    );
 
     const ossIds = ossLogs.map((l) => l.id);
-    const ossDayCounts = ossIds.length
-      ? ((await db.execute(
-          sql`SELECT log_id AS id, COUNT(*) FILTER (WHERE NOT cancelled)::int AS days
-              FROM oss_log_days
-              WHERE school_id = ${schoolId}
-                AND log_id = ANY(${ossIds})
-              GROUP BY log_id`,
-        )).rows as { id: number; days: number }[])
+    const ossDayRows = ossIds.length
+      ? await db
+          .select({
+            id: ossLogDaysTable.logId,
+            days: sql<number>`COUNT(*) FILTER (WHERE NOT cancelled)::int`,
+          })
+          .from(ossLogDaysTable)
+          .where(
+            and(
+              eq(ossLogDaysTable.schoolId, schoolId),
+              inArray(ossLogDaysTable.logId, ossIds),
+            ),
+          )
+          .groupBy(ossLogDaysTable.logId)
       : [];
-    const ossDayMap = new Map(ossDayCounts.map((r) => [r.id, r.days]));
+    const ossDayMap = new Map(ossDayRows.map((r) => [r.id, r.days]));
 
     // Hydrate student names so the list reads naturally.
     const sids = Array.from(
