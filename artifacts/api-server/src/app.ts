@@ -27,6 +27,13 @@ declare global {
       homeSchoolId?: number | null;
       // True when the active schoolId was set by a SuperUser switch.
       isSchoolSwitched?: boolean;
+      // When the signed-in staff is currently using the "Preview as
+      // another staff" QA tool, req.staffId is swapped to the target's
+      // id and these two fields surface the original (impersonator)
+      // staff so /auth/me can render a banner. Set in the global
+      // request middleware below from staff.preview_target_staff_id.
+      impersonatorStaffId?: number | null;
+      impersonatorDisplayName?: string | null;
     }
   }
 }
@@ -118,6 +125,75 @@ app.use(async (req, _res, next) => {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
       sid = verifyAuthToken(auth.slice(7).trim());
+    }
+  }
+  // "Preview as another staff" swap. Backed by staff.preview_target_staff_id
+  // (a DB column) rather than the session, because session cookies are
+  // blocked inside the Replit preview iframe — bearer-only requests would
+  // otherwise lose the impersonation immediately. Strategy: resolve the
+  // ORIGINAL staff first; if it's an Admin/DA/SU and they have a valid
+  // preview pointer to a non-privileged active staff, swap sid to the
+  // target and remember the impersonator for /auth/me's banner.
+  req.impersonatorStaffId = null;
+  req.impersonatorDisplayName = null;
+  if (sid) {
+    try {
+      const [orig] = await db
+        .select({
+          id: staffTable.id,
+          displayName: staffTable.displayName,
+          active: staffTable.active,
+          isAdmin: staffTable.isAdmin,
+          isDistrictAdmin: staffTable.isDistrictAdmin,
+          isSuperUser: staffTable.isSuperUser,
+          previewTargetStaffId: staffTable.previewTargetStaffId,
+        })
+        .from(staffTable)
+        .where(eq(staffTable.id, sid));
+      if (orig && orig.previewTargetStaffId) {
+        const stillEligible =
+          orig.active &&
+          (orig.isAdmin || orig.isDistrictAdmin || orig.isSuperUser);
+        if (stillEligible) {
+          const [target] = await db
+            .select({
+              id: staffTable.id,
+              active: staffTable.active,
+              isSuperUser: staffTable.isSuperUser,
+              isDistrictAdmin: staffTable.isDistrictAdmin,
+            })
+            .from(staffTable)
+            .where(eq(staffTable.id, orig.previewTargetStaffId));
+          if (
+            target &&
+            target.active &&
+            !target.isSuperUser &&
+            !target.isDistrictAdmin
+          ) {
+            req.impersonatorStaffId = orig.id;
+            req.impersonatorDisplayName = orig.displayName;
+            sid = target.id;
+          } else {
+            // Stale pointer: target deleted, deactivated, or promoted
+            // to a privileged role. Clear it so future requests stop
+            // attempting the swap.
+            await db
+              .update(staffTable)
+              .set({ previewTargetStaffId: null })
+              .where(eq(staffTable.id, orig.id));
+          }
+        } else {
+          // Original actor lost privilege (deactivated or role
+          // changed) while a pointer was still set. Clear it so the
+          // pointer can't strand them in an unreachable preview.
+          await db
+            .update(staffTable)
+            .set({ previewTargetStaffId: null })
+            .where(eq(staffTable.id, orig.id));
+        }
+      }
+    } catch (err) {
+      logger.warn({ err }, "preview-as middleware lookup failed");
     }
   }
   req.staffId = sid;

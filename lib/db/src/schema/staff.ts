@@ -27,6 +27,15 @@ export const staffTable = pgTable("staff", {
   // bearer-token requests inside the Replit preview iframe, where session
   // cookies are blocked. Null = use the home school.
   activeSchoolOverride: integer("active_school_override"),
+  // Admin/DistrictAdmin/SuperUser "Preview as another staff" override.
+  // When set, the global request middleware swaps req.staffId from this
+  // row to the target row before resolving schoolId or anything else, so
+  // every downstream route sees the impersonated identity. Persisted on
+  // the staff row (rather than the express session) for the same reason
+  // as activeSchoolOverride: session cookies are blocked inside the
+  // Replit preview iframe, so any state that must survive bearer-only
+  // requests has to live in the DB. Cleared by /api/admin/staff-preview/end.
+  previewTargetStaffId: integer("preview_target_staff_id"),
   email: text("email").notNull().unique(),
   passwordHash: text("password_hash").notNull(),
   displayName: text("display_name").notNull(),

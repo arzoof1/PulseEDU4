@@ -82,6 +82,17 @@ router.post("/auth/login", async (req: Request, res) => {
       .where(eq(staffTable.id, staff.id));
     staff.activeSchoolOverride = null;
   }
+  // Same safety net for the "Preview as another staff" pointer. A fresh
+  // login always lands on the real account; impersonation should never
+  // silently carry over from a previous session/device, mirroring the
+  // session-scoped semantics the previous design had.
+  if (staff.previewTargetStaffId !== null) {
+    await db
+      .update(staffTable)
+      .set({ previewTargetStaffId: null })
+      .where(eq(staffTable.id, staff.id));
+    staff.previewTargetStaffId = null;
+  }
 
   req.session.regenerate((err) => {
     if (err) {
@@ -180,35 +191,19 @@ router.get("/auth/me", async (req, res) => {
     });
     return;
   }
-  // If this session is currently previewing-as another staff (see
-  // /admin/staff-preview), surface the original impersonator's id + name
-  // so the client can show a "Previewing as X — return to my account" banner.
-  let impersonatorStaffId: number | null = null;
-  let impersonatorDisplayName: string | null = null;
-  const origId = req.session.impersonatorStaffId ?? null;
-  if (origId && origId !== staff.id) {
-    const [orig] = await db
-      .select({
-        id: staffTable.id,
-        displayName: staffTable.displayName,
-        active: staffTable.active,
-      })
-      .from(staffTable)
-      .where(eq(staffTable.id, origId));
-    if (orig?.active) {
-      impersonatorStaffId = orig.id;
-      impersonatorDisplayName = orig.displayName;
-    }
-  }
-
+  // If the global middleware swapped this request to a "Preview as X"
+  // identity (see /admin/staff-preview), it stamped req.impersonatorStaffId
+  // and req.impersonatorDisplayName from the staff row's preview pointer.
+  // Surface those so the client can render a "Previewing as X — return
+  // to my account" banner.
   res.json({
     ...publicStaff(staff),
     authToken: issueAuthToken(staff.id),
     activeSchoolId: req.schoolId ?? staff.schoolId,
     homeSchoolId: req.homeSchoolId ?? staff.schoolId,
     isSchoolSwitched: !!req.isSchoolSwitched,
-    impersonatorStaffId,
-    impersonatorDisplayName,
+    impersonatorStaffId: req.impersonatorStaffId ?? null,
+    impersonatorDisplayName: req.impersonatorDisplayName ?? null,
   });
 });
 

@@ -878,6 +878,12 @@ export async function ensureAdminHubSchema() {
   await db.execute(
     sql`ALTER TABLE parent_heartbeat_prefs ADD COLUMN IF NOT EXISTS show_oss BOOLEAN`,
   );
+  // Staff "Preview as another staff" override (DB-backed so it survives
+  // bearer-only requests inside the Replit preview iframe — session
+  // cookies are blocked there).
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS preview_target_staff_id INTEGER`,
+  );
 
   // ---- iss_admin_logs (parent assignment record for blue-pill ISS) ----
   await db.execute(sql`

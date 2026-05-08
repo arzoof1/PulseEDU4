@@ -60,7 +60,7 @@ import DataImports from "./components/DataImports";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
-import { authFetch, setAuthToken } from "./lib/authToken";
+import { authFetch } from "./lib/authToken";
 import {
   AreaChart,
   Area,
@@ -8165,23 +8165,15 @@ function App() {
             type="button"
             onClick={async () => {
               try {
-                // Use authFetch so the Bearer header is sent — the
-                // session cookie alone is unreliable inside the Replit
-                // preview iframe. Then swap the stored bearer back to
-                // the original staff before reloading so the next page
-                // load doesn't keep impersonating.
+                // Server-side state lives in staff.preview_target_staff_id;
+                // the end endpoint clears it on the impersonator's row and
+                // the next request resolves to the real account again.
                 const r = await authFetch("/api/admin/staff-preview/end", {
                   method: "POST",
                 });
                 if (!r.ok) {
                   alert("Could not return: " + (await r.text()));
                   return;
-                }
-                const data = (await r.json().catch(() => null)) as {
-                  authToken?: string;
-                } | null;
-                if (data?.authToken) {
-                  setAuthToken(data.authToken);
                 }
                 window.location.href = "/";
               } catch (err) {

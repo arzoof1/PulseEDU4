@@ -1,15 +1,6 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, staffTable, schoolsTable } from "@workspace/db";
 import { and, asc, eq, inArray, ne } from "drizzle-orm";
-import { issueAuthToken } from "../lib/authToken.js";
-
-declare module "express-session" {
-  interface SessionData {
-    // When set, the caller is currently previewing as another staff member.
-    // Holds the ORIGINAL staffId so we can swap back without re-login.
-    impersonatorStaffId?: number;
-  }
-}
 
 const router: IRouter = Router();
 
@@ -20,6 +11,14 @@ const router: IRouter = Router();
 // staff member in their scope so they can verify role-gated UI/behavior
 // without juggling test accounts. Sister tool to /admin/parent-preview.
 //
+// Backed by staff.preview_target_staff_id (a DB column on the IMPERSONATOR's
+// row) rather than the session. The reason is the Replit preview iframe:
+// session cookies are routinely blocked there, so any auth/state that lives
+// in the session is silently dropped on bearer-only requests. Storing the
+// pointer on the staff row makes it survive whatever transport the client
+// is using. The global middleware in app.ts reads the pointer and swaps
+// req.staffId from impersonator → target on every request.
+//
 // Safety:
 //   - Gated to isAdmin / isDistrictAdmin / isSuperUser (mirrors the client
 //     check that hides the menu tile for everyone else).
@@ -29,11 +28,10 @@ const router: IRouter = Router();
 //     refuses to impersonate a SuperUser or DistrictAdmin (privilege
 //     escalation guard — a school admin must not be able to "preview as"
 //     someone with district-wide reach).
-//   - Session keeps `impersonatorStaffId` = the original staff id so
-//     /auth/me can surface a banner and POST /staff-preview/end can restore
-//     the session without a re-login.
-//   - Everything is read-through-the-real-staff-row, including audit fields
-//     like createdBy on writes — anything the previewer changes is
+//   - Refuses nested previews. If you're already previewing, the START
+//     endpoint refuses with 409. End the current preview first.
+//   - Everything is read-through-the-impersonated-staff-row, including audit
+//     fields like createdBy on writes — anything the previewer changes is
 //     attributed to the impersonated staff. Use for visual / role-gate QA;
 //     do NOT use to perform real student-facing changes you want attributed
 //     to your own admin account.
@@ -52,8 +50,12 @@ async function loadDistrictSchoolIds(schoolId: number): Promise<number[]> {
   return rows.map((r) => r.id);
 }
 
-async function gateActor(req: Request, res: Response) {
-  const sid = req.staffId ?? null;
+// Resolve the IMPERSONATOR (the real signed-in staff). When previewing,
+// the global middleware has already swapped req.staffId to the target;
+// the original lives in req.impersonatorStaffId. For these routes — start
+// and end of a preview — we always operate on the original.
+async function gateImpersonator(req: Request, res: Response) {
+  const sid = req.impersonatorStaffId ?? req.staffId ?? null;
   if (!sid) {
     res.status(401).json({ error: "Sign-in required" });
     return null;
@@ -84,7 +86,7 @@ async function gateActor(req: Request, res: Response) {
 router.get(
   "/admin/staff-preview/list",
   async (req: Request, res: Response): Promise<void> => {
-    const actor = await gateActor(req, res);
+    const actor = await gateImpersonator(req, res);
     if (!actor) return;
 
     const scopeIds =
@@ -134,13 +136,22 @@ router.get(
 
 // ---------------------------------------------------------------------------
 // POST /api/admin/staff-preview { targetStaffId }
-// Swap the session to a different staff identity. Stores the original id
-// in session.impersonatorStaffId so /staff-preview/end can restore.
+// Set staff.preview_target_staff_id on the IMPERSONATOR's row. The global
+// middleware will pick it up on the next request and swap req.staffId.
 // ---------------------------------------------------------------------------
 router.post(
   "/admin/staff-preview",
   async (req: Request, res: Response): Promise<void> => {
-    const actor = await gateActor(req, res);
+    // Disallow nested previews — keeps the model simple. End the current
+    // preview first, then start a new one.
+    if (req.impersonatorStaffId) {
+      res.status(409).json({
+        error:
+          "Already previewing. End the current preview before starting a new one.",
+      });
+      return;
+    }
+    const actor = await gateImpersonator(req, res);
     if (!actor) return;
 
     const targetId = Number(req.body?.targetStaffId);
@@ -177,94 +188,58 @@ router.post(
       return;
     }
 
-    // Preserve the ORIGINAL impersonator across nested previews so a
-    // SuperUser previewing as Admin → previewing as Teacher still has a
-    // single click back to SuperUser.
-    const originalImpersonator =
-      req.session.impersonatorStaffId ?? actor.id;
+    await db
+      .update(staffTable)
+      .set({ previewTargetStaffId: target.id })
+      .where(eq(staffTable.id, actor.id));
 
-    req.session.regenerate((err) => {
-      if (err) {
-        res.status(500).json({ error: "Could not start preview session" });
-        return;
-      }
-      req.session.staffId = target.id;
-      req.session.impersonatorStaffId = originalImpersonator;
-      // Drop any stale parent identity / cross-school override.
-      delete req.session.parentId;
-      delete req.session.activeSchoolId;
-      req.session.save((saveErr) => {
-        if (saveErr) {
-          res.status(500).json({ error: "Could not save preview session" });
-          return;
-        }
-        // Return a fresh Bearer token signed for the TARGET staff. The
-        // client stores this in sessionStorage before reloading so the
-        // iframe — where the session cookie is often blocked — picks up
-        // the impersonated identity instead of falling back to the
-        // original-staff bearer that's already in storage.
-        res.json({
-          ok: true,
-          redirectTo: "/",
-          authToken: issueAuthToken(target.id),
-          targetStaffId: target.id,
-          targetDisplayName: target.displayName,
-        });
-      });
+    res.json({
+      ok: true,
+      redirectTo: "/",
+      targetStaffId: target.id,
+      targetDisplayName: target.displayName,
     });
   },
 );
 
 // ---------------------------------------------------------------------------
 // POST /api/admin/staff-preview/end
-// Restore the original staff session from impersonatorStaffId.
+// Clear staff.preview_target_staff_id on the impersonator. The global
+// middleware then stops swapping and the next request resolves to the
+// real signed-in staff again.
 // ---------------------------------------------------------------------------
 router.post(
   "/admin/staff-preview/end",
   async (req: Request, res: Response): Promise<void> => {
-    const original = req.session.impersonatorStaffId ?? null;
-    if (!original) {
+    // Normal case: middleware swapped us, so req.impersonatorStaffId is
+    // the original actor whose row holds the pointer. Edge case: the
+    // original actor lost admin privileges while a pointer was still
+    // set, so the middleware refused to swap and req.impersonatorStaffId
+    // is null. In that case the unswapped req.staffId IS the original
+    // actor, and we still want to let them clear their own pointer so
+    // they aren't permanently stranded. Middleware also self-clears
+    // this case on the NEXT request, but doing it here makes "End
+    // preview" feel synchronous.
+    let impersonatorId = req.impersonatorStaffId ?? null;
+    if (!impersonatorId && req.staffId) {
+      const [self] = await db
+        .select({ previewTargetStaffId: staffTable.previewTargetStaffId })
+        .from(staffTable)
+        .where(eq(staffTable.id, req.staffId));
+      if (self?.previewTargetStaffId) {
+        impersonatorId = req.staffId;
+      }
+    }
+    if (!impersonatorId) {
       res.status(400).json({ error: "Not currently previewing" });
       return;
     }
-    const [origStaff] = await db
-      .select({ id: staffTable.id, active: staffTable.active })
-      .from(staffTable)
-      .where(eq(staffTable.id, original));
-    if (!origStaff || !origStaff.active) {
-      // Original account no longer valid — wipe the session entirely so the
-      // user is forced through real login again.
-      req.session.destroy(() => {
-        res.clearCookie("pulseed.sid");
-        res.status(401).json({ error: "Original account no longer active" });
-      });
-      return;
-    }
+    await db
+      .update(staffTable)
+      .set({ previewTargetStaffId: null })
+      .where(eq(staffTable.id, impersonatorId));
 
-    req.session.regenerate((err) => {
-      if (err) {
-        res.status(500).json({ error: "Could not restore session" });
-        return;
-      }
-      req.session.staffId = origStaff.id;
-      delete req.session.impersonatorStaffId;
-      delete req.session.parentId;
-      delete req.session.activeSchoolId;
-      req.session.save((saveErr) => {
-        if (saveErr) {
-          res.status(500).json({ error: "Could not save restored session" });
-          return;
-        }
-        // Same iframe-bearer caveat as start-preview: hand back a fresh
-        // bearer signed for the original staff so the client can replace
-        // the impersonated bearer in sessionStorage.
-        res.json({
-          ok: true,
-          redirectTo: "/",
-          authToken: issueAuthToken(origStaff.id),
-        });
-      });
-    });
+    res.json({ ok: true, redirectTo: "/" });
   },
 );
 
