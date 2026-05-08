@@ -95,7 +95,12 @@ export default function AddDisciplineLogModal({
   onClose,
   onSaved,
 }: Props) {
-  const [kind, setKind] = useState<"iss" | "oss">(initialKind);
+  // The toggle was removed in favour of two distinct entry buttons on
+  // AdminHubPage (Add ISS log / Add OSS log), so `kind` is locked to
+  // whatever the caller opened the modal with. State is kept (rather
+  // than a plain prop reference) so existing reads of `kind` further
+  // down don't need to change.
+  const [kind] = useState<"iss" | "oss">(initialKind);
   const [studentInput, setStudentInput] = useState("");
   const [studentResults, setStudentResults] = useState<StudentRow[]>([]);
   const [student, setStudent] = useState<StudentRow | null>(null);
@@ -283,32 +288,44 @@ export default function AddDisciplineLogModal({
           </button>
         </div>
 
+        {/* Static type header replaces the previous ISS/OSS toggle —
+            the modal is opened in a single mode from the Admin Hub
+            buttons and shouldn't be switched mid-flow. Colors mirror
+            the teacher-roster pills (orange = ISS, red = OSS). */}
         <div
           style={{
-            display: "inline-flex",
-            border: "1px solid #cbd5e1",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.6rem",
+            padding: "0.55rem 0.8rem",
+            border: `1px solid ${kind === "iss" ? "#fdba74" : "#fca5a5"}`,
+            background: kind === "iss" ? "#fff7ed" : "#fef2f2",
+            color: kind === "iss" ? "#9a3412" : "#991b1b",
             borderRadius: 8,
-            overflow: "hidden",
             marginBottom: "0.85rem",
+            fontSize: 13,
           }}
         >
-          {(["iss", "oss"] as const).map((k) => (
-            <button
-              key={k}
-              type="button"
-              onClick={() => setKind(k)}
-              style={{
-                padding: "0.4rem 0.9rem",
-                background: kind === k ? (k === "iss" ? "#1d4ed8" : "#dc2626") : "white",
-                color: kind === k ? "white" : "#0f172a",
-                border: "none",
-                fontWeight: 600,
-                cursor: "pointer",
-              }}
-            >
-              {k.toUpperCase()}
-            </button>
-          ))}
+          <span
+            style={{
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: kind === "iss" ? "#ea580c" : "#dc2626",
+              color: "white",
+              fontSize: 11,
+              fontWeight: 700,
+              letterSpacing: 0.5,
+            }}
+          >
+            {kind.toUpperCase()}
+          </span>
+          <span style={{ fontWeight: 600 }}>
+            You are logging an{" "}
+            {kind === "iss"
+              ? "In-School Suspension"
+              : "Out-of-School Suspension"}
+            .
+          </span>
         </div>
 
         <div style={{ marginBottom: "0.85rem" }}>
@@ -643,7 +660,7 @@ export default function AddDisciplineLogModal({
             style={{
               padding: "0.5rem 1rem",
               border: "1px solid transparent",
-              background: kind === "iss" ? "#1d4ed8" : "#dc2626",
+              background: kind === "iss" ? "#ea580c" : "#dc2626",
               color: "white",
               fontWeight: 600,
               borderRadius: 6,

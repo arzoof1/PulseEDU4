@@ -123,7 +123,7 @@ export default function AdminHubPage() {
       <div style={{ display: "flex", gap: "0.75rem", flexWrap: "wrap" }}>
         <button
           type="button"
-          style={{ ...bigBtn, background: "#1d4ed8" }}
+          style={{ ...bigBtn, background: "#ea580c" }}
           onClick={() => setShowModal("iss")}
         >
           <span style={{ fontSize: "1.4rem" }}>📘 Add ISS log</span>
@@ -229,7 +229,7 @@ export default function AdminHubPage() {
               >
                 <span
                   style={{
-                    background: r.kind === "iss" ? "#1d4ed8" : "#dc2626",
+                    background: r.kind === "iss" ? "#ea580c" : "#dc2626",
                     color: "white",
                     padding: "2px 8px",
                     borderRadius: 6,
