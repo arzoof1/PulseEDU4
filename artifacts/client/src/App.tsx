@@ -8144,22 +8144,37 @@ function App() {
         <div
           role="status"
           style={{
-            background: "linear-gradient(90deg,#7c2d12,#b45309)",
-            color: "#fff7ed",
-            padding: "0.45rem 0.85rem",
+            background: "#fef3c7",
+            color: "#78350f",
+            padding: "6px 16px",
             display: "flex",
             alignItems: "center",
-            gap: "0.75rem",
+            gap: 12,
             justifyContent: "space-between",
-            fontSize: 13,
-            fontWeight: 500,
-            borderBottom: "1px solid #92400e",
+            flexWrap: "wrap",
+            fontSize: 12.5,
+            lineHeight: 1.4,
+            borderBottom: "1px solid #f59e0b",
           }}
         >
-          <span>
-            🪪 Previewing as <strong>{authUser.displayName}</strong>. Any
-            changes you make will be attributed to this account. Real
-            account: <strong>{authUser.impersonatorDisplayName}</strong>.
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: "inline-block",
+                width: 8,
+                height: 8,
+                borderRadius: "50%",
+                background: "#d97706",
+                flexShrink: 0,
+              }}
+            />
+            <span>
+              Previewing as <strong>{authUser.displayName}</strong>
+              <span style={{ opacity: 0.7 }}>
+                {" "}— signed in as {authUser.impersonatorDisplayName}
+              </span>
+            </span>
           </span>
           <button
             type="button"
@@ -8181,17 +8196,18 @@ function App() {
               }
             }}
             style={{
-              background: "#fff7ed",
-              color: "#7c2d12",
-              border: "1px solid #fcd34d",
-              borderRadius: 6,
-              padding: "0.3rem 0.7rem",
+              background: "#fff",
+              color: "#78350f",
+              border: "1px solid #d97706",
+              borderRadius: 4,
+              padding: "3px 10px",
               cursor: "pointer",
               fontWeight: 600,
-              fontSize: 13,
+              fontSize: 12,
+              whiteSpace: "nowrap",
             }}
           >
-            ← Return to my account
+            Exit preview
           </button>
         </div>
       )}
