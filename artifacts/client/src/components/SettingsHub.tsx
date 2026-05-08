@@ -19,7 +19,8 @@ export type SettingsTileId =
   | "parent-portal-sections"
   | "school-wide-expectations"
   | "intervention-strategies"
-  | "iss-settings";
+  | "iss-settings"
+  | "staff-preview";
 
 export type SettingsGroupId =
   | "hall-pass-ops"

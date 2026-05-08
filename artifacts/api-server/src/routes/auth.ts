@@ -180,12 +180,35 @@ router.get("/auth/me", async (req, res) => {
     });
     return;
   }
+  // If this session is currently previewing-as another staff (see
+  // /admin/staff-preview), surface the original impersonator's id + name
+  // so the client can show a "Previewing as X — return to my account" banner.
+  let impersonatorStaffId: number | null = null;
+  let impersonatorDisplayName: string | null = null;
+  const origId = req.session.impersonatorStaffId ?? null;
+  if (origId && origId !== staff.id) {
+    const [orig] = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        active: staffTable.active,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.id, origId));
+    if (orig?.active) {
+      impersonatorStaffId = orig.id;
+      impersonatorDisplayName = orig.displayName;
+    }
+  }
+
   res.json({
     ...publicStaff(staff),
     authToken: issueAuthToken(staff.id),
     activeSchoolId: req.schoolId ?? staff.schoolId,
     homeSchoolId: req.homeSchoolId ?? staff.schoolId,
     isSchoolSwitched: !!req.isSchoolSwitched,
+    impersonatorStaffId,
+    impersonatorDisplayName,
   });
 });
 

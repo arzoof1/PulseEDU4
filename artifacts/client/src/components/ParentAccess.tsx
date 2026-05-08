@@ -459,6 +459,36 @@ function SummaryStat({
   );
 }
 
+async function previewAsParentOf(studentRowId: number): Promise<void> {
+  // Staff-only "preview as parent" — see the parent-facing HeartBEAT for any
+  // student in your school without going through invite + email + accept-pw.
+  // Server creates/uses a sentinel parent and swaps the session cookie, so
+  // this tab becomes the parent. Open in a new tab so the staff tab keeps
+  // its own session.
+  const win = window.open("", "_blank");
+  try {
+    const r = await authFetch("/api/admin/parent-preview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ studentRowId }),
+    });
+    if (!r.ok) {
+      const text = await r.text();
+      if (win) win.close();
+      alert("Could not open preview: " + text);
+      return;
+    }
+    if (win) {
+      win.location.href = "/parent";
+    } else {
+      window.location.href = "/parent";
+    }
+  } catch (err) {
+    if (win) win.close();
+    alert("Could not open preview: " + (err as Error).message);
+  }
+}
+
 function StudentInviteRow({
   row,
   busyId,
@@ -520,7 +550,17 @@ function StudentInviteRow({
             {student.parentName ? ` · Skyward parent: ${student.parentName}` : ""}
           </div>
         </div>
-        <StatusPill status={overallStatus} />
+        <div style={{ display: "flex", alignItems: "center", gap: "0.5rem" }}>
+          <button
+            type="button"
+            style={btnGhost}
+            title="Open the parent-facing HeartBEAT for this student in a new tab. Staff-only QA tool — no email sent, no real parent account created."
+            onClick={() => void previewAsParentOf(student.id)}
+          >
+            Preview as parent
+          </button>
+          <StatusPill status={overallStatus} />
+        </div>
       </div>
 
       {invites.length > 0 && (

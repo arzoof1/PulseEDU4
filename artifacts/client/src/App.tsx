@@ -28,6 +28,7 @@ import TenancyPanel from "./components/TenancyPanel";
 import LogoGeneratorPage from "./components/LogoGeneratorPage";
 import SchoolPlansAdminPage from "./components/SchoolPlansAdminPage";
 import ParentAccess from "./components/ParentAccess";
+import StaffPreviewPage from "./components/StaffPreviewPage";
 import HeartbeatSectionsAdmin from "./components/HeartbeatSectionsAdmin";
 import TeacherAllowlistAdmin from "./components/TeacherAllowlistAdmin";
 import StaffDefaultsAdmin from "./components/StaffDefaultsAdmin";
@@ -4249,6 +4250,11 @@ function App() {
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
     defaultRoom?: string | null;
+    // Set when this session is currently previewing-as another staff
+    // member via the Admin → Preview as Staff tool. Triggers the
+    // top-of-app "Previewing as X" banner.
+    impersonatorStaffId?: number | null;
+    impersonatorDisplayName?: string | null;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
@@ -5695,6 +5701,22 @@ function App() {
       loadActiveKiosks();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeSection, settingsTile]);
+
+  // When the user navigates between sidebar sections (or drills into a
+  // settings tile), reset scroll to the top so they don't land mid-page on
+  // the new screen. The page itself uses window-level scrolling, so a
+  // simple window.scrollTo is enough; we also scroll documentElement to
+  // cover browsers that pin scroll on <html>.
+  useEffect(() => {
+    try {
+      window.scrollTo({ top: 0, left: 0, behavior: "auto" });
+      if (document.scrollingElement) {
+        document.scrollingElement.scrollTop = 0;
+      }
+    } catch {
+      // no-op — defensive
+    }
   }, [activeSection, settingsTile]);
 
   useEffect(() => {
@@ -8118,6 +8140,59 @@ function App() {
 
   return (
     <div className="app-shell">
+      {authUser?.impersonatorStaffId && authUser?.impersonatorDisplayName && (
+        <div
+          role="status"
+          style={{
+            background: "linear-gradient(90deg,#7c2d12,#b45309)",
+            color: "#fff7ed",
+            padding: "0.45rem 0.85rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.75rem",
+            justifyContent: "space-between",
+            fontSize: 13,
+            fontWeight: 500,
+            borderBottom: "1px solid #92400e",
+          }}
+        >
+          <span>
+            🪪 Previewing as <strong>{authUser.displayName}</strong>. Any
+            changes you make will be attributed to this account. Real
+            account: <strong>{authUser.impersonatorDisplayName}</strong>.
+          </span>
+          <button
+            type="button"
+            onClick={async () => {
+              try {
+                const r = await fetch("/api/admin/staff-preview/end", {
+                  method: "POST",
+                  credentials: "include",
+                });
+                if (!r.ok) {
+                  alert("Could not return: " + (await r.text()));
+                  return;
+                }
+                window.location.href = "/";
+              } catch (err) {
+                alert("Could not return: " + (err as Error).message);
+              }
+            }}
+            style={{
+              background: "#fff7ed",
+              color: "#7c2d12",
+              border: "1px solid #fcd34d",
+              borderRadius: 6,
+              padding: "0.3rem 0.7rem",
+              cursor: "pointer",
+              fontWeight: 600,
+              fontSize: 13,
+            }}
+          >
+            ← Return to my account
+          </button>
+        </div>
+      )}
       <header className="app-header">
         <div className="brand" aria-label="PulseED">
           <svg
@@ -18451,6 +18526,18 @@ function App() {
                 group: "admin-tenancy",
               });
             }
+            // QA tool: swap your session to view PulseEDU as another staff
+            // member. Server enforces the same Admin/DA/SU gate.
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "staff-preview",
+                icon: "🪪",
+                title: "Preview as Staff",
+                subtitle:
+                  "Sign in as another staff member to verify role-gated screens. Opens in a new tab.",
+                group: "admin-tenancy",
+              });
+            }
             return tiles;
           })()}
           onSelect={setSettingsTile}
@@ -18479,6 +18566,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "parent-portal-sections" && (isAdmin || isSuperUser) && (
         <HeartbeatSectionsAdmin />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "staff-preview" && (isAdmin || isDistrictAdmin || isSuperUser) && (
+        <StaffPreviewPage />
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (
