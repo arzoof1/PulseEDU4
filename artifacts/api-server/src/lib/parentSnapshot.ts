@@ -22,8 +22,22 @@ import {
   studentFastScoresTable,
   interventionEntriesTable,
   studentMtssPlansTable,
+  ossLogsTable,
+  ossLogDaysTable,
 } from "@workspace/db";
-import { and, eq, desc, isNull, sql } from "drizzle-orm";
+import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
+
+// Returns the YYYY-MM-DD bounds of the current school year. The cutover
+// is Aug 1 — anything before that rolls back to the previous Aug 1 so a
+// July report still reflects the year that just ended. The upper bound
+// is the *next* Aug 1, exclusive, so future-dated entries (e.g. an
+// admin pre-logging next year's days) don't bleed into the current
+// year's count.
+function schoolYearBounds(): { startIso: string; endExclusiveIso: string } {
+  const now = new Date();
+  const y = now.getMonth() >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+  return { startIso: `${y}-08-01`, endExclusiveIso: `${y + 1}-08-01` };
+}
 
 export interface ParentSnapshot {
   parent: { displayName: string; email: string };
@@ -46,6 +60,7 @@ export interface ParentSnapshot {
     staffNotes: boolean;
     iss: boolean;
     mtss: boolean;
+    oss: boolean;
   };
   pbis: {
     total: number;
@@ -116,6 +131,19 @@ export interface ParentSnapshot {
       tier: number;
       openedAt: string;
       goals: string | null;
+    }>;
+  };
+  // OSS (out-of-school suspension) — `daysThisYear` is always populated
+  // when sectionsAvailable.oss is true; `recent` lists the most recent
+  // assigned days. Reason text is included only when the school enabled
+  // the separate `showOssReason` flag (per-parent gating doesn't apply
+  // to reason — it's an all-or-nothing school policy decision).
+  oss: {
+    daysThisYear: number;
+    recent: Array<{
+      day: string;
+      reason: string | null;
+      notes: string | null;
     }>;
   };
 }
@@ -207,6 +235,7 @@ export async function buildParentSnapshot(
     staffNotes: gate(settingsRow?.showStaffNotes, false, prefsRow?.showStaffNotes),
     iss: gate(settingsRow?.showIss, false, prefsRow?.showIss),
     mtss: gate(settingsRow?.showMtss, false, prefsRow?.showMtss),
+    oss: gate(settingsRow?.showOss, false, prefsRow?.showOss),
   };
 
   // ----- PBIS -----
@@ -414,6 +443,61 @@ export async function buildParentSnapshot(
       ? 1
       : mtssPlans.reduce((m, p) => Math.max(m, p.tier), 1);
 
+  // ----- OSS (out-of-school suspension) -----
+  // Pulls non-cancelled assigned days for the current school year, joined
+  // to the parent log so we can surface the reason text when the school
+  // chose to expose it. We only count + return rows where the day-row
+  // itself is non-cancelled AND the parent log is non-cancelled, so a
+  // mid-suspension cancellation cleanly removes those days from view.
+  let ossDaysThisYear = 0;
+  let ossRecent: ParentSnapshot["oss"]["recent"] = [];
+  if (sectionsAvailable.oss) {
+    const { startIso, endExclusiveIso } = schoolYearBounds();
+    const showReason = Boolean(settingsRow?.showOssReason);
+    // Defense-in-depth: scope BOTH tables in the join by school + student.
+    // The day row is already constrained, but explicitly constraining the
+    // parent log row too means a corrupted `log_id` cross-link can't leak
+    // another tenant's reason/notes text into this snapshot.
+    const ossWhere = and(
+      eq(ossLogDaysTable.schoolId, student.schoolId),
+      eq(ossLogDaysTable.studentId, student.studentId),
+      eq(ossLogDaysTable.cancelled, false),
+      eq(ossLogsTable.schoolId, student.schoolId),
+      eq(ossLogsTable.studentId, student.studentId),
+      isNull(ossLogsTable.cancelledAt),
+      gte(ossLogDaysTable.day, startIso),
+      lt(ossLogDaysTable.day, endExclusiveIso),
+    );
+    // Two queries: an exact COUNT(*) for the year tile (no LIMIT — a
+    // student can easily exceed 10/20 OSS days in a year), and the
+    // bounded recent list for the body. Run in parallel.
+    const [countRow, dayRows] = await Promise.all([
+      db
+        .select({ n: sql<number>`COUNT(*)::int` })
+        .from(ossLogDaysTable)
+        .innerJoin(ossLogsTable, eq(ossLogDaysTable.logId, ossLogsTable.id))
+        .where(ossWhere)
+        .then((rows) => rows[0]),
+      db
+        .select({
+          day: ossLogDaysTable.day,
+          reasonText: ossLogsTable.reasonText,
+          notes: ossLogsTable.notes,
+        })
+        .from(ossLogDaysTable)
+        .innerJoin(ossLogsTable, eq(ossLogDaysTable.logId, ossLogsTable.id))
+        .where(ossWhere)
+        .orderBy(desc(ossLogDaysTable.day))
+        .limit(10),
+    ]);
+    ossDaysThisYear = countRow?.n ?? 0;
+    ossRecent = dayRows.map((r) => ({
+      day: r.day,
+      reason: showReason ? (r.reasonText ?? null) : null,
+      notes: showReason ? (r.notes ?? null) : null,
+    }));
+  }
+
   return {
     ok: true,
     data: {
@@ -479,6 +563,7 @@ export async function buildParentSnapshot(
       fastScores: fastScoresRows,
       interventions,
       mtss: { tier: mtssTier, plans: mtssPlans },
+      oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
     },
   };
 }

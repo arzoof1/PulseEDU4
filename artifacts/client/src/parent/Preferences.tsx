@@ -17,7 +17,8 @@ type SectionKey =
   | "showInterventions"
   | "showStaffNotes"
   | "showIss"
-  | "showMtss";
+  | "showMtss"
+  | "showOss";
 
 interface SectionRow {
   key: SectionKey;
@@ -95,6 +96,13 @@ const SECTION_LABELS: SectionLabel[] = [
     key: "showIss",
     label: "ISS (in-school suspension)",
     description: "ISS placements and durations.",
+    sensitive: true,
+  },
+  {
+    key: "showOss",
+    label: "OSS (out-of-school suspension)",
+    description:
+      "Out-of-school suspension days this year. Reasons appear only if your school chose to share them.",
     sensitive: true,
   },
   {

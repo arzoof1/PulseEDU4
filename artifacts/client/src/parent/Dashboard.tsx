@@ -18,6 +18,7 @@ import {
   HandHelping,
   SlidersHorizontal,
   Download,
+  ShieldAlert,
 } from "lucide-react";
 import Preferences from "./Preferences";
 import { Card, CardContent } from "@/components/ui/card";
@@ -118,6 +119,17 @@ interface Snapshot {
       tier: number;
       openedAt: string;
       goals: string | null;
+    }>;
+  };
+  // OSS section — optional so older API servers without the field still
+  // type-check. `reason` / `notes` are only populated when the school
+  // also enabled the separate `showOssReason` policy flag.
+  oss?: {
+    daysThisYear: number;
+    recent: Array<{
+      day: string;
+      reason: string | null;
+      notes: string | null;
     }>;
   };
 }
@@ -757,6 +769,76 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
               </li>
             ))}
           </ul>
+        </Section>
+      )}
+
+      {/* OSS — out-of-school suspension. Always rendered when sec.oss is
+          true (a "0 days this year" tile is itself meaningful — it tells
+          parents the school is sharing OSS info AND there's nothing on
+          file). Reason / notes only appear when the school separately
+          enabled showOssReason; the server already nulls those fields
+          out otherwise so we just render whatever's present. */}
+      {sec.oss && (
+        <Section
+          title="Out-of-School Suspension"
+          icon={<ShieldAlert className="h-4 w-4 text-rose-600" />}
+        >
+          <div className="mb-4 flex items-center gap-3">
+            <div
+              className={
+                "flex items-baseline gap-2 px-3 py-2 rounded-lg border " +
+                ((snapshot.oss?.daysThisYear ?? 0) === 0
+                  ? "bg-emerald-50 border-emerald-200"
+                  : "bg-rose-50 border-rose-200")
+              }
+            >
+              <span
+                className={
+                  "text-2xl font-bold tabular-nums " +
+                  ((snapshot.oss?.daysThisYear ?? 0) === 0
+                    ? "text-emerald-700"
+                    : "text-rose-700")
+                }
+              >
+                {snapshot.oss?.daysThisYear ?? 0}
+              </span>
+              <span className="text-xs text-slate-600 font-medium">
+                day{(snapshot.oss?.daysThisYear ?? 0) === 1 ? "" : "s"} this
+                school year
+              </span>
+            </div>
+          </div>
+          {(snapshot.oss?.recent ?? []).length === 0 ? (
+            <Empty text="No OSS days on file this school year." />
+          ) : (
+            <ul className="divide-y divide-slate-100">
+              {(snapshot.oss?.recent ?? []).map((r) => (
+                <li
+                  key={r.day}
+                  className="flex items-start justify-between py-3 gap-4"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-medium text-slate-800">
+                      {fmtDate(r.day)}
+                    </div>
+                    {r.reason && (
+                      <div className="text-xs text-slate-600 mt-0.5">
+                        {r.reason}
+                      </div>
+                    )}
+                    {r.notes && (
+                      <div className="text-xs text-slate-500 mt-1 italic">
+                        {r.notes}
+                      </div>
+                    )}
+                  </div>
+                  <Badge className="bg-rose-100 text-rose-700 hover:bg-rose-100 shrink-0">
+                    OSS
+                  </Badge>
+                </li>
+              ))}
+            </ul>
+          )}
         </Section>
       )}
 

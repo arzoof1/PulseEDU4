@@ -100,6 +100,7 @@ function drawDocument(
   if (sec.mtss) drawMtssBlock(doc, s);
   if (sec.interventions) drawInterventionsBlock(doc, s);
   if (sec.staffNotes) drawStaffNotesBlock(doc, s);
+  if (sec.oss) drawOssBlock(doc, s);
 
   drawFooter(doc, s);
 }
@@ -494,6 +495,47 @@ function drawStaffNotesBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
     doc.fillColor(COLORS.text).fontSize(10).text(n.noteText, { indent: 0 });
     doc.moveDown(0.3);
   }
+}
+
+// ---------- OSS (out-of-school suspension) ----------
+// Renders the year-to-date day count plus the most recent assigned days.
+// Reason / notes are only present in the snapshot when the school enabled
+// `showOssReason`; we surface them whenever they exist on the row so
+// upstream gating stays the single source of truth.
+function drawOssBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
+  sectionTitle(doc, "Out-of-School Suspension (OSS)");
+  drawStatRow(doc, [
+    {
+      label: "Days this school year",
+      value: String(s.oss.daysThisYear),
+      color: s.oss.daysThisYear === 0 ? COLORS.positive : COLORS.warn,
+    },
+  ]);
+  if (s.oss.recent.length === 0) {
+    drawEmpty(doc, "No OSS days on file this school year.");
+    return;
+  }
+  doc.moveDown(0.4);
+  doc.fontSize(10).font("Helvetica-Bold").fillColor(COLORS.text).text("Recent OSS days");
+  doc.moveDown(0.2);
+  for (const r of s.oss.recent) {
+    ensureSpace(doc, 18);
+    doc
+      .fontSize(10)
+      .font("Helvetica-Bold")
+      .fillColor(COLORS.text)
+      .text(r.day, { continued: !!r.reason })
+      .font("Helvetica")
+      .fillColor(COLORS.muted);
+    if (r.reason) {
+      doc.text(`   · ${r.reason}`);
+    }
+    if (r.notes) {
+      doc.fillColor(COLORS.muted).fontSize(9).text(`     ${r.notes}`);
+      doc.fontSize(10);
+    }
+  }
+  doc.fillColor(COLORS.text);
 }
 
 // ---------- Footer ----------
