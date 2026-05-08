@@ -1630,13 +1630,31 @@ type IssAttendanceRow = {
   id: number;
   studentId: string;
   day: string;
-  source: "manual" | "pullout";
+  source: "manual" | "pullout" | "admin";
   pulloutId: number | null;
+  adminLogId: number | null;
+  rolledFromDate: string | null;
+  markedServed: boolean;
   dispatchedByName: string | null;
   verifiedByName: string | null;
   presentPeriods: number[];
   notes: string | null;
   addedByName: string | null;
+};
+
+type IssCapacityInfo = {
+  capacity: number | null;
+  behavior: "soft" | "hard";
+  used: number;
+};
+
+const ISS_SOURCE_STYLE: Record<
+  "admin" | "manual" | "pullout",
+  { color: string; bg: string; label: string }
+> = {
+  admin: { color: "#1d4ed8", bg: "#eff6ff", label: "Admin" },
+  manual: { color: "#64748b", bg: "#f1f5f9", label: "Walk-in" },
+  pullout: { color: "#7c3aed", bg: "#f5f3ff", label: "Pullout" },
 };
 
 type BellPeriod = {
@@ -1677,6 +1695,8 @@ function IssDashboardSection({ students }: { students: Student[] }) {
   const [attendance, setAttendance] = useState<IssAttendanceRow[]>([]);
   const [bellPeriods, setBellPeriods] = useState<BellPeriod[]>([]);
   const [attendanceBusyId, setAttendanceBusyId] = useState<number | null>(null);
+  const [capacity, setCapacity] = useState<IssCapacityInfo | null>(null);
+  const [markServedBusyId, setMarkServedBusyId] = useState<number | null>(null);
   type IssView = "hub" | "onTheWay" | "arrived" | "roster" | "attendance";
   const [view, setView] = useState<IssView>("hub");
 
@@ -1689,11 +1709,13 @@ function IssDashboardSection({ students }: { students: Student[] }) {
     setLoading(true);
     setMsg(null);
     try {
-      const [pr, rr, ar, br] = await Promise.all([
+      const today = new Date().toLocaleDateString("en-CA");
+      const [pr, rr, ar, br, cr] = await Promise.all([
         authFetch("/api/pullouts?scope=active"),
         authFetch("/api/iss-roster"),
         authFetch("/api/iss-attendance"),
         authFetch("/api/iss-attendance/today-periods"),
+        authFetch(`/api/admin-hub/iss-capacity?from=${today}&to=${today}`),
       ]);
       if (!pr.ok) {
         setMsg({ ok: false, text: "Could not load ISS dashboard." });
@@ -1714,6 +1736,19 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         setBellPeriods(
           [...periods].sort((a, b) => a.periodNumber - b.periodNumber),
         );
+      }
+      if (cr.ok) {
+        const data = await cr.json();
+        const used = Array.isArray(data?.usage) && data.usage[0]
+          ? Number(data.usage[0].used) || 0
+          : 0;
+        setCapacity({
+          capacity: data?.capacity ?? null,
+          behavior: data?.behavior === "hard" ? "hard" : "soft",
+          used,
+        });
+      } else {
+        setCapacity(null);
       }
     } catch {
       setMsg({ ok: false, text: "Network error." });
@@ -1857,6 +1892,35 @@ function IssDashboardSection({ students }: { students: Student[] }) {
       setMsg({ ok: false, text: "Network error." });
     } finally {
       setRosterBusyId(null);
+    }
+  };
+
+  const markAsServed = async (row: IssAttendanceRow) => {
+    setMarkServedBusyId(row.id);
+    setMsg(null);
+    try {
+      const r = await authFetch(
+        `/api/iss-attendance/${row.id}/mark-served`,
+        { method: "POST" },
+      );
+      const data = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        setMsg({
+          ok: false,
+          text: data?.error || "Could not mark as served.",
+        });
+      } else {
+        setAttendance((prev) =>
+          prev.map((r0) =>
+            r0.id === row.id ? { ...r0, markedServed: true } : r0,
+          ),
+        );
+        setMsg({ ok: true, text: "Marked as served. Rollover suppressed." });
+      }
+    } catch {
+      setMsg({ ok: false, text: "Network error." });
+    } finally {
+      setMarkServedBusyId(null);
     }
   };
 
@@ -2153,6 +2217,37 @@ function IssDashboardSection({ students }: { students: Student[] }) {
               ← Back to ISS Hub
             </button>
           )}
+          {capacity?.capacity != null && (view === "attendance" || view === "roster") && (() => {
+            const cap = capacity.capacity ?? 0;
+            const used = capacity.used;
+            const pct = cap > 0 ? used / cap : 0;
+            if (pct < 0.8) return null;
+            const over = used >= cap;
+            const bg = over ? "#fee2e2" : "#fef3c7";
+            const fg = over ? "#991b1b" : "#92400e";
+            const border = over ? "#fecaca" : "#fde68a";
+            return (
+              <div
+                role="status"
+                style={{
+                  marginTop: "0.75rem",
+                  padding: "0.65rem 0.9rem",
+                  background: bg,
+                  color: fg,
+                  border: `1px solid ${border}`,
+                  borderRadius: 8,
+                  fontSize: "0.9rem",
+                  fontWeight: 600,
+                }}
+              >
+                {over ? "⚠ ISS is at or over capacity today" : "ISS is approaching capacity today"}
+                {" — "}{used}/{cap} student-day{cap === 1 ? "" : "s"} used
+                {capacity.behavior === "soft"
+                  ? ". New assignments still allowed; you'll be warned on save."
+                  : ". New assignments are blocked until existing rows clear."}
+              </div>
+            );
+          })()}
           {view === "onTheWay" && (
           <>
           <h3
@@ -2205,6 +2300,43 @@ function IssDashboardSection({ students }: { students: Student[] }) {
           >
             ISS Daily Roster ({sortedRoster.length})
           </h3>
+          {(() => {
+            if (!addStudentId.trim()) return null;
+            const sid = addStudentId.trim();
+            const row = attendance.find((r) => r.studentId === sid);
+            if (!row) return null;
+            const periodCount =
+              bellPeriods.length > 0 ? bellPeriods.length : 8;
+            const presentCount = (row.presentPeriods ?? []).length;
+            const isFullDayAdmin =
+              row.source === "admin" &&
+              (row.presentPeriods ?? []).length === 0 &&
+              !row.markedServed;
+            const isFullDayPresent = presentCount >= periodCount;
+            if (!isFullDayAdmin && !isFullDayPresent) return null;
+            return (
+              <div
+                role="status"
+                style={{
+                  margin: "0 0 0.6rem",
+                  padding: "0.6rem 0.85rem",
+                  background: "#eff6ff",
+                  color: "#1e3a8a",
+                  border: "1px solid #bfdbfe",
+                  borderRadius: 8,
+                  fontSize: "0.88rem",
+                }}
+              >
+                <strong>{studentName(sid)}</strong> is already on
+                {" "}
+                {isFullDayAdmin
+                  ? "a full-day Admin ISS assignment today"
+                  : "ISS for the entire bell schedule today"}
+                . Adding a roster entry won't create a duplicate
+                attendance row, but it may not be necessary.
+              </div>
+            );
+          })()}
           <div
             style={{
               border: "1px solid var(--border, #e2e8f0)",
@@ -2300,10 +2432,10 @@ function IssDashboardSection({ students }: { students: Student[] }) {
           ) : (
             <div style={{ display: "grid", gap: "0.5rem" }}>
               {sortedRoster.map((entry) => {
-                const accent =
-                  entry.source === "manual" ? "#22c55e" : "#7c3aed";
-                const accentBg =
-                  entry.source === "manual" ? "#f0fdf4" : "#f5f3ff";
+                const rosterStyle =
+                  ISS_SOURCE_STYLE[entry.source] ?? ISS_SOURCE_STYLE.manual;
+                const accent = rosterStyle.color;
+                const accentBg = rosterStyle.bg;
                 const isEditing = editingRosterId === entry.id;
                 const isConfirming = confirmRosterDeleteId === entry.id;
                 return (
@@ -2353,7 +2485,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                             fontWeight: 600,
                           }}
                         >
-                          {entry.source === "manual" ? "Manual" : "Pullout"}
+                          {rosterStyle.label}
                         </span>
                       </div>
                       {!isEditing && !isConfirming && (
@@ -2737,13 +2869,27 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                           >
                             Verified by
                           </th>
+                          <th
+                            style={{
+                              padding: "0.5rem 0.6rem",
+                              borderBottom: "1px solid #cbd5e1",
+                            }}
+                          >
+                            Status
+                          </th>
                         </tr>
                       </thead>
                       <tbody>
                         {sortedAttendance.map((row) => {
-                          const accent =
-                            row.source === "manual" ? "#22c55e" : "#7c3aed";
+                          const style =
+                            ISS_SOURCE_STYLE[row.source] ??
+                            ISS_SOURCE_STYLE.manual;
+                          const accent = style.color;
                           const present = new Set(row.presentPeriods ?? []);
+                          const showMarkServed =
+                            row.source === "admin" &&
+                            present.size === 0 &&
+                            !row.markedServed;
                           return (
                             <tr
                               key={row.id}
@@ -2800,10 +2946,25 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                                     fontWeight: 600,
                                   }}
                                 >
-                                  {row.source === "manual"
-                                    ? "Manual (ODR)"
-                                    : "Pullout"}
+                                  {style.label}
                                 </span>
+                                {row.rolledFromDate && (
+                                  <span
+                                    title={`Rolled from ${row.rolledFromDate}`}
+                                    style={{
+                                      marginLeft: 6,
+                                      fontSize: "0.7rem",
+                                      background: "#fef3c7",
+                                      color: "#92400e",
+                                      padding: "2px 6px",
+                                      borderRadius: 999,
+                                      fontWeight: 600,
+                                      whiteSpace: "nowrap",
+                                    }}
+                                  >
+                                    ↻ rolled from {row.rolledFromDate}
+                                  </span>
+                                )}
                               </td>
                               <td
                                 style={{
@@ -2824,6 +2985,51 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                                 {row.source === "pullout"
                                   ? row.verifiedByName || "—"
                                   : "—"}
+                              </td>
+                              <td
+                                style={{
+                                  padding: "0.45rem 0.6rem",
+                                  whiteSpace: "nowrap",
+                                }}
+                              >
+                                {row.markedServed ? (
+                                  <span
+                                    style={{
+                                      fontSize: "0.72rem",
+                                      background: "#dcfce7",
+                                      color: "#166534",
+                                      padding: "2px 8px",
+                                      borderRadius: 999,
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    ✓ Served
+                                  </span>
+                                ) : showMarkServed ? (
+                                  <button
+                                    type="button"
+                                    disabled={markServedBusyId === row.id}
+                                    onClick={() => markAsServed(row)}
+                                    title="Credit this absent day & suppress rollover"
+                                    style={{
+                                      background: "#1d4ed8",
+                                      color: "white",
+                                      border: "none",
+                                      borderRadius: 6,
+                                      padding: "0.3rem 0.65rem",
+                                      cursor: "pointer",
+                                      font: "inherit",
+                                      fontSize: "0.8rem",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {markServedBusyId === row.id
+                                      ? "…"
+                                      : "Mark as served"}
+                                  </button>
+                                ) : (
+                                  <span style={{ color: "#94a3b8" }}>—</span>
+                                )}
                               </td>
                             </tr>
                           );
