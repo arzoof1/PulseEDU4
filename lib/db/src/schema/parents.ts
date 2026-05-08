@@ -154,6 +154,11 @@ export const schoolHeartbeatSettingsTable = pgTable(
     showStaffNotes: boolean("show_staff_notes").notNull().default(false),
     showIss: boolean("show_iss").notNull().default(false),
     showMtss: boolean("show_mtss").notNull().default(false),
+    // OSS section in the parent portal. Off by default — schools opt in
+    // via Heartbeat Settings. When ON parents see dates served + total
+    // day count this year. Reasons are gated separately by showOssReason.
+    showOss: boolean("show_oss").notNull().default(false),
+    showOssReason: boolean("show_oss_reason").notNull().default(false),
     // When true, the school allows parents to opt in to the weekly Sunday
     // PDF email. When false, we hide that toggle on the parent side.
     allowWeeklyEmail: boolean("allow_weekly_email").notNull().default(true),
@@ -192,6 +197,8 @@ export const parentHeartbeatPrefsTable = pgTable(
     showStaffNotes: boolean("show_staff_notes"),
     showIss: boolean("show_iss"),
     showMtss: boolean("show_mtss"),
+    // Per-parent OSS toggle. Null = inherit school's showOss flag.
+    showOss: boolean("show_oss"),
     // Weekly email opt-in (independent per student so a parent can subscribe
     // for one kid but not another).
     weeklyEmailEnabled: boolean("weekly_email_enabled").notNull().default(false),

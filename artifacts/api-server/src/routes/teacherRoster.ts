@@ -32,8 +32,11 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   safetyPlansTable,
+  issAttendanceDayTable,
+  ossLogDaysTable,
+  issAcknowledgementsTable,
 } from "@workspace/db";
-import { and, eq, gte, inArray, isNull } from "drizzle-orm";
+import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   bucketFor,
@@ -288,7 +291,20 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
   // Pull demographics + FAST scores + recent PBIS entries + active MTSS
   // plans in parallel. The PBIS query only returns studentId since
   // that's all we need to mark "has been recognized recently".
-  const [students, scores, recentPbis, activeMtss, accommodations, safetyPlans] = await Promise.all([
+  // "Today" in YYYY-MM-DD for the ISS / OSS pill lookups below.
+  const today = new Date().toISOString().slice(0, 10);
+
+  const [
+    students,
+    scores,
+    recentPbis,
+    activeMtss,
+    accommodations,
+    safetyPlans,
+    issToday,
+    ossToday,
+    issAcksToday,
+  ] = await Promise.all([
     db
       .select()
       .from(studentsTable)
@@ -377,7 +393,72 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(safetyPlansTable.studentId, studentIds),
         ),
       ),
+    // ISS roster today — orange pill on the teacher roster row. Includes
+    // any source (manual/pullout/admin) so the pill is honest about the
+    // student being out of class.
+    db
+      .select({
+        studentId: issAttendanceDayTable.studentId,
+        source: issAttendanceDayTable.source,
+        adminLogId: issAttendanceDayTable.adminLogId,
+      })
+      .from(issAttendanceDayTable)
+      .where(
+        and(
+          eq(issAttendanceDayTable.schoolId, schoolId),
+          eq(issAttendanceDayTable.day, today),
+          inArray(issAttendanceDayTable.studentId, studentIds),
+        ),
+      ),
+    // OSS today — red pill. Cancelled rows don't count.
+    db
+      .select({ studentId: ossLogDaysTable.studentId })
+      .from(ossLogDaysTable)
+      .where(
+        and(
+          eq(ossLogDaysTable.schoolId, schoolId),
+          eq(ossLogDaysTable.day, today),
+          eq(ossLogDaysTable.cancelled, false),
+          inArray(ossLogDaysTable.studentId, studentIds),
+        ),
+      ),
+    // Acknowledgements this teacher has already filed today (so we can
+    // dim the "Posted in Canvas" / "Sent hard copy" buttons that are
+    // already done).
+    db
+      .select({
+        studentId: issAcknowledgementsTable.studentId,
+        period: issAcknowledgementsTable.period,
+        method: issAcknowledgementsTable.method,
+      })
+      .from(issAcknowledgementsTable)
+      .where(
+        and(
+          eq(issAcknowledgementsTable.schoolId, schoolId),
+          eq(issAcknowledgementsTable.day, today),
+          eq(issAcknowledgementsTable.teacherStaffId, targetTeacherId),
+          inArray(issAcknowledgementsTable.studentId, studentIds),
+        ),
+      ),
   ]);
+
+  const issByStudent = new Map<string, { source: string; adminLogId: number | null }>();
+  for (const r of issToday) {
+    issByStudent.set(r.studentId, {
+      source: r.source,
+      adminLogId: r.adminLogId,
+    });
+  }
+  const ossSet = new Set(ossToday.map((r) => r.studentId));
+  const ackByStudent = new Map<
+    string,
+    Array<{ period: number; method: string }>
+  >();
+  for (const a of issAcksToday) {
+    const list = ackByStudent.get(a.studentId) ?? [];
+    list.push({ period: a.period, method: a.method });
+    ackByStudent.set(a.studentId, list);
+  }
 
   const safetyPlanByStudent = new Map<string, (typeof safetyPlans)[number]>();
   for (const p of safetyPlans) safetyPlanByStudent.set(p.studentId, p);
@@ -452,6 +533,14 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       // cell on the Teacher Roster page can pop up a category-grouped
       // list on hover. Empty array when the student has none.
       accommodations: accommodationsByStudent.get(stu.studentId) ?? [],
+      // ISS / OSS today (Admin Hub surface). issToday is non-null when
+      // the student is on the ISS roster today regardless of source —
+      // the client renders the orange pill. ossToday flips the red OSS
+      // pill. acks lists the (period, method) pairs this teacher has
+      // already filed today.
+      issToday: issByStudent.get(stu.studentId) ?? null,
+      ossToday: ossSet.has(stu.studentId),
+      issAcks: ackByStudent.get(stu.studentId) ?? [],
       // Active safety plan summary (or null). The roster pill / hover
       // popover use this directly — no extra round-trip needed.
       safetyPlan: (() => {
@@ -535,5 +624,74 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
     );
   res.json({ teachers: out });
 });
+
+// Teacher acknowledgement of an ISS-day soft reminder. The teacher clicks
+// "Posted in Canvas" or "Sent hard copy" on the roster banner. We record
+// the (student, teacher, period, day, method) tuple. Re-clicking the same
+// button is a no-op (idempotent on the unique index).
+router.post(
+  "/teacher-roster/iss-acknowledge",
+  async (req: Request, res: Response) => {
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const studentId =
+      typeof body.studentId === "string" ? body.studentId.trim() : "";
+    const period = Number(body.period);
+    const method = body.method === "hardcopy" ? "hardcopy" : "canvas";
+    if (!studentId || !Number.isInteger(period) || period <= 0) {
+      res.status(400).json({ error: "studentId and period are required" });
+      return;
+    }
+    const day =
+      typeof body.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(body.day)
+        ? body.day
+        : new Date().toISOString().slice(0, 10);
+
+    // Confirm the teacher actually teaches this student in this period.
+    // Defends against a teacher acking another teacher's banner.
+    const matches = await db.execute(
+      sql`SELECT 1 FROM section_roster sr
+            JOIN class_sections cs ON cs.id = sr.section_id
+           WHERE cs.school_id = ${schoolId}
+             AND cs.teacher_id = ${staff.id}
+             AND cs.period = ${period}
+             AND sr.student_id = ${studentId}
+           LIMIT 1`,
+    );
+    if (matches.rows.length === 0) {
+      res.status(403).json({ error: "Not your class" });
+      return;
+    }
+
+    await db
+      .insert(issAcknowledgementsTable)
+      .values({
+        schoolId,
+        studentId,
+        teacherStaffId: staff.id,
+        teacherName: staff.displayName,
+        period,
+        day,
+        method,
+      })
+      .onConflictDoUpdate({
+        target: [
+          issAcknowledgementsTable.schoolId,
+          issAcknowledgementsTable.studentId,
+          issAcknowledgementsTable.teacherStaffId,
+          issAcknowledgementsTable.period,
+          issAcknowledgementsTable.day,
+        ],
+        set: { method },
+      });
+    res.status(201).json({ ok: true });
+  },
+);
 
 export default router;

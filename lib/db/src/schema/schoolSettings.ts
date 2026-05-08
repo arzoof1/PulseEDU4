@@ -22,6 +22,18 @@ export const schoolSettingsTable = pgTable(
   // Optional school-wide cap on the number of hall passes a student can take
   // in one school day. Null means no global cap.
   globalDailyHallPassLimit: integer("global_daily_hall_pass_limit"),
+  // -----------------------------------------------------------------
+  // ISS room daily seat capacity (Admin Hub).
+  //   issDailyCapacity = max number of unique student-days the ISS room
+  //     can hold per day (counts walk-in + pullout + admin-logged
+  //     together). NULL = no cap.
+  //   issCapacityBehavior = 'soft' shows a confirm prompt on save when
+  //     the chosen day is at/over capacity (admin can override). 'hard'
+  //     refuses the save. Rollover always bypasses the check (with a
+  //     dashboard badge so ISS Teacher sees the over-cap state).
+  // -----------------------------------------------------------------
+  issDailyCapacity: integer("iss_daily_capacity"),
+  issCapacityBehavior: text("iss_capacity_behavior").notNull().default("soft"),
   // PBIS Hub "Needs Attention" thresholds
   pbisQuietTeacherDays: integer("pbis_quiet_teacher_days").notNull().default(5),
   pbisInvisibleStudentDays: integer("pbis_invisible_student_days")

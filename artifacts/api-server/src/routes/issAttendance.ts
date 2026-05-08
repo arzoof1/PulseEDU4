@@ -122,6 +122,136 @@ router.get(
   },
 );
 
+// Mark a row as "served" — the student was absent today but has been
+// granted credit for the day (typically because admin reviewed the absence
+// and decided not to roll it forward). Suppresses any future automatic
+// rollover for this row.
+router.post(
+  "/iss-attendance/:id/mark-served",
+  requireAttendanceMW(),
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .update(issAttendanceDayTable)
+      .set({ markedServed: true, updatedAt: new Date() })
+      .where(
+        and(
+          eq(issAttendanceDayTable.id, id),
+          eq(issAttendanceDayTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Attendance row not found" });
+      return;
+    }
+    res.json(row);
+  },
+);
+
+// Apply rollover for the given date (defaults to yesterday). For every
+// admin-logged ISS row that day with no presentPeriods recorded and
+// markedServed=false, copy the assignment forward to the next non-closed
+// weekday, stamping rolledFromDate with the original day. Idempotent —
+// a second call same day finds no candidates.
+router.post(
+  "/iss-attendance/rollover",
+  requireAttendanceMW(),
+  async (req: Request, res: Response) => {
+    const schoolId = req.schoolId;
+    if (!schoolId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const day =
+      typeof req.body?.day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.body.day)
+        ? req.body.day
+        : (() => {
+            // Default to "yesterday" in school local time.
+            const t = todayInSchoolTz();
+            const d = new Date(`${t}T12:00:00`);
+            d.setDate(d.getDate() - 1);
+            return d.toISOString().slice(0, 10);
+          })();
+
+    // Closed days set for skipping when computing the next school day.
+    const closedRows = (await db.execute(
+      sql`SELECT day::text AS day FROM school_closed_days WHERE school_id = ${schoolId}`,
+    )).rows as { day: string }[];
+    const closedSet = new Set(closedRows.map((r) => r.day));
+    const isWeekend = (ymd: string) => {
+      const d = new Date(`${ymd}T12:00:00`);
+      const dow = d.getDay();
+      return dow === 0 || dow === 6;
+    };
+    const nextSchoolDay = (ymd: string): string => {
+      const d = new Date(`${ymd}T12:00:00`);
+      // Hard cap at 14 lookahead days to avoid runaway loops.
+      for (let i = 0; i < 14; i++) {
+        d.setDate(d.getDate() + 1);
+        const out = d.toISOString().slice(0, 10);
+        if (!isWeekend(out) && !closedSet.has(out)) return out;
+      }
+      return new Date(`${ymd}T12:00:00`).toISOString().slice(0, 10);
+    };
+
+    // Candidates: admin-logged rows on `day` that were "absent" (no
+    // presentPeriods) and have not been marked served and have not
+    // already been rolled (no descendant referencing this day).
+    const candidates = await db
+      .select()
+      .from(issAttendanceDayTable)
+      .where(
+        and(
+          eq(issAttendanceDayTable.schoolId, schoolId),
+          eq(issAttendanceDayTable.day, day),
+          eq(issAttendanceDayTable.source, "admin"),
+          eq(issAttendanceDayTable.markedServed, false),
+        ),
+      );
+
+    const rolled: Array<{ studentId: string; from: string; to: string }> = [];
+    for (const c of candidates) {
+      if ((c.presentPeriods ?? []).length > 0) continue;
+      const target = nextSchoolDay(day);
+      // Don't roll into a day they already have an ISS row for.
+      const existing = await db
+        .select({ id: issAttendanceDayTable.id })
+        .from(issAttendanceDayTable)
+        .where(
+          and(
+            eq(issAttendanceDayTable.schoolId, schoolId),
+            eq(issAttendanceDayTable.studentId, c.studentId),
+            eq(issAttendanceDayTable.day, target),
+          ),
+        );
+      if (existing.length > 0) continue;
+      await db.insert(issAttendanceDayTable).values({
+        schoolId,
+        studentId: c.studentId,
+        day: target,
+        source: "admin",
+        adminLogId: c.adminLogId,
+        rolledFromDate: day,
+        notes: c.notes,
+        addedById: c.addedById,
+        addedByName: c.addedByName,
+      });
+      rolled.push({ studentId: c.studentId, from: day, to: target });
+    }
+    res.json({ day, rolledCount: rolled.length, rolled });
+  },
+);
+
 router.put(
   "/iss-attendance/:id",
   requireAttendanceMW(),

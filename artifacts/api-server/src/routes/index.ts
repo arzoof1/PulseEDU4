@@ -67,6 +67,10 @@ import uiPrefsRouter from "./uiPrefs";
 import schoolPlansRouter from "./schoolPlans";
 import tierPresetsRouter from "./tierPresets";
 import safetyPlansRouter from "./safetyPlans";
+import adminHubRouter from "./adminHub";
+import disciplineReasonsRouter from "./disciplineReasons";
+import schoolClosedDaysRouter from "./schoolClosedDays";
+import studentReportPdfRouter from "./studentReportPdf";
 
 const router: IRouter = Router();
 
@@ -138,5 +142,9 @@ router.use(displayOverridesRouter);
 router.use(schoolPlansRouter);
 router.use(tierPresetsRouter);
 router.use(safetyPlansRouter);
+router.use(adminHubRouter);
+router.use(disciplineReasonsRouter);
+router.use(schoolClosedDaysRouter);
+router.use(studentReportPdfRouter);
 
 export default router;

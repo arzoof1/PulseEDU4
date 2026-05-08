@@ -112,6 +112,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pbisNegativeAffectsTotal,
     schoolWideExpectationAcronym,
     schoolWideExpectationLetters,
+    issDailyCapacity,
+    issCapacityBehavior,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -327,6 +329,68 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         .json({ error: "schoolWideExpectationLetters must be an array or null" });
       return;
     }
+  }
+
+  // -----------------------------------------------------------------
+  // ISS daily capacity + behavior. Soft = warn but allow override; hard
+  // = block creation when full. Capacity null = no limit.
+  // School-wide ISS policy — only admins / Dean / Behavior Specialist /
+  // MTSS Coordinator may flip these. Other authenticated staff get
+  // rejected before any write happens.
+  // -----------------------------------------------------------------
+  if (issDailyCapacity !== undefined || issCapacityBehavior !== undefined) {
+    const staffId = req.staffId;
+    let allowed = false;
+    if (staffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+      if (
+        s &&
+        s.active &&
+        (s.isSuperUser ||
+          s.isAdmin ||
+          s.isDean ||
+          s.isBehaviorSpecialist ||
+          s.isMtssCoordinator)
+      ) {
+        allowed = true;
+      }
+    }
+    if (!allowed) {
+      res.status(403).json({
+        error:
+          "Only admin, Dean, Behavior Specialist, or MTSS Coordinator may change ISS settings",
+      });
+      return;
+    }
+  }
+  if (issDailyCapacity !== undefined) {
+    if (issDailyCapacity === null) {
+      updates.issDailyCapacity = null;
+    } else if (
+      typeof issDailyCapacity !== "number" ||
+      !Number.isInteger(issDailyCapacity) ||
+      issDailyCapacity < 0 ||
+      issDailyCapacity > 1000
+    ) {
+      res.status(400).json({
+        error: "issDailyCapacity must be null or an integer between 0 and 1000",
+      });
+      return;
+    } else {
+      updates.issDailyCapacity = issDailyCapacity;
+    }
+  }
+  if (issCapacityBehavior !== undefined) {
+    if (issCapacityBehavior !== "soft" && issCapacityBehavior !== "hard") {
+      res
+        .status(400)
+        .json({ error: "issCapacityBehavior must be 'soft' or 'hard'" });
+      return;
+    }
+    updates.issCapacityBehavior = issCapacityBehavior;
   }
 
   // -----------------------------------------------------------------

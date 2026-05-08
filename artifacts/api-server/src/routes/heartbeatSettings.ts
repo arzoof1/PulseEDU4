@@ -21,6 +21,8 @@ const SECTION_KEYS = [
   "showStaffNotes",
   "showIss",
   "showMtss",
+  "showOss",
+  "showOssReason",
   "allowWeeklyEmail",
 ] as const;
 type SectionKey = (typeof SECTION_KEYS)[number];
@@ -37,6 +39,8 @@ const SECTION_DEFAULTS: Record<SectionKey, boolean> = {
   showStaffNotes: false,
   showIss: false,
   showMtss: false,
+  showOss: false,
+  showOssReason: false,
   allowWeeklyEmail: true,
 };
 
@@ -82,7 +86,7 @@ async function isAdminOrSuperUser(staffId: number | undefined): Promise<boolean>
 router.get("/heartbeat-settings", async (req, res): Promise<void> => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const allowed = await isAdminOrSuperUser(req.staffId);
+  const allowed = await isAdminOrSuperUser(req.staffId ?? undefined);
   if (!allowed) {
     res
       .status(403)
@@ -97,7 +101,7 @@ router.put("/heartbeat-settings", async (req, res): Promise<void> => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
 
-  const allowed = await isAdminOrSuperUser(req.staffId);
+  const allowed = await isAdminOrSuperUser(req.staffId ?? undefined);
   if (!allowed) {
     res
       .status(403)

@@ -36,6 +36,7 @@ const SECTION_KEYS = [
   "showStaffNotes",
   "showIss",
   "showMtss",
+  "showOss",
 ] as const;
 type SectionKey = (typeof SECTION_KEYS)[number];
 
@@ -51,6 +52,7 @@ const SCHOOL_DEFAULTS: Record<SectionKey, boolean> = {
   showStaffNotes: false,
   showIss: false,
   showMtss: false,
+  showOss: false,
 };
 
 const VALID_DATE_RANGES = new Set(["semester", "month", "all"]);

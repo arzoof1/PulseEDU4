@@ -3,6 +3,7 @@ import {
   serial,
   text,
   integer,
+  boolean,
   timestamp,
   uniqueIndex,
   date,
@@ -16,10 +17,24 @@ export const issAttendanceDayTable = pgTable(
     schoolId: integer("school_id").notNull(),
     studentId: text("student_id").notNull(),
     day: date("day").notNull(),
+    // 'manual' (walk-in by ISS Teacher; green pill on the dashboard)
+    // 'pullout' (period/partial via verified pullout flow; purple pill)
+    // 'admin'   (multi-day discipline assignment via Admin Hub; blue pill)
     source: text("source").notNull(),
     pulloutId: integer("pullout_id").references(() => pulloutsTable.id, {
       onDelete: "set null",
     }),
+    // Set when source='admin'. Points at the parent iss_admin_logs row so
+    // the Admin Hub can show the full multi-day assignment in one place
+    // and cancelling an assignment can soft-cancel every day at once.
+    adminLogId: integer("admin_log_id"),
+    // Set on rows that were auto-generated when the previous day was
+    // marked Absent. Carries the original day forward for the "↻ rolled
+    // from <date>" badge on the ISS Dashboard. NULL on the original row.
+    rolledFromDate: date("rolled_from_date"),
+    // Toggled true when admin clicks "Mark as served" on an absent row.
+    // Suppresses rollover so an absent kid does not cascade forever.
+    markedServed: boolean("marked_served").notNull().default(false),
     dispatchedByName: text("dispatched_by_name"),
     verifiedByName: text("verified_by_name"),
     presentPeriods: integer("present_periods").array().notNull().default([]),

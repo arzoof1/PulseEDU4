@@ -842,6 +842,183 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
   );
 }
 
+// -----------------------------------------------------------------------------
+// Admin Hub schema (ISS / OSS multi-day discipline logging).
+// All idempotent: ALTER TABLE ... IF NOT EXISTS for column additions to
+// existing tables, CREATE TABLE IF NOT EXISTS for new tables. Called from
+// boot so a fresh schema and an upgraded one both end up identical.
+// -----------------------------------------------------------------------------
+export async function ensureAdminHubSchema() {
+  // Extend iss_attendance_day with admin-log linkage + rollover bookkeeping.
+  await db.execute(
+    sql`ALTER TABLE iss_attendance_day ADD COLUMN IF NOT EXISTS admin_log_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE iss_attendance_day ADD COLUMN IF NOT EXISTS rolled_from_date DATE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE iss_attendance_day ADD COLUMN IF NOT EXISTS marked_served BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+
+  // ISS daily seat capacity + soft/hard behavior on school_settings.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_daily_capacity INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS iss_capacity_behavior TEXT NOT NULL DEFAULT 'soft'`,
+  );
+
+  // OSS section + reason gates on school_heartbeat_settings + parent prefs.
+  await db.execute(
+    sql`ALTER TABLE school_heartbeat_settings ADD COLUMN IF NOT EXISTS show_oss BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_heartbeat_settings ADD COLUMN IF NOT EXISTS show_oss_reason BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE parent_heartbeat_prefs ADD COLUMN IF NOT EXISTS show_oss BOOLEAN`,
+  );
+
+  // ---- iss_admin_logs (parent assignment record for blue-pill ISS) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS iss_admin_logs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      reason_id INTEGER,
+      reason_text TEXT,
+      notes TEXT,
+      created_by_id INTEGER NOT NULL,
+      created_by_name TEXT NOT NULL,
+      cancelled_at TIMESTAMPTZ,
+      cancelled_by_id INTEGER,
+      cancelled_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_admin_logs_by_school ON iss_admin_logs(school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_admin_logs_by_student ON iss_admin_logs(school_id, student_id)`,
+  );
+
+  // ---- oss_logs + oss_log_days ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS oss_logs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      reason_id INTEGER,
+      reason_text TEXT,
+      notes TEXT,
+      created_by_id INTEGER NOT NULL,
+      created_by_name TEXT NOT NULL,
+      cancelled_at TIMESTAMPTZ,
+      cancelled_by_id INTEGER,
+      cancelled_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS oss_logs_by_school ON oss_logs(school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS oss_logs_by_student ON oss_logs(school_id, student_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS oss_log_days (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      log_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      day DATE NOT NULL,
+      cancelled BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS oss_log_days_by_log ON oss_log_days(log_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS oss_log_days_student_day_uq ON oss_log_days(school_id, student_id, day)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS oss_log_days_by_school_day ON oss_log_days(school_id, day)`,
+  );
+
+  // ---- discipline_reasons (school-managed list) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS discipline_reasons (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_school_label_uq ON discipline_reasons(school_id, label)`,
+  );
+
+  // ---- school_closed_days (no-school calendar) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_closed_days (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      day DATE NOT NULL,
+      label TEXT,
+      created_by_id INTEGER,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_closed_days_school_day_uq ON school_closed_days(school_id, day)`,
+  );
+
+  // ---- iss_assignment_acknowledgements (teacher banner ack) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS iss_assignment_acknowledgements (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      teacher_name TEXT NOT NULL,
+      period INTEGER NOT NULL,
+      day DATE NOT NULL,
+      method TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS iss_ack_period_day_uq ON iss_assignment_acknowledgements(school_id, student_id, teacher_staff_id, period, day)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_ack_school_day ON iss_assignment_acknowledgements(school_id, day)`,
+  );
+
+  // ---- student_emergency_contacts (read-only SIS-derived contact slots) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_emergency_contacts (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      slot INTEGER NOT NULL,
+      contact_name TEXT NOT NULL,
+      relationship TEXT,
+      phone TEXT,
+      phone_label TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_emergency_contact_slot_uq ON student_emergency_contacts(school_id, student_id, slot)`,
+  );
+}
+
 // Tier-preset table + the three built-in Basic/Pro/Enterprise rows.
 // Idempotent: existing rows are kept (in case the user has edited the
 // preset's feature_keys) but missing rows are inserted.
@@ -1007,6 +1184,7 @@ function clamp(n: number, lo: number, hi: number): number {
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
+  await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {

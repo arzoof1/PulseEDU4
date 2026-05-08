@@ -1,5 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
+import AdminHubPage from "./components/AdminHubPage";
+import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
@@ -4154,6 +4156,7 @@ function App() {
     | "interventionsToday"
     | "interventionReports"
     | "myInterventions"
+    | "adminHub"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -8364,6 +8367,17 @@ function App() {
                     out of Behavior Support to avoid duplication. */}
                 {isBehaviorSpec &&
                   behaviorSpecNavSections.map(renderNavItem)}
+                {(isAdmin ||
+                  Boolean(authUser?.isSuperUser) ||
+                  Boolean(authUser?.isDistrictAdmin) ||
+                  Boolean(authUser?.isDean) ||
+                  isBehaviorSpec ||
+                  isMtss) &&
+                  renderNavItem({
+                    key: "adminHub",
+                    label: "Admin Hub",
+                    icon: IconClipboard,
+                  })}
                 {canManageBehaviorLists && !isBehaviorSpec &&
                   interventionsNavSections.map(renderNavItem)}
                 {/* Hidden here when there's pending work because Verify
@@ -18006,6 +18020,14 @@ function App() {
 
       {activeSection === "displays" && canManageDisplays && <Displays />}
 
+      {activeSection === "adminHub" && (
+        <AdminHubPage />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "iss-settings" && (
+        <IssSettingsPage />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === null && (
         <SettingsHub
           tiles={(() => {
@@ -18126,6 +18148,18 @@ function App() {
               title: "Intervention Strategies",
               subtitle:
                 "Categories and strategies shown in the Tier 3 weekly checklist.",
+              group: "feature-config",
+            });
+            // ISS settings — daily seat capacity, soft/hard behavior,
+            // school-closed days, and discipline reasons. Visible to
+            // anyone who can manage settings; the closed-days and
+            // reasons sub-panels enforce their own write gates.
+            tiles.push({
+              id: "iss-settings",
+              icon: "📘",
+              title: "ISS Settings",
+              subtitle:
+                "Daily ISS seat capacity, school-closed days, and discipline reasons.",
               group: "feature-config",
             });
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV
