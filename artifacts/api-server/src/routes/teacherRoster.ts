@@ -655,11 +655,15 @@ router.post(
 
     // Confirm the teacher actually teaches this student in this period.
     // Defends against a teacher acking another teacher's banner.
+    // NB: class_sections's teacher FK column is `teacher_staff_id`, not
+    // `teacher_id` — the schema renamed years ago when staff replaced the
+    // legacy teachers table. Using `teacher_id` raises a Postgres "column
+    // does not exist" error and 500s the ack post.
     const matches = await db.execute(
       sql`SELECT 1 FROM section_roster sr
             JOIN class_sections cs ON cs.id = sr.section_id
            WHERE cs.school_id = ${schoolId}
-             AND cs.teacher_id = ${staff.id}
+             AND cs.teacher_staff_id = ${staff.id}
              AND cs.period = ${period}
              AND sr.student_id = ${studentId}
            LIMIT 1`,

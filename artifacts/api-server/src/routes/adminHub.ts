@@ -412,13 +412,24 @@ router.post(
       .from(schoolSettingsTable)
       .where(eq(schoolSettingsTable.schoolId, schoolId));
     if (settings?.capacity && settings.capacity > 0) {
-      const usage = (await db.execute(
-        sql`SELECT day::text AS day, COUNT(DISTINCT student_id)::int AS used
-            FROM iss_attendance_day
-            WHERE school_id = ${schoolId}
-              AND day = ANY(${dates})
-            GROUP BY day`,
-      )).rows as { day: string; used: number }[];
+      // Use the query builder's inArray() so each date becomes its own
+      // bound parameter. The earlier `day = ANY(${dates})` form failed
+      // at runtime — node-pg binds the array as a single parameter and
+      // Postgres saw `ANY(($N))` (a row, not an array). Same caveat is
+      // already documented for the recent-list query above.
+      const usage = await db
+        .select({
+          day: issAttendanceDayTable.day,
+          used: sql<number>`COUNT(DISTINCT ${issAttendanceDayTable.studentId})::int`,
+        })
+        .from(issAttendanceDayTable)
+        .where(
+          and(
+            eq(issAttendanceDayTable.schoolId, schoolId),
+            inArray(issAttendanceDayTable.day, dates),
+          ),
+        )
+        .groupBy(issAttendanceDayTable.day);
       const overflow = usage
         .filter((u) => u.used >= (settings.capacity as number))
         .map((u) => u.day);
@@ -723,20 +734,29 @@ router.get(
     // (student × teacher × period) pairs from class_sections + section_roster
     // that the teacher should ack today. Joined to staff for display name
     // and students for the student's display name.
+    // class_sections's teacher FK column is `teacher_staff_id` (renamed
+    // when staff replaced legacy teachers). And we cannot use
+    // `student_id = ANY(${sids})` because node-pg collapses the array
+    // into a single parameter — expand the IN list explicitly via
+    // sql.join so each id binds to its own placeholder.
+    const sidsList = sql.join(
+      sids.map((s) => sql`${s}`),
+      sql`, `,
+    );
     const expected = (await db.execute(
       sql`SELECT sr.student_id AS student_id,
-                 cs.teacher_id AS teacher_id,
+                 cs.teacher_staff_id AS teacher_id,
                  cs.period AS period,
                  s.display_name AS teacher_name,
                  TRIM(CONCAT_WS(' ', st.first_name, st.last_name)) AS student_name
             FROM section_roster sr
             JOIN class_sections cs ON cs.id = sr.section_id
-            JOIN staff s ON s.id = cs.teacher_id
+            JOIN staff s ON s.id = cs.teacher_staff_id
             LEFT JOIN students st
               ON st.school_id = cs.school_id
              AND st.student_id = sr.student_id
            WHERE cs.school_id = ${schoolId}
-             AND sr.student_id = ANY(${sids})
+             AND sr.student_id IN (${sidsList})
              AND cs.period IS NOT NULL`,
     )).rows as {
       student_id: string;
