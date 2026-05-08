@@ -7416,6 +7416,18 @@ function App() {
     isBehaviorSpec ||
     isMtss ||
     Boolean(authUser?.isSchoolPsychologist);
+  // Print Overall Report — mirrors the server gate `canPrintReport` in
+  // routes/studentReportPdf.ts: SU / DistrictAdmin / Admin / BS / MTSS
+  // / ESE Coord / School Psych / Guidance Counselor.
+  const canPrintOverallReportClient =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    isAdmin ||
+    isBehaviorSpec ||
+    isMtss ||
+    Boolean(authUser?.isEseCoordinator) ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    Boolean(authUser?.isGuidanceCounselor);
   // School Store edit access — kept in sync with the server's
   // requireWriteAccess gate in routes/schoolStore.ts. SuperUser is
   // included so a SuperUser entering the BS or MTSS hub (both of which
@@ -18444,6 +18456,7 @@ function App() {
           // authorized actor; canManageMtssPlans matches the server.
           canManage={canManageMtssPlans}
           canEditSafetyPlan={canEditSafetyPlanClient}
+          canPrintOverallReport={canPrintOverallReportClient}
           onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}
           onBack={() => {
             const target = studentProfileReturnTo;

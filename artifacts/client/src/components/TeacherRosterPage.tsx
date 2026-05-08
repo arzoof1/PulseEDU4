@@ -81,6 +81,13 @@ interface RosterRow {
   // so the Programs hover popover can group + color them by category.
   // Empty array when the student has none.
   accommodations: Array<{ name: string; category: string }>;
+  // ISS / OSS today (Admin Hub surface). issToday is non-null when the
+  // student is on ISS today (any source); ossToday is true on OSS days.
+  // issAcks lists this teacher's already-recorded acknowledgements
+  // (period + method) for today.
+  issToday: { source: string; adminLogId: number | null } | null;
+  ossToday: boolean;
+  issAcks: Array<{ period: number; method: string }>;
 }
 
 interface RosterResponse {
@@ -817,6 +824,102 @@ function ProgramPills({ row }: { row: RosterRow }) {
   );
 }
 
+// Soft reminder banner shown beneath the student's name when they're on
+// admin-logged ISS today AND this teacher has not yet acknowledged the
+// assignment for the current period. Two buttons let the teacher record
+// "Posted in Canvas" or "Sent hard copy"; the row reloads after the
+// POST so the banner disappears.
+function IssReminder({
+  row,
+  period,
+  onAcknowledged,
+}: {
+  row: RosterRow;
+  period: number | null;
+  onAcknowledged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  // Only nudge for admin-logged ISS — walk-in / pullout rows are not
+  // missed-instruction events, so no Canvas-post reminder is needed.
+  if (!row.issToday || row.issToday.source !== "admin") return null;
+  if (period == null) return null;
+  // Once acknowledged for this period, the soft-reminder banner
+  // disappears entirely — the orange "ISS" pill next to the student's
+  // name is sufficient signal, and we don't want a persistent "✓"
+  // chip cluttering every row of the roster.
+  if (row.issAcks.some((a) => a.period === period)) return null;
+  const post = async (method: "canvas" | "hardcopy") => {
+    setBusy(true);
+    try {
+      const r = await authFetch("/api/teacher-roster/iss-acknowledge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: row.studentId,
+          period,
+          method,
+        }),
+      });
+      if (r.ok) onAcknowledged();
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div
+      style={{
+        marginTop: 6,
+        padding: "6px 8px",
+        background: "#fffbeb",
+        border: "1px solid #fde68a",
+        borderRadius: 6,
+        fontSize: 11,
+        color: "#92400e",
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: 6,
+      }}
+    >
+      <span>On ISS today — please send work for Period {period}.</span>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void post("canvas")}
+        style={{
+          padding: "2px 8px",
+          borderRadius: 4,
+          border: "1px solid #fcd34d",
+          background: "#fef3c7",
+          color: "#78350f",
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        Posted in Canvas
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={() => void post("hardcopy")}
+        style={{
+          padding: "2px 8px",
+          borderRadius: 4,
+          border: "1px solid #fcd34d",
+          background: "#fef3c7",
+          color: "#78350f",
+          fontSize: 11,
+          fontWeight: 600,
+          cursor: busy ? "wait" : "pointer",
+        }}
+      >
+        Sent hard copy
+      </button>
+    </div>
+  );
+}
+
 function BqPills({ row }: { row: RosterRow }) {
   const flags: Array<{ subject: string; score: number | null }> = [];
   if (row.ela.priorYearBq) {
@@ -868,6 +971,10 @@ export default function TeacherRosterPage({
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  // Bump to trigger a roster reload (e.g. after the IssReminder banner
+  // posts an acknowledgement so today's row picks up the new ack).
+  const [reloadTick, setReloadTick] = useState(0);
+  const refresh = () => setReloadTick((n) => n + 1);
   // Per-user view toggles. Each maps to one optional column. Defaults
   // to all-on; persisted to localStorage so the teacher's preference
   // survives reloads. Bumped key to v2 since we added pm-level toggles.
@@ -948,7 +1055,8 @@ export default function TeacherRosterPage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Reload roster when teacher or period changes.
+  // Reload roster when teacher or period changes, or when refresh() is
+  // called (reloadTick bumps).
   useEffect(() => {
     if (teacherId == null) {
       setData(null);
@@ -983,7 +1091,7 @@ export default function TeacherRosterPage({
     return () => {
       cancelled = true;
     };
-  }, [teacherId, period]);
+  }, [teacherId, period, reloadTick]);
 
   const periodOptions = data?.availablePeriods ?? [];
 
@@ -1474,7 +1582,46 @@ export default function TeacherRosterPage({
                           <span>Spider</span>
                         </button>
                       )}
+                      {row.issToday && (
+                        <span
+                          title="On In-School Suspension today"
+                          style={{
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #fdba74",
+                            background: "#fff7ed",
+                            color: "#9a3412",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          ISS
+                        </span>
+                      )}
+                      {row.ossToday && (
+                        <span
+                          title="On Out-of-School Suspension today"
+                          style={{
+                            padding: "2px 8px",
+                            borderRadius: 999,
+                            border: "1px solid #fca5a5",
+                            background: "#fef2f2",
+                            color: "#991b1b",
+                            fontSize: 11,
+                            fontWeight: 700,
+                            lineHeight: 1.2,
+                          }}
+                        >
+                          OSS
+                        </span>
+                      )}
                     </span>
+                    <IssReminder
+                      row={row}
+                      period={data.selectedPeriod}
+                      onAcknowledged={refresh}
+                    />
                   </td>
                   {visibility.programs && (
                     <td style={{ padding: "6px 10px" }}>

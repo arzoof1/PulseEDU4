@@ -483,6 +483,11 @@ interface Props {
   // (read-only) so every staff member still has an in-context entry.
   canEditSafetyPlan?: boolean;
   onOpenSafetyPlan?: (studentId: string) => void;
+  // True when the signed-in user can print the cross-domain Student
+  // Overall Report PDF (Admin / SuperUser / Behavior Specialist / MTSS
+  // Coordinator / Guidance Counselor / School Psychologist). Server
+  // re-checks via the same gate; this just hides the affordance.
+  canPrintOverallReport?: boolean;
 }
 
 export default function StudentProfile({
@@ -491,11 +496,23 @@ export default function StudentProfile({
   canManage = false,
   canEditSafetyPlan = false,
   onOpenSafetyPlan,
+  canPrintOverallReport = false,
 }: Props) {
   const [data, setData] = useState<ProfilePayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [windowKey, setWindowKey] = useState<WindowKey>("30");
+  // Emergency contacts come from /api/students/:id (separate endpoint
+  // since the insights profile payload doesn't include SIS contact
+  // slots). Loaded in a parallel fetch — failure is non-fatal.
+  const [emergencyContacts, setEmergencyContacts] = useState<
+    Array<{
+      slot: number;
+      name: string | null;
+      relationship: string | null;
+      phone: string | null;
+    }>
+  >([]);
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
   // Inline demographics editor — closed by default. When opened it
@@ -594,6 +611,27 @@ export default function StudentProfile({
       cancelled = true;
     };
   }, [studentId, windowKey, customFrom, customTo]);
+
+  // Parallel fetch for SIS-derived emergency contact slots. Independent
+  // of the window filter — these are static per-student. Reset on
+  // student change so a stale prior-student row never bleeds through
+  // if the new fetch fails (privacy correctness).
+  useEffect(() => {
+    let cancelled = false;
+    setEmergencyContacts([]);
+    authFetch(`/api/students/${encodeURIComponent(studentId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { emergencyContacts?: typeof emergencyContacts } | null) => {
+        if (cancelled || !j) return;
+        setEmergencyContacts(j.emergencyContacts ?? []);
+      })
+      .catch(() => {
+        /* non-fatal — block just stays empty */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
 
   if (loading) {
     return (
@@ -716,6 +754,28 @@ export default function StudentProfile({
                   label={`${header.activeMtssPlanCount} active plan${header.activeMtssPlanCount === 1 ? "" : "s"}`}
                   sev="watch"
                 />
+              )}
+              {canPrintOverallReport && (
+                <a
+                  href={`/api/students/${encodeURIComponent(studentId)}/overall-report-pdf`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    marginLeft: 4,
+                    background: "#dbeafe",
+                    border: "1px solid #bfdbfe",
+                    color: "#1e3a8a",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    textDecoration: "none",
+                    display: "inline-block",
+                  }}
+                  title="Print the cross-domain Student Overall Report (PDF)"
+                >
+                  🖨️ Print Overall Report
+                </a>
               )}
               {onOpenSafetyPlan && (
                 <button
@@ -1445,6 +1505,31 @@ export default function StudentProfile({
               ? `${pillars.family.linkedParentAccountCount} linked parent portal account${pillars.family.linkedParentAccountCount === 1 ? "" : "s"}`
               : "No parent portal account linked yet"}
           </div>
+          {/* SIS-derived emergency contact slots (read-only). Blank
+              slots are hidden so the block stays compact when only
+              one or two slots are populated. */}
+          {emergencyContacts.some((c) => c.name || c.phone) && (
+            <div style={{ marginTop: "0.75rem" }}>
+              <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
+                Emergency contacts
+              </div>
+              <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: "0.85rem" }}>
+                {emergencyContacts
+                  .filter((c) => c.name || c.phone)
+                  .map((c) => (
+                    <li key={c.slot}>
+                      <strong>{c.name ?? "(unnamed)"}</strong>
+                      {c.relationship && (
+                        <span style={{ color: "#6b7280" }}> — {c.relationship}</span>
+                      )}
+                      {c.phone && (
+                        <div style={{ color: "#6b7280" }}>{c.phone}</div>
+                      )}
+                    </li>
+                  ))}
+              </ul>
+            </div>
+          )}
         </Card>
       </div>
 

@@ -57,6 +57,13 @@ PulseEDU is a multi-tenant application providing tools for school operations, st
 
 _Populate as you build_
 
+## Future work
+
+- **Verify Pullouts visibility for BS/Dean/MTSS/PBIS Coord** — `canVerifyPullouts` in `App.tsx` already includes Behavior Specialist, but the user reports the "Verify Pullouts" notification only appears for Admin. Investigate `pendingPulloutCount` data fetch (around `App.tsx` line 7466 `pendingPulloutsTick` effect) and the server gate in `routes/pullouts.ts` to confirm non-Admin verifiers actually receive a non-zero pending count, plus the Quick Access promotion path at `App.tsx:8227`.
+- **Admin Hub A4 surfaces (in progress / partial)**:
+  - Parent portal OSS section — needs server work in `parentSnapshot.ts` to include OSS days + reasons gated by `school_heartbeat_settings.show_oss/show_oss_reason` and per-parent `parent_heartbeat_prefs.show_oss`, then a `Section` block in `parent/Dashboard.tsx`.
+  - ISS Dashboard polish — pills (blue admin / grey walk-in / purple pullout), capacity warning banner, rollover badge, "already on full-day ISS" banner, "Mark as served" toggle. Server flags (`markedServed`, `rolledFromDate`, `adminLogId`) already exist on `iss_attendance_day`.
+
 ## Gotchas
 
 - **Timezone handling**: Be careful with date comparisons and `new Date()` as it can lead to UTC pitfalls. Use local `YYYY-MM-DD` strings for comparisons.
