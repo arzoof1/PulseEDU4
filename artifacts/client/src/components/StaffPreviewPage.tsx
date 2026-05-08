@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { authFetch } from "../lib/authToken";
+import { authFetch, setAuthToken } from "../lib/authToken";
 
 // Sister page to ParentAccess's "Preview as parent" — lets Admin /
 // DistrictAdmin / SuperUser swap their session to any non-privileged staff
@@ -107,7 +107,6 @@ export default function StaffPreviewPage() {
 
   const previewAs = async (id: number) => {
     setBusyId(id);
-    const win = window.open("", "_blank");
     try {
       const r = await authFetch("/api/admin/staff-preview", {
         method: "POST",
@@ -116,14 +115,24 @@ export default function StaffPreviewPage() {
       });
       if (!r.ok) {
         const text = await r.text();
-        if (win) win.close();
         alert("Could not start preview: " + text);
         return;
       }
-      if (win) win.location.href = "/";
-      else window.location.href = "/";
+      // Replace the stored Bearer token with one signed for the
+      // impersonated staff. Without this, the Replit iframe — which
+      // routinely blocks third-party cookies — would keep sending the
+      // original bearer on the next request and silently revert to the
+      // real account. Reload in-place so the session cookie + bearer
+      // both point at the new identity in this same tab. (Opening a
+      // new tab loses sessionStorage, so we'd lose the bearer there.)
+      const data = (await r.json().catch(() => null)) as {
+        authToken?: string;
+      } | null;
+      if (data?.authToken) {
+        setAuthToken(data.authToken);
+      }
+      window.location.href = "/";
     } catch (err) {
-      if (win) win.close();
       alert("Could not start preview: " + (err as Error).message);
     } finally {
       setBusyId(null);

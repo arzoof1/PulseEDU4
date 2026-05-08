@@ -1,6 +1,7 @@
 import { Router, type IRouter, type Request, type Response } from "express";
 import { db, staffTable, schoolsTable } from "@workspace/db";
 import { and, asc, eq, inArray, ne } from "drizzle-orm";
+import { issueAuthToken } from "../lib/authToken.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -197,7 +198,18 @@ router.post(
           res.status(500).json({ error: "Could not save preview session" });
           return;
         }
-        res.json({ ok: true, redirectTo: "/" });
+        // Return a fresh Bearer token signed for the TARGET staff. The
+        // client stores this in sessionStorage before reloading so the
+        // iframe — where the session cookie is often blocked — picks up
+        // the impersonated identity instead of falling back to the
+        // original-staff bearer that's already in storage.
+        res.json({
+          ok: true,
+          redirectTo: "/",
+          authToken: issueAuthToken(target.id),
+          targetStaffId: target.id,
+          targetDisplayName: target.displayName,
+        });
       });
     });
   },
@@ -243,7 +255,14 @@ router.post(
           res.status(500).json({ error: "Could not save restored session" });
           return;
         }
-        res.json({ ok: true, redirectTo: "/" });
+        // Same iframe-bearer caveat as start-preview: hand back a fresh
+        // bearer signed for the original staff so the client can replace
+        // the impersonated bearer in sessionStorage.
+        res.json({
+          ok: true,
+          redirectTo: "/",
+          authToken: issueAuthToken(origStaff.id),
+        });
       });
     });
   },
