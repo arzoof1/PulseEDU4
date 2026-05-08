@@ -59,8 +59,7 @@ _Populate as you build_
 
 ## Future work
 
-- **Verify Pullouts visibility for BS/Dean/MTSS/PBIS Coord** — `canVerifyPullouts` in `App.tsx` already includes Behavior Specialist, but the user reports the "Verify Pullouts" notification only appears for Admin. Investigate `pendingPulloutCount` data fetch (around `App.tsx` line 7466 `pendingPulloutsTick` effect) and the server gate in `routes/pullouts.ts` to confirm non-Admin verifiers actually receive a non-zero pending count, plus the Quick Access promotion path at `App.tsx:8227`.
-- **Admin Hub A4 surfaces** — Parent portal OSS section and ISS Dashboard polish are both complete. Remaining: Pullouts visibility for non-Admin verifiers (see top of Future work).
+_All Admin Hub A4 follow-ups are complete. Add new items here as they come up._
 
 ## Gotchas
 

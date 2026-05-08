@@ -134,8 +134,17 @@ router.get(
     const staff = (req as Request & { staff: StaffRow }).staff;
     const scope = String(req.query.scope ?? "mine");
 
+    // Mirrors the canonical `isVerifier` defined below (and the client-side
+    // `canVerifyPullouts` gate in App.tsx). Keep these in sync — Behavior
+    // Specialists and PBIS Coordinators must be able to fetch the pending
+    // queue so the bell badge shows up for them, not just admins/dean/MTSS.
     const isVerifier =
-      staff.isSuperUser || staff.isAdmin || staff.isDean || staff.isMtssCoordinator;
+      staff.isSuperUser ||
+      staff.isAdmin ||
+      staff.isDean ||
+      staff.isMtssCoordinator ||
+      staff.isBehaviorSpecialist ||
+      staff.isPbisCoordinator;
     const isIssView =
       staff.isSuperUser ||
       staff.isAdmin ||
