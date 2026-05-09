@@ -65,6 +65,11 @@ interface SpotlightPanelProps {
   isAdmin: boolean;
 }
 
+interface TeacherOpt {
+  id: number;
+  displayName: string | null;
+}
+
 // Palette for wheel wedges. Picked for high contrast against white text
 // and reasonable ordering — alternating light/dark prevents two same-hue
 // wedges sitting next to each other.
@@ -107,6 +112,38 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   // direction across multiple picks rather than snapping back to 0.
   const [wheelRotation, setWheelRotation] = useState(0);
   const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ---- Admin "Test as teacher" override --------------------------------
+  // Lets an admin (or any core-team member) pick any teacher in the school
+  // and run Spotlight against THAT teacher's roster. The server already
+  // accepts ?teacherId= on /api/teacher-roster for core-team callers, so
+  // this is a pure client-side override — no impersonation, no school
+  // switching, no bell-schedule changes. Cleared by setting back to "".
+  // Only rendered when isAdmin is true. We intentionally don't gate the
+  // feature on the period override either — admins can pick "any teacher,
+  // any period" and the roster call uses both. (Non-admins never see this
+  // row, so the existing "this teacher's current period" UX is unchanged.)
+  const [teacherList, setTeacherList] = useState<TeacherOpt[]>([]);
+  const [teacherOverride, setTeacherOverride] = useState<number | "">("");
+  useEffect(() => {
+    if (!isAdmin) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch("/api/teacher-roster/teachers", {
+          credentials: "include",
+        });
+        if (!res.ok) return;
+        const data = (await res.json()) as { teachers?: TeacherOpt[] };
+        if (!cancelled) setTeacherList(data.teachers ?? []);
+      } catch {
+        // best-effort; admin override stays empty if fetch fails
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
 
   useEffect(() => {
     if (typeof window !== "undefined") {
@@ -193,8 +230,12 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     setSpin({ kind: "idle" });
     (async () => {
       try {
+        const teacherQs =
+          teacherOverride !== ""
+            ? `&teacherId=${encodeURIComponent(String(teacherOverride))}`
+            : "";
         const res = await fetch(
-          `/api/teacher-roster?period=${encodeURIComponent(String(activePeriod))}`,
+          `/api/teacher-roster?period=${encodeURIComponent(String(activePeriod))}${teacherQs}`,
           { credentials: "include" },
         );
         if (!res.ok) {
@@ -227,7 +268,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [activePeriod]);
+  }, [activePeriod, teacherOverride]);
 
   // Eligible roster excludes the per-session absent list — that's also
   // what the wheel and bottle row should display so the teacher doesn't
@@ -459,6 +500,75 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           )}
         </div>
       </div>
+
+      {isAdmin && (
+        <div
+          className="card"
+          style={{
+            padding: "0.75rem 1rem",
+            display: "flex",
+            gap: "0.75rem",
+            alignItems: "center",
+            flexWrap: "wrap",
+            marginBottom: "0.75rem",
+            background: "#fef3c7",
+            border: "1px solid #fcd34d",
+          }}
+        >
+          <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>
+            Admin test mode:
+          </div>
+          <select
+            value={teacherOverride}
+            onChange={(e) =>
+              setTeacherOverride(
+                e.target.value === "" ? "" : Number(e.target.value),
+              )
+            }
+            style={{
+              padding: "0.4rem 0.6rem",
+              borderRadius: 8,
+              border: "1px solid #cbd5e1",
+              minWidth: 220,
+            }}
+          >
+            <option value="">My own roster (default)</option>
+            {teacherList.map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.displayName ?? `Staff #${t.id}`}
+              </option>
+            ))}
+          </select>
+          {teacherOverride !== "" && (
+            <button
+              type="button"
+              onClick={() => setTeacherOverride("")}
+              style={{
+                padding: "0.3rem 0.6rem",
+                borderRadius: 6,
+                border: "1px solid #cbd5e1",
+                background: "white",
+                cursor: "pointer",
+                fontSize: "0.8rem",
+              }}
+            >
+              Clear
+            </button>
+          )}
+          <div
+            style={{
+              fontSize: "0.75rem",
+              opacity: 0.75,
+              fontStyle: "italic",
+              flexBasis: "100%",
+            }}
+          >
+            Pick any teacher + period to preview Spotlight against their
+            roster. Useful for testing outside school hours. Picks still
+            count toward the no-repeat tail.
+          </div>
+        </div>
+      )}
 
       <div
         className="card"
