@@ -6,6 +6,7 @@ import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import SpotlightPanel from "./components/SpotlightPanel";
+import SpotlightLaunchButton from "./components/SpotlightLaunchButton";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
@@ -8777,12 +8778,14 @@ function App() {
             })}
             {/* Spotlight — fair, randomized "pull a name" picker for the
                 current period. Sits in Quick Access because teachers reach
-                for it mid-lesson. */}
-            {renderNavItem({
-              key: "spotlight",
-              label: "Spotlight",
-              icon: IconStar,
-            })}
+                for it mid-lesson. Custom standout button (not a regular
+                .nav-item) so it reads as a playful tool rather than a
+                page; the rotating label invites a tap. */}
+            <SpotlightLaunchButton
+              active={activeSection === "spotlight"}
+              onClick={() => setActiveSection("spotlight")}
+            />
+
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
                 key: "requestPullout",

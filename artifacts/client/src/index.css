@@ -1475,3 +1475,407 @@ ul[style*="listStyle: none"] li button:hover {
   85% { opacity: 1; }
   100% { opacity: 0; }
 }
+
+/* =====================================================================
+   Spotlight — sidebar launch button + panel (wheel + bottles + result)
+   ===================================================================== */
+
+/* Sidebar standout button. Visually different from .nav-item so it reads
+   as "play a fun thing" rather than "page in a list". Rotating label is
+   handled in JS via opacity transition on .spotlight-launch-label. */
+.spotlight-launch {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  border: none;
+  border-radius: 12px;
+  padding: 0.65rem 0.85rem;
+  margin: 0.25rem 0 0.4rem 0;
+  font-size: 14px;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  color: #fff;
+  background: linear-gradient(135deg, #6366f1 0%, #ec4899 50%, #f59e0b 100%);
+  box-shadow:
+    0 4px 14px rgba(99, 102, 241, 0.32),
+    inset 0 1px 0 rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+  isolation: isolate;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+.spotlight-launch:hover {
+  transform: translateY(-1px);
+  box-shadow:
+    0 6px 18px rgba(99, 102, 241, 0.42),
+    inset 0 1px 0 rgba(255, 255, 255, 0.3);
+}
+.spotlight-launch:active { transform: translateY(0); }
+.spotlight-launch.active {
+  box-shadow:
+    0 0 0 2px #fff,
+    0 0 0 4px #6366f1,
+    0 4px 14px rgba(99, 102, 241, 0.45);
+}
+.spotlight-launch-glow {
+  position: absolute;
+  inset: -50%;
+  z-index: -1;
+  background: radial-gradient(
+    circle at 30% 30%,
+    rgba(255, 255, 255, 0.45),
+    transparent 55%
+  );
+  animation: spotlight-glow-spin 6s linear infinite;
+}
+@keyframes spotlight-glow-spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+.spotlight-launch-icon {
+  font-size: 1.15rem;
+  line-height: 1;
+  flex-shrink: 0;
+  filter: drop-shadow(0 1px 2px rgba(0, 0, 0, 0.35));
+  animation: spotlight-icon-pulse 2.4s ease-in-out infinite;
+}
+@keyframes spotlight-icon-pulse {
+  0%, 100% { transform: scale(1) rotate(0); }
+  50%      { transform: scale(1.18) rotate(8deg); }
+}
+.spotlight-launch-label {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: opacity 0.2s ease;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.spotlight-launch-label.fading  { opacity: 0; }
+.spotlight-launch-label.visible { opacity: 1; }
+.spotlight-launch-sparkles {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+.sl-spark {
+  position: absolute;
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.85);
+  opacity: 0;
+  animation: sl-spark-twinkle 3s ease-in-out infinite;
+}
+.sl-spark-1 { top: 18%; left: 28%; animation-delay: 0s;   }
+.sl-spark-2 { top: 65%; left: 65%; animation-delay: 1s;   }
+.sl-spark-3 { top: 35%; left: 80%; animation-delay: 2.1s; }
+@keyframes sl-spark-twinkle {
+  0%, 100% { opacity: 0; transform: scale(0.4); }
+  40%      { opacity: 1; transform: scale(1.4); }
+  60%      { opacity: 0.7; transform: scale(1); }
+}
+
+/* ---- Spotlight panel: animation style toggle ---- */
+.spotlight-style-toggle {
+  display: inline-flex;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #fff;
+}
+.spotlight-style-toggle button {
+  background: transparent;
+  border: none;
+  padding: 0.45rem 0.75rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color: #475569;
+  font-weight: 600;
+  transition: background 0.12s, color 0.12s;
+}
+.spotlight-style-toggle button:hover { background: #f1f5f9; }
+.spotlight-style-toggle button.active {
+  background: #1d4ed8;
+  color: #fff;
+  box-shadow: none;
+}
+.spotlight-style-toggle button + button {
+  border-left: 1px solid #cbd5e1;
+}
+
+/* ---- Spotlight panel: stage container ---- */
+.spotlight-stage {
+  background: linear-gradient(
+    180deg,
+    #f8fafc 0%,
+    #eef2ff 100%
+  );
+  border: 1px solid #e2e8f0;
+}
+
+/* ---- Wheel ---- */
+.spotlight-wheel-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+.spotlight-wheel-pointer {
+  width: 0;
+  height: 0;
+  border-left: 16px solid transparent;
+  border-right: 16px solid transparent;
+  border-top: 26px solid #ef4444;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35));
+  margin-bottom: -10px;
+  z-index: 2;
+}
+.spotlight-wheel-container {
+  width: min(360px, 80vw);
+  aspect-ratio: 1;
+  position: relative;
+  filter: drop-shadow(0 8px 24px rgba(15, 23, 42, 0.2));
+}
+.spotlight-wheel {
+  width: 100%;
+  height: 100%;
+  display: block;
+  border-radius: 50%;
+  background: #fff;
+}
+
+/* ---- Bottle flip ---- */
+.spotlight-bottles-wrap {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+.spotlight-table {
+  position: relative;
+  width: 110px;
+  height: 14px;
+  background: linear-gradient(180deg, #92400e, #78350f);
+  border-radius: 4px;
+  margin: 0.5rem 0 -10px 0;
+  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.18);
+}
+.spotlight-table::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 6px;
+  height: 26px;
+  background: #78350f;
+}
+.spotlight-bottles-row {
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 0.65rem;
+  min-height: 220px;
+  padding-top: 110px;
+  perspective: 800px;
+}
+.spotlight-bottle {
+  position: relative;
+  width: 44px;
+  height: 110px;
+  flex-shrink: 0;
+  transform-origin: center center;
+  transition: transform 0.2s ease;
+}
+.bottle-cap {
+  position: absolute;
+  top: -10px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 18px;
+  height: 12px;
+  background: #1e3a8a;
+  border-radius: 4px 4px 2px 2px;
+  z-index: 2;
+}
+.bottle-body {
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, #38bdf8 0%, #0284c7 100%);
+  border-radius: 14px 14px 6px 6px / 30px 30px 6px 6px;
+  box-shadow:
+    inset -4px 0 6px rgba(0, 0, 0, 0.18),
+    inset 4px 0 6px rgba(255, 255, 255, 0.25);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.bottle-label {
+  background: #fff;
+  color: #0f172a;
+  padding: 3px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 700;
+  white-space: nowrap;
+  max-width: 38px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border: 1px solid #cbd5e1;
+}
+/* Miss animation: launch up, tumble, fall off to the side. */
+.bottle-miss {
+  animation: bottle-miss 3.4s cubic-bezier(0.22, 0.7, 0.4, 1) forwards;
+}
+@keyframes bottle-miss {
+  0% {
+    transform: translate(0, 0) rotate(0deg);
+    opacity: 1;
+  }
+  35% {
+    transform: translate(var(--mid-x), var(--mid-y))
+               rotate(calc(var(--end-rot) * 0.45));
+  }
+  70% {
+    transform: translate(
+      calc(var(--end-x) * 0.85),
+      calc(var(--mid-y) * 0.2)
+    ) rotate(calc(var(--end-rot) * 0.85));
+    opacity: 0.95;
+  }
+  100% {
+    transform: translate(var(--end-x), var(--end-y))
+               rotate(var(--end-rot));
+    opacity: 0;
+  }
+}
+/* Winner: arc up to the table and stick the landing upright. */
+.bottle-winner {
+  animation: bottle-land 3.4s cubic-bezier(0.18, 0.7, 0.21, 1) forwards;
+  z-index: 3;
+}
+@keyframes bottle-land {
+  0% {
+    transform: translate(0, 0) rotate(0deg) scale(1);
+  }
+  25% {
+    transform: translate(0, -180px) rotate(360deg) scale(1.05);
+  }
+  55% {
+    transform: translate(0, -200px) rotate(720deg) scale(1.1);
+  }
+  78% {
+    transform: translate(0, -125px) rotate(1080deg) scale(1.12);
+  }
+  88% {
+    transform: translate(0, -118px) rotate(1080deg) scale(1.18);
+  }
+  100% {
+    transform: translate(0, -120px) rotate(1080deg) scale(1.15);
+  }
+}
+
+/* ---- Pick / spin button ---- */
+.spotlight-spin-btn {
+  background: linear-gradient(135deg, #1d4ed8, #4f46e5);
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 0.85rem 1.75rem;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 16px rgba(29, 78, 216, 0.3);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+.spotlight-spin-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 8px 20px rgba(29, 78, 216, 0.4);
+}
+.spotlight-spin-btn:disabled {
+  background: #94a3b8;
+  color: #fff;
+  cursor: not-allowed;
+  box-shadow: none;
+  opacity: 0.85;
+}
+
+/* ---- Result card ---- */
+.spotlight-result {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+  padding: 1.5rem 1rem;
+  background: linear-gradient(135deg, #1d4ed8, #4f46e5 60%, #ec4899);
+  color: #fff;
+  border-radius: 16px;
+  text-align: center;
+  animation: spotlight-result-pop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+  box-shadow: 0 10px 30px rgba(29, 78, 216, 0.35);
+}
+@keyframes spotlight-result-pop {
+  0%   { transform: scale(0.7); opacity: 0; }
+  60%  { transform: scale(1.05); opacity: 1; }
+  100% { transform: scale(1); }
+}
+.spotlight-result-eyebrow {
+  font-size: 0.85rem;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  opacity: 0.92;
+  font-weight: 600;
+}
+.spotlight-result-name {
+  font-size: clamp(2.2rem, 6vw, 3.6rem);
+  font-weight: 800;
+  line-height: 1.05;
+  text-shadow: 0 2px 4px rgba(0, 0, 0, 0.25);
+}
+.spotlight-result-prompt {
+  background: rgba(0, 0, 0, 0.22);
+  border-radius: 12px;
+  padding: 0.85rem 1.1rem;
+  font-size: 1.08rem;
+  line-height: 1.4;
+  max-width: 540px;
+}
+.spotlight-result-actions {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 0.25rem;
+}
+.spotlight-result-btn {
+  background: transparent;
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 10px;
+  padding: 0.65rem 1.05rem;
+  font-weight: 700;
+  font-size: 0.92rem;
+  cursor: pointer;
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+.spotlight-result-btn:hover {
+  background: rgba(255, 255, 255, 0.18);
+  transform: translateY(-1px);
+}
+.spotlight-result-btn.primary {
+  background: #fff;
+  color: #1d4ed8;
+  border-color: transparent;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.18);
+}
+.spotlight-result-btn.primary:hover {
+  background: #f1f5f9;
+}

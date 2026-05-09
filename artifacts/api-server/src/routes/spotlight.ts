@@ -24,6 +24,13 @@ const router: IRouter = Router();
 // small.
 const NO_REPEAT_WINDOW = 10;
 
+// Time-based cooldown: a student picked within the last N minutes by THIS
+// teacher won't be re-picked. Layered on top of NO_REPEAT_WINDOW because a
+// count-only rule fails in small classes where the same 10 picks cycle in
+// under a minute. Best-effort — we relax this rule before we'd 409, so a
+// teacher in a tiny class isn't told "nobody to pick".
+const COOLDOWN_MINUTES = 5;
+
 // Maximum prompt cards a school can keep around. Soft cap to prevent the
 // rotation from becoming meaningless.
 const MAX_PROMPTS_PER_SCHOOL = 200;
@@ -277,13 +284,42 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
     .limit(NO_REPEAT_WINDOW);
   const recentSet = new Set(recent.map((r) => r.studentId.toUpperCase()));
 
-  const upperCandidates = candidates.map((s: string) => s.toUpperCase());
-  let pool = upperCandidates.filter(
-    (s: string) => !skip.has(s) && !recentSet.has(s),
+  // Time-based cooldown: anyone this teacher picked within the last
+  // COOLDOWN_MINUTES is excluded regardless of NO_REPEAT_WINDOW. Keeps
+  // the teacher from accidentally calling on the same kid twice in the
+  // same warm-up. Best-effort — relaxed below if it would empty the pool.
+  const cooldownThreshold = new Date(
+    Date.now() - COOLDOWN_MINUTES * 60_000,
   );
-  // If everyone in the room was picked recently, relax the no-repeat rule
-  // (but keep the absent-skip rule) so the teacher isn't told "nobody to
-  // pick" in a small class.
+  const cooldownRows = await db
+    .select({ studentId: spotlightHistoryTable.studentId })
+    .from(spotlightHistoryTable)
+    .where(
+      and(
+        eq(spotlightHistoryTable.staffId, staff.id),
+        eq(spotlightHistoryTable.schoolId, schoolId),
+        sql`${spotlightHistoryTable.pickedAt} > ${cooldownThreshold}`,
+      ),
+    );
+  const cooldownSet = new Set(
+    cooldownRows.map((r) => r.studentId.toUpperCase()),
+  );
+
+  const upperCandidates = candidates.map((s: string) => s.toUpperCase());
+  // Tiered fallback so a small class never hits "nobody to pick":
+  //   1. Strictest: skip + cooldown + no-repeat-window.
+  //   2. Drop no-repeat (count-based) but keep cooldown (time-based).
+  //   3. Drop cooldown too — only honour the absent-skip list.
+  // 409 only if literally everyone was marked absent.
+  let pool = upperCandidates.filter(
+    (s: string) =>
+      !skip.has(s) && !cooldownSet.has(s) && !recentSet.has(s),
+  );
+  if (pool.length === 0) {
+    pool = upperCandidates.filter(
+      (s: string) => !skip.has(s) && !cooldownSet.has(s),
+    );
+  }
   if (pool.length === 0) {
     pool = upperCandidates.filter((s: string) => !skip.has(s));
   }

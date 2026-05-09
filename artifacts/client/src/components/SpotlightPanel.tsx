@@ -4,6 +4,14 @@ import { useEffect, useMemo, useRef, useState } from "react";
 // engagement. Pulls from the teacher's CURRENT-period roster (so attendance
 // + period-matching is implicit), excludes a no-repeat tail tracked
 // server-side, and pairs the pick with a school-managed prompt card.
+//
+// Two animation styles, switchable by the teacher and saved per-device:
+//   • wheel   — classic spinning prize wheel with one wedge per student
+//   • bottles — water-bottle flip; bottles tumble through the air, all but
+//               one miss the table; the winner lands upright with the
+//               label facing forward.
+// In both modes we ask the server for the winner FIRST, then animate the
+// reveal so the picker can land on the right answer.
 
 interface BellPeriod {
   periodNumber: number;
@@ -34,14 +42,46 @@ interface PickResult {
   poolSize: number;
 }
 
+type AnimStyle = "wheel" | "bottles";
+const STYLE_STORAGE_KEY = "pulseedu.spotlight.style";
+const ANIM_DURATION_MS = 3600;
+
 type SpinState =
   | { kind: "idle" }
-  | { kind: "spinning"; cyclingName: string }
+  | { kind: "loading" }
+  | {
+      kind: "animating";
+      pick: PickResult;
+      // Index into the *display set* (not the roster) — for the wheel
+      // this is the roster index; for bottles it's the slot in the
+      // bottle row, which is a 6-bottle subset that always includes
+      // the winner.
+      targetIndex: number;
+      bottleSlots?: RosterStudent[];
+    }
   | { kind: "result"; pick: PickResult };
 
 interface SpotlightPanelProps {
   isAdmin: boolean;
 }
+
+// Palette for wheel wedges. Picked for high contrast against white text
+// and reasonable ordering — alternating light/dark prevents two same-hue
+// wedges sitting next to each other.
+const WHEEL_COLORS = [
+  "#0ea5e9",
+  "#f97316",
+  "#10b981",
+  "#a855f7",
+  "#ef4444",
+  "#eab308",
+  "#06b6d4",
+  "#ec4899",
+  "#14b8a6",
+  "#f59e0b",
+  "#6366f1",
+  "#84cc16",
+];
 
 export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   const [periods, setPeriods] = useState<BellPeriod[]>([]);
@@ -52,8 +92,21 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   const [skipIds, setSkipIds] = useState<string[]>([]);
   const [spin, setSpin] = useState<SpinState>({ kind: "idle" });
   const [promptsModalOpen, setPromptsModalOpen] = useState(false);
+  const [animStyle, setAnimStyle] = useState<AnimStyle>(() => {
+    if (typeof window === "undefined") return "wheel";
+    const saved = window.localStorage.getItem(STYLE_STORAGE_KEY);
+    return saved === "bottles" ? "bottles" : "wheel";
+  });
+  // Wheel rotation accumulates so the wheel keeps spinning the same
+  // direction across multiple picks rather than snapping back to 0.
+  const [wheelRotation, setWheelRotation] = useState(0);
+  const animTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const spinTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(STYLE_STORAGE_KEY, animStyle);
+    }
+  }, [animStyle]);
 
   // Detect current period from the school's default bell schedule. The
   // server already has the matching helper but we mirror the light bit
@@ -68,16 +121,14 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           credentials: "include",
         });
         if (!res.ok) {
-          // No bell schedule — Spotlight still works if a period is
-          // chosen manually via the dropdown.
           setPeriods([]);
           return;
         }
         const data = (await res.json()) as { periods?: BellPeriod[] };
         if (cancelled) return;
-        const ps = (data.periods ?? []).slice().sort(
-          (a, b) => a.periodNumber - b.periodNumber,
-        );
+        const ps = (data.periods ?? [])
+          .slice()
+          .sort((a, b) => a.periodNumber - b.periodNumber);
         setPeriods(ps);
         const now = new Date();
         const hh = String(now.getHours()).padStart(2, "0");
@@ -135,69 +186,139 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     };
   }, [activePeriod]);
 
-  const candidateIds = useMemo(
-    () => roster.map((r) => r.studentId),
-    [roster],
+  // Eligible roster excludes the per-session absent list — that's also
+  // what the wheel and bottle row should display so the teacher doesn't
+  // see a wedge for a kid who isn't there.
+  const eligibleRoster = useMemo(
+    () =>
+      roster.filter(
+        (r) => !skipIds.includes(r.studentId.toUpperCase()),
+      ),
+    [roster, skipIds],
   );
 
-  function stopSpin() {
-    if (spinTimerRef.current) {
-      clearInterval(spinTimerRef.current);
-      spinTimerRef.current = null;
+  function clearAnimTimer() {
+    if (animTimerRef.current) {
+      clearTimeout(animTimerRef.current);
+      animTimerRef.current = null;
     }
   }
-  useEffect(() => () => stopSpin(), []);
+  useEffect(() => () => clearAnimTimer(), []);
 
-  async function pick() {
-    if (candidateIds.length === 0) {
+  // Pick a stable subset of bottles that includes the winner. Six bottles
+  // is the visual sweet spot — fits a phone screen, gives the eye enough
+  // candidates to feel "random" without becoming a wall of bottles.
+  function buildBottleSlots(
+    pool: RosterStudent[],
+    winnerId: string,
+  ): RosterStudent[] {
+    const SLOT_COUNT = 6;
+    const winner = pool.find(
+      (s) => s.studentId.toUpperCase() === winnerId.toUpperCase(),
+    );
+    if (!winner) return pool.slice(0, SLOT_COUNT);
+    if (pool.length <= SLOT_COUNT) {
+      // Shuffle so the winner isn't always in the same slot.
+      const shuffled = [...pool].sort(() => Math.random() - 0.5);
+      // Make sure winner is still present after shuffle (it always is —
+      // shuffle is in-place membership preserving — but be explicit).
+      return shuffled;
+    }
+    const others = pool.filter(
+      (s) => s.studentId.toUpperCase() !== winnerId.toUpperCase(),
+    );
+    const sample = others
+      .sort(() => Math.random() - 0.5)
+      .slice(0, SLOT_COUNT - 1);
+    const all = [...sample, winner].sort(() => Math.random() - 0.5);
+    return all;
+  }
+
+  // `overrideSkipIds` exists so callers (specifically markAbsentAndRepick)
+  // can hand us the freshly-updated skip list rather than relying on the
+  // closure's stale `skipIds`. Without this, the just-marked-absent
+  // student could still appear in the next request because React's
+  // `setSkipIds` is async and `pick` would otherwise close over the
+  // pre-update value.
+  async function pick(overrideSkipIds?: string[]) {
+    const effectiveSkip = overrideSkipIds ?? skipIds;
+    const skipSet = new Set(effectiveSkip.map((s) => s.toUpperCase()));
+    const effectiveCandidates = roster
+      .map((r) => r.studentId)
+      .filter((id) => !skipSet.has(id.toUpperCase()));
+    if (effectiveCandidates.length === 0) {
       setError(
         "No students in the current-period roster. Pick a different period or check your class schedule.",
       );
       return;
     }
     setError(null);
-    stopSpin();
-    // Visual reel — cycle random names while we wait for the server.
-    const names = roster.map(
-      (r) => r.firstName ?? r.studentId,
-    );
-    const cycle = () => {
-      if (names.length === 0) return "";
-      return names[Math.floor(Math.random() * names.length)] ?? "";
-    };
-    setSpin({ kind: "spinning", cyclingName: cycle() });
-    spinTimerRef.current = setInterval(() => {
-      setSpin({ kind: "spinning", cyclingName: cycle() });
-    }, 80);
+    clearAnimTimer();
+    setSpin({ kind: "loading" });
 
-    const startedAt = Date.now();
     try {
       const res = await fetch("/api/spotlight/pick", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          candidateStudentIds: candidateIds,
-          skipStudentIds: skipIds,
+          candidateStudentIds: effectiveCandidates,
+          skipStudentIds: effectiveSkip,
         }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        stopSpin();
         setSpin({ kind: "idle" });
         setError(body.error ?? `Pick failed (${res.status})`);
         return;
       }
-      // Hold the spin a beat so the animation reads as "thinking" rather
-      // than a strobe — minimum 1.4s total.
-      const elapsed = Date.now() - startedAt;
-      const wait = Math.max(0, 1400 - elapsed);
-      setTimeout(() => {
-        stopSpin();
-        setSpin({ kind: "result", pick: body as PickResult });
-      }, wait);
+      const result = body as PickResult;
+      const winnerId = result.pick.studentId.toUpperCase();
+      // Animation indices need to match what the user is *about to see*,
+      // which is the roster minus the effective skip list — same set the
+      // server picked from. Computing this from `eligibleRoster` would
+      // be stale during the markAbsentAndRepick flow.
+      const animationRoster = roster.filter(
+        (r) => !skipSet.has(r.studentId.toUpperCase()),
+      );
+      let bottleSlots: RosterStudent[] | undefined;
+      let targetIndex: number;
+      if (animStyle === "wheel") {
+        targetIndex = animationRoster.findIndex(
+          (r) => r.studentId.toUpperCase() === winnerId,
+        );
+        if (targetIndex < 0) targetIndex = 0;
+        // Compute new accumulated rotation so the winning wedge stops
+        // under the pointer at the top. Wedges are drawn starting at
+        // 12 o'clock and going clockwise; the wheel itself spins
+        // clockwise too, so we rotate by N full turns + (360 - centerOfWedge).
+        const n = animationRoster.length;
+        const wedge = n > 0 ? 360 / n : 360;
+        const centerOfWedge = (targetIndex + 0.5) * wedge;
+        // Random jitter inside the wedge so it doesn't always land
+        // dead-center (more believable as a "physical" wheel).
+        const jitter = (Math.random() - 0.5) * wedge * 0.7;
+        const turns = 5; // "five fat turns" reads as a real spin
+        const target = turns * 360 + (360 - centerOfWedge) + jitter;
+        // Accumulate so we keep spinning the same direction.
+        setWheelRotation((prev) => prev + target);
+      } else {
+        bottleSlots = buildBottleSlots(animationRoster, winnerId);
+        targetIndex = bottleSlots.findIndex(
+          (s) => s.studentId.toUpperCase() === winnerId,
+        );
+        if (targetIndex < 0) targetIndex = 0;
+      }
+      setSpin({
+        kind: "animating",
+        pick: result,
+        targetIndex,
+        bottleSlots,
+      });
+      animTimerRef.current = setTimeout(() => {
+        setSpin({ kind: "result", pick: result });
+      }, ANIM_DURATION_MS);
     } catch (e) {
-      stopSpin();
       setSpin({ kind: "idle" });
       setError(e instanceof Error ? e.message : "Pick failed");
     }
@@ -224,11 +345,20 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
 
   function markAbsentAndRepick() {
     if (spin.kind !== "result") return;
-    const id = spin.pick.pick.studentId;
-    setSkipIds((prev) => (prev.includes(id) ? prev : [...prev, id]));
+    const id = spin.pick.pick.studentId.toUpperCase();
+    // Build the next skip list synchronously so we can hand it to
+    // `pick` directly — relying on the post-render `skipIds` would race
+    // with React's async state updates and the just-absent student
+    // could be re-picked.
+    const nextSkip = skipIds.includes(id) ? skipIds : [...skipIds, id];
+    setSkipIds(nextSkip);
     setSpin({ kind: "idle" });
-    // Defer one tick so skipIds state lands before the next pick fires.
-    setTimeout(() => void pick(), 0);
+    void pick(nextSkip);
+  }
+
+  function reset() {
+    clearAnimTimer();
+    setSpin({ kind: "idle" });
   }
 
   return (
@@ -249,22 +379,42 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
             Fair, random call-on for your current-period class.
           </div>
         </div>
-        {isAdmin && (
-          <button
-            type="button"
-            onClick={() => setPromptsModalOpen(true)}
-            style={{
-              background: "transparent",
-              border: "1px solid #cbd5e1",
-              borderRadius: 8,
-              padding: "0.45rem 0.75rem",
-              fontSize: "0.85rem",
-              cursor: "pointer",
-            }}
-          >
-            ⚙ Manage prompts
-          </button>
-        )}
+        <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
+          <div className="spotlight-style-toggle" role="group" aria-label="Animation style">
+            <button
+              type="button"
+              onClick={() => setAnimStyle("wheel")}
+              className={animStyle === "wheel" ? "active" : ""}
+              title="Spinning wheel"
+            >
+              🎡 Wheel
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnimStyle("bottles")}
+              className={animStyle === "bottles" ? "active" : ""}
+              title="Water-bottle flip"
+            >
+              🥤 Bottles
+            </button>
+          </div>
+          {isAdmin && (
+            <button
+              type="button"
+              onClick={() => setPromptsModalOpen(true)}
+              style={{
+                background: "transparent",
+                border: "1px solid #cbd5e1",
+                borderRadius: 8,
+                padding: "0.45rem 0.75rem",
+                fontSize: "0.85rem",
+                cursor: "pointer",
+              }}
+            >
+              ⚙ Prompts
+            </button>
+          )}
+        </div>
       </div>
 
       <div
@@ -302,170 +452,101 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
             ))}
           </select>
         )}
-        <div style={{ marginLeft: "auto", fontSize: "0.85rem", opacity: 0.75 }}>
-          {roster.length} student{roster.length === 1 ? "" : "s"} in roster
+        <div
+          style={{
+            marginLeft: "auto",
+            fontSize: "0.85rem",
+            opacity: 0.75,
+          }}
+        >
+          {eligibleRoster.length} student
+          {eligibleRoster.length === 1 ? "" : "s"} in pool
           {skipIds.length > 0 ? ` · ${skipIds.length} marked absent` : ""}
         </div>
       </div>
 
       <div
-        className="card"
+        className="card spotlight-stage"
         style={{
-          padding: "2rem 1.5rem",
+          padding: "1.5rem 1rem",
           textAlign: "center",
-          minHeight: 320,
+          minHeight: 420,
           display: "flex",
           flexDirection: "column",
           alignItems: "center",
           justifyContent: "center",
           gap: "1rem",
-          background:
-            spin.kind === "result"
-              ? "linear-gradient(135deg, #1d4ed8, #4f46e5)"
-              : "#f8fafc",
-          color: spin.kind === "result" ? "#fff" : "inherit",
-          transition: "background 0.4s ease",
         }}
       >
-        {spin.kind === "idle" && (
-          <>
-            <div style={{ fontSize: "3rem" }} aria-hidden>
-              🎯
-            </div>
-            <div style={{ fontSize: "1.1rem", opacity: 0.8 }}>
-              Ready to call on someone fair and square?
-            </div>
-            <button
-              type="button"
-              onClick={() => void pick()}
-              disabled={roster.length === 0}
-              style={{
-                background: roster.length === 0 ? "#94a3b8" : "#1d4ed8",
-                color: "#fff",
-                border: "none",
-                borderRadius: 12,
-                padding: "1rem 2rem",
-                fontSize: "1.15rem",
-                fontWeight: 700,
-                cursor: roster.length === 0 ? "not-allowed" : "pointer",
-                boxShadow: "0 6px 20px rgba(29,78,216,0.3)",
-              }}
-            >
-              Pick a student
-            </button>
-            {skipIds.length > 0 && (
-              <button
-                type="button"
-                onClick={() => setSkipIds([])}
-                style={{
-                  background: "transparent",
-                  border: "none",
-                  color: "#1d4ed8",
-                  fontSize: "0.85rem",
-                  cursor: "pointer",
-                  textDecoration: "underline",
-                }}
-              >
-                Reset absent list ({skipIds.length})
-              </button>
-            )}
-          </>
+        {spin.kind === "result" ? (
+          <ResultCard
+            pick={spin.pick}
+            onPickAgain={() => void pick()}
+            onReroll={() => void rerollPrompt()}
+            onAbsentAndRepick={markAbsentAndRepick}
+            onDone={reset}
+          />
+        ) : animStyle === "wheel" ? (
+          <Wheel
+            roster={eligibleRoster}
+            rotation={wheelRotation}
+            spinning={spin.kind === "animating" || spin.kind === "loading"}
+            onPick={() => void pick()}
+            disabled={
+              eligibleRoster.length === 0 ||
+              spin.kind === "loading" ||
+              spin.kind === "animating"
+            }
+            statusLabel={
+              spin.kind === "loading"
+                ? "Loading…"
+                : spin.kind === "animating"
+                  ? "Spinning…"
+                  : null
+            }
+          />
+        ) : (
+          <Bottles
+            slots={
+              spin.kind === "animating" && spin.bottleSlots
+                ? spin.bottleSlots
+                : eligibleRoster.slice(0, 6)
+            }
+            winnerIndex={
+              spin.kind === "animating" ? spin.targetIndex : -1
+            }
+            spinning={spin.kind === "animating" || spin.kind === "loading"}
+            onPick={() => void pick()}
+            disabled={
+              eligibleRoster.length === 0 ||
+              spin.kind === "loading" ||
+              spin.kind === "animating"
+            }
+            statusLabel={
+              spin.kind === "loading"
+                ? "Loading…"
+                : spin.kind === "animating"
+                  ? "Flip!"
+                  : null
+            }
+          />
         )}
 
-        {spin.kind === "spinning" && (
-          <>
-            <div
-              style={{
-                fontSize: "0.85rem",
-                letterSpacing: "0.15em",
-                textTransform: "uppercase",
-                opacity: 0.7,
-              }}
-            >
-              Picking…
-            </div>
-            <div
-              style={{
-                fontSize: "clamp(2.5rem, 7vw, 4rem)",
-                fontWeight: 800,
-                lineHeight: 1.1,
-                minHeight: "1.2em",
-                fontVariantNumeric: "tabular-nums",
-              }}
-            >
-              {spin.cyclingName || "…"}
-            </div>
-          </>
-        )}
-
-        {spin.kind === "result" && (
-          <>
-            <div
-              style={{
-                fontSize: "0.85rem",
-                letterSpacing: "0.15em",
-                textTransform: "uppercase",
-                opacity: 0.85,
-              }}
-            >
-              Spotlight
-            </div>
-            <div
-              style={{
-                fontSize: "clamp(2.5rem, 7vw, 4.5rem)",
-                fontWeight: 800,
-                lineHeight: 1.1,
-              }}
-            >
-              {spin.pick.pick.firstName ?? spin.pick.pick.studentId}{" "}
-              {spin.pick.pick.lastName ?? ""}
-            </div>
-            {spin.pick.prompt && (
-              <div
-                style={{
-                  background: "rgba(0,0,0,0.18)",
-                  borderRadius: 12,
-                  padding: "1rem 1.25rem",
-                  fontSize: "1.15rem",
-                  lineHeight: 1.4,
-                  maxWidth: 560,
-                }}
-              >
-                {spin.pick.prompt.text}
-              </div>
-            )}
-            <div
-              style={{
-                display: "flex",
-                gap: "0.5rem",
-                flexWrap: "wrap",
-                justifyContent: "center",
-                marginTop: "0.5rem",
-              }}
-            >
-              <button
-                type="button"
-                onClick={() => void pick()}
-                style={resultBtn(true)}
-              >
-                Pick again
-              </button>
-              <button
-                type="button"
-                onClick={() => void rerollPrompt()}
-                style={resultBtn(false)}
-              >
-                New prompt
-              </button>
-              <button
-                type="button"
-                onClick={markAbsentAndRepick}
-                style={resultBtn(false)}
-              >
-                They're absent — re-pick
-              </button>
-            </div>
-          </>
+        {skipIds.length > 0 && spin.kind === "idle" && (
+          <button
+            type="button"
+            onClick={() => setSkipIds([])}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#1d4ed8",
+              fontSize: "0.85rem",
+              cursor: "pointer",
+              textDecoration: "underline",
+            }}
+          >
+            Reset absent list ({skipIds.length})
+          </button>
         )}
       </div>
 
@@ -492,18 +573,285 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   );
 }
 
-function resultBtn(primary: boolean): React.CSSProperties {
-  return {
-    background: primary ? "#fff" : "transparent",
-    color: primary ? "#1d4ed8" : "#fff",
-    border: primary ? "none" : "1px solid rgba(255,255,255,0.55)",
-    borderRadius: 10,
-    padding: "0.7rem 1.1rem",
-    fontWeight: 700,
-    fontSize: "0.95rem",
-    cursor: "pointer",
-  };
+// ---------------------------------------------------------------------------
+// Wheel
+// ---------------------------------------------------------------------------
+
+interface WheelProps {
+  roster: RosterStudent[];
+  rotation: number;
+  spinning: boolean;
+  onPick: () => void;
+  disabled: boolean;
+  statusLabel: string | null;
 }
+
+function Wheel({
+  roster,
+  rotation,
+  spinning,
+  onPick,
+  disabled,
+  statusLabel,
+}: WheelProps) {
+  const n = roster.length;
+  const cx = 200;
+  const cy = 200;
+  const r = 195;
+  const wedge = n > 0 ? 360 / n : 360;
+
+  return (
+    <div className="spotlight-wheel-wrap">
+      <div className="spotlight-wheel-pointer" aria-hidden />
+      <div className="spotlight-wheel-container">
+        <svg
+          viewBox="0 0 400 400"
+          className="spotlight-wheel"
+          style={{
+            transform: `rotate(${rotation}deg)`,
+            transition: spinning
+              ? `transform ${ANIM_DURATION_MS}ms cubic-bezier(0.18, 0.7, 0.21, 1)`
+              : "none",
+          }}
+        >
+          {n === 0 ? (
+            <circle cx={cx} cy={cy} r={r} fill="#e2e8f0" />
+          ) : (
+            roster.map((s, i) => {
+              const startAngle = i * wedge - 90;
+              const endAngle = startAngle + wedge;
+              const startRad = (startAngle * Math.PI) / 180;
+              const endRad = (endAngle * Math.PI) / 180;
+              const x1 = cx + r * Math.cos(startRad);
+              const y1 = cy + r * Math.sin(startRad);
+              const x2 = cx + r * Math.cos(endRad);
+              const y2 = cy + r * Math.sin(endRad);
+              const largeArc = wedge > 180 ? 1 : 0;
+              const path = `M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`;
+              const midAngle = startAngle + wedge / 2;
+              const midRad = (midAngle * Math.PI) / 180;
+              const labelDist = r * 0.66;
+              const lx = cx + labelDist * Math.cos(midRad);
+              const ly = cy + labelDist * Math.sin(midRad);
+              const color = WHEEL_COLORS[i % WHEEL_COLORS.length];
+              const fname = (s.firstName ?? s.studentId).slice(0, 10);
+              // Text rotation: align with the wedge's radial direction,
+              // then auto-flip if it'd be upside down.
+              let textRotation = midAngle;
+              if (textRotation > 90 && textRotation < 270) {
+                textRotation += 180;
+              }
+              // Hide labels when wedges become too small to read.
+              const showLabel = wedge >= 9;
+              const fontSize = wedge >= 30 ? 16 : wedge >= 15 ? 13 : 11;
+              return (
+                <g key={s.studentId}>
+                  <path
+                    d={path}
+                    fill={color}
+                    stroke="white"
+                    strokeWidth="1.5"
+                  />
+                  {showLabel && (
+                    <text
+                      x={lx}
+                      y={ly}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                      transform={`rotate(${textRotation} ${lx} ${ly})`}
+                      fontSize={fontSize}
+                      fontWeight={700}
+                      fill="white"
+                      style={{
+                        paintOrder: "stroke",
+                        stroke: "rgba(0,0,0,0.18)",
+                        strokeWidth: 2,
+                      }}
+                    >
+                      {fname}
+                    </text>
+                  )}
+                </g>
+              );
+            })
+          )}
+          <circle
+            cx={cx}
+            cy={cy}
+            r={26}
+            fill="white"
+            stroke="#1e293b"
+            strokeWidth="3"
+          />
+          <circle cx={cx} cy={cy} r={10} fill="#1e293b" />
+        </svg>
+      </div>
+      <button
+        type="button"
+        onClick={onPick}
+        disabled={disabled}
+        className="spotlight-spin-btn"
+      >
+        {statusLabel ?? "Spin the wheel"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Bottle flip
+// ---------------------------------------------------------------------------
+
+interface BottlesProps {
+  slots: RosterStudent[];
+  winnerIndex: number;
+  spinning: boolean;
+  onPick: () => void;
+  disabled: boolean;
+  statusLabel: string | null;
+}
+
+function Bottles({
+  slots,
+  winnerIndex,
+  spinning,
+  onPick,
+  disabled,
+  statusLabel,
+}: BottlesProps) {
+  // Pre-computed per-slot animation parameters so each "miss" looks
+  // distinct (different toss height, different end position, different
+  // rotation count). Stable across renders so the animation doesn't
+  // jitter when state updates.
+  const params = useMemo(
+    () =>
+      slots.map((_, i) => {
+        const dir = i % 2 === 0 ? -1 : 1;
+        const lateralBase = 140 + (i * 37) % 130;
+        return {
+          midX: dir * (40 + (i * 13) % 60),
+          midY: -(160 + (i * 29) % 80),
+          endX: dir * lateralBase,
+          endY: 80,
+          spins: 540 + (i * 137) % 360, // total rotation in degrees
+        };
+      }),
+    [slots],
+  );
+
+  return (
+    <div className="spotlight-bottles-wrap">
+      <div className="spotlight-table" aria-hidden />
+      <div className="spotlight-bottles-row">
+        {slots.length === 0 ? (
+          <div style={{ opacity: 0.6 }}>No students in the pool</div>
+        ) : (
+          slots.map((s, i) => {
+            const p = params[i];
+            const isWinner = spinning && i === winnerIndex;
+            const cls = spinning
+              ? isWinner
+                ? "spotlight-bottle bottle-winner"
+                : "spotlight-bottle bottle-miss"
+              : "spotlight-bottle";
+            const style: React.CSSProperties & Record<string, string> = {
+              ["--mid-x"]: `${p.midX}px`,
+              ["--mid-y"]: `${p.midY}px`,
+              ["--end-x"]: `${p.endX}px`,
+              ["--end-y"]: `${p.endY}px`,
+              ["--end-rot"]: `${p.spins}deg`,
+            };
+            return (
+              <div key={s.studentId} className={cls} style={style}>
+                <div className="bottle-cap" />
+                <div className="bottle-body">
+                  <div className="bottle-label">
+                    {(s.firstName ?? s.studentId).slice(0, 12)}
+                  </div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onPick}
+        disabled={disabled}
+        className="spotlight-spin-btn"
+      >
+        {statusLabel ?? "Flip the bottles"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Result card
+// ---------------------------------------------------------------------------
+
+interface ResultCardProps {
+  pick: PickResult;
+  onPickAgain: () => void;
+  onReroll: () => void;
+  onAbsentAndRepick: () => void;
+  onDone: () => void;
+}
+
+function ResultCard({
+  pick,
+  onPickAgain,
+  onReroll,
+  onAbsentAndRepick,
+  onDone,
+}: ResultCardProps) {
+  return (
+    <div className="spotlight-result">
+      <div className="spotlight-result-eyebrow">🎉 Spotlight</div>
+      <div className="spotlight-result-name">
+        {pick.pick.firstName ?? pick.pick.studentId}{" "}
+        {pick.pick.lastName ?? ""}
+      </div>
+      {pick.prompt && (
+        <div className="spotlight-result-prompt">{pick.prompt.text}</div>
+      )}
+      <div className="spotlight-result-actions">
+        <button
+          type="button"
+          onClick={onDone}
+          className="spotlight-result-btn primary"
+        >
+          Got it!
+        </button>
+        <button
+          type="button"
+          onClick={onPickAgain}
+          className="spotlight-result-btn"
+        >
+          Pick again
+        </button>
+        <button
+          type="button"
+          onClick={onReroll}
+          className="spotlight-result-btn"
+        >
+          New prompt
+        </button>
+        <button
+          type="button"
+          onClick={onAbsentAndRepick}
+          className="spotlight-result-btn"
+        >
+          They're absent — re-pick
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Prompts manager (admin-only)
+// ---------------------------------------------------------------------------
 
 function PromptsManagerModal({ onClose }: { onClose: () => void }) {
   const [prompts, setPrompts] = useState<Prompt[]>([]);
