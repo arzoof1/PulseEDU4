@@ -38,6 +38,7 @@ import {
   importJobsTable,
   safetyPlanLibraryTable,
   safetyPlansTable,
+  separationReasonTagsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -2217,6 +2218,58 @@ export async function seedPbisCatalogIfEmpty() {
     logger.info(
       { schoolId: school.id, count: inserts.length },
       "[seed] pbis_reasons starter catalog seeded",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedSeparationReasonTagsIfEmpty: per-school starter catalog of "do not
+// pair" tags for the Separation Suggestions feature. The Behavior
+// Specialist curates this list going forward, but every new school needs a
+// reasonable starting vocabulary so teachers see useful chips on day one
+// instead of an empty dropdown that pushes them to type free text (which
+// destroys aggregability for next year's scheduling team). Empty-only
+// policy: a school with even one hand-curated tag is left alone.
+// -----------------------------------------------------------------------------
+
+const SEPARATION_REASON_DEFAULTS = [
+  "Verbal conflict",
+  "Physical altercation history",
+  "Bullying / target dynamic",
+  "Negative peer influence",
+  "Disruptive when together",
+  "Off-task when paired",
+  "Romantic relationship",
+  "Family conflict (siblings / cousins)",
+  "Cliques / exclusion behavior",
+  "Cheating / academic integrity concern",
+  "Safety concern",
+  "Prior administrative referral together",
+];
+
+export async function seedSeparationReasonTagsIfEmpty() {
+  const schools = await db.select().from(schoolsTable);
+  if (schools.length === 0) return;
+
+  for (const school of schools) {
+    const [{ c: existing }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM separation_reason_tags WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (existing > 0) continue;
+
+    const inserts: (typeof separationReasonTagsTable.$inferInsert)[] =
+      SEPARATION_REASON_DEFAULTS.map((label, i) => ({
+        schoolId: school.id,
+        label,
+        sortOrder: i,
+        active: true,
+      }));
+    await db.insert(separationReasonTagsTable).values(inserts);
+    logger.info(
+      { schoolId: school.id, count: inserts.length },
+      "[seed] separation_reason_tags starter catalog seeded",
     );
   }
 }

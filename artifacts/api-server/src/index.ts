@@ -10,6 +10,7 @@ import {
   seedIreadyAndSciIfEmpty,
   seedEngagementEventsIfEmpty,
   seedPbisCatalogIfEmpty,
+  seedSeparationReasonTagsIfEmpty,
   seedPbisEntriesIfEmpty,
   seedStudentDemographicsIfEmpty,
   seedStudentRaceIfEmpty,
@@ -74,6 +75,7 @@ async function runSeed(): Promise<void> {
   // data so the new Behavior dashboard renders on first launch. Catalog
   // seed runs first because the entries seed reads pbis_reasons live.
   await seedPbisCatalogIfEmpty();
+  await seedSeparationReasonTagsIfEmpty();
   await seedPbisEntriesIfEmpty();
   // Demographic flags (ELL/ESE/504/gender) for the SEB/SEL + Equity
   // dashboards. Runs LAST because it correlates demographics to existing
