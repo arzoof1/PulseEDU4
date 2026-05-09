@@ -85,6 +85,12 @@ const WHEEL_COLORS = [
 
 export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   const [periods, setPeriods] = useState<BellPeriod[]>([]);
+  // True when `periods` was synthesized (no bell schedule configured for the
+  // current school, or impersonation landed us in a school without one). The
+  // dropdown still works — `/api/teacher-roster?period=N` doesn't depend on
+  // a bell schedule — but we want to label the periods differently and skip
+  // the time-of-day auto-detect.
+  const [periodsAreSynthetic, setPeriodsAreSynthetic] = useState(false);
   const [activePeriod, setActivePeriod] = useState<number | null>(null);
   const [roster, setRoster] = useState<RosterStudent[]>([]);
   const [loading, setLoading] = useState(true);
@@ -129,15 +135,33 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         const ps = (data.periods ?? [])
           .slice()
           .sort((a, b) => a.periodNumber - b.periodNumber);
-        setPeriods(ps);
-        const now = new Date();
-        const hh = String(now.getHours()).padStart(2, "0");
-        const mm = String(now.getMinutes()).padStart(2, "0");
-        const nowHm = `${hh}:${mm}`;
-        const live = ps.find(
-          (p) => nowHm >= p.startTime && nowHm < p.endTime,
-        );
-        setActivePeriod(live?.periodNumber ?? ps[0]?.periodNumber ?? null);
+        if (ps.length === 0) {
+          // No bell schedule for this school — synthesize Periods 1–7 so
+          // Spotlight is still usable. Crucial for testing flows that
+          // impersonate teachers in schools without a configured schedule
+          // (and for after-hours testing in any school). The roster query
+          // by period_number works without a bell schedule.
+          const synthetic: BellPeriod[] = Array.from({ length: 7 }, (_, i) => ({
+            periodNumber: i + 1,
+            name: `Period ${i + 1}`,
+            startTime: "",
+            endTime: "",
+          }));
+          setPeriods(synthetic);
+          setPeriodsAreSynthetic(true);
+          setActivePeriod(1);
+        } else {
+          setPeriods(ps);
+          setPeriodsAreSynthetic(false);
+          const now = new Date();
+          const hh = String(now.getHours()).padStart(2, "0");
+          const mm = String(now.getMinutes()).padStart(2, "0");
+          const nowHm = `${hh}:${mm}`;
+          const live = ps.find(
+            (p) => nowHm >= p.startTime && nowHm < p.endTime,
+          );
+          setActivePeriod(live?.periodNumber ?? ps[0]?.periodNumber ?? null);
+        }
       } catch (e) {
         if (!cancelled)
           setError(e instanceof Error ? e.message : "Failed to load");
@@ -431,9 +455,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         <div style={{ fontWeight: 600 }}>Period:</div>
         {periods.length === 0 ? (
           <div style={{ fontSize: "0.85rem", opacity: 0.7 }}>
-            {loading
-              ? "Loading bell schedule…"
-              : "No bell schedule configured. Set up School Settings → Bell Schedules to use Spotlight."}
+            {loading ? "Loading bell schedule…" : "No periods available."}
           </div>
         ) : (
           <select
@@ -447,10 +469,24 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           >
             {periods.map((p) => (
               <option key={p.periodNumber} value={p.periodNumber}>
-                Period {p.periodNumber} ({p.startTime}–{p.endTime})
+                {periodsAreSynthetic
+                  ? `Period ${p.periodNumber}`
+                  : `Period ${p.periodNumber} (${p.startTime}–${p.endTime})`}
               </option>
             ))}
           </select>
+        )}
+        {periodsAreSynthetic && (
+          <div
+            style={{
+              fontSize: "0.75rem",
+              opacity: 0.7,
+              fontStyle: "italic",
+            }}
+            title="No bell schedule is configured for this school, so Spotlight is using a generic 1–7 list. Roster lookup by period still works."
+          >
+            (no schedule — generic periods)
+          </div>
         )}
         <div
           style={{
