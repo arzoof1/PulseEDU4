@@ -4,6 +4,8 @@ import AdminHubPage from "./components/AdminHubPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { HallPassQueueChip } from "./components/HallPassQueueChip";
+import { KioskBanner } from "./components/KioskBanner";
+import { OpenKioskModal } from "./components/OpenKioskModal";
 import SpotlightPanel from "./components/SpotlightPanel";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
@@ -4231,6 +4233,7 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
+  const [openKioskModalShown, setOpenKioskModalShown] = useState(false);
   const [logTardyOpen, setLogTardyOpen] = useState(false);
   const [checkInOutOpen, setCheckInOutOpen] = useState(false);
   // Tier-aware Log Intervention launcher state. The launcher routes to
@@ -8931,6 +8934,11 @@ function App() {
 
       <main className="app-main">
 
+      {/* "Kiosk active on this device" banner — surfaces the still-live
+          kiosk token (if any) so a teacher who flipped to the staff app
+          can find their way back without losing the waiting line. */}
+      <KioskBanner />
+
       {activeSection === "spotlight" && (
         <SpotlightPanel
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
@@ -8969,6 +8977,31 @@ function App() {
         <div className="cp-cta-text" style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
           <span>Need to Create a Pass?</span>
           <HallPassQueueChip />
+          {/* "Open Kiosk Mode" — one-click activation of THIS device as
+              a hall pass kiosk, no admin in the loop, no PIN. Default
+              flow is "use my room"; sub / floating-staff scenarios fall
+              through to the searchable picker inside the modal. */}
+          <button
+            type="button"
+            onClick={() => setOpenKioskModalShown(true)}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "0.4rem",
+              background: "rgba(16,185,129,0.12)",
+              border: "1px solid rgba(16,185,129,0.45)",
+              color: "#047857",
+              borderRadius: 999,
+              padding: "0.3rem 0.75rem",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+              cursor: "pointer",
+            }}
+            aria-label="Open Kiosk Mode on this device"
+          >
+            <span aria-hidden>🖥️</span>
+            Open Kiosk Mode
+          </button>
         </div>
         <button
           type="button"
@@ -8978,6 +9011,9 @@ function App() {
           + Create Pass
         </button>
       </div>
+      {openKioskModalShown && (
+        <OpenKioskModal onClose={() => setOpenKioskModalShown(false)} />
+      )}
       {(() => {
         let active = 0;
         let overdue = 0;

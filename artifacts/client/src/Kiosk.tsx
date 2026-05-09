@@ -189,6 +189,11 @@ export default function Kiosk() {
   return (
     <Shell>
       <GearButton onClick={() => setShowDeactivate(true)} />
+      {/* "Step out" — opens the staff app in a new tab so a teacher can
+          log attendance, write a support note, etc. without losing the
+          waiting line. The kiosk keeps polling the queue server-side
+          (token in localStorage), so they can flip back any time. */}
+      <StepOutButton />
       <KioskBody
         token={phase.token}
         room={phase.room}
@@ -208,6 +213,18 @@ export default function Kiosk() {
 
 /* ----------------------------- Activation screen ----------------------------- */
 
+// The activation screen has three "modes" baked into one form:
+//
+//  - default mode: email + password → use the staff's default room (one tap)
+//  - picker mode:  email + password + searchable room dropdown
+//                  (entered when staff clicks "Activate to a different room"
+//                   OR when the server tells us they have no default)
+//  - confirm-takeover: room is already hosting an active kiosk; the user
+//                      must explicitly choose to replace it
+//
+// All of these submit to the same POST /api/kiosk/activate; the client
+// just toggles `dryRun` (to fetch the room list without committing) and
+// `replaceExisting` (to take over).
 function ActivationScreen({
   onActivated,
 }: {
@@ -216,34 +233,63 @@ function ActivationScreen({
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [room, setRoom] = useState("");
+  const [defaultRoom, setDefaultRoom] = useState<string | null>(null);
   const [pickerLocations, setPickerLocations] = useState<string[] | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [takeover, setTakeover] = useState<{
+    room: string;
+    activatedByName: string | null;
+    deviceLabel: string | null;
+    activatedAt: string | null;
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  async function submit(e: React.FormEvent) {
-    e.preventDefault();
+  async function call(extra: {
+    room?: string;
+    dryRun?: boolean;
+    replaceExisting?: boolean;
+  }) {
+    const body: Record<string, unknown> = {
+      email: email.trim(),
+      password,
+      deviceFingerprint: getOrCreateDeviceFingerprint(),
+      deviceLabel: getDeviceLabel(),
+      ...extra,
+    };
+    const res = await fetch("/api/kiosk/activate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await res.json().catch(() => ({}));
+    return { res, data };
+  }
+
+  async function submitDefault(e?: React.FormEvent) {
+    e?.preventDefault();
     if (!email.trim() || !password) return;
     setBusy(true);
     setError("");
     try {
-      const body: Record<string, string> = {
-        email: email.trim(),
-        password,
-        deviceFingerprint: getOrCreateDeviceFingerprint(),
-        deviceLabel: getDeviceLabel(),
-      };
-      if (room) body.room = room;
-      const res = await fetch("/api/kiosk/activate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      const data = await res.json().catch(() => ({}));
+      const { res, data } = await call({});
       if (res.status === 409 && data.needsRoom) {
+        // No default → force the picker
         setPickerLocations(data.locations ?? []);
+        setDefaultRoom(null);
+        setPickerOpen(true);
         setError(
-          "You don't have a default room set yet. Pick the room this kiosk is in.",
+          "You don't have a default room set. Pick the room this kiosk is in.",
         );
+        return;
+      }
+      if (res.status === 409 && data.roomTaken) {
+        setTakeover({
+          room: data.room,
+          activatedByName: data.existing?.activatedByName ?? null,
+          deviceLabel: data.existing?.deviceLabel ?? null,
+          activatedAt: data.existing?.activatedAt ?? null,
+        });
         return;
       }
       if (!res.ok) {
@@ -258,22 +304,114 @@ function ActivationScreen({
     }
   }
 
+  // Click "Activate to a different room" — fetch room list with dryRun
+  // (no activation row created) and switch to picker mode.
+  async function openPicker() {
+    if (!email.trim() || !password) {
+      setError("Enter your email and password first.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const { res, data } = await call({ dryRun: true });
+      if (!res.ok) {
+        setError(data.error ?? `Couldn't load room list (${res.status})`);
+        return;
+      }
+      setPickerLocations(data.locations ?? []);
+      setDefaultRoom(data.defaultRoom ?? null);
+      setRoom(data.defaultRoom ?? "");
+      setPickerOpen(true);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function submitWithRoom(e?: React.FormEvent) {
+    e?.preventDefault();
+    if (!email.trim() || !password || !room) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { res, data } = await call({ room });
+      if (res.status === 409 && data.roomTaken) {
+        setTakeover({
+          room: data.room,
+          activatedByName: data.existing?.activatedByName ?? null,
+          deviceLabel: data.existing?.deviceLabel ?? null,
+          activatedAt: data.existing?.activatedAt ?? null,
+        });
+        return;
+      }
+      if (!res.ok) {
+        setError(data.error ?? `Activation failed (${res.status})`);
+        return;
+      }
+      onActivated(data.token, data.room, data.staffName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmTakeover() {
+    if (!takeover) return;
+    setBusy(true);
+    setError("");
+    try {
+      const { res, data } = await call({
+        room: takeover.room,
+        replaceExisting: true,
+      });
+      if (!res.ok) {
+        setError(data.error ?? `Activation failed (${res.status})`);
+        return;
+      }
+      setTakeover(null);
+      onActivated(data.token, data.room, data.staffName);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  // Sort the picker so the user's own classroom is at the top, then the
+  // rest alphabetically. Important for big high schools (100+ rooms).
+  const sortedRooms = (() => {
+    if (!pickerLocations) return [];
+    const rest = pickerLocations
+      .filter((r) => r !== defaultRoom)
+      .sort((a, b) => a.localeCompare(b));
+    return defaultRoom ? [defaultRoom, ...rest] : rest;
+  })();
+
   return (
     <form
-      onSubmit={submit}
+      onSubmit={pickerOpen ? submitWithRoom : submitDefault}
       style={{
         background: "rgba(255,255,255,0.06)",
         border: "1px solid rgba(255,255,255,0.12)",
         borderRadius: 12,
         padding: "1.75rem",
-        width: "min(440px, 92vw)",
+        width: "min(460px, 92vw)",
         display: "flex",
         flexDirection: "column",
         gap: "1rem",
       }}
     >
       <div style={{ textAlign: "center", marginBottom: "0.25rem" }}>
-        <div style={{ fontSize: "1.4rem", fontWeight: 700, letterSpacing: "0.02em" }}>
+        <div
+          style={{
+            fontSize: "1.4rem",
+            fontWeight: 700,
+            letterSpacing: "0.02em",
+          }}
+        >
           Activate Kiosk
         </div>
         <div style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 4 }}>
@@ -304,44 +442,217 @@ function ActivationScreen({
         />
       </Field>
 
-      {pickerLocations && (
-        <Field label="Room this kiosk is in">
-          <select
-            value={room}
-            onChange={(e) => setRoom(e.target.value)}
-            disabled={busy}
-            style={inputStyle}
+      {pickerOpen && pickerLocations && (
+        <>
+          <Field
+            label={
+              defaultRoom
+                ? "Room this kiosk is in (start typing to search)"
+                : "Pick the room this kiosk is in"
+            }
           >
-            <option value="">Select a room…</option>
-            {pickerLocations.map((r) => (
-              <option key={r} value={r}>
-                {r}
-              </option>
-            ))}
-          </select>
-        </Field>
+            <input
+              type="text"
+              list="kiosk-room-list"
+              value={room}
+              onChange={(e) => setRoom(e.target.value)}
+              disabled={busy}
+              placeholder={
+                defaultRoom
+                  ? `${defaultRoom} (your room)`
+                  : "Type or pick a room…"
+              }
+              style={inputStyle}
+            />
+            <datalist id="kiosk-room-list">
+              {sortedRooms.map((r) => (
+                <option key={r} value={r}>
+                  {r === defaultRoom ? `${r} (your room)` : r}
+                </option>
+              ))}
+            </datalist>
+          </Field>
+          {defaultRoom && (
+            <button
+              type="button"
+              onClick={() => {
+                setPickerOpen(false);
+                setRoom("");
+                setError("");
+              }}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "rgba(255,255,255,0.7)",
+                fontSize: "0.85rem",
+                textDecoration: "underline",
+                cursor: "pointer",
+                alignSelf: "flex-start",
+                padding: 0,
+              }}
+              disabled={busy}
+            >
+              ← Back to "use my room ({defaultRoom})"
+            </button>
+          )}
+        </>
       )}
 
       {error && <ErrorBox>{error}</ErrorBox>}
 
-      <button
-        type="submit"
-        disabled={
-          busy ||
-          !email.trim() ||
-          !password ||
-          (pickerLocations !== null && !room)
-        }
-        style={primaryBtn(
-          busy ||
-            !email.trim() ||
-            !password ||
-            (pickerLocations !== null && !room),
-        )}
-      >
-        {busy ? "Activating…" : "Activate this kiosk"}
-      </button>
+      {pickerOpen ? (
+        <button
+          type="submit"
+          disabled={busy || !email.trim() || !password || !room}
+          style={primaryBtn(busy || !email.trim() || !password || !room)}
+        >
+          {busy ? "Activating…" : `Activate kiosk for ${room || "…"}`}
+        </button>
+      ) : (
+        <>
+          <button
+            type="submit"
+            disabled={busy || !email.trim() || !password}
+            style={primaryBtn(busy || !email.trim() || !password)}
+          >
+            {busy ? "Activating…" : "Activate this kiosk"}
+          </button>
+          <button
+            type="button"
+            onClick={openPicker}
+            disabled={busy || !email.trim() || !password}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "rgba(255,255,255,0.75)",
+              fontSize: "0.9rem",
+              textDecoration: "underline",
+              cursor: "pointer",
+              padding: "0.25rem",
+            }}
+          >
+            Activate to a different room (sub / floating staff)
+          </button>
+        </>
+      )}
+
+      {takeover && (
+        <TakeoverConfirm
+          info={takeover}
+          busy={busy}
+          onCancel={() => setTakeover(null)}
+          onConfirm={confirmTakeover}
+        />
+      )}
     </form>
+  );
+}
+
+function TakeoverConfirm({
+  info,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  info: {
+    room: string;
+    activatedByName: string | null;
+    deviceLabel: string | null;
+    activatedAt: string | null;
+  };
+  busy: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  const when = info.activatedAt
+    ? new Date(info.activatedAt).toLocaleString()
+    : null;
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.65)",
+        zIndex: 100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+      }}
+    >
+      <div
+        style={{
+          background: "#0f172a",
+          border: "1px solid rgba(255,255,255,0.15)",
+          color: "#fff",
+          borderRadius: 12,
+          padding: "1.5rem",
+          width: "min(440px, 92vw)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.75rem",
+          textAlign: "left",
+        }}
+      >
+        <div style={{ fontSize: "1.15rem", fontWeight: 700 }}>
+          Room "{info.room}" already has an active kiosk
+        </div>
+        <div style={{ fontSize: "0.9rem", opacity: 0.85, lineHeight: 1.5 }}>
+          {info.activatedByName ? (
+            <>
+              Last activated by <strong>{info.activatedByName}</strong>
+              {info.deviceLabel ? ` on ${info.deviceLabel}` : ""}
+              {when ? ` at ${when}` : ""}.
+            </>
+          ) : (
+            <>Another device is already running a kiosk for this room.</>
+          )}
+          <br />
+          <br />
+          Taking over will deactivate that device and clear its waiting line.
+          The other device will need to log in again to come back.
+        </div>
+        <div
+          style={{
+            display: "flex",
+            gap: "0.5rem",
+            marginTop: "0.5rem",
+            flexWrap: "wrap",
+          }}
+        >
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={busy}
+            style={{
+              ...primaryBtn(busy),
+              background: busy ? "rgba(239,68,68,0.4)" : "#ef4444",
+              flex: 1,
+            }}
+          >
+            {busy ? "Taking over…" : "Take over this room"}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={busy}
+            style={{
+              background: "transparent",
+              color: "#fff",
+              border: "1px solid rgba(255,255,255,0.3)",
+              borderRadius: 8,
+              padding: "0.65rem 1rem",
+              cursor: busy ? "not-allowed" : "pointer",
+              fontSize: "1rem",
+            }}
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1574,6 +1885,52 @@ function ModeButton({
     >
       {children}
     </button>
+  );
+}
+
+function StepOutButton() {
+  return (
+    <a
+      href={`${import.meta.env.BASE_URL}`}
+      target="_blank"
+      rel="noreferrer"
+      title="Open staff app in new tab — kiosk keeps running here"
+      style={{
+        position: "fixed",
+        top: 12,
+        right: 64,
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.15)",
+        color: "rgba(255,255,255,0.7)",
+        borderRadius: 999,
+        padding: "0 0.85rem",
+        height: 40,
+        display: "flex",
+        alignItems: "center",
+        gap: 6,
+        cursor: "pointer",
+        zIndex: 10,
+        fontSize: "0.85rem",
+        textDecoration: "none",
+      }}
+    >
+      <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden
+      >
+        <path d="M14 3h7v7" />
+        <path d="M10 14L21 3" />
+        <path d="M21 14v7H3V3h7" />
+      </svg>
+      Step out
+    </a>
   );
 }
 

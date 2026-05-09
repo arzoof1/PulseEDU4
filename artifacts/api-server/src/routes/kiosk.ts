@@ -12,7 +12,7 @@ import {
   adminNotificationsTable,
   studentsTable,
 } from "@workspace/db";
-import { and, eq, isNull, gt, desc } from "drizzle-orm";
+import { and, eq, isNull, gt, desc, sql } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
@@ -73,9 +73,291 @@ async function requireAdmin(
   });
 }
 
+// Shared room-resolution + activation creation. Used by both the
+// password-based public activate route and the session-based quick-activate
+// route so the conflict, dry-run, and fallback-picker semantics stay in
+// lockstep.
+//
+// Returns:
+//  - { kind: "ok", body }                 → 201 (caller sends as-is)
+//  - { kind: "needs_room", body }         → 409 (no default + no room picked)
+//  - { kind: "room_taken", body }         → 409 (room already has live kiosk)
+//  - { kind: "bad_room", body }           → 400 (room not a valid origin)
+//  - { kind: "dry_run", body }            → 200 (just returning rooms+default)
+type ActivateOutcome =
+  | { kind: "ok"; body: Record<string, unknown> }
+  | { kind: "needs_room"; body: Record<string, unknown> }
+  | { kind: "room_taken"; body: Record<string, unknown> }
+  | { kind: "bad_room"; body: Record<string, unknown> }
+  | { kind: "dry_run"; body: Record<string, unknown> };
+
+async function resolveActivation(args: {
+  staff: typeof staffTable.$inferSelect;
+  room: string | undefined;
+  dryRun: boolean;
+  replaceExisting: boolean;
+  deviceLabel: string | null;
+  deviceFingerprint: string | null;
+}): Promise<ActivateOutcome> {
+  const { staff, dryRun, replaceExisting, deviceLabel, deviceFingerprint } =
+    args;
+
+  const [defaultRow] = await db
+    .select()
+    .from(staffDefaultsTable)
+    .where(eq(staffDefaultsTable.staffId, staff.id));
+  const defaultRoom = defaultRow?.defaultLocationName ?? null;
+
+  // Origin rooms are scoped to the activating staff's school.
+  const originLocations = (
+    await db
+      .select()
+      .from(locationsTable)
+      .where(
+        and(
+          eq(locationsTable.isOrigin, true),
+          eq(locationsTable.active, true),
+          eq(locationsTable.schoolId, staff.schoolId),
+        ),
+      )
+  ).map((l) => l.name);
+
+  // Dry-run is what the "Pick a different room" link calls so the client can
+  // render a searchable dropdown without committing an activation. We still
+  // require a valid staff record to reach this point so the room list isn't
+  // exposed publicly.
+  if (dryRun) {
+    return {
+      kind: "dry_run",
+      body: {
+        defaultRoom,
+        locations: originLocations,
+        staffName: staff.displayName,
+      },
+    };
+  }
+
+  let chosenRoom: string;
+  let usedFallbackPicker = false;
+
+  if (typeof args.room === "string" && args.room.trim()) {
+    const candidate = args.room.trim();
+    if (!originLocations.includes(candidate)) {
+      return {
+        kind: "bad_room",
+        body: { error: `Room "${candidate}" is not a valid kiosk room` },
+      };
+    }
+    chosenRoom = candidate;
+    if (!defaultRoom) usedFallbackPicker = true;
+  } else if (defaultRoom) {
+    chosenRoom = defaultRoom;
+  } else {
+    return {
+      kind: "needs_room",
+      body: {
+        error: "No default room set",
+        needsRoom: true,
+        locations: originLocations,
+      },
+    };
+  }
+
+  // Room-conflict check + replace + insert all run inside a single
+  // transaction guarded by a per-(school, room) advisory lock. Without
+  // this, two concurrent activates can both pass the SELECT and both
+  // INSERT — the partial unique index on (school_id, room) WHERE
+  // deactivated_at IS NULL would catch one of them, but the advisory
+  // lock turns that error path into a clean serialized flow. Filter on
+  // schoolId AND room so "Room 204" in two different schools never
+  // collide.
+  const token = randomBytes(32).toString("base64url");
+  const tokenHash = hashToken(token);
+  const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
+
+  type TxOutcome =
+    | { kind: "ok"; replacedPriorStaffId: number | null }
+    | {
+        kind: "room_taken";
+        existing: {
+          activatedAt: Date;
+          deviceLabel: string | null;
+          activatedByName: string | null;
+        };
+      };
+
+  const txOutcome: TxOutcome = await db.transaction(async (tx) => {
+    // Two-int advisory lock keyed by (schoolId, hash(room)) so concurrent
+    // activations for the same room serialize, but unrelated rooms run in
+    // parallel. Released automatically at txn end.
+    await tx.execute(
+      sql`SELECT pg_advisory_xact_lock(${staff.schoolId}::int, hashtext(${chosenRoom})::int)`,
+    );
+
+    const livePriorRows = await tx
+      .select({
+        id: kioskActivationsTable.id,
+        staffId: kioskActivationsTable.staffId,
+        activatedAt: kioskActivationsTable.activatedAt,
+        expiresAt: kioskActivationsTable.expiresAt,
+        deviceLabel: kioskActivationsTable.deviceLabel,
+        activatedByName: staffTable.displayName,
+      })
+      .from(kioskActivationsTable)
+      .leftJoin(staffTable, eq(staffTable.id, kioskActivationsTable.staffId))
+      .where(
+        and(
+          eq(kioskActivationsTable.schoolId, staff.schoolId),
+          eq(kioskActivationsTable.room, chosenRoom),
+          isNull(kioskActivationsTable.deactivatedAt),
+        ),
+      );
+
+    const now = new Date();
+    // Expired rows are zombies — they failed to deactivate cleanly but
+    // are no longer "live" by the queue/branding routes. Cleaning them
+    // up here also frees the partial-unique-index slot for our INSERT.
+    const expiredRows = livePriorRows.filter((r) => r.expiresAt <= now);
+    const stillLiveRows = livePriorRows.filter((r) => r.expiresAt > now);
+
+    if (expiredRows.length > 0) {
+      await tx
+        .update(kioskActivationsTable)
+        .set({ deactivatedAt: now, deactivatedByStaffId: staff.id })
+        .where(
+          and(
+            eq(kioskActivationsTable.schoolId, staff.schoolId),
+            eq(kioskActivationsTable.room, chosenRoom),
+            isNull(kioskActivationsTable.deactivatedAt),
+            sql`${kioskActivationsTable.expiresAt} <= ${now}`,
+          ),
+        );
+    }
+
+    const blocking = stillLiveRows[0] ?? null;
+    if (blocking && !replaceExisting) {
+      return {
+        kind: "room_taken",
+        existing: {
+          activatedAt: blocking.activatedAt,
+          deviceLabel: blocking.deviceLabel,
+          activatedByName: blocking.activatedByName,
+        },
+      };
+    }
+
+    let replacedPriorStaffId: number | null = null;
+    if (blocking && replaceExisting) {
+      replacedPriorStaffId = blocking.staffId;
+      await tx
+        .update(kioskActivationsTable)
+        .set({ deactivatedAt: now, deactivatedByStaffId: staff.id })
+        .where(eq(kioskActivationsTable.id, blocking.id));
+    }
+
+    await tx.insert(kioskActivationsTable).values({
+      schoolId: staff.schoolId,
+      tokenHash,
+      room: chosenRoom,
+      staffId: staff.id,
+      expiresAt,
+      deviceLabel,
+      deviceFingerprint,
+    });
+
+    return { kind: "ok", replacedPriorStaffId };
+  });
+
+  if (txOutcome.kind === "room_taken") {
+    return {
+      kind: "room_taken",
+      body: {
+        error: `Room "${chosenRoom}" already has an active kiosk`,
+        roomTaken: true,
+        room: chosenRoom,
+        existing: txOutcome.existing,
+      },
+    };
+  }
+
+  // Audit-trail notifications fire OUTSIDE the txn so they can't roll the
+  // activation back. The fallback-picker case (no default room set) and
+  // the cross-staff take-over case both want admin visibility — the
+  // latter is the abuse signal: "did Mr. X take over Mrs. Y's kiosk in
+  // the middle of the period?"
+  if (usedFallbackPicker) {
+    await db.insert(adminNotificationsTable).values({
+      schoolId: staff.schoolId,
+      type: "kiosk_default_room_missing",
+      payload: {
+        staffId: staff.id,
+        staffEmail: staff.email,
+        staffDisplayName: staff.displayName,
+        chosenRoom,
+        activatedAt: new Date().toISOString(),
+      },
+    });
+  }
+
+  if (
+    txOutcome.replacedPriorStaffId !== null &&
+    txOutcome.replacedPriorStaffId !== staff.id
+  ) {
+    const [priorStaff] = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        email: staffTable.email,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.id, txOutcome.replacedPriorStaffId));
+    await db.insert(adminNotificationsTable).values({
+      schoolId: staff.schoolId,
+      type: "kiosk_takeover_cross_staff",
+      payload: {
+        room: chosenRoom,
+        takeoverByStaffId: staff.id,
+        takeoverByName: staff.displayName,
+        takeoverByEmail: staff.email,
+        replacedStaffId: priorStaff?.id ?? null,
+        replacedStaffName: priorStaff?.displayName ?? null,
+        replacedStaffEmail: priorStaff?.email ?? null,
+        at: new Date().toISOString(),
+      },
+    });
+  }
+
+  return {
+    kind: "ok",
+    body: {
+      token,
+      room: chosenRoom,
+      staffName: staff.displayName,
+      expiresAt: expiresAt.toISOString(),
+      replacedPrior: txOutcome.replacedPriorStaffId !== null,
+    },
+  };
+}
+
+function cleanDeviceFields(req: Request) {
+  const { deviceLabel, deviceFingerprint } = (req.body ?? {}) as {
+    deviceLabel?: unknown;
+    deviceFingerprint?: unknown;
+  };
+  return {
+    deviceLabel:
+      typeof deviceLabel === "string" && deviceLabel.trim()
+        ? deviceLabel.trim().slice(0, 200)
+        : null,
+    deviceFingerprint:
+      typeof deviceFingerprint === "string" && deviceFingerprint.trim()
+        ? deviceFingerprint.trim().slice(0, 100)
+        : null,
+  };
+}
+
 router.post("/kiosk/activate", async (req, res) => {
-  const { email, password, room, deviceLabel, deviceFingerprint } =
-    req.body ?? {};
+  const { email, password, room, dryRun, replaceExisting } = req.body ?? {};
 
   if (
     typeof email !== "string" ||
@@ -103,96 +385,68 @@ router.post("/kiosk/activate", async (req, res) => {
     return;
   }
 
-  const [defaultRow] = await db
-    .select()
-    .from(staffDefaultsTable)
-    .where(eq(staffDefaultsTable.staffId, staff.id));
-  const defaultRoom = defaultRow?.defaultLocationName ?? null;
+  const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
+  const outcome = await resolveActivation({
+    staff,
+    room: typeof room === "string" ? room : undefined,
+    dryRun: dryRun === true,
+    replaceExisting: replaceExisting === true,
+    deviceLabel,
+    deviceFingerprint,
+  });
 
-  // Origin rooms are scoped to the activating staff's school. The kiosk
-  // activation route is unauthenticated, so we derive school from the
-  // verified staff record (not req.schoolId, which isn't set here).
-  const originLocations = (
-    await db
-      .select()
-      .from(locationsTable)
-      .where(
-        and(
-          eq(locationsTable.isOrigin, true),
-          eq(locationsTable.active, true),
-          eq(locationsTable.schoolId, staff.schoolId),
-        ),
-      )
-  ).map((l) => l.name);
-
-  let chosenRoom: string;
-  let usedFallbackPicker = false;
-
-  if (typeof room === "string" && room.trim()) {
-    const candidate = room.trim();
-    if (!originLocations.includes(candidate)) {
-      res.status(400).json({
-        error: `Room "${candidate}" is not a valid kiosk room`,
-      });
+  switch (outcome.kind) {
+    case "ok":
+      res.status(201).json(outcome.body);
       return;
-    }
-    chosenRoom = candidate;
-    if (!defaultRoom) usedFallbackPicker = true;
-  } else if (defaultRoom) {
-    chosenRoom = defaultRoom;
-  } else {
-    res.status(409).json({
-      error: "No default room set",
-      needsRoom: true,
-      locations: originLocations,
-    });
-    return;
+    case "dry_run":
+      res.status(200).json(outcome.body);
+      return;
+    case "needs_room":
+    case "room_taken":
+      res.status(409).json(outcome.body);
+      return;
+    case "bad_room":
+      res.status(400).json(outcome.body);
+      return;
   }
+});
 
-  if (usedFallbackPicker) {
-    await db.insert(adminNotificationsTable).values({
-      schoolId: staff.schoolId,
-      type: "kiosk_default_room_missing",
-      payload: {
-        staffId: staff.id,
-        staffEmail: staff.email,
-        staffDisplayName: staff.displayName,
-        chosenRoom,
-        activatedAt: new Date().toISOString(),
-      },
-    });
-  }
+// Session-authenticated activation — same outcomes as /kiosk/activate but
+// trusts the existing staff session instead of asking for the password
+// again. This is the entry point for the "Open Kiosk Mode" button inside
+// the staff app: a teacher already signed in to PulseEDU can spin up a
+// kiosk on their laptop in one click.
+router.post("/kiosk/quick-activate", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const { room, dryRun, replaceExisting } = req.body ?? {};
+  const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
 
-  const token = randomBytes(32).toString("base64url");
-  const tokenHash = hashToken(token);
-
-  const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
-
-  const cleanDeviceLabel =
-    typeof deviceLabel === "string" && deviceLabel.trim()
-      ? deviceLabel.trim().slice(0, 200)
-      : null;
-  const cleanDeviceFingerprint =
-    typeof deviceFingerprint === "string" && deviceFingerprint.trim()
-      ? deviceFingerprint.trim().slice(0, 100)
-      : null;
-
-  await db.insert(kioskActivationsTable).values({
-    schoolId: staff.schoolId,
-    tokenHash,
-    room: chosenRoom,
-    staffId: staff.id,
-    expiresAt,
-    deviceLabel: cleanDeviceLabel,
-    deviceFingerprint: cleanDeviceFingerprint,
+  const outcome = await resolveActivation({
+    staff,
+    room: typeof room === "string" ? room : undefined,
+    dryRun: dryRun === true,
+    replaceExisting: replaceExisting === true,
+    deviceLabel,
+    deviceFingerprint,
   });
 
-  res.status(201).json({
-    token,
-    room: chosenRoom,
-    staffName: staff.displayName,
-    expiresAt: expiresAt.toISOString(),
-  });
+  switch (outcome.kind) {
+    case "ok":
+      res.status(201).json(outcome.body);
+      return;
+    case "dry_run":
+      res.status(200).json(outcome.body);
+      return;
+    case "needs_room":
+    case "room_taken":
+      res.status(409).json(outcome.body);
+      return;
+    case "bad_room":
+      res.status(400).json(outcome.body);
+      return;
+  }
 });
 
 router.get("/kiosk/activation/:token", async (req, res) => {
