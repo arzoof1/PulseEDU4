@@ -77,6 +77,12 @@ interface ProfilePayload {
       pbisPositiveCount: number;
       pbisNegativeCount: number;
       supportNoteCount: number;
+      // Distinct-teacher count of active separation flags involving this
+      // student in the current school year. Only displayed when >= 2 —
+      // a single teacher's flag stays private to their own seating
+      // workflow. No teacher names or paired-student details are
+      // surfaced here on purpose.
+      separationFlagTeacherCount?: number;
       recentSupportNotes: Array<{
         noteType: string;
         noteText: string;
@@ -1199,6 +1205,19 @@ export default function StudentProfile({
             )}
             {pillars.behavior.supportNoteCount > 0 && (
               <Chip label={`${pillars.behavior.supportNoteCount} notes`} sev="watch" />
+            )}
+            {/* Corroborated separation signal: only renders once two or
+                more different teachers have independently flagged this
+                student in different pairings. Single-teacher flags are
+                deliberately omitted here so a one-off classroom-
+                management request never surfaces on a student profile.
+                We show the count only — no teacher names, no paired-
+                student details, no reason tags. */}
+            {(pillars.behavior.separationFlagTeacherCount ?? 0) >= 2 && (
+              <Chip
+                label={`Flagged for separation in ${pillars.behavior.separationFlagTeacherCount} classrooms`}
+                sev="watch"
+              />
             )}
           </div>
           {data.trends.pbisDaily.length > 0 && (

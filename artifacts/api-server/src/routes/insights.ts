@@ -42,8 +42,9 @@ import {
   schoolAccommodationsTable,
   interventionEntriesTable,
   parentStudentsTable,
+  studentSeparationsTable,
 } from "@workspace/db";
-import { and, eq, inArray, isNull, gte, lte, sql, desc } from "drizzle-orm";
+import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
 import {
@@ -761,17 +762,68 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       ).toFixed(1)})`
     : "No FAST data with a cut-score chart for this grade";
 
+  // Separation-flag corroboration signal. Counts how many DISTINCT
+  // teachers have an active separation flag on this student in the
+  // current school year (the student appears as either side of the
+  // pair). A single teacher's flag is a classroom-management request
+  // about a specific pairing — not personal-behavior data — and we
+  // intentionally do NOT let it move the score. But once two or more
+  // independent teachers flag this student in different pairings, the
+  // pattern becomes a behavior signal worth recording.
+  //
+  // School year is derived inline (Aug-Jul cutover) to mirror
+  // separations.ts::currentSchoolYear without cross-importing a route.
+  function _currentSchoolYear(now = new Date()): string {
+    const y = now.getFullYear();
+    const m = now.getMonth();
+    return m >= 7 ? `${y}-${y + 1}` : `${y - 1}-${y}`;
+  }
+  const separationDistinctTeachersRow = await db
+    .select({
+      n: sql<number>`count(distinct ${studentSeparationsTable.reporterStaffId})`,
+    })
+    .from(studentSeparationsTable)
+    .where(
+      and(
+        eq(studentSeparationsTable.schoolId, schoolId),
+        eq(studentSeparationsTable.schoolYear, _currentSchoolYear()),
+        or(
+          eq(studentSeparationsTable.studentAId, studentId),
+          eq(studentSeparationsTable.studentBId, studentId),
+        ),
+      ),
+    );
+  const separationFlagTeacherCount = Number(
+    separationDistinctTeachersRow[0]?.n ?? 0,
+  );
+
   // Behavior: PBIS positives lift, PBIS negatives + support notes drag.
   // Caps prevent a single very-active student from saturating either end.
+  // Corroborated separation flags (>=2 different teachers) apply a fixed
+  // -10 drag — modest because it's a softer signal than a logged
+  // negative PBIS or a support note, but real because two independent
+  // teachers seeing the same student in different problematic pairings
+  // is a pattern, not a one-off.
   let behaviorScore = 75;
   behaviorScore += Math.min(pbisPositive * 3, 25);
   behaviorScore -= Math.min(pbisNegative * 5, 50);
   behaviorScore -= Math.min(supportNotes.length * 8, 60);
+  if (separationFlagTeacherCount >= 2) behaviorScore -= 10;
   behaviorScore = Math.max(0, Math.min(100, behaviorScore));
-  const behaviorRationale =
-    pbisPositive + pbisNegative + supportNotes.length === 0
-      ? `No behavior entries (${window.label.toLowerCase()})`
-      : `${pbisPositive} positive, ${pbisNegative} concerns, ${supportNotes.length} notes (${window.label.toLowerCase()})`;
+  const behaviorRationaleParts: string[] = [];
+  if (pbisPositive + pbisNegative + supportNotes.length === 0) {
+    behaviorRationaleParts.push(`No behavior entries (${window.label.toLowerCase()})`);
+  } else {
+    behaviorRationaleParts.push(
+      `${pbisPositive} positive, ${pbisNegative} concerns, ${supportNotes.length} notes (${window.label.toLowerCase()})`,
+    );
+  }
+  if (separationFlagTeacherCount >= 2) {
+    behaviorRationaleParts.push(
+      `flagged for separation in ${separationFlagTeacherCount} classrooms`,
+    );
+  }
+  const behaviorRationale = behaviorRationaleParts.join(" · ");
 
   // Flow (attendance & transitions): tardies + ISS days + over-average
   // hall-pass usage drag from a 100 baseline. Hall-pass excess only
@@ -1013,6 +1065,14 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         pbisPositiveCount: pbisPositive,
         pbisNegativeCount: pbisNegative,
         supportNoteCount: supportNotes.length,
+        // Privacy: a single teacher's separation flag is part of THAT
+        // teacher's private seating workflow and must never surface on
+        // a student's profile (network payload included — relying on
+        // client-only hiding would leak the signal to anyone inspecting
+        // the response). We coerce sub-threshold counts to 0 here so
+        // the wire payload itself only carries the corroborated number.
+        separationFlagTeacherCount:
+          separationFlagTeacherCount >= 2 ? separationFlagTeacherCount : 0,
         recentSupportNotes: supportNotes,
         recentPbis: pbisRows
           .filter((r) => !r.voidedAt)
