@@ -322,8 +322,8 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase }: Props) {
             <button
               type="button"
               onClick={() => setShowLog(true)}
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-semibold text-white shadow-sm"
-              style={{ background: C.brand }}
+              className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-bold shadow-sm"
+              style={{ background: C.brand, color: "#FFFFFF" }}
             >
               <Plus className="h-4 w-4" /> Log interaction
             </button>
