@@ -7473,26 +7473,26 @@ function App() {
 
       if (tardyEntryType === "tardy" && tardyCreateReturnPass) {
         try {
-          const passRes = await authFetch("/api/hall-passes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
+          // Front office is issuing on behalf of a returning student —
+          // skip the "you have N students out" warning (it's not their
+          // student). Same-student and keep-apart 409s still surface
+          // the soft confirm and the forced-ack modal respectively.
+          await submitHallPassWithOverrides(
+            {
               studentId: tardyStudentId,
               destination: "Return to Class",
               originRoom: "Front Office",
               teacherName: tardyReturnPassTeacher,
-            }),
-          });
-          if (!passRes.ok) {
-            console.error(
-              "Failed to create return pass:",
-              await passRes.text(),
-            );
-          } else {
-            loadHallPasses();
-          }
+              isTardyReturn: true,
+            },
+            { skipMyActivesPrewarning: true },
+          );
         } catch (err) {
-          console.error("Failed to create return pass:", err);
+          if (err instanceof Error && err.message === "Cancelled.") {
+            // User backed out of an override prompt — no error.
+          } else {
+            console.error("Failed to create return pass:", err);
+          }
         }
       }
 
@@ -7502,6 +7502,140 @@ function App() {
     } catch (err) {
       console.error("Failed to create tardy:", err);
     }
+  };
+
+  // Single source of truth for creating a hall pass with the full override
+  // flow:
+  //   1. Soft pre-warning if the teacher already has other student(s) out
+  //      (skippable for tardy-return passes, where the front office is
+  //      issuing on behalf of a returning student and the warning makes
+  //      no sense).
+  //   2. Server returns 409 STUDENT_HAS_ACTIVE_PASS → window.confirm soft
+  //      override → retry with overrideStudentActive=true (server ends
+  //      the prior pass, then issues the new one).
+  //   3. Server returns 409 KEEP_APART_CONFLICT → red modal with REQUIRED
+  //      ack checkbox ("I have contacted admin…") → retry with
+  //      overridePolarityAck=true.
+  // Throws Error("Cancelled.") if the user backs out of any prompt.
+  // Calls loadHallPasses() on success. Used by every front-end caller of
+  // POST /api/hall-passes (CreatePassModal, the legacy inline form, and
+  // both tardy-return code paths) so behaviour stays consistent.
+  const submitHallPassWithOverrides = async (
+    payload: {
+      studentId: string;
+      destination: string;
+      originRoom: string;
+      teacherName: string;
+      destinationTeacher?: string | null;
+      contactedAcknowledged?: boolean;
+      maxDurationMinutes?: number;
+      isTardyReturn?: boolean;
+    },
+    opts?: { skipMyActivesPrewarning?: boolean },
+  ): Promise<void> => {
+    if (!opts?.skipMyActivesPrewarning) {
+      const myActives = hallPasses.filter(
+        (p) =>
+          p.status === "active" &&
+          (p.teacherName === currentStaffUser ||
+            p.teacherName === `${currentStaffUser} (K)`) &&
+          p.studentId !== payload.studentId,
+      );
+      if (myActives.length > 0) {
+        const lines = myActives
+          .slice(0, 5)
+          .map((p) => `• ${p.studentId} → ${p.destination}`)
+          .join("\n");
+        const more =
+          myActives.length > 5
+            ? `\n…and ${myActives.length - 5} more`
+            : "";
+        const ok = window.confirm(
+          `Heads up — you currently have ${myActives.length} student${
+            myActives.length === 1 ? "" : "s"
+          } out on a pass:\n\n${lines}${more}\n\nCreate another pass anyway?`,
+        );
+        if (!ok) throw new Error("Cancelled.");
+      }
+    }
+
+    const post = async (
+      overrideStudentActive: boolean,
+      overridePolarityAck: boolean,
+    ): Promise<void> => {
+      const res = await authFetch("/api/hall-passes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...payload,
+          overrideStudentActive,
+          overridePolarityAck,
+        }),
+      });
+      if (res.ok) {
+        loadHallPasses();
+        return;
+      }
+      const body = await res
+        .clone()
+        .json()
+        .catch(
+          () =>
+            null as null | {
+              code?: string;
+              error?: string;
+              existingPass?: {
+                destination?: string;
+                teacherName?: string;
+              };
+              partner?: {
+                studentId?: string;
+                firstName?: string | null;
+                lastName?: string | null;
+                destination?: string;
+              };
+            },
+        );
+      if (res.status === 409 && body?.code === "STUDENT_HAS_ACTIVE_PASS") {
+        const ex = body.existingPass;
+        const detail = ex
+          ? `${payload.studentId} is already out → ${ex.destination}` +
+            (ex.teacherName ? ` (issued by ${ex.teacherName})` : "")
+          : body.error ?? "Student already has an active pass.";
+        const ok = window.confirm(
+          `${detail}\n\nEnd that pass and create the new one?`,
+        );
+        if (!ok) throw new Error("Cancelled.");
+        return post(true, overridePolarityAck);
+      }
+      if (res.status === 409 && body?.code === "KEEP_APART_CONFLICT") {
+        const partner = body.partner;
+        const partnerName =
+          partner?.firstName && partner?.lastName
+            ? `${partner.firstName} ${partner.lastName}`
+            : partner?.studentId ?? "the keep-apart partner";
+        const partnerDest = partner?.destination ?? "(unknown)";
+        await new Promise<void>((resolve, reject) => {
+          setKeepApartOverride({
+            partnerName,
+            partnerDestination: partnerDest,
+            onConfirm: () => {
+              setKeepApartOverride(null);
+              resolve();
+            },
+            onCancel: () => {
+              setKeepApartOverride(null);
+              reject(new Error("Cancelled."));
+            },
+          });
+        });
+        return post(overrideStudentActive, true);
+      }
+      const text = body?.error ?? (await res.text());
+      throw new Error(text || "Failed to create pass.");
+    };
+
+    await post(false, false);
   };
 
   const handleEndPass = async (id: number) => {
@@ -7572,31 +7706,24 @@ function App() {
     if (!selectedStudentId || !destination || !originRoom) return;
 
     try {
-      const res = await authFetch("/api/hall-passes", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          studentId: selectedStudentId,
-          destination,
-          originRoom,
-          teacherName: currentStaffUser,
-          destinationTeacher: destinationTeacher || null,
-          contactedAcknowledged: destinationTeacher ? contactedAck : false,
-        }),
+      await submitHallPassWithOverrides({
+        studentId: selectedStudentId,
+        destination,
+        originRoom,
+        teacherName: currentStaffUser,
+        destinationTeacher: destinationTeacher || null,
+        contactedAcknowledged: destinationTeacher ? contactedAck : false,
       });
-      if (!res.ok) {
-        console.error("Failed to create hall pass:", await res.text());
-        return;
-      }
       setDestination("");
       setOriginRoom("");
       setSelectedStudentId("");
       setStudentSearch("");
       setDestinationTeacher("");
       setContactedAck(false);
-      loadHallPasses();
     } catch (err) {
+      if (err instanceof Error && err.message === "Cancelled.") return;
       console.error("Failed to create hall pass:", err);
+      alert(err instanceof Error ? err.message : "Failed to create hall pass.");
     }
   };
 
@@ -9182,125 +9309,15 @@ function App() {
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
         onCreate={async (payload) => {
-          // Soft pre-warning: the teacher already has at least one
-          // OTHER student out on a pass (kiosk-issued passes count too —
-          // they show as "<displayName> (K)"). Easy to miss, so confirm.
-          const myActives = hallPasses.filter(
-            (p) =>
-              p.status === "active" &&
-              (p.teacherName === currentStaffUser ||
-                p.teacherName === `${currentStaffUser} (K)`) &&
-              p.studentId !== payload.studentId,
-          );
-          if (myActives.length > 0) {
-            const lines = myActives
-              .slice(0, 5)
-              .map((p) => `• ${p.studentId} → ${p.destination}`)
-              .join("\n");
-            const more =
-              myActives.length > 5 ? `\n…and ${myActives.length - 5} more` : "";
-            const ok = window.confirm(
-              `Heads up — you currently have ${myActives.length} student${
-                myActives.length === 1 ? "" : "s"
-              } out on a pass:\n\n${lines}${more}\n\nCreate another pass anyway?`,
-            );
-            if (!ok) {
-              throw new Error("Cancelled.");
-            }
-          }
-
-          const post = async (
-            overrideStudentActive: boolean,
-            overridePolarityAck: boolean,
-          ): Promise<void> => {
-            const res = await authFetch("/api/hall-passes", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                studentId: payload.studentId,
-                destination: payload.destination,
-                originRoom: payload.originRoom,
-                teacherName: payload.fromTeacher || currentStaffUser,
-                destinationTeacher: payload.destinationTeacher,
-                contactedAcknowledged: payload.contactedAcknowledged,
-                maxDurationMinutes: payload.maxDurationMinutes,
-                overrideStudentActive,
-                overridePolarityAck,
-              }),
-            });
-            if (res.ok) {
-              loadHallPasses();
-              return;
-            }
-            // Try to parse the structured 409 codes; fall back to text.
-            const body = await res
-              .clone()
-              .json()
-              .catch(() => null as null | {
-                code?: string;
-                error?: string;
-                existingPass?: {
-                  destination?: string;
-                  originRoom?: string;
-                  teacherName?: string;
-                  createdAt?: string;
-                };
-                partner?: {
-                  studentId?: string;
-                  firstName?: string | null;
-                  lastName?: string | null;
-                  destination?: string;
-                };
-              });
-            if (
-              res.status === 409 &&
-              body?.code === "STUDENT_HAS_ACTIVE_PASS"
-            ) {
-              const ex = body.existingPass;
-              const detail = ex
-                ? `${payload.studentId} is already out → ${ex.destination}` +
-                  (ex.teacherName ? ` (issued by ${ex.teacherName})` : "")
-                : body.error ?? "Student already has an active pass.";
-              const ok = window.confirm(
-                `${detail}\n\nEnd that pass and create the new one?`,
-              );
-              if (!ok) {
-                throw new Error("Cancelled.");
-              }
-              return post(true, overridePolarityAck);
-            }
-            if (res.status === 409 && body?.code === "KEEP_APART_CONFLICT") {
-              const partner = body.partner;
-              const partnerName =
-                partner?.firstName && partner?.lastName
-                  ? `${partner.firstName} ${partner.lastName}`
-                  : partner?.studentId ?? "the keep-apart partner";
-              const partnerDest = partner?.destination ?? "(unknown)";
-              try {
-                await new Promise<void>((resolve, reject) => {
-                  setKeepApartOverride({
-                    partnerName,
-                    partnerDestination: partnerDest,
-                    onConfirm: () => {
-                      setKeepApartOverride(null);
-                      resolve();
-                    },
-                    onCancel: () => {
-                      setKeepApartOverride(null);
-                      reject(new Error("Cancelled."));
-                    },
-                  });
-                });
-              } catch (err) {
-                throw err instanceof Error ? err : new Error("Cancelled.");
-              }
-              return post(overrideStudentActive, true);
-            }
-            const text = body?.error ?? (await res.text());
-            throw new Error(text || "Failed to create pass.");
-          };
-
-          await post(false, false);
+          await submitHallPassWithOverrides({
+            studentId: payload.studentId,
+            destination: payload.destination,
+            originRoom: payload.originRoom,
+            teacherName: payload.fromTeacher || currentStaffUser,
+            destinationTeacher: payload.destinationTeacher,
+            contactedAcknowledged: payload.contactedAcknowledged,
+            maxDurationMinutes: payload.maxDurationMinutes,
+          });
         }}
       />
 
@@ -20146,25 +20163,28 @@ function App() {
               );
             }
             const info = await lookupRes.json();
-            const passRes = await authFetch("/api/hall-passes", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                studentId: payload.studentId,
-                destination: info.teacherName,
-                originRoom: "Front Office",
-                teacherName: currentStaffUser,
-                destinationTeacher: info.teacherName,
-                contactedAcknowledged: true,
-                isTardyReturn: true,
-              }),
-            });
-            if (!passRes.ok) {
+            try {
+              await submitHallPassWithOverrides(
+                {
+                  studentId: payload.studentId,
+                  destination: info.teacherName,
+                  originRoom: "Front Office",
+                  teacherName: currentStaffUser,
+                  destinationTeacher: info.teacherName,
+                  contactedAcknowledged: true,
+                  isTardyReturn: true,
+                },
+                { skipMyActivesPrewarning: true },
+              );
+            } catch (err) {
               loadTardies();
-              const text = await passRes.text();
-              throw new Error(text || "Failed to create return pass.");
+              if (err instanceof Error && err.message === "Cancelled.") {
+                return;
+              }
+              throw err instanceof Error
+                ? err
+                : new Error("Failed to create return pass.");
             }
-            loadHallPasses();
           }
           loadTardies();
         }}
