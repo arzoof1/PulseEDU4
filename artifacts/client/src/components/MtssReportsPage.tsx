@@ -758,27 +758,30 @@ export default function MtssReportsPage({
                 width: "100%",
                 borderCollapse: "collapse",
                 fontSize: "0.85rem",
+                // tabular-nums keeps digits the same width so column
+                // contents line up cleanly under the right-aligned header.
+                fontVariantNumeric: "tabular-nums",
               }}
             >
               <thead>
                 <tr style={{ background: "#f8fafc" }}>
-                  <th style={th}>Teacher</th>
-                  <th style={th}>T2 done</th>
-                  <th style={th}>T2 expected</th>
-                  <th style={th}>T2 %</th>
-                  <th style={th}>T3 scored</th>
-                  <th style={th}>T3 avg</th>
+                  <th style={thFirst}>Teacher</th>
+                  <th style={thR}>T2 done</th>
+                  <th style={thR}>T2 expected</th>
+                  <th style={thR}>T2 %</th>
+                  <th style={thR}>T3 scored</th>
+                  <th style={thRLast}>T3 avg</th>
                 </tr>
               </thead>
               <tbody>
                 {data.perTeacher.map((r) => (
                   <tr key={r.teacherStaffId}>
-                    <td style={td}>{r.teacherName}</td>
-                    <td style={tdR}>{r.t2Completed}</td>
-                    <td style={tdR}>{r.t2Expected}</td>
-                    <td style={tdR}>{fmtPct(r.t2CompletionPct)}</td>
-                    <td style={tdR}>{r.t3ScoredCount}</td>
-                    <td style={tdR}>{fmtScore(r.t3AvgScore)}</td>
+                    <td style={tdFirst}>{r.teacherName}</td>
+                    <td style={tdRMid}>{r.t2Completed}</td>
+                    <td style={tdRMid}>{r.t2Expected}</td>
+                    <td style={tdRMid}>{fmtPct(r.t2CompletionPct)}</td>
+                    <td style={tdRMid}>{r.t3ScoredCount}</td>
+                    <td style={tdRLast}>{fmtScore(r.t3AvgScore)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -897,20 +900,39 @@ export default function MtssReportsPage({
 
 // ---------------- mini bits ----------------
 
+// ---- Columned-table style kit (proposal v1) -------------------------------
+// Goals from the user request:
+//   1. Right-align numeric headers so they sit DIRECTLY above their numbers
+//      instead of being left-aligned while the values are right-aligned.
+//   2. Add a thin vertical divider between columns so the eye can track
+//      across rows in a wide table.
+//   3. Keep the look light — borders are subtle slate, not heavy lines.
+// `*First` / `*Last` variants drop the extra divider on the outer edges
+// so the table doesn't look "boxed in" against the card it lives inside.
 const th: React.CSSProperties = {
   textAlign: "left",
-  padding: "6px 8px",
+  padding: "6px 10px",
   borderBottom: "1px solid #e5e7eb",
+  borderRight: "1px solid #e5e7eb",
   fontSize: "0.75rem",
   color: "#64748b",
   textTransform: "uppercase",
   letterSpacing: 0.4,
+  fontWeight: 600,
 };
+const thFirst: React.CSSProperties = { ...th };
+const thR: React.CSSProperties = { ...th, textAlign: "right" };
+const thRLast: React.CSSProperties = { ...thR, borderRight: "none" };
+
 const td: React.CSSProperties = {
-  padding: "6px 8px",
+  padding: "6px 10px",
   borderBottom: "1px solid #f1f5f9",
+  borderRight: "1px solid #f1f5f9",
 };
+const tdFirst: React.CSSProperties = { ...td };
 const tdR: React.CSSProperties = { ...td, textAlign: "right" };
+const tdRMid: React.CSSProperties = { ...tdR };
+const tdRLast: React.CSSProperties = { ...tdR, borderRight: "none" };
 
 function SummaryTile({
   label,
