@@ -297,10 +297,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
             >
               <Shield className="h-3.5 w-3.5" /> Core Team Only
             </div>
-            <h1
-              className="mt-2 text-3xl font-bold tracking-tight"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
+            <h1 className="mt-2 text-3xl font-bold tracking-tight">
               Watchlist Hub
             </h1>
             <p className="mt-1 max-w-2xl text-sm" style={{ color: C.inkSoft }}>

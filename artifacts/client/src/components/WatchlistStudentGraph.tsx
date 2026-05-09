@@ -352,10 +352,7 @@ export default function WatchlistStudentGraph({
                 Back to Hub
               </button>
             )}
-            <h1
-              className="mt-2 text-3xl font-bold tracking-tight"
-              style={{ fontFamily: "'Playfair Display', serif" }}
-            >
+            <h1 className="mt-2 text-3xl font-bold tracking-tight">
               Student Spider
             </h1>
             <p className="mt-1 max-w-2xl text-sm" style={{ color: C.inkSoft }}>
