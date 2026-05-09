@@ -1658,26 +1658,33 @@ ul[style*="listStyle: none"] li button:hover {
   gap: 1rem;
   width: 100%;
 }
+/* Table is absolutely positioned inside the wrap so the winning bottle's
+   landing Y is anchored to the table's surface — they don't drift apart
+   regardless of row layout. `top: 100px` matches the winner's final
+   translateY: bottle base sits flush on table top.
+   See `@keyframes bottle-land` and keep them in sync if either changes. */
 .spotlight-table {
-  position: relative;
-  width: 110px;
-  height: 14px;
-  background: linear-gradient(180deg, #92400e, #78350f);
-  border-radius: 4px;
-  margin: 0.5rem 0 -10px 0;
-  box-shadow: 0 6px 10px rgba(0, 0, 0, 0.18);
-}
-.spotlight-table::after {
-  content: "";
   position: absolute;
-  top: 100%;
+  top: 100px;
   left: 50%;
   transform: translateX(-50%);
-  width: 6px;
-  height: 26px;
-  background: #78350f;
+  width: 380px;
+  max-width: 90%;
+  height: 18px;
+  background: linear-gradient(180deg, #92400e 0%, #78350f 70%, #5a2a09 100%);
+  border-radius: 3px 3px 6px 6px;
+  box-shadow:
+    0 1px 0 rgba(255, 255, 255, 0.15) inset,
+    0 10px 14px rgba(0, 0, 0, 0.25);
+  z-index: 1;
+  pointer-events: none;
+}
+/* Drop the old single table-leg pseudo — wide-table look reads better. */
+.spotlight-table::after {
+  display: none;
 }
 .spotlight-bottles-row {
+  position: relative;
   display: flex;
   align-items: flex-end;
   justify-content: center;
@@ -1756,47 +1763,60 @@ ul[style*="listStyle: none"] li button:hover {
     opacity: 0;
   }
 }
-/* Winner: toss up, spin, arc BACKWARD onto the table, touchdown with a
-   small recoil, then settle upright. The final resting Y (-128px) places
-   the bottle's base flush on the brown table strip above the row.
-   Scale shrinks slightly toward the end to read as "moving away" into
-   the back of the stage rather than popping toward the camera. */
+/* Winner — modeled on the real bottle-flip game (kid flicks a half-full
+   water bottle so it does ONE clean rotation and "sticks" upright on a
+   table). Beats:
+     0–35%   wind-up flick + arc to peak, halfway through one rotation
+     35–60%  descending, finishing the single rotation back to upright
+     60–72%  TOUCHDOWN on the table (base hits, body squashes wide+short)
+     72–95%  did-it-tip? wobble — left, right, tiny left, almost falls
+     95–100% settled upright, base flush on the brown table strip
+   Total rotation is exactly 360° (one flip), not multiple — the over-
+   spinning version read as carnival/fidget-toy, this reads as bottle
+   flip. The wobble uses translateX + rotate to fake a base-pivoted
+   rock without changing transform-origin mid-animation. */
 .bottle-winner {
-  animation: bottle-land 4s cubic-bezier(0.18, 0.7, 0.21, 1) forwards;
+  animation: bottle-land 4s cubic-bezier(0.2, 0.65, 0.25, 1) forwards;
   z-index: 3;
 }
 @keyframes bottle-land {
-  /* lift off */
+  /* 0% — at rest, about to flick */
   0% {
     transform: translate(0, 0) rotate(0deg) scale(1);
   }
-  /* mid-toss, spinning */
-  22% {
-    transform: translate(0, -190px) rotate(360deg) scale(1.05);
+  /* 35% — mid-air at peak, halfway through the rotation */
+  35% {
+    transform: translate(0, -220px) rotate(180deg) scale(1.05);
   }
-  /* peak — highest point, still spinning */
-  45% {
-    transform: translate(0, -230px) rotate(720deg) scale(1.08);
+  /* 60% — descending, rotation completes to upright */
+  60% {
+    transform: translate(0, -150px) rotate(360deg) scale(1.02);
   }
-  /* coming down, rotation finishing to upright */
-  62% {
-    transform: translate(0, -170px) rotate(1080deg) scale(1.04);
+  /* 70% — TOUCHDOWN: base hits the table, body squashes (wide & short) */
+  70% {
+    transform: translate(0, -118px) rotate(360deg) scaleX(1.12) scaleY(0.86);
   }
-  /* TOUCHDOWN on the table — squash */
-  74% {
-    transform: translate(0, -126px) rotate(1080deg) scale(1.05, 0.92);
+  /* 76% — recovery from squash, slight rebound stretch */
+  76% {
+    transform: translate(0, -124px) rotate(360deg) scaleX(0.97) scaleY(1.03);
   }
-  /* recoil — small bounce back up */
+  /* 82% — wobble LEFT: bottle tips, almost falls. translateX paired with
+            rotate keeps the bottle's base on the table (faking a pivot
+            at the base instead of the center). */
   82% {
-    transform: translate(0, -138px) rotate(1080deg) scale(1, 1.04);
+    transform: translate(-5px, -120px) rotate(351deg) scale(1);
   }
-  /* secondary settle */
-  90% {
-    transform: translate(0, -126px) rotate(1080deg) scale(1.02, 0.98);
+  /* 88% — wobble RIGHT: tips the other way */
+  88% {
+    transform: translate(5px, -120px) rotate(369deg) scale(1);
   }
-  /* final rest, upright on the table */
+  /* 94% — tiny final left tip */
+  94% {
+    transform: translate(-1.5px, -120px) rotate(357deg) scale(1);
+  }
+  /* 100% — SETTLED upright on the table, dead still */
   100% {
-    transform: translate(0, -128px) rotate(1080deg) scale(1);
+    transform: translate(0, -120px) rotate(360deg) scale(1);
   }
 }
 
