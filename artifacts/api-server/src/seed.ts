@@ -1063,6 +1063,137 @@ export async function ensureAdminHubSchema() {
   );
 }
 
+// -----------------------------------------------------------------------------
+// Watchlist Hub schema (interactions, cases, witness statements, audit log,
+// alert dismissals). All idempotent CREATE TABLE IF NOT EXISTS so a fresh
+// schema and an upgraded one both end up identical. Called from runSeed.
+// -----------------------------------------------------------------------------
+export async function ensureWatchlistSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interactions (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      occurred_date TEXT NOT NULL,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      kind TEXT NOT NULL,
+      severity INTEGER NOT NULL DEFAULT 1,
+      location TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL,
+      detail TEXT NOT NULL DEFAULT '',
+      case_id INTEGER,
+      logged_by_staff_id INTEGER,
+      logged_by_name TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'open',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interactions_school_idx ON interactions(school_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interactions_school_date_idx ON interactions(school_id, occurred_date)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interactions_school_case_idx ON interactions(school_id, case_id)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_participants (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      interaction_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      notes TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_participants_school_idx ON interaction_participants(school_id)`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_participants_interaction_student_idx ON interaction_participants(interaction_id, student_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_participants_school_student_idx ON interaction_participants(school_id, student_id)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_cases (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_number INTEGER NOT NULL,
+      title TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      lead_staff_id INTEGER,
+      lead_staff_name TEXT NOT NULL DEFAULT '',
+      summary TEXT NOT NULL DEFAULT '',
+      opened_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      closed_at TIMESTAMPTZ,
+      created_by_staff_id INTEGER,
+      created_by_name TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_cases_school_idx ON interaction_cases(school_id)`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_cases_school_number_idx ON interaction_cases(school_id, case_number)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_case_notes (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      body TEXT NOT NULL,
+      author_staff_id INTEGER,
+      author_name TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_case_notes_case_idx ON interaction_case_notes(school_id, case_id)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS witness_statements (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      interaction_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'requested',
+      requested_by_staff_id INTEGER,
+      requested_by_name TEXT NOT NULL DEFAULT '',
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      reminded_at TIMESTAMPTZ,
+      remind_count INTEGER NOT NULL DEFAULT 0,
+      completed_at TIMESTAMPTZ,
+      body TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS witness_statements_school_idx ON witness_statements(school_id)`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS witness_statements_interaction_student_idx ON witness_statements(interaction_id, student_id)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_audit_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      entity_type TEXT NOT NULL,
+      entity_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      actor_staff_id INTEGER,
+      actor_name TEXT NOT NULL DEFAULT '',
+      payload JSONB,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_audit_log_school_idx ON interaction_audit_log(school_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_audit_log_entity_idx ON interaction_audit_log(school_id, entity_type, entity_id)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_alert_dismissals (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      rule_kind TEXT NOT NULL,
+      subject_student_id TEXT NOT NULL,
+      subject_key TEXT NOT NULL DEFAULT '',
+      dismissed_by_staff_id INTEGER,
+      dismissed_by_name TEXT NOT NULL DEFAULT '',
+      dismiss_reason TEXT NOT NULL DEFAULT '',
+      dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      expires_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_alert_dismissals_school_idx ON interaction_alert_dismissals(school_id)`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_alert_dismissals_active_idx ON interaction_alert_dismissals(school_id, rule_kind, subject_student_id, subject_key)`);
+}
+
 // Tier-preset table + the three built-in Basic/Pro/Enterprise rows.
 // Idempotent: existing rows are kept (in case the user has edited the
 // preset's feature_keys) but missing rows are inserted.

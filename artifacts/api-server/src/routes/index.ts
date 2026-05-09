@@ -78,6 +78,7 @@ import studentFinderRouter from "./studentFinder";
 import staffDirectoryRouter from "./staffDirectory";
 import hallPassQueueRouter from "./hallPassQueue";
 import spotlightRouter from "./spotlight";
+import watchlistRouter from "./watchlist";
 
 const router: IRouter = Router();
 
@@ -160,5 +161,6 @@ router.use(studentFinderRouter);
 router.use(staffDirectoryRouter);
 router.use(hallPassQueueRouter);
 router.use(spotlightRouter);
+router.use(watchlistRouter);
 
 export default router;

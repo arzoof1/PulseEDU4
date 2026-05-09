@@ -16,6 +16,7 @@ import {
   seedStudentRaceIfEmpty,
   seedSafetyPlanLibraryIfEmpty,
   seedSafetyPlansIfEmpty,
+  ensureWatchlistSchema,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -95,6 +96,10 @@ async function runSeed(): Promise<void> {
   // so the red SP pill appears on every teacher's roster on day-1).
   await seedSafetyPlanLibraryIfEmpty();
   await seedSafetyPlansIfEmpty();
+  // Watchlist Hub schema (interactions, cases, witness statements, audit log,
+  // alert dismissals). Idempotent — safe on every boot; cheap on already-
+  // migrated DBs.
+  await ensureWatchlistSchema();
 }
 
 // In production we MUST open the port within the platform's health-check

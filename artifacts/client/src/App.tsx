@@ -1,6 +1,9 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
 import AdminHubPage from "./components/AdminHubPage";
+import WatchlistHub from "./components/WatchlistHub";
+import WatchlistNetwork from "./components/WatchlistNetwork";
+import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
@@ -4421,9 +4424,15 @@ function App() {
     | "interventionReports"
     | "myInterventions"
     | "adminHub"
+    | "watchlistHub"
+    | "watchlistNetwork"
+    | "watchlistCase"
     | "separationSuggestions"
     | "spotlight"
   >("hallPasses");
+  const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
+    number | null
+  >(null);
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
   // Roster. Cleared on Back. If the activeSection switches to
@@ -8960,6 +8969,17 @@ function App() {
                   renderNavItem({
                     key: "adminHub",
                     label: "Admin Hub",
+                    icon: IconClipboard,
+                  })}
+                {(isAdmin ||
+                  Boolean(authUser?.isSuperUser) ||
+                  Boolean(authUser?.isDistrictAdmin) ||
+                  Boolean(authUser?.isDean) ||
+                  isBehaviorSpec ||
+                  isMtss) &&
+                  renderNavItem({
+                    key: "watchlistHub",
+                    label: "Watchlist Hub",
                     icon: IconClipboard,
                   })}
                 {canManageBehaviorLists && !isBehaviorSpec &&
@@ -18625,6 +18645,33 @@ function App() {
 
       {activeSection === "adminHub" && (
         <AdminHubPage />
+      )}
+
+      {activeSection === "watchlistHub" && (
+        <WatchlistHub
+          onOpenNetwork={() => setActiveSection("watchlistNetwork")}
+          onOpenCase={(id) => {
+            setSelectedWatchlistCaseId(id);
+            setActiveSection("watchlistCase");
+          }}
+        />
+      )}
+
+      {activeSection === "watchlistNetwork" && (
+        <WatchlistNetwork
+          onBack={() => setActiveSection("watchlistHub")}
+          onOpenCase={(id) => {
+            setSelectedWatchlistCaseId(id);
+            setActiveSection("watchlistCase");
+          }}
+        />
+      )}
+
+      {activeSection === "watchlistCase" && selectedWatchlistCaseId != null && (
+        <WatchlistCaseDetail
+          caseId={selectedWatchlistCaseId}
+          onBack={() => setActiveSection("watchlistHub")}
+        />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "iss-settings" && (

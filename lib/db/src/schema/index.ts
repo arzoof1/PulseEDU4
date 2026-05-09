@@ -71,3 +71,8 @@ export * from "./issAcknowledgements";
 export * from "./studentEmergencyContacts";
 export * from "./separationReasonTags";
 export * from "./studentSeparations";
+export * from "./interactions";
+export * from "./interactionCases";
+export * from "./interactionWitnessStatements";
+export * from "./interactionAuditLog";
+export * from "./interactionAlertDismissals";
