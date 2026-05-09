@@ -3,6 +3,7 @@ import Login from "./Login";
 import AdminHubPage from "./components/AdminHubPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
+import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { HallPassQueueChip } from "./components/HallPassQueueChip";
 import { KioskBanner } from "./components/KioskBanner";
 import { OpenKioskModal } from "./components/OpenKioskModal";
@@ -9014,6 +9015,12 @@ function App() {
       {openKioskModalShown && (
         <OpenKioskModal onClose={() => setOpenKioskModalShown(false)} />
       )}
+      {/* Companion Queue Panel — visible whenever there is at least one
+          live kiosk waiting line the signed-in staff member is allowed
+          to manage. Reorder/remove from here without disturbing the
+          front-of-room kiosk; "Show QR" mints a phone-ready view-only
+          link. The component self-hides when nothing is in scope. */}
+      <CompanionQueuePanel user={authUser} />
       {(() => {
         let active = 0;
         let overdue = 0;

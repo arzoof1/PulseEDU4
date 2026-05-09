@@ -18,6 +18,7 @@ export * from "./staffDefaults";
 export * from "./locationAllowedDestinations";
 export * from "./staff";
 export * from "./kioskActivations";
+export * from "./kioskViewerTokens";
 export * from "./hallPassQueue";
 export * from "./spotlight";
 export * from "./adminNotifications";

@@ -10,14 +10,52 @@ import {
   db,
   hallPassQueueTable,
   kioskActivationsTable,
+  kioskViewerTokensTable,
   hallPassesTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
   studentsTable,
   staffTable,
+  schoolsTable,
 } from "@workspace/db";
-import { and, eq, isNull, gt, asc, ne } from "drizzle-orm";
+import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
+import { randomBytes } from "node:crypto";
 import { requireSchool } from "../lib/scope.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
+
+// How long a minted viewer token stays usable. The token is also killed
+// the moment the underlying kiosk activation is deactivated, so this is
+// just an upper bound for "I scanned this QR yesterday and forgot".
+const VIEWER_TOKEN_TTL_MS = 12 * 60 * 60 * 1000;
+
+// Predicate: can `staff` view/manage the queue for the given live
+// activation in their school? Mirrors the take-over policy decision
+// (admin/core team OR same default room OR original activator) so the
+// staff app and the activation flow stay consistent.
+function canManageRoomQueue(
+  staff: {
+    id: number;
+    defaultRoom: string | null;
+    isAdmin?: boolean | null;
+    isSuperUser?: boolean | null;
+    isDistrictAdmin?: boolean | null;
+    isBehaviorSpecialist?: boolean | null;
+    isMtssCoordinator?: boolean | null;
+    isSchoolPsychologist?: boolean | null;
+  },
+  activation: { staffId: number; room: string },
+): boolean {
+  if (isCoreTeam(staff)) return true;
+  if (activation.staffId === staff.id) return true;
+  if (
+    staff.defaultRoom &&
+    staff.defaultRoom.trim().length > 0 &&
+    staff.defaultRoom === activation.room
+  ) {
+    return true;
+  }
+  return false;
+}
 
 const router: IRouter = Router();
 
@@ -421,6 +459,228 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
       addedAt:
         r.addedAt instanceof Date ? r.addedAt.toISOString() : r.addedAt,
     })),
+  });
+});
+
+// Companion-panel endpoint: re-stamp positions for one room's queue.
+// Body: { kioskActivationId, orderedIds: number[] } — the ids in the order
+// they should appear (1..n). We look up the activation, authorize against
+// `canManageRoomQueue`, and rewrite positions inside a transaction so the
+// kiosk never sees a half-applied reorder.
+router.post("/hall-pass-queue/reorder", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const { kioskActivationId, orderedIds } = req.body ?? {};
+  if (
+    !Number.isInteger(kioskActivationId) ||
+    !Array.isArray(orderedIds) ||
+    orderedIds.some((v) => !Number.isInteger(v))
+  ) {
+    res
+      .status(400)
+      .json({ error: "kioskActivationId and orderedIds[] are required" });
+    return;
+  }
+
+  const [activation] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.id, kioskActivationId),
+        eq(kioskActivationsTable.schoolId, schoolId),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!activation) {
+    res.status(404).json({ error: "Kiosk no longer active" });
+    return;
+  }
+  if (!canManageRoomQueue(staff, activation)) {
+    res
+      .status(403)
+      .json({ error: "You can't manage the queue for that room" });
+    return;
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      // Lock and verify every supplied id belongs to this activation —
+      // prevents a malformed payload from rewriting another room's line.
+      const live = await tx
+        .select()
+        .from(hallPassQueueTable)
+        .where(eq(hallPassQueueTable.kioskActivationId, activation.id))
+        .for("update");
+      const liveIds = new Set(live.map((r) => r.id));
+      const orderedSet = new Set(orderedIds as number[]);
+      if (
+        (orderedIds as number[]).length !== live.length ||
+        (orderedIds as number[]).some((id) => !liveIds.has(id)) ||
+        orderedSet.size !== (orderedIds as number[]).length
+      ) {
+        // Stale snapshot — somebody modified the queue between the panel
+        // load and the reorder click. Surface it so the UI can refetch.
+        throw new Error("STALE_QUEUE");
+      }
+      // Two-pass write to dodge the (kiosk_activation_id, position) range
+      // ordering: first push everything to a high temporary range, then
+      // back down to 1..n.
+      for (let i = 0; i < (orderedIds as number[]).length; i++) {
+        await tx
+          .update(hallPassQueueTable)
+          .set({ position: 10_000 + i })
+          .where(eq(hallPassQueueTable.id, (orderedIds as number[])[i]!));
+      }
+      for (let i = 0; i < (orderedIds as number[]).length; i++) {
+        await tx
+          .update(hallPassQueueTable)
+          .set({ position: i + 1 })
+          .where(eq(hallPassQueueTable.id, (orderedIds as number[])[i]!));
+      }
+    });
+  } catch (err) {
+    if (err instanceof Error && err.message === "STALE_QUEUE") {
+      res
+        .status(409)
+        .json({ error: "Queue changed — refresh and try again", stale: true });
+      return;
+    }
+    req.log.error({ err }, "hall-pass-queue reorder failed");
+    res.status(500).json({ error: "Could not reorder queue" });
+    return;
+  }
+  res.json({ ok: true });
+});
+
+// Mint a read-only viewer token for the live kiosk in a given room.
+// Returns the token string, the absolute viewer URL (so the QR code on
+// the client doesn't have to know about path prefixes), and the expiry.
+router.post("/kiosk/viewer-token", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const { room } = req.body ?? {};
+  if (typeof room !== "string" || !room.trim()) {
+    res.status(400).json({ error: "room is required" });
+    return;
+  }
+  const trimmedRoom = room.trim();
+
+  const [activation] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.schoolId, schoolId),
+        eq(kioskActivationsTable.room, trimmedRoom),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!activation) {
+    res
+      .status(404)
+      .json({ error: `No active kiosk for room "${trimmedRoom}"` });
+    return;
+  }
+  if (!canManageRoomQueue(staff, activation)) {
+    res
+      .status(403)
+      .json({ error: "You can't share the queue for that room" });
+    return;
+  }
+
+  const token = randomBytes(24).toString("base64url");
+  const tokenHash = createHash("sha256").update(token).digest("hex");
+  const expiresAt = new Date(
+    Math.min(
+      Date.now() + VIEWER_TOKEN_TTL_MS,
+      // Clip to the activation's own expiry — viewer should never outlive
+      // the kiosk it's mirroring.
+      activation.expiresAt.getTime(),
+    ),
+  );
+  await db.insert(kioskViewerTokensTable).values({
+    schoolId,
+    kioskActivationId: activation.id,
+    tokenHash,
+    createdByStaffId: staff.id,
+    expiresAt,
+  });
+
+  // Build an absolute URL using the request's own host so it resolves on
+  // the phone (the staff app's preview/published origin). Path-based
+  // routing in main.tsx picks up `/kiosk-view/...` and renders the
+  // read-only mirror.
+  const proto = (req.headers["x-forwarded-proto"] as string) || req.protocol;
+  const host = req.headers["x-forwarded-host"] || req.headers.host;
+  const url = `${proto}://${host}/kiosk-view/${token}`;
+  res.json({
+    token,
+    url,
+    room: activation.room,
+    expiresAt: expiresAt.toISOString(),
+  });
+});
+
+// Public read for the phone mirror. NO auth — possessing the token is
+// the auth. Returns 410 Gone the moment the underlying kiosk goes away,
+// which is what makes "go dark on take-over" actually go dark.
+router.get("/kiosk/viewer/:token", async (req, res) => {
+  const raw = req.params.token;
+  if (typeof raw !== "string" || raw.length < 16) {
+    res.status(404).json({ error: "Invalid viewer link" });
+    return;
+  }
+  const tokenHash = createHash("sha256").update(raw).digest("hex");
+  const [row] = await db
+    .select({
+      viewer: kioskViewerTokensTable,
+      activation: kioskActivationsTable,
+    })
+    .from(kioskViewerTokensTable)
+    .innerJoin(
+      kioskActivationsTable,
+      eq(kioskActivationsTable.id, kioskViewerTokensTable.kioskActivationId),
+    )
+    .where(eq(kioskViewerTokensTable.tokenHash, tokenHash));
+
+  if (!row) {
+    res.status(404).json({ error: "Viewer link not found" });
+    return;
+  }
+  const now = new Date();
+  if (row.viewer.revokedAt || row.viewer.expiresAt <= now) {
+    res.status(410).json({ error: "Viewer link expired", gone: true });
+    return;
+  }
+  if (
+    row.activation.deactivatedAt ||
+    row.activation.expiresAt <= now
+  ) {
+    res
+      .status(410)
+      .json({ error: "Kiosk is no longer active", gone: true });
+    return;
+  }
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, row.activation.schoolId));
+
+  const { rows } = await clearStaleAndList(row.activation);
+  res.json({
+    room: row.activation.room,
+    schoolName: school?.name ?? null,
+    capacity: QUEUE_CAP,
+    entries: rows.map((r, i) => shapeEntry(r, i)),
+    refreshedAt: new Date().toISOString(),
   });
 });
 
