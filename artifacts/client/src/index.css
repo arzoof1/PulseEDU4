@@ -8,6 +8,83 @@
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities);
 
+/* ---------------------------------------------------------------------------
+   .pulse-table — shared columned-table look.
+   Applied to every data table in the staff app so the visual language is
+   consistent. To restyle every table at once, edit this block.
+
+   What it provides:
+     - tabular numerals so digits line up vertically
+     - bold purple→blue gradient uppercase headers
+     - thin vertical dividers between columns (none on outer edges)
+     - subtle row dividers
+     - consistent padding
+
+   What it intentionally does NOT do:
+     - It does not force header text-alignment. Numeric columns should still
+       opt-in to right-aligned headers (e.g. `style={{ textAlign: 'right' }}`
+       on the th) so the header sits directly above its numbers. Most admin
+       tables are all-text and stay left-aligned by default.
+
+   Inline styles on cells (text-align, color, custom padding, etc) still win
+   over these defaults because inline styles have higher specificity, so
+   existing per-table tweaks remain intact.
+   --------------------------------------------------------------------------- */
+.pulse-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+.pulse-table thead th {
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  font-size: 0.75rem;
+  padding: 6px 10px;
+  border-bottom: 1px solid #e5e7eb;
+  border-right: 1px solid #e5e7eb;
+  /* Solid fallback color first — used by:
+       - browsers without `background-clip: text` support
+       - Windows High Contrast / forced-colors mode (which ignores
+         background images and would otherwise leave header text
+         invisible)
+       - print stylesheets (gradients don't always print reliably)
+     The gradient is then layered on top via `background-clip: text`
+     in the @supports block. The forced-colors / print media queries
+     restore the solid color so headers remain readable. */
+  color: #4f46e5;
+}
+@supports ((-webkit-background-clip: text) or (background-clip: text)) {
+  .pulse-table thead th {
+    background-image: linear-gradient(90deg, #7c3aed 0%, #2563eb 100%);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+}
+@media (forced-colors: active), print {
+  .pulse-table thead th {
+    background-image: none;
+    -webkit-background-clip: border-box;
+    background-clip: border-box;
+    color: CanvasText;
+  }
+}
+.pulse-table thead th:last-child {
+  border-right: none;
+}
+.pulse-table tbody td {
+  padding: 6px 10px;
+  border-bottom: 1px solid #f1f5f9;
+  border-right: 1px solid #f1f5f9;
+}
+.pulse-table tbody td:last-child {
+  border-right: none;
+}
+.pulse-table tbody tr:last-child td {
+  border-bottom: none;
+}
+
 :root {
   --bg: #f6f8fb;
   --surface: #ffffff;

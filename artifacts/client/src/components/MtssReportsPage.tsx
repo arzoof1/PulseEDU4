@@ -753,7 +753,7 @@ export default function MtssReportsPage({
             </BarChart>
           </ResponsiveContainer>
           <div style={{ overflowX: "auto", marginTop: 8 }}>
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",

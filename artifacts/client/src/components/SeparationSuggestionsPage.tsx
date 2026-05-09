@@ -229,7 +229,7 @@ export default function SeparationSuggestionsPage({ onBack }: Props) {
             No flagged pairs match these filters yet.
           </p>
         ) : (
-          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
+          <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 14 }}>
             <thead style={{ textAlign: "left", background: "#f8fafc" }}>
               <tr>
                 <th style={{ padding: "6px 10px" }}>Pair</th>

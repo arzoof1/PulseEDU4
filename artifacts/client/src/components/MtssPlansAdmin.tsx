@@ -365,7 +365,7 @@ export default function MtssPlansAdmin({
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",

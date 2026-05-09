@@ -690,7 +690,7 @@ function TopStudentTable({
           No data in this window.
         </p>
       ) : (
-        <table
+        <table className="pulse-table"
           style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
         >
           <tbody>
@@ -772,7 +772,7 @@ function TopValueTable({
           No data in this window.
         </p>
       ) : (
-        <table
+        <table className="pulse-table"
           style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
         >
           <tbody>

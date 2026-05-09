@@ -373,7 +373,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
       )}
 
       <div style={{ overflow: "auto", marginTop: 12, maxHeight: "70vh" }}>
-        <table
+        <table className="pulse-table"
           style={{
             borderCollapse: "separate",
             borderSpacing: 0,

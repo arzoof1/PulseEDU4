@@ -516,7 +516,7 @@ export default function InterventionReportsPage({ onBack }: Props) {
               <h4 style={{ margin: "0.5rem 0" }}>
                 Per-teacher completion (week of {week})
               </h4>
-              <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <table className="pulse-table" style={{ borderCollapse: "collapse", width: "100%" }}>
                 <thead>
                   <tr>
                     <th

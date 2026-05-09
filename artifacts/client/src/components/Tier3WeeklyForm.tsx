@@ -536,7 +536,7 @@ export default function Tier3WeeklyForm({
           every Mon..Fri column so the days don't visually run
           together — the first day cell gets a left border too. */}
       <div style={{ overflowX: "auto" }}>
-        <table
+        <table className="pulse-table"
           style={{
             borderCollapse: "collapse",
             width: "100%",
@@ -955,7 +955,7 @@ export default function Tier3WeeklyForm({
               >
                 {cat.name}
               </div>
-              <table style={{ borderCollapse: "collapse", width: "100%" }}>
+              <table className="pulse-table" style={{ borderCollapse: "collapse", width: "100%" }}>
                 <thead>
                   <tr>
                     <th

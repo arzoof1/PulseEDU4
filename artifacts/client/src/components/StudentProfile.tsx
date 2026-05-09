@@ -1042,7 +1042,7 @@ export default function StudentProfile({
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
                 FAST PM
               </div>
-              <table style={{ width: "100%", fontSize: "0.85rem" }}>
+              <table className="pulse-table" style={{ width: "100%", fontSize: "0.85rem" }}>
                 <thead>
                   <tr style={{ color: "#6b7280" }}>
                     <th style={{ textAlign: "left" }}>Subject</th>
@@ -1076,7 +1076,7 @@ export default function StudentProfile({
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
                 iReady AP
               </div>
-              <table style={{ width: "100%", fontSize: "0.85rem" }}>
+              <table className="pulse-table" style={{ width: "100%", fontSize: "0.85rem" }}>
                 <thead>
                   <tr style={{ color: "#6b7280" }}>
                     <th style={{ textAlign: "left" }}>Subject</th>
@@ -1118,7 +1118,7 @@ export default function StudentProfile({
               <div style={{ fontWeight: 600, fontSize: "0.85rem", marginBottom: 4 }}>
                 SCI Benchmark
               </div>
-              <table style={{ width: "100%", fontSize: "0.85rem" }}>
+              <table className="pulse-table" style={{ width: "100%", fontSize: "0.85rem" }}>
                 <thead>
                   <tr style={{ color: "#6b7280" }}>
                     <th style={{ textAlign: "left" }}>Subject</th>
@@ -1587,7 +1587,7 @@ export default function StudentProfile({
           </p>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",

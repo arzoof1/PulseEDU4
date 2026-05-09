@@ -342,7 +342,7 @@ function KindScheduleList({
           No {KIND_LABEL[kind].toLowerCase()} schedules yet. Click “New” above to create one.
         </p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+        <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border, #2a3447)" }}>
               <th style={{ padding: "0.5rem" }}>Name</th>
@@ -656,7 +656,7 @@ function ScheduleEditor({
         </label>
       </div>
 
-      <table style={{ width: "100%", borderCollapse: "collapse" }}>
+      <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
           <tr style={{ textAlign: "left", borderBottom: "1px solid var(--border, #2a3447)" }}>
             <th style={{ padding: "0.5rem", width: 80 }}>#</th>

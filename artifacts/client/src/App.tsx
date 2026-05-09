@@ -2822,7 +2822,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                   </div>
                 ) : (
                   <div style={{ overflowX: "auto" }}>
-                    <table
+                    <table className="pulse-table"
                       style={{
                         width: "100%",
                         borderCollapse: "collapse",
@@ -3171,7 +3171,7 @@ function BehaviorReviewSection({
       ) : rows.length === 0 ? (
         <p>No pullouts awaiting review. 🎉</p>
       ) : (
-        <table
+        <table className="pulse-table"
           border={1}
           cellPadding={6}
           style={{ borderCollapse: "collapse", width: "100%" }}
@@ -3281,7 +3281,7 @@ function StudentPulloutsTab({ studentId }: { studentId: string }) {
   return (
     <>
       <h3>Pullouts ({rows.length})</h3>
-      <table
+      <table className="pulse-table"
         border={1}
         cellPadding={6}
         style={{ borderCollapse: "collapse" }}
@@ -3394,7 +3394,7 @@ function PulloutReportSection({ students }: { students: Student[] }) {
       {rows.length === 0 ? (
         <p style={{ color: "#666" }}>None.</p>
       ) : (
-        <table
+        <table className="pulse-table"
           border={1}
           cellPadding={4}
           style={{ borderCollapse: "collapse", fontSize: "0.9em" }}
@@ -9293,7 +9293,7 @@ function App() {
             );
           })()
         ) : (
-          <table
+          <table className="pulse-table"
             border={1}
             cellPadding={6}
             style={{ borderCollapse: "collapse", width: "100%" }}
@@ -10364,7 +10364,7 @@ function App() {
                     </div>
                   ) : (
                     <div style={{ maxHeight: 480, overflow: "auto" }}>
-                      <table
+                      <table className="pulse-table"
                         style={{
                           width: "100%",
                           borderCollapse: "collapse",
@@ -10482,7 +10482,7 @@ function App() {
                     </div>
                   ) : (
                     <div style={{ maxHeight: 480, overflow: "auto" }}>
-                      <table
+                      <table className="pulse-table"
                         style={{
                           width: "100%",
                           borderCollapse: "collapse",
@@ -10611,7 +10611,7 @@ function App() {
                     </div>
                   ) : (
                     <div style={{ maxHeight: 480, overflow: "auto" }}>
-                      <table
+                      <table className="pulse-table"
                         style={{
                           width: "100%",
                           borderCollapse: "collapse",
@@ -10887,7 +10887,7 @@ function App() {
                 </div>
               ) : (
                 <div style={{ maxHeight: 600, overflow: "auto" }}>
-                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
+                  <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.9rem" }}>
                     <thead
                       style={{
                         position: "sticky",
@@ -11125,7 +11125,7 @@ function App() {
                   {hpReportData.topStudentTakers.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
-                    <table>
+                    <table className="pulse-table">
                       <thead>
                         <tr>
                           <th>#</th>
@@ -11155,7 +11155,7 @@ function App() {
                   {hpReportData.topStudentLostMinutes.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
-                    <table>
+                    <table className="pulse-table">
                       <thead>
                         <tr>
                           <th>#</th>
@@ -11185,7 +11185,7 @@ function App() {
                   {hpReportData.topTeacherGranters.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
-                    <table>
+                    <table className="pulse-table">
                       <thead>
                         <tr>
                           <th>#</th>
@@ -11212,7 +11212,7 @@ function App() {
                   {hpReportData.topDestinations.length === 0 ? (
                     <div className="muted">No passes today.</div>
                   ) : (
-                    <table>
+                    <table className="pulse-table">
                       <thead>
                         <tr>
                           <th>#</th>
@@ -11461,7 +11461,7 @@ function App() {
 
       <div className="card">
       <h2>Tardy / Check-Ins</h2>
-      <table border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
+      <table className="pulse-table" border={1} cellPadding={6} style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
             <th>Student</th>
@@ -11916,7 +11916,7 @@ function App() {
 
               {studentTab === "hallPasses" && (<>
               <h3>Hall Passes</h3>
-              <table
+              <table className="pulse-table"
                 border={1}
                 cellPadding={6}
                 style={{ borderCollapse: "collapse" }}
@@ -11955,7 +11955,7 @@ function App() {
 
               {studentTab === "tardy" && (<>
               <h3>Tardy / Support Logs</h3>
-              <table
+              <table className="pulse-table"
                 border={1}
                 cellPadding={6}
                 style={{ borderCollapse: "collapse" }}
@@ -13846,7 +13846,7 @@ function App() {
                             {reportData.sections.length === 0 ? (
                               <div>No sections for this teacher.</div>
                             ) : (
-                              <table
+                              <table className="pulse-table"
                                 style={{
                                   borderCollapse: "collapse",
                                   width: "100%",
@@ -13954,7 +13954,7 @@ function App() {
                               );
                               return (
                                 <div style={{ overflowX: "auto" }}>
-                                  <table
+                                  <table className="pulse-table"
                                     style={{
                                       borderCollapse: "collapse",
                                       fontSize: "0.85rem",
@@ -14600,7 +14600,7 @@ function App() {
 
           {activeSection === "pbisRecent" && (<>
           <h3 style={{ marginTop: 0 }}>Recent PBIS Entries</h3>
-          <table
+          <table className="pulse-table"
             border={1}
             cellPadding={6}
             style={{ borderCollapse: "collapse" }}
@@ -14786,7 +14786,7 @@ function App() {
                   No points awarded in this period yet.
                 </div>
               ) : (
-                <table>
+                <table className="pulse-table">
                   <thead>
                     <tr>
                       <th>#</th>
@@ -14820,7 +14820,7 @@ function App() {
                   No staff awards in this period yet.
                 </div>
               ) : (
-                <table>
+                <table className="pulse-table">
                   <thead>
                     <tr>
                       <th>#</th>
@@ -15168,7 +15168,7 @@ function App() {
                       —
                     </div>
                   ) : (
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                       <thead>
                         <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                           <th style={{ padding: "0.25rem" }}>Reason</th>
@@ -15197,7 +15197,7 @@ function App() {
                       —
                     </div>
                   ) : (
-                    <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                    <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                       <thead>
                         <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                           <th style={{ padding: "0.25rem" }}>Teacher</th>
@@ -15227,7 +15227,7 @@ function App() {
                   No entries match these filters.
                 </div>
               ) : (
-                <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
+                <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.85rem" }}>
                   <thead>
                     <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                       <th style={{ padding: "0.25rem" }}>When</th>
@@ -16878,7 +16878,7 @@ function App() {
                   );
                   return (
                     <div style={{ overflowX: "auto" }}>
-                      <table
+                      <table className="pulse-table"
                         style={{
                           width: "100%",
                           borderCollapse: "collapse",
@@ -17334,7 +17334,7 @@ function App() {
                   Add
                 </button>
               </div>
-              <table
+              <table className="pulse-table"
                 style={{ width: "100%", borderCollapse: "collapse" }}
               >
                 <thead>
@@ -17557,7 +17557,7 @@ function App() {
           {pbisReasonsList.length === 0 ? (
             <div style={{ color: "var(--muted, #666)" }}>No reasons yet.</div>
           ) : (
-            <table
+            <table className="pulse-table"
               style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
             >
               <thead>
@@ -17647,7 +17647,7 @@ function App() {
               No milestones configured yet. (Suggestion: 25, 50, 100.)
             </div>
           ) : (
-            <table style={{ borderCollapse: "collapse", maxWidth: "32rem" }}>
+            <table className="pulse-table" style={{ borderCollapse: "collapse", maxWidth: "32rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                   <th style={{ padding: "0.4rem" }}>Points</th>
@@ -17684,7 +17684,7 @@ function App() {
           {milestoneEmailLog.length === 0 ? (
             <div style={{ color: "var(--muted, #666)" }}>None yet.</div>
           ) : (
-            <table style={{ borderCollapse: "collapse", width: "100%", maxWidth: "56rem" }}>
+            <table className="pulse-table" style={{ borderCollapse: "collapse", width: "100%", maxWidth: "56rem" }}>
               <thead>
                 <tr style={{ borderBottom: "1px solid #ccc", textAlign: "left" }}>
                   <th style={{ padding: "0.4rem" }}>When</th>
@@ -17818,7 +17818,7 @@ function App() {
               No interventions yet.
             </div>
           ) : (
-            <table
+            <table className="pulse-table"
               style={{ width: "100%", borderCollapse: "collapse", maxWidth: "48rem" }}
             >
               <thead>
@@ -18049,7 +18049,7 @@ function App() {
               No per-student limits set.
             </div>
           ) : (
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
@@ -18197,7 +18197,7 @@ function App() {
               No keep-apart pairs yet.
             </div>
           ) : (
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
@@ -18318,7 +18318,7 @@ function App() {
               No reasons yet.
             </div>
           ) : (
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",
@@ -19089,7 +19089,7 @@ function App() {
               No kiosks are currently active.
             </p>
           ) : (
-            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
                   <th style={{ textAlign: "left", padding: "0.5rem" }}>

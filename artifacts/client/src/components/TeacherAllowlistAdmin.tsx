@@ -85,7 +85,7 @@ export default function TeacherAllowlistAdmin({
         style={{ marginBottom: "0.75rem", maxWidth: "20rem" }}
       />
       <div style={{ overflowX: "auto" }}>
-        <table
+        <table className="pulse-table"
           style={{
             borderCollapse: "collapse",
             width: "100%",

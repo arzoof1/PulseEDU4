@@ -557,7 +557,7 @@ function DisparityFlagsPanel({ flags }: { flags: DisparityFlag[] }) {
           consistent across demographic lines.
         </p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <thead>
             <tr style={{ color: "#64748b", fontSize: 11 }}>
               <th style={{ textAlign: "left", padding: "0.4rem 0", fontWeight: 500 }}>
@@ -940,7 +940,7 @@ function SnapshotCard({ snapshot }: { snapshot: SubgroupSnapshot }) {
       {empty ? (
         <p style={emptyRowStyle}>No students in this subgroup.</p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <tbody>
             {snapshot.metrics.map((m) => {
               const t = tone(m.riskRatio, m.worseDirection);

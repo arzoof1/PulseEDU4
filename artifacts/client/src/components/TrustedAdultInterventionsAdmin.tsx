@@ -157,7 +157,7 @@ export default function TrustedAdultInterventionsAdmin() {
           No interventions yet.
         </div>
       ) : (
-        <table
+        <table className="pulse-table"
           style={{
             width: "100%",
             borderCollapse: "collapse",

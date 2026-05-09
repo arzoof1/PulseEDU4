@@ -496,7 +496,7 @@ export default function MyInterventionsPage({
               No interventions match these filters.
             </p>
           ) : (
-            <table
+            <table className="pulse-table"
               style={{
                 width: "100%",
                 borderCollapse: "collapse",

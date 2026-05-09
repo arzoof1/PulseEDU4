@@ -122,7 +122,7 @@ export default function BandStudentsDrawer({
                   : `${students.length} student${students.length === 1 ? "" : "s"}`}
                 {truncated ? ` — showing first ${students.length}` : ""}
               </p>
-              <table style={tableStyle}>
+              <table className="pulse-table" style={tableStyle}>
                 <thead>
                   <tr>
                     <th style={thStyle}>Student</th>

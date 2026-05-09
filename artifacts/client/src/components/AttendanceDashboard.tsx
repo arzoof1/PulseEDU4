@@ -838,7 +838,7 @@ function PeriodAbsenceCard({
           No period-level absences in this window.
         </p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <tbody>
             {data.map((row) => {
               const pct = max > 0 ? (row.absences / max) * 100 : 0;
@@ -905,7 +905,7 @@ function TopAbsentTable({
           No data in this window.
         </p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <thead>
             <tr style={{ color: "var(--text-subtle, #64748b)", fontSize: 11 }}>
               <th style={{ textAlign: "left", padding: "0 0 0.25rem", fontWeight: 500 }}>
@@ -1313,7 +1313,7 @@ function RecentAbsencesTable({
         </p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table
+          <table className="pulse-table"
             style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
           >
             <thead>

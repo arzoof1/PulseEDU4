@@ -166,7 +166,7 @@ export default function AdminHubPage() {
               borderRadius: 8,
             }}
           >
-            <table
+            <table className="pulse-table"
               style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
             >
               <thead style={{ background: "#f8fafc", textAlign: "left" }}>

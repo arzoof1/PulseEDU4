@@ -1480,7 +1480,7 @@ export default function TeacherRosterPage({
 
       {!loading && data && data.students.length > 0 && (
         <div style={{ overflowX: "auto" }}>
-          <table
+          <table className="pulse-table"
             style={{
               borderCollapse: "collapse",
               width: "100%",

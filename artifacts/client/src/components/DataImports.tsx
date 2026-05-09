@@ -731,7 +731,7 @@ function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
           >
             Required columns
           </div>
-          <table
+          <table className="pulse-table"
             style={{
               width: "100%",
               borderCollapse: "collapse",
@@ -778,7 +778,7 @@ function DirectionsPanel({ kind, kindDef }: { kind: Kind; kindDef: KindDef }) {
           >
             Optional columns
           </div>
-          <table
+          <table className="pulse-table"
             style={{
               width: "100%",
               borderCollapse: "collapse",
@@ -1591,7 +1591,7 @@ export default function DataImports({
                       )}
                     </summary>
                     <div style={{ marginTop: "0.5rem", overflowX: "auto" }}>
-                      <table
+                      <table className="pulse-table"
                         style={{
                           width: "100%",
                           borderCollapse: "collapse",
@@ -1871,7 +1871,7 @@ export default function DataImports({
                       overflowX: "auto",
                     }}
                   >
-                    <table
+                    <table className="pulse-table"
                       style={{
                         width: "100%",
                         borderCollapse: "collapse",
@@ -2038,7 +2038,7 @@ export default function DataImports({
             </div>
           ) : (
             <div style={{ overflowX: "auto" }}>
-              <table
+              <table className="pulse-table"
                 style={{
                   width: "100%",
                   borderCollapse: "collapse",

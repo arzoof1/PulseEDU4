@@ -912,7 +912,7 @@ function PlaylistEditor({
             No items yet. Upload a PNG, MP4, WAV, or PDF to get started.
           </div>
         ) : (
-          <table
+          <table className="pulse-table"
             style={{
               width: "100%",
               borderCollapse: "collapse",

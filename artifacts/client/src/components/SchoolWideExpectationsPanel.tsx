@@ -110,7 +110,7 @@ export default function SchoolWideExpectationsPanel() {
         />
       </label>
 
-      <table style={{ borderCollapse: "collapse" }}>
+      <table className="pulse-table" style={{ borderCollapse: "collapse" }}>
         <thead>
           <tr>
             <th

@@ -256,7 +256,7 @@ export default function SchoolPlansAdminPage() {
           </div>
 
           <div style={{ overflow: "auto", border: "1px solid #e2e8f0", borderRadius: 8 }}>
-            <table style={{ borderCollapse: "collapse", minWidth: "100%" }}>
+            <table className="pulse-table" style={{ borderCollapse: "collapse", minWidth: "100%" }}>
               <thead>
                 <tr style={{ background: "#f8fafc" }}>
                   <th

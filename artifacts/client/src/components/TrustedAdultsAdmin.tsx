@@ -475,7 +475,7 @@ export default function TrustedAdultsAdmin({ canManage }: Props) {
         </p>
       ) : (
         <div style={{ overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr style={{ background: "#f9fafb", borderBottom: "1px solid #e5e7eb" }}>
                 <th style={{ textAlign: "left", padding: "0.5rem", fontSize: "0.85rem" }}>Student</th>

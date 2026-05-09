@@ -426,7 +426,7 @@ function TenancyPanelInner() {
         <h3 style={{ marginBottom: "0.5rem" }}>
           Schools ({schoolsForDistrict.length})
         </h3>
-        <table
+        <table className="pulse-table"
           style={{
             width: "100%",
             borderCollapse: "collapse",
@@ -532,7 +532,7 @@ function TenancyPanelInner() {
           grid stays readable when a district has many schools.
         </p>
         <div style={{ overflowX: "auto" }}>
-          <table
+          <table className="pulse-table"
             style={{
               width: "100%",
               borderCollapse: "collapse",

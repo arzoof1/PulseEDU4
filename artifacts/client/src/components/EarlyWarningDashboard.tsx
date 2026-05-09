@@ -705,7 +705,7 @@ function TopRiskPanel({
           leaderboard yet.
         </p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <thead>
             <tr style={{ color: "#64748b", fontSize: 11 }}>
               <th style={{ textAlign: "left", padding: "0.4rem 0", fontWeight: 500 }}>

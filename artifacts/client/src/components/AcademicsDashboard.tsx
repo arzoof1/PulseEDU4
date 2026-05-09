@@ -766,7 +766,7 @@ function TopGrowerTable({
           No grower data yet — needs PM1 + PM3 scores.
         </p>
       ) : (
-        <table
+        <table className="pulse-table"
           style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
         >
           <tbody>
@@ -834,7 +834,7 @@ function LowPm3Table({
           No L1 students in this cohort. 🎉
         </p>
       ) : (
-        <table
+        <table className="pulse-table"
           style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}
         >
           <tbody>

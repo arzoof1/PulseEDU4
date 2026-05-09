@@ -738,7 +738,7 @@ function HighestNeedTable({
           No students with any risk flag in this cohort. 🎉
         </p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <tbody>
             {rows.map((r) => (
               <tr
@@ -803,7 +803,7 @@ function AtRiskWithoutPlanTable({
           Every at-risk student in this cohort already has an active MTSS plan.
         </p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <tbody>
             {rows.map((r) => (
               <tr
@@ -864,7 +864,7 @@ function SelPlanRosterTable({
           No active SEL- or Behavior-bucket plans in this cohort.
         </p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <tbody>
             {rows.map((r) => (
               <tr
@@ -923,7 +923,7 @@ function MostAccommodatedTable({
           No active accommodations in this cohort yet.
         </p>
       ) : (
-        <table style={tableStyle}>
+        <table className="pulse-table" style={tableStyle}>
           <tbody>
             {rows.map((r) => (
               <tr

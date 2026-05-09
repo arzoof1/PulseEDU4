@@ -638,7 +638,7 @@ function TopStudentTable({
           No data in this window.
         </p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <tbody>
             {rows.map((r) => (
               <tr key={r.studentId} style={{ borderBottom: "1px solid #f1f5f9" }}>
@@ -712,7 +712,7 @@ function TopValueTable({
           No data in this window.
         </p>
       ) : (
-        <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+        <table className="pulse-table" style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
           <tbody>
             {rows.map((r) => (
               <tr key={r.label} style={{ borderBottom: "1px solid #f1f5f9" }}>
