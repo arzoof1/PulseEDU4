@@ -10,5 +10,6 @@ export const modules: ModuleMap = {
   "./components/mockups/pulse-screens/SchoolTrunk.tsx": () => import("../components/mockups/pulse-screens/SchoolTrunk.tsx"),
   "./components/mockups/pulse-screens/StudentTimeline.tsx": () => import("../components/mockups/pulse-screens/StudentTimeline.tsx"),
   "./components/mockups/pulse-screens/WatchListRedesign.tsx": () => import("../components/mockups/pulse-screens/WatchListRedesign.tsx"),
-  "./components/mockups/watchlist-hub/Hub.tsx": () => import("../components/mockups/watchlist-hub/Hub.tsx")
+  "./components/mockups/watchlist-hub/Hub.tsx": () => import("../components/mockups/watchlist-hub/Hub.tsx"),
+  "./components/mockups/watchlist-hub/Network.tsx": () => import("../components/mockups/watchlist-hub/Network.tsx")
 };
