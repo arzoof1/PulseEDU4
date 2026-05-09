@@ -8,11 +8,12 @@ import {
 import {
   db,
   issRosterTable,
+  issAttendanceDayTable,
   pulloutsTable,
   staffTable,
   studentsTable,
 } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import { and, eq, inArray } from "drizzle-orm";
 import { sendPulloutReturnEmail } from "../lib/pulloutEmail";
 import { upsertIssAttendance } from "./issAttendance";
 import { requireSchool } from "../lib/scope.js";
@@ -60,7 +61,48 @@ router.get("/iss-roster", requireRosterMW(), async (req, res) => {
     .from(issRosterTable)
     .where(eq(issRosterTable.schoolId, schoolId))
     .orderBy(issRosterTable.createdAt);
-  res.json(rows);
+
+  // ALSO surface TODAY's admin-created ISS assignments (Admin Hub multi-day
+  // logs) on the roster, even though they live in iss_attendance_day rather
+  // than iss_roster. Without this, an admin who scheduled a student for ISS
+  // through Admin Hub never appears on the ISS Teacher's daily roster, which
+  // confused users into thinking their assignment was lost.
+  // We exclude any student already represented in iss_roster for today (to
+  // avoid duplicates when both flows have been used) and tag the synthesized
+  // rows with kind:"admin-day" so the client knows they can't be edited or
+  // removed from this surface (those actions live in Admin Hub).
+  const today = new Date().toLocaleDateString("en-CA");
+  const todayAdminDays = await db
+    .select()
+    .from(issAttendanceDayTable)
+    .where(
+      and(
+        eq(issAttendanceDayTable.schoolId, schoolId),
+        eq(issAttendanceDayTable.day, today),
+      ),
+    );
+  const alreadyOnRoster = new Set(rows.map((r) => r.studentId));
+  const synthesized = todayAdminDays
+    .filter((d) => d.source === "admin" && !alreadyOnRoster.has(d.studentId))
+    .map((d) => ({
+      // Negative ids so they can never collide with real iss_roster ids
+      // (which are serial positive). Client uses this to gate edit/remove.
+      id: -d.id,
+      schoolId: d.schoolId,
+      studentId: d.studentId,
+      source: "admin" as const,
+      pulloutId: null as number | null,
+      period: null as number | null,
+      notes: d.notes,
+      addedById: d.addedById,
+      addedByName: d.addedByName,
+      createdAt: d.createdAt,
+      adminLogId: d.adminLogId,
+      kind: "admin-day" as const,
+    }));
+  // Tag the existing iss_roster rows as kind:"roster" for client parity.
+  const tagged = rows.map((r) => ({ ...r, kind: "roster" as const }));
+  res.json([...tagged, ...synthesized]);
 });
 
 router.post(

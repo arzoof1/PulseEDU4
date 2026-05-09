@@ -1169,10 +1169,18 @@ export default function TeacherRosterPage({
   }, [sepRows]);
 
   // Reset period when switching teachers if the new teacher doesn't
-  // teach the previously-selected period.
+  // teach the previously-selected period. Also auto-select the first
+  // available period if none is currently chosen — the per-row
+  // Separation Suggestions icon is bound to a single class section, so
+  // it can only render once a period is picked. Auto-selecting avoids
+  // the "where are my icons?" confusion users hit on first load.
   useEffect(() => {
     if (period != null && periodOptions.length > 0 && !periodOptions.includes(period)) {
       setPeriod(null);
+      return;
+    }
+    if (period == null && periodOptions.length > 0) {
+      setPeriod(periodOptions[0]);
     }
   }, [periodOptions, period]);
 
@@ -1657,6 +1665,13 @@ export default function TeacherRosterPage({
                       )}
                       {sepSectionId != null && (() => {
                         const n = sepCountByStudent.get(row.studentId) ?? 0;
+                        // Two-state icon per the product spec:
+                        //  - Default (no flag yet): chain-link 🔗 — "could be
+                        //    paired with someone in this class".
+                        //  - After flagged: red prohibition 🚫 — easy at-a-
+                        //    glance recognition that this student already has
+                        //    one or more separation suggestions on file.
+                        const flagged = n > 0;
                         return (
                           <button
                             type="button"
@@ -1667,13 +1682,13 @@ export default function TeacherRosterPage({
                               })
                             }
                             title={
-                              n > 0
-                                ? `${n} separation suggestion${n === 1 ? "" : "s"} this period — click to edit`
-                                : "Suggest a separation for this student"
+                              flagged
+                                ? `${n} separation suggestion${n === 1 ? "" : "s"} for ${row.firstName} this period — click to edit`
+                                : `Suggest a separation pairing for ${row.firstName}`
                             }
                             aria-label={
-                              n > 0
-                                ? `Edit separation suggestions for ${row.firstName} ${row.lastName}`
+                              flagged
+                                ? `Edit ${n} separation suggestion${n === 1 ? "" : "s"} for ${row.firstName} ${row.lastName}`
                                 : `Suggest separation for ${row.firstName} ${row.lastName}`
                             }
                             style={{
@@ -1682,20 +1697,19 @@ export default function TeacherRosterPage({
                               gap: 4,
                               padding: "2px 8px",
                               borderRadius: 999,
-                              border:
-                                n > 0
-                                  ? "1px solid #fdba74"
-                                  : "1px solid #cbd5e1",
-                              background: n > 0 ? "#fff7ed" : "white",
-                              color: n > 0 ? "#9a3412" : "#475569",
-                              fontSize: 11,
+                              border: flagged
+                                ? "1px solid #fca5a5"
+                                : "1px solid #cbd5e1",
+                              background: flagged ? "#fef2f2" : "white",
+                              color: flagged ? "#b91c1c" : "#475569",
+                              fontSize: 12,
                               fontWeight: 600,
                               lineHeight: 1.2,
                               cursor: "pointer",
                             }}
                           >
-                            <span aria-hidden="true">🚫</span>
-                            <span>{n > 0 ? `Don't pair · ${n}` : "Don't pair"}</span>
+                            <span aria-hidden="true">{flagged ? "🚫" : "🔗"}</span>
+                            {flagged && <span>{n}</span>}
                           </button>
                         );
                       })()}

@@ -59,7 +59,12 @@ _Populate as you build_
 
 ## Future work
 
-_All Admin Hub A4 follow-ups are complete. Add new items here as they come up._
+- **Admin Hub ISS log: view detail + edit/delete with audit guardrails**
+  Click into a row in the Admin Hub recent feed to see the full assignment.
+  - **Delete entire assignment**: only allowed if **no day has been served yet** (no `iss_attendance_day` rows for that `admin_log_id` show any served signal — present periods, marked-served, or rolled-from). Audit retention for partially-served assignments is intentional.
+  - **Trim the tail**: even on a partially-served assignment, the user should be able to remove **future** day rows (and **today's** row only while it has not yet been served — i.e. `present_periods` is empty AND `marked_served = false`). Already-served past days are immutable.
+  - **Edit reason / notes / dates**: future days can be re-dated; past served days cannot. Reason and notes are editable on any non-cancelled assignment, with the change recorded in an audit trail.
+  - Needs a server-side audit log table for who/when/what changed before shipping.
 
 ## Gotchas
 

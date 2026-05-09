@@ -1618,15 +1618,25 @@ function VerifyPulloutsSection({
 }
 
 type IssRosterEntry = {
+  // Negative for synthesized "admin-day" rows (read-only on this surface;
+  // edit/remove must happen via Admin Hub). Positive for real iss_roster
+  // rows that this dashboard owns end-to-end.
   id: number;
   studentId: string;
-  source: "manual" | "pullout";
+  source: "manual" | "pullout" | "admin";
   pulloutId: number | null;
   period: number | null;
   notes: string | null;
   addedById: number | null;
   addedByName: string | null;
   createdAt: string;
+  // Set on synthesized rows so we can deep-link to the originating Admin
+  // Hub assignment if we add that affordance later.
+  adminLogId?: number | null;
+  // "roster" = real iss_roster row (editable here)
+  // "admin-day" = synthesized from today's iss_attendance_day admin row
+  //              (read-only here; Admin Hub owns edit/cancel)
+  kind?: "roster" | "admin-day";
 };
 
 type IssAttendanceRow = {
@@ -2491,7 +2501,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                           {rosterStyle.label}
                         </span>
                       </div>
-                      {!isEditing && !isConfirming && (
+                      {!isEditing && !isConfirming && entry.kind !== "admin-day" && (
                         <div style={{ display: "flex", gap: 6 }}>
                           <button
                             type="button"
@@ -2525,6 +2535,18 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                             Remove
                           </button>
                         </div>
+                      )}
+                      {!isEditing && entry.kind === "admin-day" && (
+                        <span
+                          title="This assignment was created in the Admin Hub. Edit or cancel it from there."
+                          style={{
+                            fontSize: "0.75rem",
+                            color: "#475569",
+                            fontStyle: "italic",
+                          }}
+                        >
+                          From Admin Hub
+                        </span>
                       )}
                       {isConfirming && (
                         <div
