@@ -119,6 +119,23 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   // here so the UI can show "Period 3" without a round-trip first.
   useEffect(() => {
     let cancelled = false;
+    // Synthesize Periods 1–7 as a universal fallback. Used whenever the
+    // school has no default bell schedule, the endpoint errors, or the
+    // response comes back with zero periods. Crucial so Spotlight stays
+    // usable when impersonating teachers in schools without a configured
+    // schedule (and for after-hours testing in any school). The roster
+    // query by period_number works without a bell schedule.
+    function synthesize() {
+      const synthetic: BellPeriod[] = Array.from({ length: 7 }, (_, i) => ({
+        periodNumber: i + 1,
+        name: `Period ${i + 1}`,
+        startTime: "",
+        endTime: "",
+      }));
+      setPeriods(synthetic);
+      setPeriodsAreSynthetic(true);
+      setActivePeriod(1);
+    }
     async function load() {
       setLoading(true);
       setError(null);
@@ -127,7 +144,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           credentials: "include",
         });
         if (!res.ok) {
-          setPeriods([]);
+          if (!cancelled) synthesize();
           return;
         }
         const data = (await res.json()) as { periods?: BellPeriod[] };
@@ -136,20 +153,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           .slice()
           .sort((a, b) => a.periodNumber - b.periodNumber);
         if (ps.length === 0) {
-          // No bell schedule for this school — synthesize Periods 1–7 so
-          // Spotlight is still usable. Crucial for testing flows that
-          // impersonate teachers in schools without a configured schedule
-          // (and for after-hours testing in any school). The roster query
-          // by period_number works without a bell schedule.
-          const synthetic: BellPeriod[] = Array.from({ length: 7 }, (_, i) => ({
-            periodNumber: i + 1,
-            name: `Period ${i + 1}`,
-            startTime: "",
-            endTime: "",
-          }));
-          setPeriods(synthetic);
-          setPeriodsAreSynthetic(true);
-          setActivePeriod(1);
+          synthesize();
         } else {
           setPeriods(ps);
           setPeriodsAreSynthetic(false);
@@ -163,8 +167,10 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           setActivePeriod(live?.periodNumber ?? ps[0]?.periodNumber ?? null);
         }
       } catch (e) {
-        if (!cancelled)
+        if (!cancelled) {
           setError(e instanceof Error ? e.message : "Failed to load");
+          synthesize();
+        }
       } finally {
         if (!cancelled) setLoading(false);
       }
