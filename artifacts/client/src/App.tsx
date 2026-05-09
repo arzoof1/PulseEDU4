@@ -7,6 +7,7 @@ import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
+import { StudentFinderModal } from "./components/StudentFinderModal";
 import InterventionsTodayPage from "./components/InterventionsTodayPage";
 import InterventionReportsPage from "./components/InterventionReportsPage";
 import MtssReportsPage from "./components/MtssReportsPage";
@@ -4295,6 +4296,7 @@ function App() {
   const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
+  const [showStudentFinder, setShowStudentFinder] = useState(false);
   const [changePwCurrent, setChangePwCurrent] = useState("");
   const [changePwNew, setChangePwNew] = useState("");
   const [changePwBusy, setChangePwBusy] = useState(false);
@@ -8312,6 +8314,35 @@ function App() {
           refreshKey={interventionRefreshKey}
           onClick={() => setActiveSection("interventionsToday")}
         />
+        {/* Student Finder — "where is this kid right now?" lookup
+            available to every signed-in staff member (hall monitors,
+            front-office subs, custodians). Sits on the left side of the
+            top bar so it's always one click away from anywhere in the
+            app. The button is small + visually quiet on purpose: it
+            shouldn't compete with the brand or the bell, but should be
+            instantly recognizable as a locator. */}
+        <button
+          type="button"
+          onClick={() => setShowStudentFinder(true)}
+          aria-label="Open Student Finder"
+          title="Find a student"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            background: "transparent",
+            border: "1px solid var(--border)",
+            borderRadius: 8,
+            padding: "4px 10px",
+            cursor: "pointer",
+            fontSize: 13,
+            color: "inherit",
+            marginLeft: 4,
+          }}
+        >
+          <span aria-hidden="true" style={{ fontSize: 14 }}>📍</span>
+          Finder
+        </button>
         <div className="header-controls">
           <SchoolSwitcher />
           <label>
@@ -8386,6 +8417,10 @@ function App() {
           </span>
         </div>
       </header>
+
+      {showStudentFinder && (
+        <StudentFinderModal onClose={() => setShowStudentFinder(false)} />
+      )}
 
       {showChangePw && (
         <div
