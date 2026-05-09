@@ -915,10 +915,16 @@ const th: React.CSSProperties = {
   borderBottom: "1px solid #e5e7eb",
   borderRight: "1px solid #e5e7eb",
   fontSize: "0.75rem",
-  color: "#64748b",
   textTransform: "uppercase",
   letterSpacing: 0.4,
-  fontWeight: 600,
+  fontWeight: 800,
+  // Purple → blue gradient applied to the text via background-clip.
+  // `color: transparent` is required for the gradient to show through.
+  // `WebkitBackgroundClip` keeps Safari/Chrome happy.
+  backgroundImage: "linear-gradient(90deg, #7c3aed 0%, #2563eb 100%)",
+  WebkitBackgroundClip: "text",
+  backgroundClip: "text",
+  color: "transparent",
 };
 const thFirst: React.CSSProperties = { ...th };
 const thR: React.CSSProperties = { ...th, textAlign: "right" };
