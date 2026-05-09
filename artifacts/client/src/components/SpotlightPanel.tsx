@@ -198,7 +198,15 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           { credentials: "include" },
         );
         if (!res.ok) {
-          if (!cancelled) setRoster([]);
+          // Surface the actual failure so we can debug — silent empty
+          // pools are confusing during impersonation/after-hours testing.
+          const body = await res.text().catch(() => "");
+          if (!cancelled) {
+            setRoster([]);
+            setError(
+              `Roster fetch failed (${res.status}): ${body.slice(0, 200) || "no body"}`,
+            );
+          }
           return;
         }
         const data = (await res.json()) as {
@@ -207,8 +215,13 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         };
         const list = data.students ?? data.rows ?? [];
         if (!cancelled) setRoster(list);
-      } catch {
-        if (!cancelled) setRoster([]);
+      } catch (e) {
+        if (!cancelled) {
+          setRoster([]);
+          setError(
+            `Roster fetch error: ${e instanceof Error ? e.message : String(e)}`,
+          );
+        }
       }
     })();
     return () => {
