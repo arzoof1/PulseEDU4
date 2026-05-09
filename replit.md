@@ -64,7 +64,8 @@ _Populate as you build_
   - **Delete entire assignment**: only allowed if **no day has been served yet** (no `iss_attendance_day` rows for that `admin_log_id` show any served signal — present periods, marked-served, or rolled-from). Audit retention for partially-served assignments is intentional.
   - **Trim the tail**: even on a partially-served assignment, the user should be able to remove **future** day rows (and **today's** row only while it has not yet been served — i.e. `present_periods` is empty AND `marked_served = false`). Already-served past days are immutable.
   - **Edit reason / notes / dates**: future days can be re-dated; past served days cannot. Reason and notes are editable on any non-cancelled assignment, with the change recorded in an audit trail.
-  - Needs a server-side audit log table for who/when/what changed before shipping.
+  - **Required "reason for edit"**: every edit/trim/delete prompts the user for a short justification ("why are you changing this?") that is stored on the audit row. This is the column auditors will read first to understand whether a change was a typo correction, a legitimate behavior update, or something that needs follow-up. Should be required (non-empty, min ~5 chars), not optional.
+  - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
 
 ## Gotchas
 
