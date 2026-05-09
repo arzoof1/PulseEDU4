@@ -25,21 +25,28 @@ const router: IRouter = Router();
 // student profile and we do not want this finder to become a side door
 // around them.
 
+// School-local clock. Replit servers run UTC, so `new Date().getHours()` /
+// `getDate()` would silently use UTC and break "is right now in P7?" by 4–5
+// hours during the school day. We mirror the SCHOOL_TZ pattern from
+// interventionsBell.ts (per-school timezones live on `schools.timezone` but
+// the rest of the app currently treats America/New_York as the canonical
+// HCSB zone). Switch to the per-school value when we generalize this app.
+const SCHOOL_TZ = "America/New_York";
+
 function localToday(): string {
-  // Use the server's local timezone for "what day is it" — same convention
-  // the rest of the app uses (see Gotchas in replit.md). Returns YYYY-MM-DD.
-  const d = new Date();
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, "0");
-  const day = String(d.getDate()).padStart(2, "0");
-  return `${y}-${m}-${day}`;
+  // en-CA gives ISO-style YYYY-MM-DD.
+  return new Date().toLocaleDateString("en-CA", { timeZone: SCHOOL_TZ });
 }
 
 function nowHHMM(): string {
-  const d = new Date();
-  return `${String(d.getHours()).padStart(2, "0")}:${String(
-    d.getMinutes(),
-  ).padStart(2, "0")}`;
+  // 24h HH:MM in school-local time, suitable for direct string comparison
+  // against bell_schedule_periods.start_time / end_time.
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: SCHOOL_TZ,
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(new Date());
 }
 
 // Typeahead — name or student_id, school-scoped, capped at 20 results.
