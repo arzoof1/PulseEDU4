@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 // Spotlight — fair, fast, "pull a name from the hat" picker for whole-class
 // engagement. Pulls from the teacher's CURRENT-period roster (so attendance
@@ -130,7 +131,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/teacher-roster/teachers", {
+        const res = await authFetch("/api/teacher-roster/teachers", {
           credentials: "include",
         });
         if (!res.ok) return;
@@ -177,7 +178,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
       setLoading(true);
       setError(null);
       try {
-        const res = await fetch("/api/bell-schedules/active", {
+        const res = await authFetch("/api/bell-schedules/active", {
           credentials: "include",
         });
         if (!res.ok) {
@@ -234,7 +235,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           teacherOverride !== ""
             ? `&teacherId=${encodeURIComponent(String(teacherOverride))}`
             : "";
-        const res = await fetch(
+        const res = await authFetch(
           `/api/teacher-roster?period=${encodeURIComponent(String(activePeriod))}${teacherQs}`,
           { credentials: "include" },
         );
@@ -341,7 +342,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     setSpin({ kind: "loading" });
 
     try {
-      const res = await fetch("/api/spotlight/pick", {
+      const res = await authFetch("/api/spotlight/pick", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -411,7 +412,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   async function rerollPrompt() {
     if (spin.kind !== "result") return;
     try {
-      const res = await fetch("/api/spotlight/prompt", {
+      const res = await authFetch("/api/spotlight/prompt", {
         credentials: "include",
       });
       if (!res.ok) return;
@@ -1028,7 +1029,7 @@ function PromptsManagerModal({ onClose }: { onClose: () => void }) {
   async function load() {
     setLoading(true);
     try {
-      const res = await fetch("/api/spotlight/prompts", {
+      const res = await authFetch("/api/spotlight/prompts", {
         credentials: "include",
       });
       if (res.ok) {
@@ -1048,7 +1049,7 @@ function PromptsManagerModal({ onClose }: { onClose: () => void }) {
     setSavingNew(true);
     setError(null);
     try {
-      const res = await fetch("/api/spotlight/prompts", {
+      const res = await authFetch("/api/spotlight/prompts", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
@@ -1067,7 +1068,7 @@ function PromptsManagerModal({ onClose }: { onClose: () => void }) {
   }
 
   async function toggle(p: Prompt) {
-    await fetch(`/api/spotlight/prompts/${p.id}`, {
+    await authFetch(`/api/spotlight/prompts/${p.id}`, {
       method: "PUT",
       credentials: "include",
       headers: { "Content-Type": "application/json" },
@@ -1078,7 +1079,7 @@ function PromptsManagerModal({ onClose }: { onClose: () => void }) {
 
   async function remove(p: Prompt) {
     if (!confirm(`Delete prompt: "${p.text}"?`)) return;
-    await fetch(`/api/spotlight/prompts/${p.id}`, {
+    await authFetch(`/api/spotlight/prompts/${p.id}`, {
       method: "DELETE",
       credentials: "include",
     });
