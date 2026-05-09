@@ -901,6 +901,261 @@ router.get("/watchlist/network", async (req: Request, res: Response) => {
   });
 });
 
+// Ego-graph for a single student: the student in the center, every case
+// they're tied to as a ring around them, and every other player on each
+// of those cases as a sub-ring around the case node. Drives the
+// "search by name → spider web" view in the Hub.
+router.get(
+  "/watchlist/network/student/:studentId",
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const studentId = String(req.params.studentId ?? "").trim();
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+
+    // 1. Center student.
+    const [center] = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.studentId, studentId),
+        ),
+      );
+    if (!center) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+
+    // 2. Every case this student touches (via any interaction they're a
+    // participant of). We deliberately ignore loose interactions
+    // (caseId IS NULL) here — the spider view is about cases. Capped
+    // (default 12, max 30) to keep the SVG readable and the payload
+    // bounded for students who appear in many cases.
+    const maxCases = Math.min(30, Math.max(1, asInt(req.query["max"]) ?? 12));
+    const caseRows = (
+      await db.execute(sql`
+        SELECT DISTINCT c.id AS "id",
+                        c.case_number AS "caseNumber",
+                        c.title AS "title",
+                        c.status AS "status",
+                        c.lead_staff_name AS "leadStaffName",
+                        c.summary AS "summary",
+                        c.opened_at AS "openedAt"
+        FROM interaction_cases c
+        JOIN interactions i ON i.case_id = c.id AND i.school_id = c.school_id
+        JOIN interaction_participants p ON p.interaction_id = i.id AND p.school_id = i.school_id
+        WHERE c.school_id = ${schoolId}
+          AND p.student_id = ${studentId}
+        ORDER BY c.opened_at DESC
+        LIMIT ${maxCases + 1}
+      `)
+    ).rows as Array<{
+      id: number;
+      caseNumber: number;
+      title: string;
+      status: string;
+      leadStaffName: string;
+      summary: string;
+      openedAt: string;
+    }>;
+
+    // Detect truncation: we asked for maxCases+1 above so we can flag
+    // "more available" without a separate count query.
+    const truncated = caseRows.length > maxCases;
+    const trimmedCases = truncated ? caseRows.slice(0, maxCases) : caseRows;
+
+    if (trimmedCases.length === 0) {
+      res.json({ center, cases: [], truncated: false, maxCases });
+      return;
+    }
+
+    const caseIds = trimmedCases.map((c) => c.id);
+
+    // 3. All interactions on those cases (incidents).
+    const incidents = await db
+      .select()
+      .from(interactionsTable)
+      .where(
+        and(
+          eq(interactionsTable.schoolId, schoolId),
+          inArray(interactionsTable.caseId, caseIds),
+        ),
+      )
+      .orderBy(desc(interactionsTable.occurredAt));
+
+    // 4. All participants across those interactions (so we can list every
+    // student on every case, with their role on the case = the role
+    // they most often play across the case's incidents).
+    const interactionIds = incidents.map((i) => i.id);
+    const allParts = interactionIds.length
+      ? await db
+          .select()
+          .from(interactionParticipantsTable)
+          .where(
+            and(
+              eq(interactionParticipantsTable.schoolId, schoolId),
+              inArray(
+                interactionParticipantsTable.interactionId,
+                interactionIds,
+              ),
+            ),
+          )
+      : [];
+
+    // 5. All notes for those cases.
+    const notes = await db
+      .select()
+      .from(interactionCaseNotesTable)
+      .where(
+        and(
+          eq(interactionCaseNotesTable.schoolId, schoolId),
+          inArray(interactionCaseNotesTable.caseId, caseIds),
+        ),
+      )
+      .orderBy(desc(interactionCaseNotesTable.createdAt));
+
+    // 6. Resolve every student that appears anywhere.
+    const studentIds = Array.from(
+      new Set(allParts.map((p) => p.studentId).concat([studentId])),
+    );
+    const students = await loadStudents(schoolId, studentIds);
+
+    // Helper: incident -> caseId map for grouping.
+    const incidentCase = new Map<number, number>();
+    for (const i of incidents) {
+      if (i.caseId != null) incidentCase.set(i.id, i.caseId);
+    }
+
+    // Roll up participants per case → per student → role counts.
+    const perCasePlayers = new Map<
+      number,
+      Map<string, { studentId: string; roles: Record<string, number> }>
+    >();
+    for (const p of allParts) {
+      const cid = incidentCase.get(p.interactionId);
+      if (cid == null) continue;
+      let m = perCasePlayers.get(cid);
+      if (!m) {
+        m = new Map();
+        perCasePlayers.set(cid, m);
+      }
+      let entry = m.get(p.studentId);
+      if (!entry) {
+        entry = { studentId: p.studentId, roles: {} };
+        m.set(p.studentId, entry);
+      }
+      entry.roles[p.role] = (entry.roles[p.role] ?? 0) + 1;
+    }
+
+    const incidentsByCase = new Map<number, InteractionRow[]>();
+    for (const i of incidents) {
+      if (i.caseId == null) continue;
+      const arr = incidentsByCase.get(i.caseId) ?? [];
+      arr.push(i);
+      incidentsByCase.set(i.caseId, arr);
+    }
+
+    const notesByCase = new Map<number, typeof notes>();
+    for (const n of notes) {
+      const arr = notesByCase.get(n.caseId) ?? [];
+      arr.push(n);
+      notesByCase.set(n.caseId, arr);
+    }
+
+    // For each incident also compute the participant list (student → role
+    // on this specific incident) so the drill-in panel can render it.
+    const partsByIncident = new Map<number, InteractionParticipantRow[]>();
+    for (const p of allParts) {
+      const arr = partsByIncident.get(p.interactionId) ?? [];
+      arr.push(p);
+      partsByIncident.set(p.interactionId, arr);
+    }
+
+    const cases = trimmedCases.map((c) => {
+      const playerMap = perCasePlayers.get(c.id) ?? new Map();
+      const players = Array.from(playerMap.values())
+        .map((entry) => {
+          const stu = students.get(entry.studentId);
+          if (!stu) return null;
+          // primary role = max-count role
+          let primaryRole = "witness";
+          let max = 0;
+          for (const [r, n] of Object.entries(entry.roles) as Array<[string, number]>) {
+            if (n > max) {
+              primaryRole = r;
+              max = n;
+            }
+          }
+          return {
+            studentId: entry.studentId,
+            firstName: stu.firstName,
+            lastName: stu.lastName,
+            grade: stu.grade,
+            primaryRole,
+            isCenter: entry.studentId === studentId,
+          };
+        })
+        .filter(
+          (p): p is NonNullable<typeof p> => p !== null,
+        );
+
+      const caseIncidents = (incidentsByCase.get(c.id) ?? []).map((i) => ({
+        id: i.id,
+        occurredAt: i.occurredAt,
+        occurredDate: i.occurredDate,
+        kind: i.kind,
+        severity: i.severity,
+        location: i.location,
+        summary: i.summary,
+        detail: i.detail,
+        loggedByName: i.loggedByName,
+        participants: (partsByIncident.get(i.id) ?? []).map((p) => {
+          const stu = students.get(p.studentId);
+          return {
+            studentId: p.studentId,
+            firstName: stu?.firstName ?? "",
+            lastName: stu?.lastName ?? "",
+            role: p.role,
+            notes: p.notes,
+          };
+        }),
+      }));
+
+      const caseNotes = (notesByCase.get(c.id) ?? []).map((n) => ({
+        id: n.id,
+        body: n.body,
+        authorName: n.authorName,
+        createdAt: n.createdAt,
+      }));
+
+      return {
+        id: c.id,
+        caseNumber: c.caseNumber,
+        title: c.title,
+        status: c.status,
+        leadStaffName: c.leadStaffName,
+        summary: c.summary,
+        openedAt: c.openedAt,
+        players,
+        incidents: caseIncidents,
+        notes: caseNotes,
+      };
+    });
+
+    res.json({ center, cases, truncated, maxCases });
+  },
+);
+
 // --- cases -----------------------------------------------------------
 
 router.get("/watchlist/cases", async (req: Request, res: Response) => {

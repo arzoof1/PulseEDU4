@@ -107,6 +107,7 @@ interface StatementRow {
 interface Props {
   onOpenNetwork?: () => void;
   onOpenCase?: (caseId: number) => void;
+  onOpenStudentGraph?: (studentId?: string | null) => void;
 }
 
 function ruleIconFor(k: Alert["ruleKind"]) {
@@ -135,7 +136,7 @@ function relTime(iso: string): string {
   return new Date(iso).toLocaleDateString();
 }
 
-export default function WatchlistHub({ onOpenNetwork, onOpenCase }: Props) {
+export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentGraph }: Props) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [orbit, setOrbit] = useState<OrbitItem[]>([]);
@@ -311,6 +312,14 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase }: Props) {
             </p>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => onOpenStudentGraph?.(null)}
+              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-semibold"
+              style={{ borderColor: C.line, color: C.ink, background: C.panel }}
+            >
+              <Sparkles className="h-4 w-4" /> Student spider
+            </button>
             <button
               type="button"
               onClick={() => onOpenNetwork?.()}

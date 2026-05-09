@@ -3,6 +3,7 @@ import Login from "./Login";
 import AdminHubPage from "./components/AdminHubPage";
 import WatchlistHub from "./components/WatchlistHub";
 import WatchlistNetwork from "./components/WatchlistNetwork";
+import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
@@ -4427,11 +4428,15 @@ function App() {
     | "watchlistHub"
     | "watchlistNetwork"
     | "watchlistCase"
+    | "watchlistStudentGraph"
     | "separationSuggestions"
     | "spotlight"
   >("hallPasses");
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
+  >(null);
+  const [selectedSpiderStudentId, setSelectedSpiderStudentId] = useState<
+    string | null
   >(null);
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -18650,6 +18655,21 @@ function App() {
       {activeSection === "watchlistHub" && (
         <WatchlistHub
           onOpenNetwork={() => setActiveSection("watchlistNetwork")}
+          onOpenCase={(id) => {
+            setSelectedWatchlistCaseId(id);
+            setActiveSection("watchlistCase");
+          }}
+          onOpenStudentGraph={(sid) => {
+            setSelectedSpiderStudentId(sid ?? null);
+            setActiveSection("watchlistStudentGraph");
+          }}
+        />
+      )}
+
+      {activeSection === "watchlistStudentGraph" && (
+        <WatchlistStudentGraph
+          initialStudentId={selectedSpiderStudentId}
+          onBack={() => setActiveSection("watchlistHub")}
           onOpenCase={(id) => {
             setSelectedWatchlistCaseId(id);
             setActiveSection("watchlistCase");
