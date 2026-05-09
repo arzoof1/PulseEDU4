@@ -196,9 +196,21 @@ router.get("/auth/me", async (req, res) => {
   // and req.impersonatorDisplayName from the staff row's preview pointer.
   // Surface those so the client can render a "Previewing as X — return
   // to my account" banner.
+  // CRITICAL: when previewing, the bearer token we mint here MUST be for
+  // the impersonator (the real signed-in user), NOT for the swapped target
+  // identity in `staff`. The client's authFetch silently rotates its
+  // stored bearer from any response carrying a fresh `authToken`, so
+  // issuing `staff.id` (= target) during preview would permanently bind
+  // the client's bearer to the previewed user. Then "Exit preview" would
+  // appear to succeed (the server-side preview pointer would clear) but
+  // the very next /auth/me request, authenticated by the now-target's
+  // bearer, would resolve directly to the target with no impersonation —
+  // stranding the user inside the previewed account. Always re-anchor the
+  // token to the impersonator's row when one is present.
+  const tokenSubject = req.impersonatorStaffId ?? staff.id;
   res.json({
     ...publicStaff(staff),
-    authToken: issueAuthToken(staff.id),
+    authToken: issueAuthToken(tokenSubject),
     activeSchoolId: req.schoolId ?? staff.schoolId,
     homeSchoolId: req.homeSchoolId ?? staff.schoolId,
     isSchoolSwitched: !!req.isSchoolSwitched,
