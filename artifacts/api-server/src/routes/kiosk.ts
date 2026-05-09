@@ -73,10 +73,9 @@ async function requireAdmin(
   });
 }
 
-// Shared room-resolution + activation creation. Used by both the
-// password-based public activate route and the session-based quick-activate
-// route so the conflict, dry-run, and fallback-picker semantics stay in
-// lockstep.
+// Shared room-resolution + activation creation. Used by the
+// password-based public activate route so the conflict, dry-run, and
+// fallback-picker semantics live in one place.
 //
 // Returns:
 //  - { kind: "ok", body }                 → 201 (caller sends as-is)
@@ -386,43 +385,6 @@ router.post("/kiosk/activate", async (req, res) => {
   }
 
   const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
-  const outcome = await resolveActivation({
-    staff,
-    room: typeof room === "string" ? room : undefined,
-    dryRun: dryRun === true,
-    replaceExisting: replaceExisting === true,
-    deviceLabel,
-    deviceFingerprint,
-  });
-
-  switch (outcome.kind) {
-    case "ok":
-      res.status(201).json(outcome.body);
-      return;
-    case "dry_run":
-      res.status(200).json(outcome.body);
-      return;
-    case "needs_room":
-    case "room_taken":
-      res.status(409).json(outcome.body);
-      return;
-    case "bad_room":
-      res.status(400).json(outcome.body);
-      return;
-  }
-});
-
-// Session-authenticated activation — same outcomes as /kiosk/activate but
-// trusts the existing staff session instead of asking for the password
-// again. This is the entry point for the "Open Kiosk Mode" button inside
-// the staff app: a teacher already signed in to PulseEDU can spin up a
-// kiosk on their laptop in one click.
-router.post("/kiosk/quick-activate", requireStaff, async (req, res) => {
-  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
-    .staff;
-  const { room, dryRun, replaceExisting } = req.body ?? {};
-  const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
-
   const outcome = await resolveActivation({
     staff,
     room: typeof room === "string" ? room : undefined,
