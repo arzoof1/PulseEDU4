@@ -3912,44 +3912,71 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
 
     // High-concern: 4–7 incidents each, mostly severity 3–5, anchored in their
     // case. Includes at least one pending witness statement per student.
+    // We rotate through the *full* case roster (excluding self) when picking
+    // co-participants so every roster member ends up in at least one incident
+    // — fixes the empty peek modal for case-mates that previously were never
+    // co-participants.
     high.forEach((stu, sIdx) => {
       const myCase = insertedCases[sIdx % insertedCases.length];
-      const caseMates = caseRoster
+      const fullMates = caseRoster
         .filter((r) => r.caseId === myCase.id && r.studentId !== stu.studentId)
-        .slice(0, 2)
         .map((r) => ({
           studentId: r.studentId,
-          role:
-            r.role === "target" ? "instigator" : r.role === "instigator" ? "target" : "direct",
+          baseRole: r.role,
         }));
+      const flipRole = (base: string) =>
+        base === "target" ? "instigator" : base === "instigator" ? "target" : "direct";
       const incidentCount = 4 + Math.floor(rng() * 4);
       for (let i = 0; i < incidentCount; i++) {
         const sev = rng() < 0.35 ? 5 : rng() < 0.6 ? 4 : 3;
+        // Rotate the mate window so every roster member shows up across the
+        // 4-7 incidents on this case.
+        const mateCount = Math.min(fullMates.length, 1 + Math.floor(rng() * 2));
+        const mates: { studentId: string; role: string }[] = [];
+        for (let j = 0; j < mateCount; j++) {
+          const m = fullMates[(i + j) % fullMates.length];
+          if (!m) continue;
+          mates.push({ studentId: m.studentId, role: flipRole(m.baseRole) });
+        }
         pushIncident({
           anchor: stu,
           anchorRole: WL_ROLES_HIGH[i % WL_ROLES_HIGH.length],
-          coStudents: caseMates,
+          coStudents: mates,
           severity: sev,
           kind: pick(rng, [...WL_KINDS].filter((k) => k !== "peripheral_note")),
           daysAgo: 1 + Math.floor(rng() * 21),
           caseId: myCase.id,
           summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(rng, ["physical", "verbal", "ongoing", "escalating"])} incident; staff intervened.`,
-          withWitnessFor: i === 0 && caseMates[0] ? [{ studentId: caseMates[0].studentId }] : undefined,
+          withWitnessFor: i === 0 && mates[0] ? [{ studentId: mates[0].studentId }] : undefined,
         });
       }
     });
 
     // Medium: 2–3 incidents, mixed severity, sometimes attached to a case.
+    // When attached, optionally pull in one case-mate as a co-participant so
+    // medium-tier roster members also surface on the case timeline.
     med.forEach((stu, sIdx) => {
       const incidentCount = 2 + Math.floor(rng() * 2);
       const attachToCase = rng() < 0.5;
       const myCase = attachToCase ? insertedCases[sIdx % insertedCases.length] : null;
+      const myMates = myCase
+        ? caseRoster
+            .filter((r) => r.caseId === myCase.id && r.studentId !== stu.studentId)
+            .map((r) => r.studentId)
+        : [];
       for (let i = 0; i < incidentCount; i++) {
         const sev = rng() < 0.25 ? 4 : rng() < 0.6 ? 3 : 2;
+        const co: { studentId: string; role: string }[] = [];
+        if (myMates.length > 0 && rng() < 0.5) {
+          co.push({
+            studentId: myMates[Math.floor(rng() * myMates.length)],
+            role: pick(rng, ["witness", "peripheral"]),
+          });
+        }
         pushIncident({
           anchor: stu,
           anchorRole: WL_ROLES_MED[i % WL_ROLES_MED.length],
-          coStudents: [],
+          coStudents: co,
           severity: sev,
           kind: pick(rng, [...WL_KINDS]),
           daysAgo: 2 + Math.floor(rng() * 28),
@@ -3979,6 +4006,56 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       interactionInserts,
       500,
     );
+
+    // Coverage sweep: ensure every caseRoster member appears as a participant
+    // on at least one incident for their case. Without this, medium / low-tier
+    // roster members can end up with an empty peek modal even though they're
+    // listed on the case.
+    {
+      // Build (caseId -> Set<studentId>) of who's already covered, plus
+      // (caseId -> staged interaction indexes for that case).
+      const coverage = new Map<number, Set<string>>();
+      const incidentsByCase = new Map<number, number[]>();
+      for (const sp of stagedParticipants) {
+        const inc = interactionInserts[sp.interactionIdx];
+        const cid = inc.caseId;
+        if (cid == null) continue;
+        let s = coverage.get(cid);
+        if (!s) {
+          s = new Set();
+          coverage.set(cid, s);
+        }
+        s.add(sp.row.studentId);
+      }
+      for (let idx = 0; idx < interactionInserts.length; idx++) {
+        const cid = interactionInserts[idx].caseId;
+        if (cid == null) continue;
+        let arr = incidentsByCase.get(cid);
+        if (!arr) {
+          arr = [];
+          incidentsByCase.set(cid, arr);
+        }
+        arr.push(idx);
+      }
+      for (const r of caseRoster) {
+        const have = coverage.get(r.caseId);
+        if (have && have.has(r.studentId)) continue;
+        const incs = incidentsByCase.get(r.caseId);
+        if (!incs || incs.length === 0) continue;
+        const targetIdx = incs[Math.floor(rng() * incs.length)];
+        stagedParticipants.push({
+          interactionIdx: targetIdx,
+          row: {
+            schoolId: school.id,
+            studentId: r.studentId,
+            role: r.role === "target" || r.role === "instigator" ? "witness" : "peripheral",
+            notes: "",
+          },
+        });
+        if (have) have.add(r.studentId);
+        else coverage.set(r.caseId, new Set([r.studentId]));
+      }
+    }
 
     const participantRows: ParticipantInsert[] = stagedParticipants.map((p) => ({
       ...p.row,

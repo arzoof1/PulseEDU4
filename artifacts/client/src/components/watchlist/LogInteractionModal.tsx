@@ -42,6 +42,16 @@ interface Props {
   onClose: () => void;
   onCreated?: (interactionId: number) => void;
   initialCaseId?: number | null;
+  initialParticipants?: Array<{
+    studentId: string;
+    firstName: string;
+    lastName: string;
+    grade: string | null;
+    role?: Role;
+  }>;
+  initialKind?: string;
+  initialSeverity?: number;
+  titleOverride?: string;
 }
 
 function ymd(d: Date): string {
@@ -51,16 +61,33 @@ function ymd(d: Date): string {
   return `${y}-${m}-${dd}`;
 }
 
-export default function LogInteractionModal({ onClose, onCreated, initialCaseId }: Props) {
-  const [kind, setKind] = useState<string>("verbal");
-  const [severity, setSeverity] = useState(2);
+export default function LogInteractionModal({
+  onClose,
+  onCreated,
+  initialCaseId,
+  initialParticipants,
+  initialKind,
+  initialSeverity,
+  titleOverride,
+}: Props) {
+  const [kind, setKind] = useState<string>(initialKind ?? "verbal");
+  const [severity, setSeverity] = useState(initialSeverity ?? 2);
   const [location, setLocation] = useState("");
   const [occurredDate, setOccurredDate] = useState(ymd(new Date()));
   const [summary, setSummary] = useState("");
   const [detail, setDetail] = useState("");
   const [caseId, setCaseId] = useState<number | null>(initialCaseId ?? null);
   const [cases, setCases] = useState<CaseLite[]>([]);
-  const [participants, setParticipants] = useState<Participant[]>([]);
+  const [participants, setParticipants] = useState<Participant[]>(
+    (initialParticipants ?? []).map((p) => ({
+      studentId: p.studentId,
+      firstName: p.firstName,
+      lastName: p.lastName,
+      grade: p.grade,
+      role: p.role ?? "direct",
+      notes: "",
+    })),
+  );
   const [search, setSearch] = useState("");
   const [hits, setHits] = useState<StudentHit[]>([]);
   const [searching, setSearching] = useState(false);
@@ -214,7 +241,7 @@ export default function LogInteractionModal({ onClose, onCreated, initialCaseId 
           style={{ borderColor: WL_COLORS.line }}
         >
           <h2 className="text-lg font-bold" style={{ color: WL_COLORS.ink }}>
-            Log interaction
+            {titleOverride ?? "Log interaction"}
           </h2>
           <button
             onClick={onClose}

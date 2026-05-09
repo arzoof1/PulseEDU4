@@ -108,6 +108,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   const [savingNote, setSavingNote] = useState(false);
   const [showLog, setShowLog] = useState(false);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
+  const [showAttach, setShowAttach] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
@@ -332,7 +333,6 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
             ) : (
               <h1
                 className="mt-2 cursor-pointer text-3xl font-bold tracking-tight"
-                style={{ fontFamily: "'Playfair Display', serif" }}
                 onClick={() => setEditingTitle(true)}
                 title="Click to edit"
               >
@@ -409,16 +409,27 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
               className="rounded-xl border p-5"
               style={{ borderColor: C.line, background: C.panel }}
             >
-              <div className="flex items-baseline justify-between">
+              <div className="flex items-baseline justify-between gap-2">
                 <h2 className="text-lg font-bold tracking-tight">Incidents in this case</h2>
-                <button
-                  type="button"
-                  onClick={() => setShowLog(true)}
-                  className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold"
-                  style={{ background: C.bg, color: C.ink }}
-                >
-                  <Plus className="h-3 w-3" /> New
-                </button>
+                <div className="flex items-center gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowAttach(true)}
+                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                    style={{ borderColor: C.line, background: C.panel, color: C.ink }}
+                    title="Pull a loose (no-case) incident onto this thread"
+                  >
+                    Attach existing
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowLog(true)}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold text-white"
+                    style={{ background: C.brand }}
+                  >
+                    <Plus className="h-3 w-3" /> Log new
+                  </button>
+                </div>
               </div>
               <div className="mt-3 divide-y" style={{ borderColor: C.line }}>
                 {data.incidents.length === 0 ? (
@@ -688,6 +699,216 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
           }}
         />
       )}
+      {showAttach && (
+        <AttachExistingIncidentModal
+          caseId={caseId}
+          onClose={() => setShowAttach(false)}
+          onAttached={() => {
+            setShowAttach(false);
+            void reload();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// AttachExistingIncidentModal
+// ---------------------------------------------------------------------------
+// Lists recent loose (caseId IS NULL) interactions and lets the user reassign
+// one to this case via PATCH /watchlist/interactions/:id { caseId }. Useful
+// when a Core Team member realizes a previously-logged loose incident
+// actually belongs on a now-open case thread.
+
+function AttachExistingIncidentModal({
+  caseId,
+  onClose,
+  onAttached,
+}: {
+  caseId: number;
+  onClose: () => void;
+  onAttached: () => void;
+}) {
+  type LooseRow = {
+    id: number;
+    occurredDate: string;
+    kind: string;
+    severity: number;
+    location: string | null;
+    summary: string;
+    caseId: number | null;
+    participantCount?: number;
+  };
+  const [rows, setRows] = useState<LooseRow[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [q, setQ] = useState("");
+
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      setLoading(true);
+      try {
+        // Loose-only + wide window so older un-attached incidents are visible.
+        // Server caps `limit` at 100; that's still the practical ceiling for
+        // this picker (most schools won't have more loose incidents than that
+        // sitting around at once). If a school does, we'll add pagination.
+        const r = await authFetch(
+          "/api/watchlist/interactions?loose=1&windowDays=3650&limit=100",
+        );
+        if (!alive || !r.ok) return;
+        const d = (await r.json()) as { interactions: LooseRow[] };
+        setRows(d.interactions);
+      } finally {
+        if (alive) setLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  const filtered = rows.filter((r) => {
+    if (!q.trim()) return true;
+    const needle = q.trim().toLowerCase();
+    return (
+      r.summary.toLowerCase().includes(needle) ||
+      r.kind.toLowerCase().includes(needle) ||
+      (r.location ?? "").toLowerCase().includes(needle)
+    );
+  });
+
+  const attach = async (id: number) => {
+    setBusyId(id);
+    setError(null);
+    try {
+      const r = await authFetch(`/api/watchlist/interactions/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ caseId }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      onAttached();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to attach");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-auto p-4"
+      style={{ background: "rgba(31,27,22,0.55)" }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-xl rounded-xl border shadow-xl"
+        style={{ background: C.panel, borderColor: C.line }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="flex items-center justify-between border-b px-5 py-3"
+          style={{ borderColor: C.line }}
+        >
+          <div>
+            <h2 className="text-lg font-bold">Attach existing incident</h2>
+            <div className="text-[11px]" style={{ color: C.inkSoft }}>
+              Pick a loose incident (no case) to add to this thread.
+            </div>
+          </div>
+          <button onClick={onClose} className="text-sm" style={{ color: C.inkSoft }}>
+            Close
+          </button>
+        </div>
+        <div className="space-y-3 p-5">
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="Filter by summary, kind, or location…"
+            className="w-full rounded-md border px-2 py-1.5 text-sm"
+            style={{ borderColor: C.line, background: C.bg }}
+          />
+          {loading ? (
+            <div className="text-sm" style={{ color: C.inkSoft }}>
+              Loading loose incidents…
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="text-sm" style={{ color: C.inkSoft }}>
+              No loose incidents to attach.
+            </div>
+          ) : (
+            <div
+              className="max-h-[55vh] space-y-2 overflow-auto"
+              style={{ background: C.bg }}
+            >
+              {filtered.map((r) => {
+                const sev = severityChipStyle(r.severity);
+                return (
+                  <div
+                    key={r.id}
+                    className="rounded-md border p-2"
+                    style={{ borderColor: C.line, background: C.panel }}
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                            style={{ background: sev.bg, color: sev.fg }}
+                          >
+                            sev {r.severity}
+                          </span>
+                          <span className="text-[11px] font-semibold">
+                            {r.kind}
+                          </span>
+                          <span className="text-[11px]" style={{ color: C.inkSoft }}>
+                            {r.occurredDate}
+                            {r.location ? ` · ${r.location}` : ""}
+                          </span>
+                        </div>
+                        <div className="mt-1 text-xs">{r.summary}</div>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void attach(r.id)}
+                        disabled={busyId === r.id}
+                        className="shrink-0 rounded-md px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50"
+                        style={{ background: C.brand }}
+                      >
+                        {busyId === r.id ? "Attaching…" : "Attach"}
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          {error && (
+            <div
+              className="rounded-md px-3 py-2 text-sm font-semibold"
+              style={{ background: C.alertSoft, color: C.alert }}
+            >
+              {error}
+            </div>
+          )}
+        </div>
+        <div
+          className="flex items-center justify-end gap-2 border-t px-5 py-3"
+          style={{ borderColor: C.line, background: C.bg }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border px-3 py-1.5 text-sm font-semibold"
+            style={{ borderColor: C.line, color: C.ink }}
+          >
+            Done
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ import {
   statusPillStyle,
   type Role,
 } from "./watchlist/colors";
+import LogInteractionModal from "./watchlist/LogInteractionModal";
 
 interface SearchHit {
   studentId: string;
@@ -241,6 +242,10 @@ export default function WatchlistStudentGraph({
     caseId: number;
     studentId: string;
   } | null>(null);
+  // Soft-empty-state action: open LogInteractionModal pre-bound to the peek
+  // case + student so a Core Team member can capture the first incident
+  // without losing context.
+  const [logForPeek, setLogForPeek] = useState(false);
 
   // Close peek on Escape.
   useEffect(() => {
@@ -251,6 +256,13 @@ export default function WatchlistStudentGraph({
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [peek]);
+
+  // Reset the soft-empty-state log flag whenever peek closes or switches to a
+  // different student/case, so the LogInteractionModal cannot reappear on the
+  // next peek with the wrong context.
+  useEffect(() => {
+    setLogForPeek(false);
+  }, [peek?.caseId, peek?.studentId]);
 
   // AbortController for the in-flight ego fetch — prevents a slow earlier
   // request from clobbering the UI after the user re-centers on someone
@@ -829,12 +841,42 @@ export default function WatchlistStudentGraph({
                   Incidents on this case ({peekIncidents.length})
                 </div>
                 {peekIncidents.length === 0 && (
-                  <p
-                    className="mt-2 text-xs"
-                    style={{ color: C.inkSoft }}
+                  <div
+                    className="mt-2 rounded-md border p-3"
+                    style={{ borderColor: C.line, background: C.bg }}
                   >
-                    No specific incidents found for this player on this case.
-                  </p>
+                    <p className="text-xs" style={{ color: C.inkSoft }}>
+                      <span className="font-semibold">{peekPlayer.firstName}</span> is
+                      on this case roster but isn't tied to a specific incident yet.
+                      Want to log one, or open their full history elsewhere?
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setLogForPeek(true)}
+                        className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold text-white"
+                        style={{ background: C.brand }}
+                      >
+                        Log incident on case for {peekPlayer.firstName}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const sid = peek.studentId;
+                          const fn = peekPlayer.firstName;
+                          const ln = peekPlayer.lastName;
+                          setPeek(null);
+                          setCenterStudentId(sid);
+                          setQuery(`${fn} ${ln}`);
+                          setShowHits(false);
+                        }}
+                        className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                        style={{ borderColor: C.line, color: C.ink }}
+                      >
+                        Open {peekPlayer.firstName}'s full history
+                      </button>
+                    </div>
+                  </div>
                 )}
                 <div className="mt-2 space-y-2">
                   {peekIncidents.map((i) => {
@@ -934,6 +976,26 @@ export default function WatchlistStudentGraph({
                 </button>
               </div>
             </div>
+            {logForPeek && (
+              <LogInteractionModal
+                onClose={() => setLogForPeek(false)}
+                onCreated={() => {
+                  setLogForPeek(false);
+                  if (centerStudentId) void loadEgo(centerStudentId);
+                }}
+                initialCaseId={peekCase.id}
+                initialParticipants={[
+                  {
+                    studentId: peekPlayer.studentId,
+                    firstName: peekPlayer.firstName,
+                    lastName: peekPlayer.lastName,
+                    grade: peekPlayer.grade ?? null,
+                    role: (peekPlayer.primaryRole as Role) ?? "direct",
+                  },
+                ]}
+                titleOverride={`Log incident · Case #${peekCase.caseNumber}`}
+              />
+            )}
           </div>
         );
       })()}

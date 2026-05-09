@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
+import NewCaseModal from "./watchlist/NewCaseModal";
 import {
   WL_COLORS as C,
   initialsOf,
@@ -145,6 +146,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
   const [statements, setStatements] = useState<StatementRow[]>([]);
   const [windowDays, setWindowDays] = useState(14);
   const [showLog, setShowLog] = useState(false);
+  const [showNewCase, setShowNewCase] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [busyAlert, setBusyAlert] = useState<string | null>(null);
 
@@ -324,6 +326,14 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
               style={{ borderColor: C.line, color: C.ink, background: C.panel }}
             >
               <GitBranch className="h-4 w-4" /> Network view
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowNewCase(true)}
+              className="inline-flex items-center gap-1.5 rounded-md border px-3 py-2 text-sm font-bold"
+              style={{ borderColor: C.brand, color: C.brand, background: C.brandSoft }}
+            >
+              <Plus className="h-4 w-4" /> New case
             </button>
             <button
               type="button"
@@ -627,19 +637,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
               <h2 className="text-lg font-bold tracking-tight">Active cases</h2>
               <button
                 type="button"
-                onClick={async () => {
-                  const title = window.prompt("New case title:");
-                  if (!title) return;
-                  const r = await authFetch("/api/watchlist/cases", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ title, status: "open" }),
-                  });
-                  if (r.ok) {
-                    const d = (await r.json()) as { case: { id: number } };
-                    onOpenCase?.(d.case.id);
-                  }
-                }}
+                onClick={() => setShowNewCase(true)}
                 className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold"
                 style={{ background: C.bg, color: C.ink }}
               >
@@ -894,6 +892,16 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
         <LogInteractionModal
           onClose={() => setShowLog(false)}
           onCreated={() => void reload()}
+        />
+      )}
+      {showNewCase && (
+        <NewCaseModal
+          onClose={() => setShowNewCase(false)}
+          onCreated={(caseId) => {
+            setShowNewCase(false);
+            void reload();
+            onOpenCase?.(caseId);
+          }}
         />
       )}
     </div>

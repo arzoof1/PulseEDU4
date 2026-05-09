@@ -242,7 +242,6 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
             </div>
             <h1
               className="mt-2 text-3xl font-bold tracking-tight"
-              style={{ fontFamily: "'Playfair Display', serif" }}
             >
               Interaction network
             </h1>

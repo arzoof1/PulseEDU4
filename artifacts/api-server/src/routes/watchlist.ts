@@ -1240,7 +1240,145 @@ router.post("/watchlist/cases", async (req: Request, res: Response) => {
     })
     .returning();
   await audit({ schoolId, entityType: "case", entityId: row.id, action: "created", staff, payload: { title } });
-  res.json({ case: row });
+
+  // Optional: roster + initial incident in the same create call. Lets the
+  // NewCaseModal spin up a case, attach the known students with roles, and
+  // (optionally) log the first incident — all in one round trip.
+  const playersIn = Array.isArray(b["players"])
+    ? (b["players"] as Array<Record<string, unknown>>)
+    : [];
+  const initInc = b["initialIncident"] as Record<string, unknown> | undefined;
+
+  type PlayerStaged = { studentId: string; role: InteractionRole; notes: string };
+  const validPlayers: PlayerStaged[] = [];
+  const sids = [
+    ...new Set(
+      playersIn.map((p) => clean(p["studentId"], 60)).filter(Boolean),
+    ),
+  ];
+  if (sids.length > 0) {
+    const studs = await loadStudents(schoolId, sids);
+    for (const p of playersIn) {
+      const sid = clean(p["studentId"], 60);
+      if (!sid || !studs.has(sid)) continue;
+      validPlayers.push({
+        studentId: sid,
+        role: isRole(p["role"]) ? (p["role"] as InteractionRole) : "peripheral",
+        notes: clean(p["notes"], 1000),
+      });
+    }
+  }
+
+  let initialIncidentId: number | null = null;
+  if (initInc && typeof initInc === "object") {
+    const kind = isKind(initInc["kind"])
+      ? (initInc["kind"] as InteractionKind)
+      : "verbal";
+    const severity = Math.max(
+      1,
+      Math.min(4, asInt(initInc["severity"]) ?? 2),
+    );
+    const location = clean(initInc["location"], 200);
+    const incSummary =
+      clean(initInc["summary"], 280) || `Initial incident — ${title}`;
+    const detail = clean(initInc["detail"], 4000);
+    const occurredDateRaw = clean(initInc["occurredDate"], 10);
+    const occurredDate = /^\d{4}-\d{2}-\d{2}$/.test(occurredDateRaw)
+      ? occurredDateRaw
+      : ymdLocal(new Date());
+    const [inc] = await db
+      .insert(interactionsTable)
+      .values({
+        schoolId,
+        occurredDate,
+        kind,
+        severity,
+        location,
+        summary: incSummary,
+        detail,
+        caseId: row.id,
+        loggedByStaffId: staff.id,
+        loggedByName: staff.displayName,
+      })
+      .returning();
+    initialIncidentId = inc.id;
+    if (validPlayers.length > 0) {
+      await db
+        .insert(interactionParticipantsTable)
+        .values(
+          validPlayers.map((p) => ({
+            schoolId,
+            interactionId: inc.id,
+            studentId: p.studentId,
+            role: p.role,
+            notes: p.notes,
+          })),
+        )
+        .onConflictDoNothing();
+    }
+    await audit({
+      schoolId,
+      entityType: "interaction",
+      entityId: inc.id,
+      action: "created",
+      staff,
+      payload: {
+        kind,
+        severity,
+        caseId: row.id,
+        participantCount: validPlayers.length,
+        viaCaseCreate: true,
+      },
+    });
+  } else if (validPlayers.length > 0) {
+    // No initial incident — register each known player on the case via a
+    // lightweight peripheral_note (mirrors the add-player endpoint so the
+    // network/spider/case-detail surfaces them immediately).
+    const today = ymdLocal(new Date());
+    for (const p of validPlayers) {
+      const [inc] = await db
+        .insert(interactionsTable)
+        .values({
+          schoolId,
+          occurredDate: today,
+          kind: "peripheral_note",
+          severity: 1,
+          location: "",
+          summary: `Added to case as ${p.role}`,
+          detail: p.notes,
+          caseId: row.id,
+          loggedByStaffId: staff.id,
+          loggedByName: staff.displayName,
+        })
+        .returning();
+      await db.insert(interactionParticipantsTable).values({
+        schoolId,
+        interactionId: inc.id,
+        studentId: p.studentId,
+        role: p.role,
+        notes: p.notes,
+      });
+      await audit({
+        schoolId,
+        entityType: "case",
+        entityId: row.id,
+        action: "player_added",
+        staff,
+        payload: {
+          studentId: p.studentId,
+          role: p.role,
+          interactionId: inc.id,
+          viaCaseCreate: true,
+        },
+      });
+    }
+  }
+
+  res.json({
+    case: row,
+    initialIncidentId,
+    playerCount: validPlayers.length,
+  });
 });
 
 router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
