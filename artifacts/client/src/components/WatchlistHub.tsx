@@ -873,8 +873,8 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                           <button
                             type="button"
                             onClick={() => completeStatement(s.id)}
-                            className="rounded-md px-2 py-0.5 text-[11px] font-semibold text-white"
-                            style={{ background: C.ink }}
+                            className="rounded-md px-2 py-0.5 text-[11px] font-bold"
+                            style={{ background: C.ink, color: "#FFFFFF" }}
                           >
                             Complete
                           </button>
