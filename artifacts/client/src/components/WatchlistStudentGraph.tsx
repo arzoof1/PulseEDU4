@@ -169,6 +169,24 @@ export default function WatchlistStudentGraph({
   const [openIncidentIds, setOpenIncidentIds] = useState<Set<number>>(
     new Set(),
   );
+  // Peek state: clicking a peripheral student sphere opens a small modal
+  // with their role + the specific incidents in this case where they
+  // appeared. Closing the modal returns the user to the same web with
+  // the same center — drill-down, not navigation.
+  const [peek, setPeek] = useState<{
+    caseId: number;
+    studentId: string;
+  } | null>(null);
+
+  // Close peek on Escape.
+  useEffect(() => {
+    if (!peek) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPeek(null);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [peek]);
 
   // AbortController for the in-flight ego fetch — prevents a slow earlier
   // request from clobbering the UI after the user re-centers on someone
@@ -567,11 +585,14 @@ export default function WatchlistStudentGraph({
                         style={{ cursor: "pointer" }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          setCenterStudentId(p.studentId);
-                          setQuery(`${p.firstName} ${p.lastName}`);
-                          setShowHits(false);
+                          // Drill-down: peek this player on this case
+                          // without losing the current center.
+                          setSelectedCaseId(c.id);
+                          setPeek({ caseId: c.id, studentId: p.studentId });
                         }}
-                      >
+                      ><title>
+                          Click to peek {p.firstName} {p.lastName} on Case #{c.caseNumber}
+                        </title>
                         <circle
                           cx={p.x}
                           cy={p.y}
@@ -636,6 +657,188 @@ export default function WatchlistStudentGraph({
           </div>
         )}
       </div>
+
+      {/* Peripheral-player peek modal */}
+      {peek && data && (() => {
+        const peekCase = data.cases.find((c) => c.id === peek.caseId);
+        const peekPlayer = peekCase?.players.find(
+          (p) => p.studentId === peek.studentId,
+        );
+        if (!peekCase || !peekPlayer) return null;
+        const peekIncidents = peekCase.incidents.filter((i) =>
+          i.participants.some((pp) => pp.studentId === peek.studentId),
+        );
+        const ring = roleColor(peekPlayer.primaryRole);
+        const soft = roleSoft(peekPlayer.primaryRole);
+        return (
+          <div
+            className="fixed inset-0 z-30 flex items-center justify-center px-4"
+            style={{ background: "rgba(0,0,0,0.45)" }}
+            onClick={() => setPeek(null)}
+          >
+            <div
+              className="max-h-[80vh] w-full max-w-lg overflow-hidden rounded-lg shadow-xl"
+              style={{ background: C.panel }}
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div
+                className="flex items-start justify-between gap-3 border-b px-4 py-3"
+                style={{ borderColor: C.line }}
+              >
+                <div className="min-w-0 flex-1">
+                  <div
+                    className="text-[11px] font-semibold uppercase tracking-wider"
+                    style={{ color: C.inkSoft }}
+                  >
+                    Peek · Case #{peekCase.caseNumber}
+                  </div>
+                  <div className="mt-0.5 flex items-center gap-2">
+                    <span className="text-base font-bold">
+                      {peekPlayer.firstName} {peekPlayer.lastName}
+                    </span>
+                    <span
+                      className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                      style={{ background: soft, color: ring }}
+                    >
+                      {peekPlayer.primaryRole}
+                    </span>
+                    {peekPlayer.grade && (
+                      <span
+                        className="text-[11px]"
+                        style={{ color: C.inkSoft }}
+                      >
+                        Gr {peekPlayer.grade}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setPeek(null)}
+                  className="rounded p-1"
+                  style={{ color: C.inkSoft }}
+                  aria-label="Close"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+
+              <div className="max-h-[55vh] overflow-y-auto px-4 py-3">
+                <div
+                  className="text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: C.inkSoft }}
+                >
+                  Incidents on this case ({peekIncidents.length})
+                </div>
+                {peekIncidents.length === 0 && (
+                  <p
+                    className="mt-2 text-xs"
+                    style={{ color: C.inkSoft }}
+                  >
+                    No specific incidents found for this player on this case.
+                  </p>
+                )}
+                <div className="mt-2 space-y-2">
+                  {peekIncidents.map((i) => {
+                    const sev = severityChipStyle(i.severity);
+                    const myPart = i.participants.find(
+                      (pp) => pp.studentId === peek.studentId,
+                    );
+                    return (
+                      <div
+                        key={i.id}
+                        className="rounded-md border p-2"
+                        style={{ borderColor: C.line, background: C.bg }}
+                      >
+                        <div className="flex flex-wrap items-center gap-1.5">
+                          <span
+                            className="text-[10px] font-semibold uppercase tracking-wider"
+                            style={{ color: C.inkSoft }}
+                          >
+                            {new Date(i.occurredAt).toLocaleDateString()}
+                          </span>
+                          <span className="text-xs font-semibold">
+                            {i.kind}
+                          </span>
+                          <span
+                            className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                            style={{ background: sev.bg, color: sev.fg }}
+                          >
+                            {sev.label}
+                          </span>
+                          {myPart && (
+                            <span
+                              className="rounded-full px-1.5 py-0.5 text-[10px] font-semibold"
+                              style={{
+                                background: roleSoft(myPart.role),
+                                color: roleColor(myPart.role),
+                              }}
+                            >
+                              role: {myPart.role}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 text-xs">{i.summary}</p>
+                        {i.location && (
+                          <div
+                            className="mt-1 text-[11px]"
+                            style={{ color: C.inkSoft }}
+                          >
+                            Location: {i.location}
+                          </div>
+                        )}
+                        {i.detail && (
+                          <p className="mt-1 whitespace-pre-wrap text-[11px]">
+                            {i.detail}
+                          </p>
+                        )}
+                        {myPart?.notes && (
+                          <div
+                            className="mt-1 rounded px-2 py-1 text-[11px] italic"
+                            style={{ background: soft, color: ring }}
+                          >
+                            “{myPart.notes}”
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div
+                className="flex items-center justify-between gap-2 border-t px-4 py-3"
+                style={{ borderColor: C.line, background: C.bg }}
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    const sid = peek.studentId;
+                    const fn = peekPlayer.firstName;
+                    const ln = peekPlayer.lastName;
+                    setPeek(null);
+                    setCenterStudentId(sid);
+                    setQuery(`${fn} ${ln}`);
+                    setShowHits(false);
+                  }}
+                  className="rounded-md border px-2.5 py-1 text-[11px] font-semibold"
+                  style={{ borderColor: C.line, color: C.ink }}
+                >
+                  Re-center spider on this student
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setPeek(null)}
+                  className="rounded-md px-2.5 py-1 text-[11px] font-bold"
+                  style={{ background: C.ink, color: "#FFFFFF" }}
+                >
+                  Done
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
