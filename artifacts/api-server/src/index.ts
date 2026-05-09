@@ -17,6 +17,7 @@ import {
   seedSafetyPlanLibraryIfEmpty,
   seedSafetyPlansIfEmpty,
   ensureWatchlistSchema,
+  seedWatchlistIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -100,6 +101,9 @@ async function runSeed(): Promise<void> {
   // alert dismissals). Idempotent — safe on every boot; cheap on already-
   // migrated DBs.
   await ensureWatchlistSchema();
+  // Watchlist demo data: 20% of each school's roster gets activity, with a
+  // ~3%-of-20% high-concern slice anchoring 3–4 cases. Idempotent per school.
+  await seedWatchlistIfEmpty();
 }
 
 // In production we MUST open the port within the platform's health-check

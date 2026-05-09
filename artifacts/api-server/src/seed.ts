@@ -39,6 +39,11 @@ import {
   safetyPlanLibraryTable,
   safetyPlansTable,
   separationReasonTagsTable,
+  interactionsTable,
+  interactionParticipantsTable,
+  interactionCasesTable,
+  interactionCaseNotesTable,
+  witnessStatementsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -3589,6 +3594,400 @@ export async function seedSafetyPlansIfEmpty(): Promise<void> {
     logger.info(
       { schoolId: s.id, plans: planRows.length, teachers: teacherStaff.length },
       "[seed] safety plans seeded",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// seedWatchlistIfEmpty: per-school, deterministic, idempotent.
+//
+// Spread (same in every school):
+//   - 20% of the school's roster gets watchlist activity.
+//   - Of that 20%, ~3% are "high-concern" — multi-incident, severe, in cases,
+//     witness statements pending. The other 97% split:
+//     ~30% medium (2–3 incidents, mixed severity), ~67% low (1 incident,
+//     usually peripheral / witness / low-severity note).
+//   - 3–4 cases per school, anchored on the high-concern students and pulling
+//     in mediums/lows as supporting players. Each case gets 2–3 notes.
+//
+// Skipped per-school once any interaction row exists for that school. Safe to
+// re-run on existing schools without producing duplicates.
+// -----------------------------------------------------------------------------
+const WL_KINDS = [
+  "fight",
+  "verbal",
+  "rumor",
+  "property",
+  "bullying",
+  "peripheral_note",
+  "other",
+] as const;
+const WL_LOCATIONS = [
+  "Main hallway",
+  "Cafeteria",
+  "Bus loop",
+  "Gym locker room",
+  "Courtyard",
+  "Stairwell B",
+  "Bathroom near 200 wing",
+  "Library",
+  "Bus 14",
+  "Parking lot",
+];
+const WL_ROLES_HIGH = ["direct", "target", "instigator"] as const;
+const WL_ROLES_MED = ["direct", "rumor", "witness"] as const;
+const WL_ROLES_LOW = ["peripheral", "witness", "deescalator"] as const;
+
+const WL_CASE_TITLES = [
+  "8th-grade hallway arc",
+  "7th-grade cafeteria cluster",
+  "6th-grade rumor thread",
+  "Bus 14 escalation",
+  "Locker room dispute",
+];
+
+function ymdDaysAgo(days: number): string {
+  const d = new Date();
+  d.setDate(d.getDate() - days);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`;
+}
+
+export async function seedWatchlistIfEmpty(): Promise<void> {
+  await ensureWatchlistSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM interactions WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const studentRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (studentRows.length < 10) continue;
+
+    const staffRows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+        isMtssCoordinator: staffTable.isMtssCoordinator,
+        isCounselor: staffTable.isCounselor,
+        isAdmin: staffTable.isAdmin,
+        isDean: staffTable.isDean,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id));
+    if (staffRows.length === 0) continue;
+
+    const lead =
+      staffRows.find((s) => s.isBehaviorSpecialist) ||
+      staffRows.find((s) => s.isMtssCoordinator) ||
+      staffRows.find((s) => s.isCounselor) ||
+      staffRows.find((s) => s.isDean) ||
+      staffRows.find((s) => s.isAdmin) ||
+      staffRows[0];
+    const loggers = staffRows.filter(
+      (s) =>
+        s.isBehaviorSpecialist ||
+        s.isMtssCoordinator ||
+        s.isCounselor ||
+        s.isDean ||
+        s.isAdmin,
+    );
+    const loggerPool = loggers.length > 0 ? loggers : [lead];
+
+    const rng = makeRng(0x1377c1 + school.id * 1097);
+    // Deterministic shuffle, then take 20%.
+    const shuffled = [...studentRows]
+      .map((s) => ({ s, k: rng() }))
+      .sort((a, b) => a.k - b.k)
+      .map((x) => x.s);
+    const totalPicked = Math.max(8, Math.floor(shuffled.length * 0.2));
+    const picked = shuffled.slice(0, totalPicked);
+    // ~3% of the 20% are high-concern; floor to at least 2 so the cases
+    // have enough anchors to look interesting on small demo schools.
+    const highCount = Math.max(2, Math.floor(picked.length * 0.03 * 5));
+    // ^ 0.03 * 5 = 15% of the 20% — matches "3% of all students = 0.6%
+    // of school", but we lean a touch heavier so the High card on the Hub
+    // actually shows movement. Adjust to taste.
+    const medCount = Math.max(3, Math.floor(picked.length * 0.3));
+    const high = picked.slice(0, highCount);
+    const med = picked.slice(highCount, highCount + medCount);
+    const low = picked.slice(highCount + medCount);
+
+    // ---- Cases first so we can stamp case_id on the high-concern incidents.
+    const numCases = Math.min(WL_CASE_TITLES.length - 1, Math.max(3, Math.ceil(high.length / 2)));
+    const caseInserts: (typeof interactionCasesTable.$inferInsert)[] = [];
+    for (let i = 0; i < numCases; i++) {
+      caseInserts.push({
+        schoolId: school.id,
+        caseNumber: i + 1,
+        title: WL_CASE_TITLES[i] ?? `Case ${i + 1}`,
+        status: i === 0 ? "escalated" : i === numCases - 1 ? "monitoring" : "open",
+        leadStaffId: lead.id,
+        leadStaffName: lead.displayName,
+        summary:
+          "Auto-seeded demo case linking related incidents across the watchlist.",
+        createdByStaffId: lead.id,
+        createdByName: lead.displayName,
+      });
+    }
+    const insertedCases = await db
+      .insert(interactionCasesTable)
+      .values(caseInserts)
+      .returning();
+
+    // Distribute high-concern students across cases (round-robin), then add
+    // a few medium / low players to each case as supporting roles.
+    const caseRoster: { caseId: number; studentId: string; role: string }[] = [];
+    high.forEach((stu, idx) => {
+      const c = insertedCases[idx % insertedCases.length];
+      caseRoster.push({
+        caseId: c.id,
+        studentId: stu.studentId,
+        role: WL_ROLES_HIGH[idx % WL_ROLES_HIGH.length],
+      });
+    });
+    med.slice(0, insertedCases.length * 2).forEach((stu, idx) => {
+      const c = insertedCases[idx % insertedCases.length];
+      caseRoster.push({
+        caseId: c.id,
+        studentId: stu.studentId,
+        role: WL_ROLES_MED[idx % WL_ROLES_MED.length],
+      });
+    });
+
+    // ---- Interactions + participants. We stage everything in memory and
+    // batch insert at the end so the per-school write is just a few queries.
+    type InteractionInsert = typeof interactionsTable.$inferInsert;
+    type ParticipantInsert = typeof interactionParticipantsTable.$inferInsert;
+    type WitnessInsert = typeof witnessStatementsTable.$inferInsert;
+    type NoteInsert = typeof interactionCaseNotesTable.$inferInsert;
+
+    const interactionInserts: InteractionInsert[] = [];
+    // Track which participants belong to which staged interaction by index.
+    const stagedParticipants: { interactionIdx: number; row: Omit<ParticipantInsert, "interactionId"> }[] = [];
+    const stagedWitnesses: { interactionIdx: number; row: Omit<WitnessInsert, "interactionId"> }[] = [];
+
+    function pushIncident(opts: {
+      anchor: { studentId: string };
+      anchorRole: string;
+      coStudents: { studentId: string; role: string }[];
+      severity: number;
+      kind: string;
+      daysAgo: number;
+      caseId: number | null;
+      summary: string;
+      withWitnessFor?: { studentId: string }[];
+    }) {
+      const log = pick(rng, loggerPool);
+      const idx = interactionInserts.length;
+      const occurredDate = ymdDaysAgo(opts.daysAgo);
+      interactionInserts.push({
+        schoolId: school.id,
+        occurredDate,
+        kind: opts.kind,
+        severity: opts.severity,
+        location: pick(rng, WL_LOCATIONS),
+        summary: opts.summary,
+        detail: "",
+        caseId: opts.caseId,
+        loggedByStaffId: log.id,
+        loggedByName: log.displayName,
+        status: opts.severity >= 4 ? "open" : "open",
+      });
+      stagedParticipants.push({
+        interactionIdx: idx,
+        row: {
+          schoolId: school.id,
+          studentId: opts.anchor.studentId,
+          role: opts.anchorRole,
+          notes: "",
+        },
+      });
+      for (const co of opts.coStudents) {
+        stagedParticipants.push({
+          interactionIdx: idx,
+          row: {
+            schoolId: school.id,
+            studentId: co.studentId,
+            role: co.role,
+            notes: "",
+          },
+        });
+      }
+      for (const w of opts.withWitnessFor || []) {
+        stagedWitnesses.push({
+          interactionIdx: idx,
+          row: {
+            schoolId: school.id,
+            studentId: w.studentId,
+            status: "requested",
+            requestedByStaffId: log.id,
+            requestedByName: log.displayName,
+            remindCount: 0,
+            body: "",
+          },
+        });
+      }
+    }
+
+    // High-concern: 4–7 incidents each, mostly severity 3–5, anchored in their
+    // case. Includes at least one pending witness statement per student.
+    high.forEach((stu, sIdx) => {
+      const myCase = insertedCases[sIdx % insertedCases.length];
+      const caseMates = caseRoster
+        .filter((r) => r.caseId === myCase.id && r.studentId !== stu.studentId)
+        .slice(0, 2)
+        .map((r) => ({
+          studentId: r.studentId,
+          role:
+            r.role === "target" ? "instigator" : r.role === "instigator" ? "target" : "direct",
+        }));
+      const incidentCount = 4 + Math.floor(rng() * 4);
+      for (let i = 0; i < incidentCount; i++) {
+        const sev = rng() < 0.35 ? 5 : rng() < 0.6 ? 4 : 3;
+        pushIncident({
+          anchor: stu,
+          anchorRole: WL_ROLES_HIGH[i % WL_ROLES_HIGH.length],
+          coStudents: caseMates,
+          severity: sev,
+          kind: pick(rng, [...WL_KINDS].filter((k) => k !== "peripheral_note")),
+          daysAgo: 1 + Math.floor(rng() * 21),
+          caseId: myCase.id,
+          summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(rng, ["physical", "verbal", "ongoing", "escalating"])} incident; staff intervened.`,
+          withWitnessFor: i === 0 && caseMates[0] ? [{ studentId: caseMates[0].studentId }] : undefined,
+        });
+      }
+    });
+
+    // Medium: 2–3 incidents, mixed severity, sometimes attached to a case.
+    med.forEach((stu, sIdx) => {
+      const incidentCount = 2 + Math.floor(rng() * 2);
+      const attachToCase = rng() < 0.5;
+      const myCase = attachToCase ? insertedCases[sIdx % insertedCases.length] : null;
+      for (let i = 0; i < incidentCount; i++) {
+        const sev = rng() < 0.25 ? 4 : rng() < 0.6 ? 3 : 2;
+        pushIncident({
+          anchor: stu,
+          anchorRole: WL_ROLES_MED[i % WL_ROLES_MED.length],
+          coStudents: [],
+          severity: sev,
+          kind: pick(rng, [...WL_KINDS]),
+          daysAgo: 2 + Math.floor(rng() * 28),
+          caseId: myCase?.id ?? null,
+          summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(rng, ["raised voices", "name-calling", "shoving", "rumor reported"])} in ${pick(rng, WL_LOCATIONS)}.`,
+        });
+      }
+    });
+
+    // Low: 1 incident each, usually peripheral / witness / observation.
+    low.forEach((stu, sIdx) => {
+      const sev = rng() < 0.15 ? 3 : rng() < 0.5 ? 2 : 1;
+      pushIncident({
+        anchor: stu,
+        anchorRole: WL_ROLES_LOW[sIdx % WL_ROLES_LOW.length],
+        coStudents: [],
+        severity: sev,
+        kind: sev === 1 ? "peripheral_note" : pick(rng, [...WL_KINDS]),
+        daysAgo: 3 + Math.floor(rng() * 35),
+        caseId: null,
+        summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${sev === 1 ? "noted on the periphery; flagged for awareness only." : "minor incident logged for awareness."}`,
+      });
+    });
+
+    const insertedInteractions = await chunkedInsertReturning<{ id: number }>(
+      interactionsTable,
+      interactionInserts,
+      500,
+    );
+
+    const participantRows: ParticipantInsert[] = stagedParticipants.map((p) => ({
+      ...p.row,
+      interactionId: insertedInteractions[p.interactionIdx].id,
+    }));
+    if (participantRows.length > 0) {
+      // Drop accidental duplicates from the unique (interaction_id, student_id)
+      // index — same student showing up twice on one incident is fine to merge.
+      const seen = new Set<string>();
+      const deduped: ParticipantInsert[] = [];
+      for (const r of participantRows) {
+        const k = `${r.interactionId}:${r.studentId}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        deduped.push(r);
+      }
+      for (let i = 0; i < deduped.length; i += 500) {
+        await db.insert(interactionParticipantsTable).values(deduped.slice(i, i + 500));
+      }
+    }
+
+    const witnessRows: WitnessInsert[] = stagedWitnesses.map((w) => ({
+      ...w.row,
+      interactionId: insertedInteractions[w.interactionIdx].id,
+    }));
+    if (witnessRows.length > 0) {
+      const seen = new Set<string>();
+      const deduped: WitnessInsert[] = [];
+      for (const r of witnessRows) {
+        const k = `${r.interactionId}:${r.studentId}`;
+        if (seen.has(k)) continue;
+        seen.add(k);
+        deduped.push(r);
+      }
+      await db.insert(witnessStatementsTable).values(deduped);
+    }
+
+    // ---- 2–3 notes per case. Mix lead-staff + admin loggers so the timeline
+    // shows multiple voices.
+    const noteRows: NoteInsert[] = [];
+    for (const c of insertedCases) {
+      const noteCount = 2 + Math.floor(rng() * 2);
+      for (let i = 0; i < noteCount; i++) {
+        const author = pick(rng, loggerPool);
+        noteRows.push({
+          schoolId: school.id,
+          caseId: c.id,
+          body: pick(rng, [
+            "Met with both students individually; restorative conversation scheduled for tomorrow.",
+            "Looped in counselor; agreed to a check-in plan starting Monday.",
+            "Family contact made; parent will reinforce expectations at home.",
+            "Pattern is shifting — no new incidents this week, keep monitoring.",
+            "Witness statements collected; consistent account from three students.",
+          ]),
+          authorStaffId: author.id,
+          authorName: author.displayName,
+        });
+      }
+    }
+    if (noteRows.length > 0) {
+      await db.insert(interactionCaseNotesTable).values(noteRows);
+    }
+
+    logger.info(
+      {
+        schoolId: school.id,
+        students: picked.length,
+        high: high.length,
+        med: med.length,
+        low: low.length,
+        cases: insertedCases.length,
+        incidents: insertedInteractions.length,
+        notes: noteRows.length,
+      },
+      "[seed] watchlist seeded",
     );
   }
 }
