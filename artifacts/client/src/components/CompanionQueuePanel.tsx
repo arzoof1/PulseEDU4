@@ -29,6 +29,8 @@ interface QueueEntry {
   position: number;
   addedAt: string;
   kioskActivationId: number;
+  blocked?: boolean;
+  blockedReason?: string | null;
 }
 
 interface ActivePass {
@@ -437,7 +439,8 @@ function RoomBlock({
                 alignItems: "center",
                 gap: 8,
                 padding: "0.4rem 0.5rem",
-                background: "#f8fafc",
+                background: e.blocked ? "#fef2f2" : "#f8fafc",
+                border: e.blocked ? "1px solid #fecaca" : "1px solid transparent",
                 borderRadius: 6,
                 fontSize: "0.9rem",
               }}
@@ -447,8 +450,8 @@ function RoomBlock({
                   width: 22,
                   height: 22,
                   borderRadius: 11,
-                  background: "#e0e7ff",
-                  color: "#3730a3",
+                  background: e.blocked ? "#fee2e2" : "#e0e7ff",
+                  color: e.blocked ? "#991b1b" : "#3730a3",
                   fontWeight: 700,
                   fontSize: "0.75rem",
                   display: "inline-flex",
@@ -466,6 +469,26 @@ function RoomBlock({
                 <span style={{ opacity: 0.6, fontSize: "0.8rem" }}>
                   · {e.destination} · {formatWait(e.addedAt)}
                 </span>
+                {e.blocked && (
+                  <span
+                    title="Keep-apart hold — waiting until the rule clears"
+                    style={{
+                      marginLeft: 6,
+                      display: "inline-block",
+                      padding: "1px 6px",
+                      background: "#dc2626",
+                      color: "#fff",
+                      borderRadius: 4,
+                      fontSize: "0.65rem",
+                      fontWeight: 700,
+                      letterSpacing: "0.04em",
+                      textTransform: "uppercase",
+                      verticalAlign: "1px",
+                    }}
+                  >
+                    On hold
+                  </span>
+                )}
               </span>
               <button
                 type="button"

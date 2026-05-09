@@ -36,6 +36,8 @@ router.post("/hall-passes", async (req, res) => {
     contactedAcknowledged,
     maxDurationMinutes,
     isTardyReturn,
+    overrideStudentActive,
+    overridePolarityAck,
   } = req.body ?? {};
 
   if (
@@ -65,12 +67,71 @@ router.post("/hall-passes", async (req, res) => {
     return;
   }
 
+  // Same-student already-active guard. Without override, return a 409 with
+  // a structured code so the client can show a soft confirm; with
+  // overrideStudentActive=true, end the existing pass first and continue.
+  const [existingActive] = await db
+    .select()
+    .from(hallPassesTable)
+    .where(
+      and(
+        eq(hallPassesTable.schoolId, schoolId),
+        eq(hallPassesTable.studentId, studentId),
+        eq(hallPassesTable.status, "active"),
+      ),
+    );
+  if (existingActive) {
+    if (overrideStudentActive !== true) {
+      res.status(409).json({
+        code: "STUDENT_HAS_ACTIVE_PASS",
+        error: `${studentId} already has an active pass to ${existingActive.destination}.`,
+        existingPass: {
+          id: existingActive.id,
+          destination: existingActive.destination,
+          originRoom: existingActive.originRoom,
+          teacherName: existingActive.teacherName,
+          createdAt: existingActive.createdAt,
+        },
+      });
+      return;
+    }
+    // Override: end the prior pass cleanly so we never have two `active`
+    // rows for the same student (kiosk + teacher counts both query this).
+    await db
+      .update(hallPassesTable)
+      .set({ status: "system_ended", endedAt: new Date().toISOString() })
+      .where(eq(hallPassesTable.id, existingActive.id));
+  }
+
   // Polarity / keep-apart enforcement: refuse to issue a pass if any of this
-  // student's paired partners is currently out on a pass.
+  // student's paired partners is currently out on a pass — UNLESS the
+  // teacher has explicitly acknowledged the override
+  // (overridePolarityAck=true). Acknowledgement is collected in the UI as
+  // a forced checkbox ("I have contacted admin about this override").
   const conflict = await findPolarityConflict(studentId, schoolId);
   if (conflict) {
-    res.status(409).json({ error: polarityConflictMessage(conflict) });
-    return;
+    if (overridePolarityAck !== true) {
+      res.status(409).json({
+        code: "KEEP_APART_CONFLICT",
+        error: polarityConflictMessage(conflict),
+        partner: {
+          studentId: conflict.partnerStudentId,
+          firstName: conflict.partnerFirstName,
+          lastName: conflict.partnerLastName,
+          destination: conflict.partnerActiveDestination,
+        },
+      });
+      return;
+    }
+    req.log.warn(
+      {
+        studentId,
+        partnerStudentId: conflict.partnerStudentId,
+        teacherName,
+        schoolId,
+      },
+      "keep-apart override acknowledged by teacher",
+    );
   }
 
   // Daily-limit enforcement (per-student override falls back to per-school global).

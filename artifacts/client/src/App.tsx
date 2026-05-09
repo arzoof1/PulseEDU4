@@ -4232,6 +4232,17 @@ function App() {
   const [students, setStudents] = useState<Student[]>([]);
   const [hallPasses, setHallPasses] = useState<HallPass[]>([]);
   const [createPassOpen, setCreatePassOpen] = useState(false);
+  // Forced-acknowledgement modal for keep-apart overrides. The server
+  // returns a 409 with code KEEP_APART_CONFLICT when a teacher tries to
+  // issue a pass for a student whose keep-apart partner is currently out.
+  // The teacher can override only after checking "I have contacted admin
+  // about this override" — the ack is required, not optional.
+  const [keepApartOverride, setKeepApartOverride] = useState<{
+    partnerName: string;
+    partnerDestination: string;
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
   const [logTardyOpen, setLogTardyOpen] = useState(false);
   const [checkInOutOpen, setCheckInOutOpen] = useState(false);
   // Tier-aware Log Intervention launcher state. The launcher routes to
@@ -9171,26 +9182,136 @@ function App() {
         maxMinutes={schoolSettings.hallPassMaxMinutes}
         defaultMinutes={schoolSettings.hallPassDefaultMinutes}
         onCreate={async (payload) => {
-          const res = await authFetch("/api/hall-passes", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              studentId: payload.studentId,
-              destination: payload.destination,
-              originRoom: payload.originRoom,
-              teacherName: payload.fromTeacher || currentStaffUser,
-              destinationTeacher: payload.destinationTeacher,
-              contactedAcknowledged: payload.contactedAcknowledged,
-              maxDurationMinutes: payload.maxDurationMinutes,
-            }),
-          });
-          if (!res.ok) {
-            const text = await res.text();
-            throw new Error(text || "Failed to create pass.");
+          // Soft pre-warning: the teacher already has at least one
+          // OTHER student out on a pass (kiosk-issued passes count too —
+          // they show as "<displayName> (K)"). Easy to miss, so confirm.
+          const myActives = hallPasses.filter(
+            (p) =>
+              p.status === "active" &&
+              (p.teacherName === currentStaffUser ||
+                p.teacherName === `${currentStaffUser} (K)`) &&
+              p.studentId !== payload.studentId,
+          );
+          if (myActives.length > 0) {
+            const lines = myActives
+              .slice(0, 5)
+              .map((p) => `• ${p.studentId} → ${p.destination}`)
+              .join("\n");
+            const more =
+              myActives.length > 5 ? `\n…and ${myActives.length - 5} more` : "";
+            const ok = window.confirm(
+              `Heads up — you currently have ${myActives.length} student${
+                myActives.length === 1 ? "" : "s"
+              } out on a pass:\n\n${lines}${more}\n\nCreate another pass anyway?`,
+            );
+            if (!ok) {
+              throw new Error("Cancelled.");
+            }
           }
-          loadHallPasses();
+
+          const post = async (
+            overrideStudentActive: boolean,
+            overridePolarityAck: boolean,
+          ): Promise<void> => {
+            const res = await authFetch("/api/hall-passes", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                studentId: payload.studentId,
+                destination: payload.destination,
+                originRoom: payload.originRoom,
+                teacherName: payload.fromTeacher || currentStaffUser,
+                destinationTeacher: payload.destinationTeacher,
+                contactedAcknowledged: payload.contactedAcknowledged,
+                maxDurationMinutes: payload.maxDurationMinutes,
+                overrideStudentActive,
+                overridePolarityAck,
+              }),
+            });
+            if (res.ok) {
+              loadHallPasses();
+              return;
+            }
+            // Try to parse the structured 409 codes; fall back to text.
+            const body = await res
+              .clone()
+              .json()
+              .catch(() => null as null | {
+                code?: string;
+                error?: string;
+                existingPass?: {
+                  destination?: string;
+                  originRoom?: string;
+                  teacherName?: string;
+                  createdAt?: string;
+                };
+                partner?: {
+                  studentId?: string;
+                  firstName?: string | null;
+                  lastName?: string | null;
+                  destination?: string;
+                };
+              });
+            if (
+              res.status === 409 &&
+              body?.code === "STUDENT_HAS_ACTIVE_PASS"
+            ) {
+              const ex = body.existingPass;
+              const detail = ex
+                ? `${payload.studentId} is already out → ${ex.destination}` +
+                  (ex.teacherName ? ` (issued by ${ex.teacherName})` : "")
+                : body.error ?? "Student already has an active pass.";
+              const ok = window.confirm(
+                `${detail}\n\nEnd that pass and create the new one?`,
+              );
+              if (!ok) {
+                throw new Error("Cancelled.");
+              }
+              return post(true, overridePolarityAck);
+            }
+            if (res.status === 409 && body?.code === "KEEP_APART_CONFLICT") {
+              const partner = body.partner;
+              const partnerName =
+                partner?.firstName && partner?.lastName
+                  ? `${partner.firstName} ${partner.lastName}`
+                  : partner?.studentId ?? "the keep-apart partner";
+              const partnerDest = partner?.destination ?? "(unknown)";
+              try {
+                await new Promise<void>((resolve, reject) => {
+                  setKeepApartOverride({
+                    partnerName,
+                    partnerDestination: partnerDest,
+                    onConfirm: () => {
+                      setKeepApartOverride(null);
+                      resolve();
+                    },
+                    onCancel: () => {
+                      setKeepApartOverride(null);
+                      reject(new Error("Cancelled."));
+                    },
+                  });
+                });
+              } catch (err) {
+                throw err instanceof Error ? err : new Error("Cancelled.");
+              }
+              return post(overrideStudentActive, true);
+            }
+            const text = body?.error ?? (await res.text());
+            throw new Error(text || "Failed to create pass.");
+          };
+
+          await post(false, false);
         }}
       />
+
+      {keepApartOverride && (
+        <KeepApartOverrideModal
+          partnerName={keepApartOverride.partnerName}
+          partnerDestination={keepApartOverride.partnerDestination}
+          onCancel={keepApartOverride.onCancel}
+          onConfirm={keepApartOverride.onConfirm}
+        />
+      )}
 
       <div className="card">
         <div
@@ -20112,6 +20233,152 @@ function App() {
         }}
       />
       </main>
+    </div>
+  );
+}
+
+function KeepApartOverrideModal({
+  partnerName,
+  partnerDestination,
+  onCancel,
+  onConfirm,
+}: {
+  partnerName: string;
+  partnerDestination: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  const [acked, setAcked] = useState(false);
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="keep-apart-title"
+      onClick={onCancel}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.6)",
+        zIndex: 1100,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "1rem",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#fff",
+          borderRadius: 12,
+          width: "min(460px, 95vw)",
+          padding: "1.25rem 1.4rem",
+          display: "flex",
+          flexDirection: "column",
+          gap: "1rem",
+          borderTop: "6px solid #dc2626",
+          boxShadow: "0 20px 50px rgba(0,0,0,0.25)",
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <span aria-hidden style={{ fontSize: "1.4rem" }}>🚫</span>
+          <h3
+            id="keep-apart-title"
+            style={{ margin: 0, color: "#991b1b", fontSize: "1.1rem" }}
+          >
+            Keep-apart override
+          </h3>
+        </div>
+
+        <div
+          style={{
+            background: "#fef2f2",
+            border: "1px solid #fecaca",
+            borderRadius: 8,
+            padding: "0.7rem 0.85rem",
+            color: "#7f1d1d",
+            fontSize: "0.9rem",
+            lineHeight: 1.45,
+          }}
+        >
+          <strong>{partnerName}</strong> is currently out
+          {partnerDestination ? (
+            <>
+              {" "}
+              (→ <em>{partnerDestination}</em>)
+            </>
+          ) : null}{" "}
+          and is on this student's keep-apart list. Issuing this pass will
+          put them in the same area.
+        </div>
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: 10,
+            fontSize: "0.9rem",
+            cursor: "pointer",
+            padding: "0.5rem",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            background: "#f8fafc",
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={acked}
+            onChange={(e) => setAcked(e.target.checked)}
+            style={{ marginTop: 3, width: 18, height: 18, flexShrink: 0 }}
+            autoFocus
+          />
+          <span>
+            I have contacted admin about this keep-apart override and take
+            responsibility for issuing this pass anyway.
+          </span>
+        </label>
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "flex-end",
+            gap: 8,
+            marginTop: 4,
+          }}
+        >
+          <button
+            type="button"
+            onClick={onCancel}
+            style={{
+              background: "#fff",
+              border: "1px solid #cbd5e1",
+              borderRadius: 6,
+              padding: "0.45rem 0.9rem",
+              fontSize: "0.9rem",
+              cursor: "pointer",
+            }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            disabled={!acked}
+            onClick={onConfirm}
+            style={{
+              background: acked ? "#dc2626" : "#fca5a5",
+              color: "#fff",
+              border: "none",
+              borderRadius: 6,
+              padding: "0.45rem 1rem",
+              fontSize: "0.9rem",
+              fontWeight: 600,
+              cursor: acked ? "pointer" : "not-allowed",
+            }}
+          >
+            Override and create pass
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

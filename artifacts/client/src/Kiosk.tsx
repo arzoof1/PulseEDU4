@@ -855,8 +855,29 @@ function KioskBody({
         createdAt?: string;
         maxDurationMinutes?: number;
         studentFirstName?: string | null;
+        queued?: boolean;
+        position?: number | null;
+        message?: string;
       };
       if (mode === "out") {
+        // Keep-apart hold: server enqueued the student silently and told
+        // us to show a generic "on hold" message — never the partner's
+        // name. Surface as a non-error status so it doesn't look angry.
+        if (data.queued === true) {
+          const positionLabel =
+            typeof data.position === "number" && data.position > 0
+              ? ` You're #${data.position} in line.`
+              : "";
+          setStatus({
+            kind: "error",
+            message:
+              (data.message ?? "You're on hold — please wait.") +
+              positionLabel,
+          });
+          setStudentId("");
+          setDestination("");
+          return;
+        }
         // Skip the brief success card and go straight to the giant
         // countdown screen so the teacher can see who's out from across
         // the room.

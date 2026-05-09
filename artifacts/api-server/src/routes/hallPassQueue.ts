@@ -22,6 +22,8 @@ import { and, eq, inArray, isNull, gt, asc, ne, sql } from "drizzle-orm";
 import { randomBytes } from "node:crypto";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
+import { findPolarityConflict } from "./polarityPairs";
+import { findDailyLimitConflict } from "./studentHallPassLimits";
 
 // How long a minted viewer token stays usable. The token is also killed
 // the moment the underlying kiosk activation is deactivated, so this is
@@ -61,7 +63,9 @@ const router: IRouter = Router();
 
 // Hard cap on a single kiosk's queue. Beyond this the kiosk shows
 // "Line is full, try in a minute." Keeps the line from becoming a hangout.
-const QUEUE_CAP = 5;
+// Exported so routes/kiosk.ts can enforce the same cap when it enqueues a
+// student that hit the keep-apart hold.
+export const QUEUE_CAP = 5;
 
 function hashToken(token: string): string {
   return createHash("sha256").update(token).digest("hex");
@@ -116,7 +120,7 @@ async function loadActivationByToken(token: unknown) {
 //     day. This is a safety net so the feature still works for a school in
 //     onboarding; the onboarding doc instructs admins to configure a bell
 //     schedule for proper period-based reset.
-async function getCurrentPeriodKey(schoolId: number): Promise<string> {
+export async function getCurrentPeriodKey(schoolId: number): Promise<string> {
   const [schedule] = await db
     .select()
     .from(bellSchedulesTable)
@@ -414,13 +418,24 @@ export async function peekNextInQueue(act: {
 }) {
   const { rows } = await clearStaleAndList(act);
   if (rows.length === 0) return null;
-  const next = rows[0];
-  return {
-    studentId: next.studentId,
-    firstName: next.firstName,
-    lastName: next.lastName,
-    destination: next.destination,
-  };
+  // Skip-and-badge: walk arrival order and return the first entry that is
+  // currently eligible to leave — i.e. NOT blocked by either a keep-apart
+  // hold OR a daily-limit cap they hit while waiting in line. Preserves
+  // arrival fairness; blocked students don't lose their place, the kiosk
+  // just calls the next eligible kid until they're cleared.
+  for (const row of rows) {
+    const polarity = await findPolarityConflict(row.studentId, act.schoolId);
+    if (polarity) continue;
+    const limit = await findDailyLimitConflict(row.studentId, act.schoolId);
+    if (limit) continue;
+    return {
+      studentId: row.studentId,
+      firstName: row.firstName,
+      lastName: row.lastName,
+      destination: row.destination,
+    };
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -465,28 +480,41 @@ router.get("/hall-pass-queue", requireStaff, async (req, res) => {
     );
 
   const manageableRooms = new Set<string>();
-  const entries = rows
-    .filter((r) =>
-      canManageRoomQueue(staff, {
-        staffId: r.activationStaffId,
-        room: r.activationRoom,
-      }),
-    )
-    .map((r) => {
-      manageableRooms.add(r.activationRoom);
-      return {
-        id: r.id,
-        room: r.room,
-        studentId: r.studentId,
-        firstName: r.firstName,
-        lastName: r.lastName,
-        destination: r.destination,
-        position: r.position,
-        addedAt:
-          r.addedAt instanceof Date ? r.addedAt.toISOString() : r.addedAt,
-        kioskActivationId: r.kioskActivationId,
-      };
-    });
+  const filteredRows = rows.filter((r) =>
+    canManageRoomQueue(staff, {
+      staffId: r.activationStaffId,
+      room: r.activationRoom,
+    }),
+  );
+  // Compute keep-apart hold per entry. A queued student is "blocked" while
+  // any of their polarity partners has an active hall pass right now. We
+  // intentionally don't surface the partner's name to the panel — staff
+  // can look up keep-apart pairs in the polarity admin if they need to.
+  // Queue sizes are tiny (≤5/kiosk * a few kiosks), so per-row lookups
+  // are fine.
+  const blockedFlags = await Promise.all(
+    filteredRows.map(async (r) => {
+      const c = await findPolarityConflict(r.studentId, schoolId);
+      return c !== null;
+    }),
+  );
+  const entries = filteredRows.map((r, i) => {
+    manageableRooms.add(r.activationRoom);
+    return {
+      id: r.id,
+      room: r.room,
+      studentId: r.studentId,
+      firstName: r.firstName,
+      lastName: r.lastName,
+      destination: r.destination,
+      position: r.position,
+      addedAt:
+        r.addedAt instanceof Date ? r.addedAt.toISOString() : r.addedAt,
+      kioskActivationId: r.kioskActivationId,
+      blocked: blockedFlags[i] === true,
+      blockedReason: blockedFlags[i] === true ? "keep_apart" : null,
+    };
+  });
 
   // Also include rooms with NO queue but a live kiosk the staff can
   // manage — so the panel still shows the room (and its active passes)

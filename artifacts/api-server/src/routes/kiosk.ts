@@ -4,6 +4,7 @@ import { randomBytes, createHash } from "node:crypto";
 import {
   db,
   hallPassesTable,
+  hallPassQueueTable,
   locationsTable,
   locationAllowedDestinationsTable,
   staffDefaultsTable,
@@ -12,7 +13,7 @@ import {
   adminNotificationsTable,
   studentsTable,
 } from "@workspace/db";
-import { and, eq, isNull, gt, desc, sql } from "drizzle-orm";
+import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
@@ -25,7 +26,12 @@ import {
   findDailyLimitConflict,
   dailyLimitConflictMessage,
 } from "./studentHallPassLimits";
-import { consumeQueueEntry, peekNextInQueue } from "./hallPassQueue";
+import {
+  consumeQueueEntry,
+  peekNextInQueue,
+  QUEUE_CAP,
+  getCurrentPeriodKey,
+} from "./hallPassQueue";
 
 const ACTIVATION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -763,8 +769,106 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     act.schoolId,
   );
   if (conflict) {
-    res.status(409).json({ error: polarityConflictMessage(conflict) });
-    return;
+    // Keep-apart at the kiosk: instead of bouncing the student with an
+    // error that names the other kid, drop them silently into THIS kiosk's
+    // queue and tell them they're on hold. The companion queue panel and
+    // the kiosk's "next up" prompt both skip blocked entries until the
+    // partner's pass ends, at which point the hold clears automatically.
+    // We deliberately don't echo the partner's name in the response.
+    try {
+      const [student] = await db
+        .select({
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.studentId, normalizedStudentId),
+            eq(studentsTable.schoolId, act.schoolId),
+          ),
+        );
+      const periodKey = await getCurrentPeriodKey(act.schoolId);
+      // Stale-clear before insert so a previous-period queue doesn't count
+      // toward this period's cap. Mirrors /kiosk/queue/:token/add.
+      await db
+        .delete(hallPassQueueTable)
+        .where(
+          and(
+            eq(hallPassQueueTable.kioskActivationId, act.id),
+            ne(hallPassQueueTable.periodKey, periodKey),
+          ),
+        );
+      const enqueueResult = await db.transaction(async (tx) => {
+        // Serialize all enqueue attempts for this kiosk. `.for("update")`
+        // alone doesn't help when the queue is empty (no rows to lock),
+        // so two concurrent on-hold attempts could both pass the
+        // QUEUE_CAP check. The advisory lock is released at COMMIT.
+        await tx.execute(sql`SELECT pg_advisory_xact_lock(${act.id})`);
+        const locked = await tx
+          .select()
+          .from(hallPassQueueTable)
+          .where(eq(hallPassQueueTable.kioskActivationId, act.id))
+          .orderBy(
+            asc(hallPassQueueTable.position),
+            asc(hallPassQueueTable.id),
+          )
+          .for("update");
+        if (locked.some((r) => r.studentId === normalizedStudentId)) {
+          return { kind: "duplicate" as const };
+        }
+        if (locked.length >= QUEUE_CAP) {
+          return { kind: "full" as const };
+        }
+        const nextPos =
+          locked.reduce((m, r) => (r.position > m ? r.position : m), 0) + 1;
+        await tx.insert(hallPassQueueTable).values({
+          schoolId: act.schoolId,
+          kioskActivationId: act.id,
+          room: act.room,
+          studentId: normalizedStudentId,
+          firstName: student?.firstName ?? null,
+          lastName: student?.lastName ?? null,
+          destination,
+          position: nextPos,
+          periodKey,
+        });
+        const after = await tx
+          .select()
+          .from(hallPassQueueTable)
+          .where(eq(hallPassQueueTable.kioskActivationId, act.id))
+          .orderBy(
+            asc(hallPassQueueTable.position),
+            asc(hallPassQueueTable.id),
+          );
+        const myIdx = after.findIndex(
+          (r) => r.studentId === normalizedStudentId,
+        );
+        return { kind: "ok" as const, position: myIdx + 1 };
+      });
+      if (enqueueResult.kind === "full") {
+        res.status(409).json({
+          error: "You can't go right now and the line is full — try later.",
+        });
+        return;
+      }
+      // Whether duplicate (already in line on a prior attempt) or freshly
+      // inserted, the student-facing message is the same generic hold.
+      const position =
+        enqueueResult.kind === "ok" ? enqueueResult.position : null;
+      res.status(202).json({
+        queued: true,
+        reason: "on_hold",
+        position,
+        message:
+          "You can't go right now. You're on hold and will be called when it's your turn.",
+      });
+      return;
+    } catch (err) {
+      req.log.error({ err }, "kiosk keep-apart enqueue failed");
+      res.status(409).json({ error: polarityConflictMessage(conflict) });
+      return;
+    }
   }
 
   const [pass] = await db
