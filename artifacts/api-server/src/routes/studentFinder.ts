@@ -13,6 +13,7 @@ import {
 } from "@workspace/db";
 import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -184,6 +185,8 @@ router.get(
             id: staffTable.id,
             displayName: staffTable.displayName,
             defaultRoom: staffTable.defaultRoom,
+            workExtension: staffTable.workExtension,
+            cellPhone: staffTable.cellPhone,
           })
           .from(staffTable)
           .where(
@@ -194,6 +197,29 @@ router.get(
           )
       : [];
     const teacherById = new Map(teachers.map((t) => [t.id, t]));
+
+    // Cell-phone visibility on schedule rows mirrors the Staff Directory
+    // gate: caller is Core Team OR the per-school toggle is on. Server
+    // redacts before the response so the value never leaves the API
+    // when the caller isn't entitled. We resolve this BEFORE building
+    // the period payload because the period mappers below read
+    // `showCellPhone` directly.
+    const [me] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, req.staffId!));
+    const callerIsCoreTeam = !!me && isCoreTeam(me);
+    const [visibilitySettings] = await db
+      .select({
+        staffDirectoryShowCellPhone:
+          schoolSettingsTable.staffDirectoryShowCellPhone,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId))
+      .limit(1);
+    const showCellPhone =
+      callerIsCoreTeam ||
+      Boolean(visibilitySettings?.staffDirectoryShowCellPhone);
 
     // Group sections by period — co-teaching / schedule glitches can yield
     // more than one row; we surface them all rather than silently picking
@@ -243,6 +269,8 @@ router.get(
               courseName: s.courseName,
               teacherName: t?.displayName ?? "(unknown teacher)",
               room: t?.defaultRoom ?? null,
+              workExtension: t?.workExtension ?? null,
+              cellPhone: showCellPhone ? (t?.cellPhone ?? null) : null,
             };
           }),
         });
@@ -268,6 +296,8 @@ router.get(
               courseName: s.courseName,
               teacherName: t?.displayName ?? "(unknown teacher)",
               room: t?.defaultRoom ?? null,
+              workExtension: t?.workExtension ?? null,
+              cellPhone: showCellPhone ? (t?.cellPhone ?? null) : null,
             };
           }),
         });

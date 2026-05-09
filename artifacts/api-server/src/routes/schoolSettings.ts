@@ -115,6 +115,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     issDailyCapacity,
     issCapacityBehavior,
     finderShowAbsentBanner,
+    staffDirectoryShowCellPhone,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -395,6 +396,17 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.finderShowAbsentBanner = finderShowAbsentBanner;
+  }
+  // Staff Directory cell-phone visibility toggle. School-wide policy —
+  // any settings-manager can flip it. Boolean only.
+  if (staffDirectoryShowCellPhone !== undefined) {
+    if (typeof staffDirectoryShowCellPhone !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "staffDirectoryShowCellPhone must be a boolean" });
+      return;
+    }
+    updates.staffDirectoryShowCellPhone = staffDirectoryShowCellPhone;
   }
   if (issCapacityBehavior !== undefined) {
     if (issCapacityBehavior !== "soft" && issCapacityBehavior !== "hard") {

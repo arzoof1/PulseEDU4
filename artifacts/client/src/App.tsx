@@ -8,6 +8,7 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import { StudentFinderModal } from "./components/StudentFinderModal";
+import StaffDirectoryPage from "./components/StaffDirectoryPage";
 import InterventionsTodayPage from "./components/InterventionsTodayPage";
 import InterventionReportsPage from "./components/InterventionReportsPage";
 import MtssReportsPage from "./components/MtssReportsPage";
@@ -4452,6 +4453,7 @@ function App() {
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
     finderShowAbsentBanner: boolean;
+    staffDirectoryShowCellPhone: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -4504,6 +4506,7 @@ function App() {
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
     finderShowAbsentBanner: false,
+    staffDirectoryShowCellPhone: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -6132,6 +6135,10 @@ function App() {
             typeof data.finderShowAbsentBanner === "boolean"
               ? data.finderShowAbsentBanner
               : false,
+          staffDirectoryShowCellPhone:
+            typeof data.staffDirectoryShowCellPhone === "boolean"
+              ? data.staffDirectoryShowCellPhone
+              : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -6230,6 +6237,10 @@ function App() {
         finderShowAbsentBanner:
           typeof data.finderShowAbsentBanner === "boolean"
             ? data.finderShowAbsentBanner
+            : false,
+        staffDirectoryShowCellPhone:
+          typeof data.staffDirectoryShowCellPhone === "boolean"
+            ? data.staffDirectoryShowCellPhone
             : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
@@ -18538,6 +18549,14 @@ function App() {
               return n + (adminOn && superOn ? 1 : 0);
             }, 0);
             tiles.push({
+              id: "staff-directory",
+              icon: "📞",
+              title: "Staff Directory",
+              subtitle:
+                "Active staff with default room and contact phones — surfaced in the Finder.",
+              group: "school-identity",
+            });
+            tiles.push({
               id: "schoolFeatures",
               icon: "🧩",
               title: "School Features",
@@ -18725,6 +18744,30 @@ function App() {
         <StaffPreviewPage />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "staff-directory" && (
+        <StaffDirectoryPage
+          showCellPhoneSetting={schoolSettings.staffDirectoryShowCellPhone}
+          onToggleShowCellPhone={async (next) => {
+            setSchoolSettings((prev) => ({
+              ...prev,
+              staffDirectoryShowCellPhone: next,
+            }));
+            try {
+              await authFetch("/api/school-settings", {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ staffDirectoryShowCellPhone: next }),
+              });
+            } catch {
+              // Roll back optimistic update on failure.
+              setSchoolSettings((prev) => ({
+                ...prev,
+                staffDirectoryShowCellPhone: !next,
+              }));
+            }
+          }}
+        />
+      )}
       {activeSection === "settings" && canManageSettings && settingsTile === "separation-tags" && (
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>Separation Reason Tags</h2>

@@ -61,6 +61,16 @@ export const schoolSettingsTable = pgTable(
   finderShowAbsentBanner: boolean("finder_show_absent_banner")
     .notNull()
     .default(false),
+  // Staff Directory cell-phone visibility. When false (default), only
+  // Core Team / Admin / SuperUser can see staff personal cell numbers
+  // in the Finder. When true, every signed-in staff member can see
+  // them — appropriate for schools that treat the cell list as a
+  // faculty-meeting handout. Work extensions are always visible to
+  // everyone regardless of this toggle. Editing is always restricted
+  // to Core Team / Admin / SuperUser.
+  staffDirectoryShowCellPhone: boolean("staff_directory_show_cell_phone")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //

@@ -75,6 +75,7 @@ import separationsRouter from "./separations";
 import schoolClosedDaysRouter from "./schoolClosedDays";
 import studentReportPdfRouter from "./studentReportPdf";
 import studentFinderRouter from "./studentFinder";
+import staffDirectoryRouter from "./staffDirectory";
 
 const router: IRouter = Router();
 
@@ -154,5 +155,6 @@ router.use(separationsRouter);
 router.use(schoolClosedDaysRouter);
 router.use(studentReportPdfRouter);
 router.use(studentFinderRouter);
+router.use(staffDirectoryRouter);
 
 export default router;

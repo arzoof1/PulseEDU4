@@ -19,6 +19,33 @@ interface PeriodClass {
   courseName: string;
   teacherName: string;
   room: string | null;
+  workExtension: string | null;
+  cellPhone: string | null;
+}
+
+function PhoneLine({
+  workExtension,
+  cellPhone,
+}: {
+  workExtension: string | null;
+  cellPhone: string | null;
+}) {
+  if (!workExtension && !cellPhone) return null;
+  return (
+    <div
+      style={{
+        fontSize: 11,
+        color: "var(--muted, #64748b)",
+        marginTop: 2,
+        display: "flex",
+        gap: 8,
+        flexWrap: "wrap",
+      }}
+    >
+      {workExtension && <span>📞 {workExtension}</span>}
+      {cellPhone && <span>📱 {cellPhone}</span>}
+    </div>
+  );
 }
 
 interface PeriodRow {
@@ -544,7 +571,13 @@ export function StudentFinderModal({ onClose }: { onClose: () => void }) {
                             </>
                           ) : null}
                           <td>{c.courseName}</td>
-                          <td>{c.teacherName}</td>
+                          <td>
+                            {c.teacherName}
+                            <PhoneLine
+                              workExtension={c.workExtension}
+                              cellPhone={c.cellPhone}
+                            />
+                          </td>
                           <td>{c.room ?? "—"}</td>
                         </tr>
                       ));

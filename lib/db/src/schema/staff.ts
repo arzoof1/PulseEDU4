@@ -121,6 +121,21 @@ export const staffTable = pgTable("staff", {
   // every time.
   defaultRoom: text("default_room"),
 
+  // Staff Directory phone numbers, surfaced in the Finder ("Where is
+  // this teacher right now?") and on student-finder schedule rows.
+  // - workExtension: low-sensitivity (school extension or classroom
+  //   line). Visible to every signed-in staff member.
+  // - cellPhone: high-sensitivity personal cell number. Visibility is
+  //   controlled by school_settings.staff_directory_show_cell_phone:
+  //     OFF (default) — only Core Team / Admin / SuperUser can see it
+  //     ON              — every signed-in staff member can see it
+  //   Edits are restricted to Core Team / Admin / SuperUser regardless.
+  //   Server is the source of truth for the redaction; the client
+  //   never receives the cell number when the caller is not allowed
+  //   to see it.
+  workExtension: text("work_extension"),
+  cellPhone: text("cell_phone"),
+
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),
   active: boolean("active").notNull().default(true),

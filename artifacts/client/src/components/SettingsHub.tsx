@@ -21,7 +21,8 @@ export type SettingsTileId =
   | "intervention-strategies"
   | "iss-settings"
   | "staff-preview"
-  | "separation-tags";
+  | "separation-tags"
+  | "staff-directory";
 
 export type SettingsGroupId =
   | "hall-pass-ops"
