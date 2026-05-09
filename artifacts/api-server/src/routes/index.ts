@@ -76,6 +76,8 @@ import schoolClosedDaysRouter from "./schoolClosedDays";
 import studentReportPdfRouter from "./studentReportPdf";
 import studentFinderRouter from "./studentFinder";
 import staffDirectoryRouter from "./staffDirectory";
+import hallPassQueueRouter from "./hallPassQueue";
+import spotlightRouter from "./spotlight";
 
 const router: IRouter = Router();
 
@@ -156,5 +158,7 @@ router.use(schoolClosedDaysRouter);
 router.use(studentReportPdfRouter);
 router.use(studentFinderRouter);
 router.use(staffDirectoryRouter);
+router.use(hallPassQueueRouter);
+router.use(spotlightRouter);
 
 export default router;

@@ -104,6 +104,23 @@ type Status =
     }
   | { kind: "error"; message: string };
 
+interface QueueEntry {
+  id: number;
+  studentId: string;
+  firstName: string | null;
+  lastName: string | null;
+  destination: string;
+  position: number;
+  addedAt: string;
+}
+
+// How long the "Welcome [Name] — enter your ID" handoff prompt sits on the
+// kiosk after the previous student taps "I'm back". If the queued student
+// doesn't enter their ID in this window we forfeit their slot and return
+// the kiosk to idle (the next student in line, if any, is NOT auto-shown
+// — they have to either be re-queued or walk up cold).
+const NEXT_UP_TIMEOUT_MS = 60_000;
+
 export default function Kiosk() {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
   const [showDeactivate, setShowDeactivate] = useState(false);
@@ -354,6 +371,83 @@ function KioskBody({
   const [returnError, setReturnError] = useState<string | null>(null);
   const studentIdInputRef = useRef<HTMLInputElement | null>(null);
 
+  // ---- Hall Pass Queue state ---------------------------------------------
+  // Polled from /api/kiosk/queue/:token; auto-clears at period boundary on
+  // the server side. The strip on the right edge of the kiosk shows this
+  // list; "Get in line" opens an overlay to add yourself.
+  const [queue, setQueue] = useState<QueueEntry[]>([]);
+  const [queueCap, setQueueCap] = useState(5);
+  const [getInLineOpen, setGetInLineOpen] = useState(false);
+  // When the previous student taps "I'm back" and the server reports a
+  // next-up entry, we render a dedicated handoff overlay until they enter
+  // their ID (or NEXT_UP_TIMEOUT_MS elapses).
+  const [nextUp, setNextUp] = useState<{
+    entry: QueueEntry;
+    expiresAt: number;
+  } | null>(null);
+
+  const refetchQueue = useMemo(
+    () => async () => {
+      try {
+        const res = await fetch(
+          `/api/kiosk/queue/${encodeURIComponent(token)}`,
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as {
+          capacity?: number;
+          entries?: QueueEntry[];
+        };
+        setQueue(data.entries ?? []);
+        if (typeof data.capacity === "number") setQueueCap(data.capacity);
+      } catch {
+        // ignore — next poll will retry
+      }
+    },
+    [token],
+  );
+
+  useEffect(() => {
+    refetchQueue();
+    const id = setInterval(refetchQueue, 10_000);
+    return () => clearInterval(id);
+  }, [refetchQueue]);
+
+  // Auto-expire the next-up handoff prompt after NEXT_UP_TIMEOUT_MS so a
+  // queued student who walked off doesn't park the kiosk indefinitely.
+  useEffect(() => {
+    if (!nextUp) return;
+    const remaining = nextUp.expiresAt - Date.now();
+    if (remaining <= 0) {
+      // already expired; skip immediately
+      void (async () => {
+        await fetch(
+          `/api/kiosk/queue/${encodeURIComponent(token)}/skip`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ studentId: nextUp.entry.studentId }),
+          },
+        ).catch(() => {});
+        setNextUp(null);
+        await refetchQueue();
+      })();
+      return;
+    }
+    const id = setTimeout(async () => {
+      await fetch(
+        `/api/kiosk/queue/${encodeURIComponent(token)}/skip`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentId: nextUp.entry.studentId }),
+        },
+      ).catch(() => {});
+      setNextUp(null);
+      await refetchQueue();
+    }, remaining);
+    return () => clearTimeout(id);
+  }, [nextUp, token, refetchQueue]);
+
   useEffect(() => {
     fetch("/api/school-settings")
       .then((r) => r.json())
@@ -568,7 +662,35 @@ function KioskBody({
               }
               // 404 means the pass was already ended elsewhere; treat as
               // success and clear the screen.
+              const body = (await res
+                .json()
+                .catch(() => ({}))) as {
+                nextInQueue?: {
+                  studentId: string;
+                  firstName: string | null;
+                  lastName: string | null;
+                  destination: string;
+                } | null;
+              };
               setActivePass(null);
+              // If someone is queued, surface the next-up handoff prompt.
+              // Refresh the canonical queue list so the strip + prompt
+              // agree, then arm the timeout.
+              await refetchQueue();
+              if (body.nextInQueue) {
+                setNextUp({
+                  entry: {
+                    id: -1,
+                    studentId: body.nextInQueue.studentId,
+                    firstName: body.nextInQueue.firstName,
+                    lastName: body.nextInQueue.lastName,
+                    destination: body.nextInQueue.destination,
+                    position: 1,
+                    addedAt: new Date().toISOString(),
+                  },
+                  expiresAt: Date.now() + NEXT_UP_TIMEOUT_MS,
+                });
+              }
             } catch (err) {
               setReturnError(
                 err instanceof Error ? err.message : "Network error",
@@ -695,7 +817,576 @@ function KioskBody({
           </button>
         </form>
       )}
+
+      {/* Persistent queue strip — sibling to TimerScreen so the timer's
+          render path is never coupled to queue updates. Sits on the right
+          edge with a higher z-index than the timer overlay. */}
+      <QueueStrip
+        entries={queue}
+        cap={queueCap}
+        onAdd={() => setGetInLineOpen(true)}
+        disabled={!!nextUp}
+      />
+
+      {getInLineOpen && (
+        <GetInLineOverlay
+          token={token}
+          destinationOptions={destinationOptions}
+          onClose={() => setGetInLineOpen(false)}
+          onAdded={() => {
+            setGetInLineOpen(false);
+            void refetchQueue();
+          }}
+        />
+      )}
+
+      {nextUp && (
+        <NextUpScreen
+          entry={nextUp.entry}
+          expiresAt={nextUp.expiresAt}
+          token={token}
+          onSkip={async () => {
+            await fetch(
+              `/api/kiosk/queue/${encodeURIComponent(token)}/skip`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  studentId: nextUp.entry.studentId,
+                }),
+              },
+            ).catch(() => {});
+            setNextUp(null);
+            void refetchQueue();
+          }}
+          onRevoked={onRevoked}
+          onPassStarted={(pass) => {
+            setActivePass(pass);
+            setNextUp(null);
+            void refetchQueue();
+          }}
+        />
+      )}
     </>
+  );
+}
+
+/* ----------------------------- Queue UI ----------------------------- */
+
+function QueueStrip({
+  entries,
+  cap,
+  onAdd,
+  disabled,
+}: {
+  entries: QueueEntry[];
+  cap: number;
+  onAdd: () => void;
+  disabled: boolean;
+}) {
+  const isFull = entries.length >= cap;
+  return (
+    <div
+      style={{
+        position: "fixed",
+        top: 0,
+        right: 0,
+        bottom: 0,
+        width: 96,
+        background: "rgba(15,23,42,0.92)",
+        color: "#fff",
+        zIndex: 10,
+        display: "flex",
+        flexDirection: "column",
+        padding: "0.75rem 0.5rem",
+        boxShadow: "-4px 0 16px rgba(0,0,0,0.25)",
+        borderLeft: "1px solid rgba(255,255,255,0.08)",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "0.7rem",
+          letterSpacing: "0.12em",
+          textTransform: "uppercase",
+          opacity: 0.7,
+          marginBottom: "0.5rem",
+          textAlign: "center",
+        }}
+      >
+        Next up
+      </div>
+      <div
+        style={{
+          fontSize: "1.6rem",
+          fontWeight: 800,
+          lineHeight: 1,
+          textAlign: "center",
+          marginBottom: "0.75rem",
+        }}
+      >
+        {entries.length}
+        <span style={{ opacity: 0.5, fontSize: "0.85rem", fontWeight: 600 }}>
+          /{cap}
+        </span>
+      </div>
+      <div
+        style={{
+          flex: 1,
+          overflowY: "auto",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.4rem",
+        }}
+      >
+        {entries.length === 0 ? (
+          <div
+            style={{
+              fontSize: "0.75rem",
+              opacity: 0.55,
+              textAlign: "center",
+              padding: "0.5rem 0.25rem",
+              lineHeight: 1.3,
+            }}
+          >
+            No one waiting
+          </div>
+        ) : (
+          entries.map((e) => (
+            <div
+              key={e.id}
+              style={{
+                background: "rgba(255,255,255,0.08)",
+                borderRadius: 8,
+                padding: "0.4rem 0.35rem",
+                fontSize: "0.8rem",
+                lineHeight: 1.15,
+                textAlign: "center",
+                fontWeight: 600,
+              }}
+            >
+              <div>
+                {e.firstName ?? e.studentId}
+                {e.lastName ? ` ${e.lastName.charAt(0)}.` : ""}
+              </div>
+              <div
+                style={{
+                  fontSize: "0.65rem",
+                  opacity: 0.6,
+                  fontWeight: 400,
+                  marginTop: 2,
+                }}
+              >
+                {e.destination}
+              </div>
+            </div>
+          ))
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onAdd}
+        disabled={isFull || disabled}
+        style={{
+          marginTop: "0.5rem",
+          background: isFull || disabled ? "rgba(255,255,255,0.1)" : "#22c55e",
+          color: isFull || disabled ? "rgba(255,255,255,0.5)" : "#0b1220",
+          border: "none",
+          borderRadius: 8,
+          padding: "0.6rem 0.3rem",
+          fontWeight: 700,
+          fontSize: "0.75rem",
+          lineHeight: 1.15,
+          cursor: isFull || disabled ? "not-allowed" : "pointer",
+        }}
+      >
+        {isFull ? "Line is full" : "Get in line"}
+      </button>
+    </div>
+  );
+}
+
+function GetInLineOverlay({
+  token,
+  destinationOptions,
+  onClose,
+  onAdded,
+}: {
+  token: string;
+  destinationOptions: LocationRow[];
+  onClose: () => void;
+  onAdded: () => void;
+}) {
+  const [studentId, setStudentId] = useState("");
+  const [destination, setDestination] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [position, setPosition] = useState<number | null>(null);
+
+  // Auto-close after a brief confirmation so the next person can use the
+  // overlay without a stale message lingering.
+  useEffect(() => {
+    if (position == null) return;
+    const id = setTimeout(onAdded, 2500);
+    return () => clearTimeout(id);
+  }, [position, onAdded]);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!studentId.trim() || !destination) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch(
+        `/api/kiosk/queue/${encodeURIComponent(token)}/add`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: studentId.trim(),
+            destination,
+          }),
+        },
+      );
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(body.error ?? `Request failed (${res.status})`);
+        return;
+      }
+      setPosition(body.position ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.7)",
+        zIndex: 20,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "2rem",
+      }}
+      onClick={onClose}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "#0f172a",
+          color: "#fff",
+          borderRadius: 16,
+          padding: "1.5rem",
+          width: "min(440px, 92vw)",
+          border: "1px solid rgba(255,255,255,0.12)",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "0.75rem",
+            letterSpacing: "0.15em",
+            textTransform: "uppercase",
+            opacity: 0.7,
+            marginBottom: "0.25rem",
+          }}
+        >
+          Get in line
+        </div>
+        <h2 style={{ margin: "0 0 1rem", fontSize: "1.5rem" }}>
+          Add yourself to the queue
+        </h2>
+        {position != null ? (
+          <div
+            style={{
+              padding: "1rem",
+              background: "rgba(34,197,94,0.15)",
+              border: "1px solid #22c55e",
+              borderRadius: 8,
+              textAlign: "center",
+            }}
+          >
+            <div style={{ fontSize: "1rem", marginBottom: "0.25rem" }}>
+              You are
+            </div>
+            <div style={{ fontSize: "2.5rem", fontWeight: 800 }}>
+              #{position}
+            </div>
+            <div style={{ opacity: 0.85, marginTop: "0.5rem" }}>
+              We'll call your name on the screen.
+            </div>
+          </div>
+        ) : (
+          <form
+            onSubmit={submit}
+            style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}
+          >
+            <Field label="Your Student ID">
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                autoFocus
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                placeholder="e.g. 12345"
+                style={inputStyle}
+                disabled={submitting}
+              />
+            </Field>
+            <Field label="Where are you going?">
+              <select
+                value={destination}
+                onChange={(e) => setDestination(e.target.value)}
+                style={inputStyle}
+                disabled={submitting}
+              >
+                <option value="">Select a destination…</option>
+                {destinationOptions.map((d) => (
+                  <option key={d.id} value={d.name}>
+                    {d.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            {error && <ErrorBox>{error}</ErrorBox>}
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <button
+                type="button"
+                onClick={onClose}
+                disabled={submitting}
+                style={{
+                  flex: 1,
+                  background: "transparent",
+                  color: "#fff",
+                  border: "1px solid rgba(255,255,255,0.25)",
+                  borderRadius: 8,
+                  padding: "0.85rem",
+                  fontWeight: 600,
+                  cursor: submitting ? "not-allowed" : "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={
+                  submitting || !studentId.trim() || !destination
+                }
+                style={primaryBtn(
+                  submitting || !studentId.trim() || !destination,
+                  { padding: "0.85rem", flex: 1 },
+                )}
+              >
+                {submitting ? "Adding…" : "Get in line"}
+              </button>
+            </div>
+          </form>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function NextUpScreen({
+  entry,
+  expiresAt,
+  token,
+  onSkip,
+  onRevoked,
+  onPassStarted,
+}: {
+  entry: QueueEntry;
+  expiresAt: number;
+  token: string;
+  onSkip: () => void;
+  onRevoked: () => void;
+  onPassStarted: (pass: ActivePass) => void;
+}) {
+  const [studentId, setStudentId] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [tick, setTick] = useState(Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setTick(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  const secondsLeft = Math.max(0, Math.ceil((expiresAt - tick) / 1000));
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = studentId.trim();
+    if (!trimmed) return;
+    if (trimmed.toUpperCase() !== entry.studentId.toUpperCase()) {
+      setError(
+        `That ID doesn't match ${entry.firstName ?? entry.studentId}. Try again or tap Skip.`,
+      );
+      return;
+    }
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/kiosk/hall-passes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          studentId: trimmed,
+          token,
+          destination: entry.destination,
+        }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
+          onRevoked();
+          return;
+        }
+      }
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setError(b.error ?? `Request failed (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as {
+        id?: number;
+        destination?: string;
+        createdAt?: string;
+        maxDurationMinutes?: number;
+        studentFirstName?: string | null;
+      };
+      if (
+        typeof data.id === "number" &&
+        typeof data.createdAt === "string" &&
+        typeof data.maxDurationMinutes === "number"
+      ) {
+        onPassStarted({
+          id: data.id,
+          studentId: trimmed,
+          studentFirstName: data.studentFirstName ?? entry.firstName ?? null,
+          destination: data.destination ?? entry.destination,
+          createdAt: data.createdAt,
+          maxDurationMinutes: data.maxDurationMinutes,
+        });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Network error");
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "#1d4ed8",
+        color: "#fff",
+        zIndex: 15,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        padding: "2rem",
+        textAlign: "center",
+      }}
+    >
+      <div
+        style={{
+          fontSize: "clamp(1rem, 2.5vw, 1.5rem)",
+          letterSpacing: "0.15em",
+          textTransform: "uppercase",
+          opacity: 0.85,
+          marginBottom: "0.75rem",
+        }}
+      >
+        Your turn
+      </div>
+      <div
+        style={{
+          fontSize: "clamp(2.5rem, 7vw, 5rem)",
+          fontWeight: 800,
+          lineHeight: 1.1,
+          marginBottom: "0.25rem",
+        }}
+      >
+        Welcome, {entry.firstName ?? entry.studentId}!
+      </div>
+      <div
+        style={{
+          fontSize: "clamp(1.1rem, 2.5vw, 1.6rem)",
+          opacity: 0.85,
+          marginBottom: "2rem",
+        }}
+      >
+        Heading to {entry.destination}
+      </div>
+      <form
+        onSubmit={submit}
+        style={{
+          background: "rgba(0,0,0,0.18)",
+          border: "1px solid rgba(255,255,255,0.25)",
+          borderRadius: 12,
+          padding: "1.25rem",
+          width: "min(420px, 92vw)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "0.85rem",
+        }}
+      >
+        <div
+          style={{
+            fontSize: "1rem",
+            fontWeight: 600,
+            opacity: 0.9,
+            textAlign: "left",
+          }}
+        >
+          Enter your Student ID to start your pass
+        </div>
+        <input
+          type="text"
+          inputMode="numeric"
+          autoComplete="off"
+          autoFocus
+          value={studentId}
+          onChange={(e) => setStudentId(e.target.value)}
+          placeholder="e.g. 12345"
+          style={{ ...inputStyle, fontSize: "1.4rem", textAlign: "center" }}
+          disabled={submitting}
+        />
+        {error && <ErrorBox>{error}</ErrorBox>}
+        <button
+          type="submit"
+          disabled={submitting || !studentId.trim()}
+          style={primaryBtn(submitting || !studentId.trim(), {
+            padding: "1rem",
+            fontSize: "1.15rem",
+          })}
+        >
+          {submitting ? "Starting pass…" : "Start my pass"}
+        </button>
+        <button
+          type="button"
+          onClick={onSkip}
+          disabled={submitting}
+          style={{
+            background: "transparent",
+            color: "#fff",
+            border: "1px solid rgba(255,255,255,0.4)",
+            borderRadius: 8,
+            padding: "0.65rem",
+            fontWeight: 600,
+            cursor: submitting ? "not-allowed" : "pointer",
+          }}
+        >
+          Skip / not here ({secondsLeft}s)
+        </button>
+      </form>
+    </div>
   );
 }
 

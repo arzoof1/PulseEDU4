@@ -3,6 +3,8 @@ import Login from "./Login";
 import AdminHubPage from "./components/AdminHubPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
+import { HallPassQueueChip } from "./components/HallPassQueueChip";
+import SpotlightPanel from "./components/SpotlightPanel";
 import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
@@ -4407,6 +4409,7 @@ function App() {
     | "myInterventions"
     | "adminHub"
     | "separationSuggestions"
+    | "spotlight"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -8633,6 +8636,14 @@ function App() {
               label: "Teacher Roster",
               icon: IconUser,
             })}
+            {/* Spotlight — fair, randomized "pull a name" picker for the
+                current period. Sits in Quick Access because teachers reach
+                for it mid-lesson. */}
+            {renderNavItem({
+              key: "spotlight",
+              label: "Spotlight",
+              icon: IconStar,
+            })}
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
                 key: "requestPullout",
@@ -8920,6 +8931,12 @@ function App() {
 
       <main className="app-main">
 
+      {activeSection === "spotlight" && (
+        <SpotlightPanel
+          isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+        />
+      )}
+
       {activeSection === "hallPasses" && (<>
       {(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
@@ -8949,7 +8966,10 @@ function App() {
           Previously sat below the stats — fine on desktop, awkward on
           a narrow viewport where the stats stack into a tall column. */}
       <div className="card cp-cta-card">
-        <div className="cp-cta-text">Need to Create a Pass?</div>
+        <div className="cp-cta-text" style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
+          <span>Need to Create a Pass?</span>
+          <HallPassQueueChip />
+        </div>
         <button
           type="button"
           className="cp-cta-button cp-cta-button--blue"

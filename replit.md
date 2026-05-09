@@ -57,6 +57,15 @@ PulseEDU is a multi-tenant application providing tools for school operations, st
 
 _Populate as you build_
 
+## Onboarding (critical setup notes)
+
+- **Configure a default bell schedule before enabling Hall Pass Queue.** The
+  queue auto-resets when the bell-schedule period changes, giving each
+  period a clean line. If no default bell schedule is configured, the
+  queue falls back to 45-minute idle buckets — usable, but the period-aware
+  reset is the intended UX. School Settings → Bell Schedules → mark one
+  schedule as the default.
+
 ## Future work
 
 - **Admin Hub ISS log: view detail + edit/delete with audit guardrails**

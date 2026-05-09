@@ -25,6 +25,7 @@ import {
   findDailyLimitConflict,
   dailyLimitConflictMessage,
 } from "./studentHallPassLimits";
+import { consumeQueueEntry, peekNextInQueue } from "./hallPassQueue";
 
 const ACTIVATION_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -577,6 +578,11 @@ router.post("/kiosk/hall-passes", async (req, res) => {
       ),
     );
 
+  // If this student was queued on this kiosk, remove their queue entry now
+  // that the pass has started. Safe no-op if they weren't in the queue
+  // (e.g. they walked up cold).
+  await consumeQueueEntry(act.id, normalizedStudentId);
+
   res.status(201).json({
     ...pass,
     studentFirstName: student?.firstName ?? null,
@@ -668,9 +674,19 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
       ),
     );
 
+  // Pop the next student off this kiosk's queue (if any) so the kiosk can
+  // show a "Welcome [Name] — enter your ID to start your pass" prompt. We
+  // do NOT auto-create the pass — the next student must scan/enter their
+  // ID so they get their full allotted time.
+  const nextInQueue = await peekNextInQueue({
+    id: act.id,
+    schoolId: act.schoolId,
+  });
+
   res.json({
     ...updated,
     studentFirstName: student?.firstName ?? null,
+    nextInQueue,
   });
 });
 
