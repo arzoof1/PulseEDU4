@@ -1732,7 +1732,7 @@ ul[style*="listStyle: none"] li button:hover {
 }
 /* Miss animation: launch up, tumble, fall off to the side. */
 .bottle-miss {
-  animation: bottle-miss 3.4s cubic-bezier(0.22, 0.7, 0.4, 1) forwards;
+  animation: bottle-miss 4s cubic-bezier(0.22, 0.7, 0.4, 1) forwards;
 }
 @keyframes bottle-miss {
   0% {
@@ -1756,29 +1756,47 @@ ul[style*="listStyle: none"] li button:hover {
     opacity: 0;
   }
 }
-/* Winner: arc up to the table and stick the landing upright. */
+/* Winner: toss up, spin, arc BACKWARD onto the table, touchdown with a
+   small recoil, then settle upright. The final resting Y (-128px) places
+   the bottle's base flush on the brown table strip above the row.
+   Scale shrinks slightly toward the end to read as "moving away" into
+   the back of the stage rather than popping toward the camera. */
 .bottle-winner {
-  animation: bottle-land 3.4s cubic-bezier(0.18, 0.7, 0.21, 1) forwards;
+  animation: bottle-land 4s cubic-bezier(0.18, 0.7, 0.21, 1) forwards;
   z-index: 3;
 }
 @keyframes bottle-land {
+  /* lift off */
   0% {
     transform: translate(0, 0) rotate(0deg) scale(1);
   }
-  25% {
-    transform: translate(0, -180px) rotate(360deg) scale(1.05);
+  /* mid-toss, spinning */
+  22% {
+    transform: translate(0, -190px) rotate(360deg) scale(1.05);
   }
-  55% {
-    transform: translate(0, -200px) rotate(720deg) scale(1.1);
+  /* peak — highest point, still spinning */
+  45% {
+    transform: translate(0, -230px) rotate(720deg) scale(1.08);
   }
-  78% {
-    transform: translate(0, -125px) rotate(1080deg) scale(1.12);
+  /* coming down, rotation finishing to upright */
+  62% {
+    transform: translate(0, -170px) rotate(1080deg) scale(1.04);
   }
-  88% {
-    transform: translate(0, -118px) rotate(1080deg) scale(1.18);
+  /* TOUCHDOWN on the table — squash */
+  74% {
+    transform: translate(0, -126px) rotate(1080deg) scale(1.05, 0.92);
   }
+  /* recoil — small bounce back up */
+  82% {
+    transform: translate(0, -138px) rotate(1080deg) scale(1, 1.04);
+  }
+  /* secondary settle */
+  90% {
+    transform: translate(0, -126px) rotate(1080deg) scale(1.02, 0.98);
+  }
+  /* final rest, upright on the table */
   100% {
-    transform: translate(0, -120px) rotate(1080deg) scale(1.15);
+    transform: translate(0, -128px) rotate(1080deg) scale(1);
   }
 }
 

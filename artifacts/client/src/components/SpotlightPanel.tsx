@@ -45,7 +45,12 @@ interface PickResult {
 
 type AnimStyle = "wheel" | "bottles";
 const STYLE_STORAGE_KEY = "pulseedu.spotlight.style";
-const ANIM_DURATION_MS = 3600;
+// Total animation runtime. Keep in lockstep with the CSS keyframe
+// durations on `.bottle-winner` / `.bottle-miss` (and the wheel spin) —
+// the React timer that flips state from "animating" → "result" must
+// fire AFTER the bottle has visibly landed on the table, otherwise the
+// poster swap cuts off the touchdown beat.
+const ANIM_DURATION_MS = 4000;
 
 type SpinState =
   | { kind: "idle" }
