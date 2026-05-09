@@ -89,10 +89,25 @@ router.get(
     const actor = await gateImpersonator(req, res);
     if (!actor) return;
 
+    // Scope to the currently-viewed school (req.schoolId), not the full
+    // district. For plain Admins req.schoolId === actor.schoolId so the
+    // behavior is unchanged. For SuperUsers / DistrictAdmins, this means
+    // "show me staff in whichever school I just switched to via the
+    // tenancy switcher" — which is what the picker is being used for in
+    // practice (eg a SU at Parrott switches to TMS to test, then opens
+    // the picker expecting TMS teachers, not 1,000+ alphabetized names
+    // across 90 Hernando schools). The previous district-wide list made
+    // the picker useless when the actor's home school differed from the
+    // school they were trying to test in. The ?scope=district query param
+    // restores the old behavior for the rare case where you genuinely
+    // want to reach across schools without switching first.
+    const wantDistrict = req.query.scope === "district";
+    const canDistrict = actor.isSuperUser || actor.isDistrictAdmin;
+    const viewedSchoolId = req.schoolId ?? actor.schoolId;
     const scopeIds =
-      actor.isSuperUser || actor.isDistrictAdmin
+      wantDistrict && canDistrict
         ? await loadDistrictSchoolIds(actor.schoolId)
-        : [actor.schoolId];
+        : [viewedSchoolId];
 
     const rows = await db
       .select({
