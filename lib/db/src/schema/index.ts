@@ -66,3 +66,5 @@ export * from "./disciplineReasons";
 export * from "./schoolClosedDays";
 export * from "./issAcknowledgements";
 export * from "./studentEmergencyContacts";
+export * from "./separationReasonTags";
+export * from "./studentSeparations";

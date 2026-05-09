@@ -71,6 +71,7 @@ import tierPresetsRouter from "./tierPresets";
 import safetyPlansRouter from "./safetyPlans";
 import adminHubRouter from "./adminHub";
 import disciplineReasonsRouter from "./disciplineReasons";
+import separationsRouter from "./separations";
 import schoolClosedDaysRouter from "./schoolClosedDays";
 import studentReportPdfRouter from "./studentReportPdf";
 
@@ -148,6 +149,7 @@ router.use(tierPresetsRouter);
 router.use(safetyPlansRouter);
 router.use(adminHubRouter);
 router.use(disciplineReasonsRouter);
+router.use(separationsRouter);
 router.use(schoolClosedDaysRouter);
 router.use(studentReportPdfRouter);
 

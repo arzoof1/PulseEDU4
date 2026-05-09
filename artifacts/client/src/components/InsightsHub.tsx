@@ -25,7 +25,8 @@ export type InsightsTileId =
   | "equity"
   | "plans"
   | "interventions"
-  | "earlyWarning";
+  | "earlyWarning"
+  | "separations";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 

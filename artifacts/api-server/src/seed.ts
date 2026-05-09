@@ -885,6 +885,43 @@ export async function ensureAdminHubSchema() {
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS preview_target_staff_id INTEGER`,
   );
 
+  // ---- Separation Suggestions: per-school tag catalog + teacher-filed
+  // "do not pair" entries scoped to a class section. See
+  // lib/db/src/schema/separationReasonTags.ts and
+  // lib/db/src/schema/studentSeparations.ts for the full design notes.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS separation_reason_tags (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS separation_reason_tags_school_label_unique ON separation_reason_tags(school_id, label)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_separations (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      class_section_id INTEGER NOT NULL,
+      reporter_staff_id INTEGER NOT NULL,
+      student_a_id TEXT NOT NULL,
+      student_b_id TEXT NOT NULL,
+      school_year TEXT NOT NULL,
+      reason_tag_ids INTEGER[] NOT NULL DEFAULT '{}',
+      reason_note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_separations_pair_unique ON student_separations(class_section_id, reporter_staff_id, student_a_id, student_b_id, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_separations_by_school ON student_separations(school_id, school_year)`,
+  );
+
   // ---- iss_admin_logs (parent assignment record for blue-pill ISS) ----
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS iss_admin_logs (

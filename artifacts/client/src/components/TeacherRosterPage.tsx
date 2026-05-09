@@ -15,6 +15,7 @@
 
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import SuggestSeparationModal from "./SuggestSeparationModal";
 
 interface TeacherOpt {
   id: number;
@@ -1095,6 +1096,78 @@ export default function TeacherRosterPage({
 
   const periodOptions = data?.availablePeriods ?? [];
 
+  // ----- Separation Suggestions (per-period) -----
+  // The roster only knows the period number, but the Suggest-Separation
+  // modal needs the class_section_id. Resolve it once per (teacher,
+  // period) via a tiny lookup, then pull this teacher's existing flags
+  // for that section so we can show a "🚫 N" pill on each row that's
+  // already in a flagged pair.
+  const isOwnRoster = teacherId === defaultTeacherId;
+  const [sepSectionId, setSepSectionId] = useState<number | null>(null);
+  type SepRow = {
+    id: number;
+    studentAId: string;
+    studentBId: string;
+    reasonTagIds: number[];
+    reasonNote: string | null;
+  };
+  const [sepRows, setSepRows] = useState<SepRow[]>([]);
+  const [sepTick, setSepTick] = useState(0);
+  const [sepTarget, setSepTarget] = useState<{
+    studentId: string;
+    studentName: string;
+  } | null>(null);
+
+  useEffect(() => {
+    setSepSectionId(null);
+    setSepRows([]);
+    if (!isOwnRoster || period == null) return;
+    let cancelled = false;
+    authFetch(`/api/separations/section-for-period?period=${period}`)
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((j: { id: number } | null) => {
+        if (cancelled || !j) return;
+        setSepSectionId(j.id);
+      })
+      .catch(() => {
+        /* non-fatal: feature just stays hidden */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isOwnRoster, period]);
+
+  useEffect(() => {
+    if (sepSectionId == null) {
+      setSepRows([]);
+      return;
+    }
+    let cancelled = false;
+    authFetch(`/api/separations/my?classSectionId=${sepSectionId}`)
+      .then(async (r) => (r.ok ? r.json() : null))
+      .then((j: { separations: SepRow[] } | null) => {
+        if (cancelled || !j) return;
+        setSepRows(j.separations);
+      })
+      .catch(() => {
+        /* non-fatal */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sepSectionId, sepTick]);
+
+  // Per-student count of flagged pairs in the current period (for the
+  // "🚫 N" pill). Derived once from sepRows.
+  const sepCountByStudent = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const r of sepRows) {
+      m.set(r.studentAId, (m.get(r.studentAId) ?? 0) + 1);
+      m.set(r.studentBId, (m.get(r.studentBId) ?? 0) + 1);
+    }
+    return m;
+  }, [sepRows]);
+
   // Reset period when switching teachers if the new teacher doesn't
   // teach the previously-selected period.
   useEffect(() => {
@@ -1582,6 +1655,50 @@ export default function TeacherRosterPage({
                           <span>Spider</span>
                         </button>
                       )}
+                      {sepSectionId != null && (() => {
+                        const n = sepCountByStudent.get(row.studentId) ?? 0;
+                        return (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setSepTarget({
+                                studentId: row.studentId,
+                                studentName: `${row.firstName} ${row.lastName}`,
+                              })
+                            }
+                            title={
+                              n > 0
+                                ? `${n} separation suggestion${n === 1 ? "" : "s"} this period — click to edit`
+                                : "Suggest a separation for this student"
+                            }
+                            aria-label={
+                              n > 0
+                                ? `Edit separation suggestions for ${row.firstName} ${row.lastName}`
+                                : `Suggest separation for ${row.firstName} ${row.lastName}`
+                            }
+                            style={{
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 4,
+                              padding: "2px 8px",
+                              borderRadius: 999,
+                              border:
+                                n > 0
+                                  ? "1px solid #fdba74"
+                                  : "1px solid #cbd5e1",
+                              background: n > 0 ? "#fff7ed" : "white",
+                              color: n > 0 ? "#9a3412" : "#475569",
+                              fontSize: 11,
+                              fontWeight: 600,
+                              lineHeight: 1.2,
+                              cursor: "pointer",
+                            }}
+                          >
+                            <span aria-hidden="true">🚫</span>
+                            <span>{n > 0 ? `Don't pair · ${n}` : "Don't pair"}</span>
+                          </button>
+                        );
+                      })()}
                       {row.issToday && (
                         <span
                           title="On In-School Suspension today"
@@ -1655,6 +1772,15 @@ export default function TeacherRosterPage({
             </tbody>
           </table>
         </div>
+      )}
+      {sepTarget && sepSectionId != null && (
+        <SuggestSeparationModal
+          classSectionId={sepSectionId}
+          primaryStudentId={sepTarget.studentId}
+          primaryStudentName={sepTarget.studentName}
+          onClose={() => setSepTarget(null)}
+          onSaved={() => setSepTick((t) => t + 1)}
+        />
       )}
     </div>
   );

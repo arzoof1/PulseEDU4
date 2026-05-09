@@ -16,6 +16,8 @@ import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
+import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
+import SeparationTagsAdmin from "./components/SeparationTagsAdmin";
 import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
 import PbisHomePanel from "./components/PbisHomePanel";
@@ -3923,6 +3925,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "logIntervention",
   },
   {
+    id: "separations",
+    icon: "🚫",
+    title: "Separation Suggestions",
+    subtitle:
+      "Pairs of students teachers have asked you to keep apart in next year's schedule. Filter by grade and reason; drill in for the per-student timeline.",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "separationSuggestions",
+  },
+  {
     id: "earlyWarning",
     icon: "🚨",
     title: "Early Warning",
@@ -4369,6 +4381,7 @@ function App() {
     | "interventionReports"
     | "myInterventions"
     | "adminHub"
+    | "separationSuggestions"
   >("hallPasses");
   // Selected student for the Insights → StudentProfile drill-in. Set by
   // a row click in InsightsWatchlist OR the Spider pill on the Teacher
@@ -18544,6 +18557,30 @@ function App() {
                 group: "admin-tenancy",
               });
             }
+            // Separation reason tags — curated by the scheduling team
+            // (Admin / DA / SU / Behavior Specialist / Counselor /
+            // Guidance Counselor / Dean / School Psychologist / MTSS
+            // Coordinator). Mirrors the server gate in routes/separations.ts.
+            if (
+              isAdmin ||
+              isDistrictAdmin ||
+              isSuperUser ||
+              isBehaviorSpec ||
+              Boolean(authUser?.isCounselor) ||
+              Boolean(authUser?.isGuidanceCounselor) ||
+              Boolean(authUser?.isDean) ||
+              Boolean(authUser?.isSchoolPsychologist) ||
+              Boolean(authUser?.isMtssCoordinator)
+            ) {
+              tiles.push({
+                id: "separation-tags",
+                icon: "🚫",
+                title: "Separation Reason Tags",
+                subtitle:
+                  "Curate the dropdown teachers use when flagging two students who shouldn't be paired in the schedule.",
+                group: "feature-config",
+              });
+            }
             // QA tool: swap your session to view PulseEDU as another staff
             // member. Server enforces the same Admin/DA/SU gate.
             if (isAdmin || isDistrictAdmin || isSuperUser) {
@@ -18588,6 +18625,17 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "staff-preview" && (isAdmin || isDistrictAdmin || isSuperUser) && (
         <StaffPreviewPage />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "separation-tags" && (
+        <div className="card" style={{ marginBottom: "1rem" }}>
+          <h2 style={{ marginTop: 0 }}>Separation Reason Tags</h2>
+          <SeparationTagsAdmin />
+        </div>
+      )}
+
+      {activeSection === "separationSuggestions" && (
+        <SeparationSuggestionsPage onBack={() => setActiveSection("insights")} />
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (

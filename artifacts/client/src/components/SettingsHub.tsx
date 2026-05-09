@@ -20,7 +20,8 @@ export type SettingsTileId =
   | "school-wide-expectations"
   | "intervention-strategies"
   | "iss-settings"
-  | "staff-preview";
+  | "staff-preview"
+  | "separation-tags";
 
 export type SettingsGroupId =
   | "hall-pass-ops"
