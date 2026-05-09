@@ -230,8 +230,15 @@ router.post(
         impersonatorId = req.staffId;
       }
     }
+    // Idempotent: if there's no impersonation in flight, this is a no-op
+    // success rather than an error. The previous 400 response stranded
+    // users whose React state still showed the "Previewing as…" banner
+    // even though their session/bearer had already rotated back to a
+    // direct sign-in (the server-side pointer was already cleared, but
+    // the cached /auth/me response was stale). Returning 200 lets the
+    // client always reload and resync against /auth/me.
     if (!impersonatorId) {
-      res.status(400).json({ error: "Not currently previewing" });
+      res.json({ ok: true, redirectTo: "/", wasPreviewing: false });
       return;
     }
     await db
@@ -239,7 +246,7 @@ router.post(
       .set({ previewTargetStaffId: null })
       .where(eq(staffTable.id, impersonatorId));
 
-    res.json({ ok: true, redirectTo: "/" });
+    res.json({ ok: true, redirectTo: "/", wasPreviewing: true });
   },
 );
 

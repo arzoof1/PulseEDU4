@@ -8179,6 +8179,11 @@ function App() {
         <div
           role="status"
           style={{
+            // Sticky so the Exit button is always reachable even if the
+            // user has scrolled or the page header tries to overlap.
+            position: "sticky",
+            top: 0,
+            zIndex: 1000,
             background: "#fef3c7",
             color: "#78350f",
             padding: "6px 16px",
@@ -8186,13 +8191,26 @@ function App() {
             alignItems: "center",
             gap: 12,
             justifyContent: "space-between",
-            flexWrap: "wrap",
+            // No wrap: keep the button on the same row as the label so
+            // it can never get hidden under the header on narrow widths.
+            // The label gets ellipsis truncation via min-width:0 + the
+            // inner span's overflow rules below.
+            flexWrap: "nowrap",
             fontSize: 12.5,
             lineHeight: 1.4,
             borderBottom: "1px solid #f59e0b",
           }}
         >
-          <span style={{ display: "inline-flex", alignItems: "center", gap: 8, minWidth: 0 }}>
+          <span
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 8,
+              minWidth: 0,
+              flex: "1 1 auto",
+              overflow: "hidden",
+            }}
+          >
             <span
               aria-hidden="true"
               style={{
@@ -8204,7 +8222,14 @@ function App() {
                 flexShrink: 0,
               }}
             />
-            <span>
+            <span
+              style={{
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+                minWidth: 0,
+              }}
+            >
               Previewing as <strong>{authUser.displayName}</strong>
               <span style={{ opacity: 0.7 }}>
                 {" "}— signed in as {authUser.impersonatorDisplayName}
@@ -8214,21 +8239,26 @@ function App() {
           <button
             type="button"
             onClick={async () => {
+              // Always reload after attempting the end call. The server
+              // is now idempotent — if there was no preview to clear
+              // (e.g. the cached banner was stale because the auth token
+              // had already rotated), it returns 200 anyway, and the
+              // reload lets /api/auth/me give the React state the truth.
+              // Any genuine network failure still falls through to the
+              // alert so the user knows to try again.
               try {
-                // Server-side state lives in staff.preview_target_staff_id;
-                // the end endpoint clears it on the impersonator's row and
-                // the next request resolves to the real account again.
                 const r = await authFetch("/api/admin/staff-preview/end", {
                   method: "POST",
                 });
-                if (!r.ok) {
+                if (!r.ok && r.status !== 400) {
                   alert("Could not return: " + (await r.text()));
                   return;
                 }
-                window.location.href = "/";
               } catch (err) {
                 alert("Could not return: " + (err as Error).message);
+                return;
               }
+              window.location.href = "/";
             }}
             style={{
               background: "#fff",
@@ -8240,6 +8270,7 @@ function App() {
               fontWeight: 600,
               fontSize: 12,
               whiteSpace: "nowrap",
+              flexShrink: 0,
             }}
           >
             Exit preview
