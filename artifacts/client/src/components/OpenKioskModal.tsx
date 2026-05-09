@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 // Same key Kiosk.tsx and KioskBanner.tsx use. Storing it from the staff
 // app side is what makes "Open in new tab → already activated" work.
@@ -70,10 +71,13 @@ export function OpenKioskModal({ onClose }: { onClose: () => void }) {
       deviceLabel: getDeviceLabel(),
       ...extra,
     };
-    const res = await fetch("/api/kiosk/quick-activate", {
+    // authFetch attaches the Bearer token from sessionStorage. The bare
+    // session cookie isn't reliable inside the Replit preview iframe, so
+    // without this the request lands without a staffId and the server
+    // returns 401 "Sign-in required" — looked like a dead button.
+    const res = await authFetch("/api/kiosk/quick-activate", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      credentials: "include",
       body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));

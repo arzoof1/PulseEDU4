@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import QRCode from "qrcode";
+import { authFetch } from "../lib/authToken";
 
 // "Companion Queue Panel" — a small dashboard inside the staff app that
 // surfaces every live kiosk waiting line the signed-in user is allowed
@@ -92,9 +93,7 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
     if (loadingRef.current) return;
     loadingRef.current = true;
     try {
-      const res = await fetch("/api/hall-pass-queue", {
-        credentials: "include",
-      });
+      const res = await authFetch("/api/hall-pass-queue");
       if (!res.ok) {
         // Silent retry on every non-OK status. 401 = not signed in
         // (panel is irrelevant); 5xx/502 = api restart blip and the
@@ -155,10 +154,9 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
     [orderedIds[idx], orderedIds[swap]] = [orderedIds[swap]!, orderedIds[idx]!];
     setBusy(entryId);
     try {
-      const res = await fetch("/api/hall-pass-queue/reorder", {
+      const res = await authFetch("/api/hall-pass-queue/reorder", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        credentials: "include",
         body: JSON.stringify({
           kioskActivationId: target.kioskActivationId,
           orderedIds,
@@ -179,9 +177,8 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
   async function remove(entryId: number) {
     setBusy(entryId);
     try {
-      const res = await fetch(`/api/hall-pass-queue/${entryId}`, {
+      const res = await authFetch(`/api/hall-pass-queue/${entryId}`, {
         method: "DELETE",
-        credentials: "include",
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -450,10 +447,9 @@ function ViewerQrModal({
     let cancelled = false;
     (async () => {
       try {
-        const res = await fetch("/api/kiosk/viewer-token", {
+        const res = await authFetch("/api/kiosk/viewer-token", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          credentials: "include",
           body: JSON.stringify({ room }),
         });
         if (cancelled) return;
