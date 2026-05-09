@@ -9260,7 +9260,8 @@ function App() {
               .filter((p) => p.status === "active")
               .filter((p) =>
                 passFilter === "mine"
-                  ? p.teacherName === currentStaffUser
+                  ? p.teacherName === currentStaffUser ||
+                    p.teacherName === `${currentStaffUser} (K)`
                   : true,
               )
               .sort(
@@ -9406,7 +9407,8 @@ function App() {
                 )
                 .filter((p) =>
                   passFilter === "mine"
-                    ? p.teacherName === currentStaffUser
+                    ? p.teacherName === currentStaffUser ||
+                      p.teacherName === `${currentStaffUser} (K)`
                     : true,
                 )
                 .map((p) => {
