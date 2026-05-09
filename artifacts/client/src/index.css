@@ -1820,6 +1820,227 @@ ul[style*="listStyle: none"] li button:hover {
   }
 }
 
+/* ---- Slot reel ---------------------------------------------------------- */
+/* A horizontal tape of names slides leftward past a fixed center pointer.
+   Edge fades sell the speed; the pointer (golden frame at center) is
+   where the winner lands. The strip's transform is animated inline by
+   React with a long ease-out cubic-bezier — no @keyframes here. */
+.spotlight-reel-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+.spotlight-reel-window {
+  position: relative;
+  max-width: 100%;
+  height: 110px;
+  overflow: hidden;
+  background: linear-gradient(180deg, #0f172a, #1e293b);
+  border: 2px solid #1e293b;
+  border-radius: 14px;
+  box-shadow:
+    inset 0 0 24px rgba(0, 0, 0, 0.55),
+    0 6px 16px rgba(15, 23, 42, 0.25);
+}
+/* The center pointer is the visible "winner box" — golden frame, sits
+   over the moving strip. */
+.spotlight-reel-pointer {
+  position: absolute;
+  left: 50%;
+  top: 4px;
+  bottom: 4px;
+  transform: translateX(-50%);
+  border: 3px solid #facc15;
+  border-radius: 10px;
+  box-shadow:
+    0 0 14px rgba(250, 204, 21, 0.6),
+    inset 0 0 14px rgba(250, 204, 21, 0.15);
+  pointer-events: none;
+  z-index: 2;
+}
+.spotlight-reel-strip {
+  display: flex;
+  align-items: center;
+  height: 100%;
+  /* will-change hint for the long translate animation */
+  will-change: transform;
+}
+.spotlight-reel-slot {
+  flex: 0 0 auto;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #f8fafc;
+  font-weight: 700;
+  text-align: center;
+  padding: 0 0.5rem;
+  border-right: 1px solid rgba(255, 255, 255, 0.06);
+}
+.spotlight-reel-slot-name {
+  font-size: 1.15rem;
+  line-height: 1.15;
+}
+.spotlight-reel-slot-last {
+  font-size: 0.85rem;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+/* Side fades: gradient overlays mask the leftmost / rightmost slots so
+   the speeding tape blurs out toward the edges. */
+.spotlight-reel-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 18%;
+  pointer-events: none;
+  z-index: 1;
+}
+.spotlight-reel-fade-l {
+  left: 0;
+  background: linear-gradient(90deg, #0f172a 0%, rgba(15, 23, 42, 0) 100%);
+}
+.spotlight-reel-fade-r {
+  right: 0;
+  background: linear-gradient(270deg, #0f172a 0%, rgba(15, 23, 42, 0) 100%);
+}
+
+/* ---- Spotlight sweep ---------------------------------------------------- */
+/* Yearbook-style grid of names on a dark stage. A bright cone sweeps
+   across the grid in a wandering path then locks onto the winner cell.
+   The winner cell brightens late (via .is-winner-spot's delayed
+   keyframes) so the answer isn't given away up front. */
+.spotlight-grid-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1rem;
+  width: 100%;
+}
+.spotlight-grid-stage {
+  position: relative;
+  width: 100%;
+  min-height: 320px;
+  padding: 1.25rem;
+  background: linear-gradient(160deg, #0f172a 0%, #1e1b4b 100%);
+  border-radius: 14px;
+  overflow: hidden;
+  box-shadow: inset 0 0 40px rgba(0, 0, 0, 0.5);
+}
+.spotlight-grid {
+  display: grid;
+  gap: 0.5rem;
+  position: relative;
+  z-index: 1;
+}
+.spotlight-grid-cell {
+  background: rgba(255, 255, 255, 0.04);
+  color: #94a3b8;
+  padding: 0.6rem 0.4rem;
+  text-align: center;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  min-height: 56px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  transition:
+    background 0.4s ease,
+    color 0.4s ease,
+    transform 0.4s ease,
+    box-shadow 0.4s ease;
+}
+.spotlight-grid-cell-first {
+  font-weight: 700;
+  font-size: 0.95rem;
+  line-height: 1.1;
+}
+.spotlight-grid-cell-last {
+  font-size: 0.75rem;
+  opacity: 0.7;
+  margin-top: 2px;
+}
+/* Winner cell: darkened with everyone else for most of the sweep, then
+   pops bright gold near the end as the spotlight "locks on". The
+   keyframe percentages are tied to the 4s ANIM_DURATION_MS. */
+.spotlight-grid-cell.is-winner-spot {
+  animation: spotlight-cell-reveal 4s cubic-bezier(0.4, 0.1, 0.2, 1) forwards;
+  z-index: 3;
+  position: relative;
+}
+@keyframes spotlight-cell-reveal {
+  0%,
+  82% {
+    background: rgba(255, 255, 255, 0.04);
+    color: #94a3b8;
+    transform: scale(1);
+    box-shadow: none;
+  }
+  92%,
+  100% {
+    background: linear-gradient(135deg, #fde047, #facc15);
+    color: #0f172a;
+    transform: scale(1.18);
+    box-shadow: 0 0 36px rgba(250, 204, 21, 0.7);
+  }
+}
+/* The cone is an absolutely-positioned bright disc that uses
+   mix-blend-mode: screen so it visually "lights up" the cells under it.
+   The `--target-x/y` CSS vars (set inline by React from the winner cell
+   coords) define the final landing point of the sweep. The keyframe
+   percentages keep the cone wandering until ~75% then settle on the
+   target so it lines up with the cell-reveal flash above. */
+.spotlight-cone {
+  position: absolute;
+  width: 220px;
+  height: 220px;
+  margin-left: -110px;
+  margin-top: -110px;
+  background: radial-gradient(
+    circle,
+    rgba(254, 243, 199, 0.65) 0%,
+    rgba(254, 243, 199, 0.28) 30%,
+    rgba(254, 243, 199, 0.08) 55%,
+    transparent 70%
+  );
+  pointer-events: none;
+  mix-blend-mode: screen;
+  filter: blur(2px);
+  z-index: 2;
+  animation: spotlight-sweep 4s cubic-bezier(0.4, 0.1, 0.2, 1) forwards;
+}
+@keyframes spotlight-sweep {
+  0% {
+    left: 22%;
+    top: 25%;
+  }
+  18% {
+    left: 78%;
+    top: 30%;
+  }
+  35% {
+    left: 38%;
+    top: 78%;
+  }
+  52% {
+    left: 82%;
+    top: 62%;
+  }
+  68% {
+    left: 28%;
+    top: 48%;
+  }
+  82%,
+  100% {
+    left: var(--target-x);
+    top: var(--target-y);
+  }
+}
+
 /* ---- Pick / spin button ---- */
 .spotlight-spin-btn {
   background: linear-gradient(135deg, #1d4ed8, #4f46e5);

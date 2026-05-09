@@ -43,8 +43,42 @@ interface PickResult {
   poolSize: number;
 }
 
-type AnimStyle = "wheel" | "bottles";
+type AnimStyle = "wheel" | "bottles" | "reel" | "spotlight";
 const STYLE_STORAGE_KEY = "pulseedu.spotlight.style";
+
+// Slot-reel layout constants. The strip is one long horizontal tape of
+// names; the winner is forced into REEL_WINNER_INDEX so the strip can
+// scroll a long way before stopping. Tweaking these affects how many
+// names whiz past before the deceleration begins.
+const REEL_TOTAL_SLOTS = 60;
+const REEL_WINNER_INDEX = 50;
+const REEL_SLOT_WIDTH = 160;
+const REEL_VISIBLE_SLOTS = 5;
+
+// Build a long, mostly-random strip of names with the winner forced into
+// the late REEL_WINNER_INDEX position. The fillers are sampled from the
+// pool with replacement — duplicates are fine, even desirable, because
+// they read as "the reel is whirring past random names" rather than a
+// curated list.
+function buildReelSlots(
+  pool: { studentId: string; firstName: string | null; lastName: string | null }[],
+  winnerId: string,
+) {
+  if (pool.length === 0) return [];
+  const winner = pool.find(
+    (s) => s.studentId.toUpperCase() === winnerId.toUpperCase(),
+  );
+  if (!winner) return pool.slice(0, REEL_TOTAL_SLOTS);
+  const slots = [];
+  for (let i = 0; i < REEL_TOTAL_SLOTS; i++) {
+    if (i === REEL_WINNER_INDEX) {
+      slots.push(winner);
+    } else {
+      slots.push(pool[Math.floor(Math.random() * pool.length)]);
+    }
+  }
+  return slots;
+}
 // Total animation runtime. Keep in lockstep with the CSS keyframe
 // durations on `.bottle-winner` / `.bottle-miss` (and the wheel spin) —
 // the React timer that flips state from "animating" → "result" must
@@ -64,6 +98,10 @@ type SpinState =
       // the winner.
       targetIndex: number;
       bottleSlots?: RosterStudent[];
+      // Long pre-built strip of names for the slot-reel animation. Winner
+      // sits at a fixed index (`REEL_WINNER_INDEX`) so the strip can scroll
+      // a long way before settling. Only set when animStyle === "reel".
+      reelSlots?: RosterStudent[];
     }
   | { kind: "result"; pick: PickResult };
 
@@ -112,7 +150,10 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   const [animStyle, setAnimStyle] = useState<AnimStyle>(() => {
     if (typeof window === "undefined") return "wheel";
     const saved = window.localStorage.getItem(STYLE_STORAGE_KEY);
-    return saved === "bottles" ? "bottles" : "wheel";
+    if (saved === "bottles" || saved === "reel" || saved === "spotlight") {
+      return saved;
+    }
+    return "wheel";
   });
   // Wheel rotation accumulates so the wheel keeps spinning the same
   // direction across multiple picks rather than snapping back to 0.
@@ -372,6 +413,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         (r) => !skipSet.has(r.studentId.toUpperCase()),
       );
       let bottleSlots: RosterStudent[] | undefined;
+      let reelSlots: RosterStudent[] | undefined;
       let targetIndex: number;
       if (animStyle === "wheel") {
         targetIndex = animationRoster.findIndex(
@@ -392,6 +434,19 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         const target = turns * 360 + (360 - centerOfWedge) + jitter;
         // Accumulate so we keep spinning the same direction.
         setWheelRotation((prev) => prev + target);
+      } else if (animStyle === "reel") {
+        // Slot-reel: build a long strip of random fillers with the
+        // winner forced into a known late position. The animation
+        // scrolls the strip from slot 0 → slot REEL_WINNER_INDEX so
+        // the eye sees a long deceleration before the winner lands
+        // under the center pointer.
+        reelSlots = buildReelSlots(animationRoster, winnerId);
+        targetIndex = REEL_WINNER_INDEX;
+      } else if (animStyle === "spotlight") {
+        targetIndex = animationRoster.findIndex(
+          (r) => r.studentId.toUpperCase() === winnerId,
+        );
+        if (targetIndex < 0) targetIndex = 0;
       } else {
         bottleSlots = buildBottleSlots(animationRoster, winnerId);
         targetIndex = bottleSlots.findIndex(
@@ -404,6 +459,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         pick: result,
         targetIndex,
         bottleSlots,
+        reelSlots,
       });
       animTimerRef.current = setTimeout(() => {
         setSpin({ kind: "result", pick: result });
@@ -486,6 +542,22 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
               title="Water-bottle flip"
             >
               🥤 Bottles
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnimStyle("reel")}
+              className={animStyle === "reel" ? "active" : ""}
+              title="Slot reel"
+            >
+              🎰 Reel
+            </button>
+            <button
+              type="button"
+              onClick={() => setAnimStyle("spotlight")}
+              className={animStyle === "spotlight" ? "active" : ""}
+              title="Spotlight sweep"
+            >
+              🔦 Spotlight
             </button>
           </div>
           {isAdmin && (
@@ -673,6 +745,52 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
                 ? "Loading…"
                 : spin.kind === "animating"
                   ? "Spinning…"
+                  : null
+            }
+          />
+        ) : animStyle === "reel" ? (
+          <Reel
+            slots={
+              spin.kind === "animating" && spin.reelSlots
+                ? spin.reelSlots
+                : eligibleRoster.slice(0, REEL_VISIBLE_SLOTS)
+            }
+            winnerIndex={
+              spin.kind === "animating" ? spin.targetIndex : -1
+            }
+            spinning={spin.kind === "animating" || spin.kind === "loading"}
+            onPick={() => void pick()}
+            disabled={
+              eligibleRoster.length === 0 ||
+              spin.kind === "loading" ||
+              spin.kind === "animating"
+            }
+            statusLabel={
+              spin.kind === "loading"
+                ? "Loading…"
+                : spin.kind === "animating"
+                  ? "Rolling…"
+                  : null
+            }
+          />
+        ) : animStyle === "spotlight" ? (
+          <SpotlightSweep
+            roster={eligibleRoster}
+            winnerIndex={
+              spin.kind === "animating" ? spin.targetIndex : -1
+            }
+            spinning={spin.kind === "animating" || spin.kind === "loading"}
+            onPick={() => void pick()}
+            disabled={
+              eligibleRoster.length === 0 ||
+              spin.kind === "loading" ||
+              spin.kind === "animating"
+            }
+            statusLabel={
+              spin.kind === "loading"
+                ? "Loading…"
+                : spin.kind === "animating"
+                  ? "Searching…"
                   : null
             }
           />
@@ -952,6 +1070,184 @@ function Bottles({
         className="spotlight-spin-btn"
       >
         {statusLabel ?? "Flip the bottles"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Slot reel
+// ---------------------------------------------------------------------------
+// Casino-style horizontal reel: a long strip of names scrolls leftward
+// past a fixed center pointer, decelerating into the winner. The strip
+// is built upstream in `buildReelSlots` with the winner forced into
+// REEL_WINNER_INDEX, so all this component does is translate the strip
+// from "slot 0 centered" → "winner slot centered" with one fat
+// ease-out cubic-bezier transition.
+
+interface ReelProps {
+  slots: RosterStudent[];
+  winnerIndex: number;
+  spinning: boolean;
+  onPick: () => void;
+  disabled: boolean;
+  statusLabel: string | null;
+}
+
+function Reel({
+  slots,
+  winnerIndex,
+  spinning,
+  onPick,
+  disabled,
+  statusLabel,
+}: ReelProps) {
+  const windowWidth = REEL_SLOT_WIDTH * REEL_VISIBLE_SLOTS;
+  // To put slot `i` under the center pointer the strip must translate
+  // by (windowCenter − slotCenter). When idle, center slot 0 so the
+  // reel doesn't appear shifted off-screen at rest.
+  const startTx = windowWidth / 2 - REEL_SLOT_WIDTH / 2;
+  const targetIdx = winnerIndex >= 0 ? winnerIndex : 0;
+  const targetTx =
+    windowWidth / 2 - targetIdx * REEL_SLOT_WIDTH - REEL_SLOT_WIDTH / 2;
+  const tx = spinning ? targetTx : startTx;
+
+  return (
+    <div className="spotlight-reel-wrap">
+      <div className="spotlight-reel-window" style={{ width: windowWidth }}>
+        {/* Center highlight frame stays put; the strip slides under it. */}
+        <div
+          className="spotlight-reel-pointer"
+          style={{ width: REEL_SLOT_WIDTH }}
+          aria-hidden
+        />
+        <div
+          className="spotlight-reel-strip"
+          style={{
+            transform: `translateX(${tx}px)`,
+            transition: spinning
+              ? `transform ${ANIM_DURATION_MS}ms cubic-bezier(0.15, 0.6, 0.15, 1)`
+              : "none",
+          }}
+        >
+          {slots.map((s, i) => (
+            <div
+              key={`${s.studentId}-${i}`}
+              className="spotlight-reel-slot"
+              style={{ width: REEL_SLOT_WIDTH }}
+            >
+              <div className="spotlight-reel-slot-name">
+                {s.firstName ?? s.studentId}
+              </div>
+              {s.lastName && (
+                <div className="spotlight-reel-slot-last">
+                  {s.lastName[0]}.
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        {/* Edge fades — the strip blurs out toward the sides so the
+            speeding tape reads as motion rather than a discrete list. */}
+        <div className="spotlight-reel-fade spotlight-reel-fade-l" aria-hidden />
+        <div className="spotlight-reel-fade spotlight-reel-fade-r" aria-hidden />
+      </div>
+      <button
+        type="button"
+        onClick={onPick}
+        disabled={disabled}
+        className="spotlight-spin-btn"
+      >
+        {statusLabel ?? "Pull the lever"}
+      </button>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Spotlight sweep
+// ---------------------------------------------------------------------------
+// Yearbook-style grid of names on a dark stage. A bright "spotlight"
+// circle sweeps in a lazy path across the grid, finally settling on the
+// winner cell. The winner cell brightens to gold late in the animation
+// (via a delayed cell keyframe) so the audience sees the spotlight
+// "lock on" rather than learning the answer up front.
+
+interface SpotlightSweepProps {
+  roster: RosterStudent[];
+  winnerIndex: number;
+  spinning: boolean;
+  onPick: () => void;
+  disabled: boolean;
+  statusLabel: string | null;
+}
+
+function SpotlightSweep({
+  roster,
+  winnerIndex,
+  spinning,
+  onPick,
+  disabled,
+  statusLabel,
+}: SpotlightSweepProps) {
+  // Pick a sensible columns count. Square-ish but capped at 6 columns
+  // so cells don't get too narrow on phones. Below 6 students we use
+  // the roster size directly so we don't end up with empty cells.
+  const cols = Math.min(
+    6,
+    roster.length <= 6 ? Math.max(1, roster.length) : Math.ceil(Math.sqrt(roster.length)),
+  );
+  const rows = Math.max(1, Math.ceil(roster.length / cols));
+  const winnerCol = winnerIndex >= 0 ? winnerIndex % cols : 0;
+  const winnerRow = winnerIndex >= 0 ? Math.floor(winnerIndex / cols) : 0;
+  // Target cell center as a percentage of the stage (left/top accept %
+  // relative to the parent, which is what we want for the cone overlay).
+  const targetX = `${((winnerCol + 0.5) * 100) / cols}%`;
+  const targetY = `${((winnerRow + 0.5) * 100) / rows}%`;
+
+  return (
+    <div className="spotlight-grid-wrap">
+      <div className="spotlight-grid-stage">
+        <div
+          className="spotlight-grid"
+          style={{ gridTemplateColumns: `repeat(${cols}, 1fr)` }}
+        >
+          {roster.map((s, i) => (
+            <div
+              key={s.studentId}
+              className={`spotlight-grid-cell${
+                spinning && i === winnerIndex ? " is-winner-spot" : ""
+              }`}
+            >
+              <div className="spotlight-grid-cell-first">
+                {s.firstName ?? s.studentId}
+              </div>
+              {s.lastName && (
+                <div className="spotlight-grid-cell-last">{s.lastName}</div>
+              )}
+            </div>
+          ))}
+        </div>
+        {spinning && (
+          <div
+            className="spotlight-cone"
+            style={
+              {
+                "--target-x": targetX,
+                "--target-y": targetY,
+              } as React.CSSProperties
+            }
+            aria-hidden
+          />
+        )}
+      </div>
+      <button
+        type="button"
+        onClick={onPick}
+        disabled={disabled}
+        className="spotlight-spin-btn"
+      >
+        {statusLabel ?? "Sweep the spotlight"}
       </button>
     </div>
   );
