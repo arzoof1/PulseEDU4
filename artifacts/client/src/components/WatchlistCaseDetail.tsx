@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowLeft,
+  ChevronDown,
   ChevronRight,
   Plus,
   Shield,
@@ -9,6 +10,7 @@ import {
 } from "lucide-react";
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
+import VoiceTextarea from "./watchlist/VoiceTextarea";
 import {
   ROLE_META,
   WL_COLORS as C,
@@ -67,11 +69,24 @@ interface NoteRow {
   createdAt: string;
 }
 
+interface StatementRow {
+  id: number;
+  interactionId: number;
+  studentId: string;
+  status: string;
+  body: string;
+  requestedByName: string | null;
+  requestedAt: string;
+  remindCount: number;
+  completedAt: string | null;
+}
+
 interface Resp {
   case: CaseRow;
   incidents: Incident[];
   players: Player[];
   notes: NoteRow[];
+  statements: StatementRow[];
 }
 
 interface StudentHit {
@@ -95,6 +110,92 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
+  const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
+  const [stmtDrafts, setStmtDrafts] = useState<Record<string, string>>({});
+  const [stmtBusy, setStmtBusy] = useState<string | null>(null);
+  // Forward ref so the statement action helpers (defined above the
+  // useCallback that owns reload()) can trigger a refresh without hitting
+  // the temporal-dead-zone on the const.
+  const reloadRef = useRef<(() => Promise<void>) | null>(null);
+
+  const draftKey = (sid: string, iid: number) => `${sid}:${iid}`;
+
+  const setDraft = (sid: string, iid: number, body: string) =>
+    setStmtDrafts((p) => ({ ...p, [draftKey(sid, iid)]: body }));
+
+  const saveStatementBody = async (statementId: number, body: string) => {
+    setStmtBusy(`save:${statementId}`);
+    try {
+      const r = await authFetch(`/api/watchlist/statements/${statementId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      });
+      if (!r.ok) throw new Error(await r.text());
+      await reloadRef.current?.();
+    } finally {
+      setStmtBusy(null);
+    }
+  };
+
+  const completeStatement = async (statementId: number, body: string) => {
+    setStmtBusy(`complete:${statementId}`);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/statements/${statementId}/complete`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ body }),
+        },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      await reloadRef.current?.();
+    } finally {
+      setStmtBusy(null);
+    }
+  };
+
+  const remindStatement = async (statementId: number) => {
+    setStmtBusy(`remind:${statementId}`);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/statements/${statementId}/remind`,
+        { method: "POST" },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      await reloadRef.current?.();
+    } finally {
+      setStmtBusy(null);
+    }
+  };
+
+  const requestStatement = async (
+    interactionId: number,
+    studentId: string,
+    body: string,
+  ) => {
+    setStmtBusy(`new:${interactionId}:${studentId}`);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/interactions/${interactionId}/statements`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ studentId, body }),
+        },
+      );
+      if (!r.ok) throw new Error(await r.text());
+      setStmtDrafts((p) => {
+        const n = { ...p };
+        delete n[draftKey(studentId, interactionId)];
+        return n;
+      });
+      await reloadRef.current?.();
+    } finally {
+      setStmtBusy(null);
+    }
+  };
 
   const reload = useCallback(async () => {
     setError(null);
@@ -109,6 +210,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   }, [caseId]);
 
   useEffect(() => {
+    reloadRef.current = reload;
     void reload();
   }, [reload]);
 
@@ -396,21 +498,24 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                   {data.notes.length} entries
                 </span>
               </div>
-              <div className="mt-3 flex gap-2">
-                <textarea
-                  value={noteText}
-                  onChange={(e) => setNoteText(e.target.value)}
-                  rows={2}
-                  placeholder="Add a note about a conversation, follow-up, or pattern…"
-                  className="flex-1 rounded-md border px-2 py-1.5 text-sm"
-                  style={{ borderColor: C.line, background: C.bg }}
-                />
+              <div className="mt-3 flex items-start gap-2">
+                <div className="flex-1">
+                  <VoiceTextarea
+                    value={noteText}
+                    onChange={setNoteText}
+                    rows={2}
+                    placeholder="Add a note about a conversation, follow-up, or pattern… (tap mic to dictate)"
+                    className="w-full rounded-md border px-2 py-1.5 text-sm"
+                    style={{ borderColor: C.line, background: C.bg }}
+                    brandColor={C.brand}
+                  />
+                </div>
                 <button
                   type="button"
                   onClick={addNote}
                   disabled={savingNote || !noteText.trim()}
-                  className="rounded-md px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-                  style={{ background: C.brand }}
+                  className="rounded-md px-3 py-1.5 text-sm font-bold disabled:opacity-50"
+                  style={{ background: C.brand, color: "#FFFFFF" }}
                 >
                   {savingNote ? "…" : "Add"}
                 </button>
@@ -471,40 +576,91 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                       Object.entries(p.counts).sort((a, b) => b[1] - a[1])[0]?.[0] ?? "peripheral";
                     const meta =
                       ROLE_META[(dominantRole as Role) ?? "peripheral"] ?? ROLE_META.peripheral;
+                    const isOpen = expandedPlayer === p.studentId;
+                    const playerIncidents = data.incidents.filter((inc) =>
+                      inc.participants.some((part) => part.studentId === p.studentId),
+                    );
+                    const playerStatements = (data.statements ?? []).filter(
+                      (s) => s.studentId === p.studentId,
+                    );
                     return (
                       <div
                         key={p.studentId}
-                        className="flex items-center gap-3 rounded-md border p-2"
+                        className="rounded-md border"
                         style={{ borderColor: C.line, background: C.bg }}
                       >
-                        <div
-                          className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold"
-                          style={{
-                            background: meta.soft,
-                            color: meta.color,
-                            border: `1.5px solid ${meta.color}`,
-                          }}
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setExpandedPlayer(isOpen ? null : p.studentId)
+                          }
+                          className="flex w-full items-center gap-3 p-2 text-left"
+                          aria-expanded={isOpen}
                         >
-                          {p.firstName.charAt(0)}
-                          {p.lastName.charAt(0)}
-                        </div>
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-semibold">
-                            {p.firstName} {p.lastName}
-                          </div>
+                          {isOpen ? (
+                            <ChevronDown
+                              className="h-4 w-4 shrink-0"
+                              style={{ color: C.inkSoft }}
+                            />
+                          ) : (
+                            <ChevronRight
+                              className="h-4 w-4 shrink-0"
+                              style={{ color: C.inkSoft }}
+                            />
+                          )}
                           <div
-                            className="text-[11px]"
-                            style={{ color: C.inkSoft }}
+                            className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-sm font-bold"
+                            style={{
+                              background: meta.soft,
+                              color: meta.color,
+                              border: `1.5px solid ${meta.color}`,
+                            }}
                           >
-                            Gr {p.grade ?? "?"} · {p.total} appearance{p.total === 1 ? "" : "s"}
+                            {p.firstName.charAt(0)}
+                            {p.lastName.charAt(0)}
                           </div>
-                        </div>
-                        <span
-                          className="rounded-full px-2 py-0.5 text-[10px] font-bold"
-                          style={{ background: meta.soft, color: meta.color }}
-                        >
-                          {meta.label}
-                        </span>
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-semibold">
+                              {p.firstName} {p.lastName}
+                            </div>
+                            <div
+                              className="text-[11px]"
+                              style={{ color: C.inkSoft }}
+                            >
+                              Gr {p.grade ?? "?"} · {p.total} appearance
+                              {p.total === 1 ? "" : "s"} ·{" "}
+                              {playerStatements.length} stmt
+                            </div>
+                          </div>
+                          <span
+                            className="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                            style={{ background: meta.soft, color: meta.color }}
+                          >
+                            {meta.label}
+                          </span>
+                        </button>
+                        {isOpen && (
+                          <div
+                            className="border-t px-3 py-3"
+                            style={{ borderColor: C.line, background: C.panel }}
+                          >
+                            <PlayerDrawer
+                              studentId={p.studentId}
+                              firstName={p.firstName}
+                              lastName={p.lastName}
+                              incidents={playerIncidents}
+                              statements={playerStatements}
+                              stmtDrafts={stmtDrafts}
+                              setDraft={setDraft}
+                              draftKey={draftKey}
+                              busy={stmtBusy}
+                              onSave={saveStatementBody}
+                              onComplete={completeStatement}
+                              onRemind={remindStatement}
+                              onRequest={requestStatement}
+                            />
+                          </div>
+                        )}
                       </div>
                     );
                   })
@@ -767,6 +923,197 @@ function AddPlayerModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PlayerDrawer
+// ---------------------------------------------------------------------------
+// Renders the expanded panel beneath a player pill: a compact list of the
+// case's incidents that involve this student, plus the witness statements
+// already requested for them. Each statement body is editable via the
+// VoiceTextarea (so a Core Team member can transcribe a verbal account live
+// from the student) with Save (draft) / Mark complete / Remind buttons.
+// Incidents without a statement for this student show an inline "Capture
+// statement" form that creates one on Save.
+
+function PlayerDrawer({
+  studentId,
+  firstName,
+  lastName,
+  incidents,
+  statements,
+  stmtDrafts,
+  setDraft,
+  draftKey,
+  busy,
+  onSave,
+  onComplete,
+  onRemind,
+  onRequest,
+}: {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  incidents: Incident[];
+  statements: StatementRow[];
+  stmtDrafts: Record<string, string>;
+  setDraft: (sid: string, iid: number, body: string) => void;
+  draftKey: (sid: string, iid: number) => string;
+  busy: string | null;
+  onSave: (statementId: number, body: string) => Promise<void>;
+  onComplete: (statementId: number, body: string) => Promise<void>;
+  onRemind: (statementId: number) => Promise<void>;
+  onRequest: (
+    interactionId: number,
+    studentId: string,
+    body: string,
+  ) => Promise<void>;
+}) {
+  if (incidents.length === 0) {
+    return (
+      <div className="text-xs" style={{ color: C.inkSoft }}>
+        No incidents in this case yet for {firstName} {lastName}.
+      </div>
+    );
+  }
+  return (
+    <div className="space-y-3">
+      {incidents.map((inc) => {
+        const part = inc.participants.find((p) => p.studentId === studentId);
+        const role = (part?.role as Role) ?? "peripheral";
+        const meta = ROLE_META[role] ?? ROLE_META.peripheral;
+        const stmt = statements.find((s) => s.interactionId === inc.id);
+        const dKey = draftKey(studentId, inc.id);
+        const draft = stmtDrafts[dKey] ?? stmt?.body ?? "";
+        return (
+          <div
+            key={inc.id}
+            className="rounded-md border p-2"
+            style={{ borderColor: C.line, background: C.bg }}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {(() => {
+                    const sev = severityChipStyle(inc.severity);
+                    return (
+                      <span
+                        className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                        style={{ background: sev.bg, color: sev.fg }}
+                      >
+                        sev {inc.severity}
+                      </span>
+                    );
+                  })()}
+                  <span
+                    className="rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                    style={{ background: meta.soft, color: meta.color }}
+                  >
+                    {meta.label}
+                  </span>
+                  <span className="text-[11px]" style={{ color: C.inkSoft }}>
+                    {inc.occurredDate}
+                    {inc.location ? ` · ${inc.location}` : ""}
+                  </span>
+                </div>
+                <div
+                  className="mt-1 text-xs"
+                  style={{ color: C.ink }}
+                >
+                  {inc.summary}
+                </div>
+              </div>
+              {stmt &&
+                (() => {
+                  const sp = statusPillStyle(stmt.status);
+                  return (
+                    <span
+                      className="shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-bold"
+                      style={{ background: sp.bg, color: sp.fg }}
+                    >
+                      {sp.label}
+                    </span>
+                  );
+                })()}
+            </div>
+
+            <div className="mt-2">
+              <div
+                className="mb-1 text-[10px] font-semibold uppercase tracking-wider"
+                style={{ color: C.inkSoft }}
+              >
+                Witness statement{" "}
+                <span className="font-normal normal-case opacity-70">
+                  (mic to dictate)
+                </span>
+              </div>
+              <VoiceTextarea
+                value={draft}
+                onChange={(v) => setDraft(studentId, inc.id, v)}
+                rows={3}
+                placeholder={`What did ${firstName} see or do?`}
+                className="w-full rounded-md border px-2 py-1.5 text-xs"
+                style={{ borderColor: C.line, background: C.panel }}
+                brandColor={C.brand}
+              />
+              <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                {stmt ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => void onSave(stmt.id, draft)}
+                      disabled={busy?.startsWith("save:") || draft === stmt.body}
+                      className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                      style={{ borderColor: C.line, color: C.ink }}
+                    >
+                      Save draft
+                    </button>
+                    {stmt.status !== "completed" && (
+                      <button
+                        type="button"
+                        onClick={() => void onComplete(stmt.id, draft)}
+                        disabled={
+                          !draft.trim() || busy?.startsWith("complete:")
+                        }
+                        className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+                        style={{ background: C.brand, color: "#FFFFFF" }}
+                      >
+                        Mark complete
+                      </button>
+                    )}
+                    {stmt.status !== "completed" && (
+                      <button
+                        type="button"
+                        onClick={() => void onRemind(stmt.id)}
+                        disabled={busy?.startsWith("remind:")}
+                        className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                        style={{ borderColor: C.line, color: C.inkSoft }}
+                      >
+                        Remind ({stmt.remindCount})
+                      </button>
+                    )}
+                    <span className="text-[10px]" style={{ color: C.inkSoft }}>
+                      Requested by {stmt.requestedByName ?? "—"}
+                    </span>
+                  </>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void onRequest(inc.id, studentId, draft)}
+                    disabled={busy?.startsWith(`new:${inc.id}:${studentId}`)}
+                    className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+                    style={{ background: C.brand, color: "#FFFFFF" }}
+                  >
+                    {draft.trim() ? "Save statement" : "Request statement"}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })}
     </div>
   );
 }

@@ -44,6 +44,7 @@ import {
   interactionCasesTable,
   interactionCaseNotesTable,
   witnessStatementsTable,
+  interactionQuickEntriesTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -1197,6 +1198,71 @@ export async function ensureWatchlistSchema() {
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_alert_dismissals_school_idx ON interaction_alert_dismissals(school_id)`);
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_alert_dismissals_active_idx ON interaction_alert_dismissals(school_id, rule_kind, subject_student_id, subject_key)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_quick_entries (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      severity INTEGER NOT NULL DEFAULT 2,
+      location TEXT NOT NULL DEFAULT '',
+      summary_template TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_by_name TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_quick_entries_school_idx ON interaction_quick_entries(school_id)`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_quick_entries_school_label_idx ON interaction_quick_entries(school_id, label)`);
+}
+
+// Per-school default quick-entry catalog. Idempotent: only seeds when
+// the school has zero entries. Safe to re-run every boot.
+export async function seedWatchlistQuickEntriesIfEmpty(): Promise<void> {
+  await ensureWatchlistSchema();
+  const schools = await db.select().from(schoolsTable);
+  const defaults: Array<{
+    label: string;
+    kind: string;
+    severity: number;
+    location: string;
+    summaryTemplate: string;
+  }> = [
+    { label: "Hallway shove", kind: "verbal", severity: 2, location: "Hallway", summaryTemplate: "Brief shove between students in the hallway during passing period." },
+    { label: "Cafeteria verbal", kind: "verbal", severity: 2, location: "Cafeteria", summaryTemplate: "Verbal exchange in the cafeteria — words exchanged, no contact." },
+    { label: "Lunch line cut / dispute", kind: "verbal", severity: 1, location: "Cafeteria", summaryTemplate: "Lunch line dispute — staff intervened." },
+    { label: "Classroom disruption", kind: "class_disruption", severity: 2, location: "Classroom", summaryTemplate: "Disruption during class — student redirected." },
+    { label: "Bus 14 incident", kind: "verbal", severity: 2, location: "Bus 14", summaryTemplate: "Reported incident on bus route — driver flagged." },
+    { label: "Rumor heard from peers", kind: "rumor", severity: 1, location: "", summaryTemplate: "Secondhand rumor reported by peers — flagged for monitoring." },
+    { label: "Locker / property damage", kind: "property", severity: 3, location: "Hallway", summaryTemplate: "Property damage reported — student belongings affected." },
+    { label: "Physical fight", kind: "fight", severity: 4, location: "", summaryTemplate: "Physical altercation between students. Staff separated." },
+    { label: "Threat reported", kind: "threat", severity: 4, location: "", summaryTemplate: "Threat reported by student/staff — under investigation." },
+    { label: "Witnessed only (peripheral)", kind: "peripheral_note", severity: 1, location: "", summaryTemplate: "Witnessed nearby only — no direct involvement." },
+  ];
+  for (const school of schools) {
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM interaction_quick_entries WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+    await db.insert(interactionQuickEntriesTable).values(
+      defaults.map((d, i) => ({
+        schoolId: school.id,
+        label: d.label,
+        kind: d.kind,
+        severity: d.severity,
+        location: d.location,
+        summaryTemplate: d.summaryTemplate,
+        sortOrder: i,
+        createdByName: "System (seed)",
+      })),
+    );
+  }
 }
 
 // Tier-preset table + the three built-in Basic/Pro/Enterprise rows.

@@ -18,6 +18,7 @@ import {
   seedSafetyPlansIfEmpty,
   ensureWatchlistSchema,
   seedWatchlistIfEmpty,
+  seedWatchlistQuickEntriesIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -104,6 +105,11 @@ async function runSeed(): Promise<void> {
   // Watchlist demo data: 20% of each school's roster gets activity, with a
   // ~3%-of-20% high-concern slice anchoring 3–4 cases. Idempotent per school.
   await seedWatchlistIfEmpty();
+  // Per-school default catalog of quick-entry templates (Hallway shove,
+  // Cafeteria verbal, etc.) for the Log Interaction modal. Idempotent:
+  // skipped per-school when any quick entry already exists, so Core
+  // Team customizations are preserved across reboots.
+  await seedWatchlistQuickEntriesIfEmpty();
 }
 
 // In production we MUST open the port within the platform's health-check

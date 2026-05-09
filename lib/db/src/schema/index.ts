@@ -76,3 +76,4 @@ export * from "./interactionCases";
 export * from "./interactionWitnessStatements";
 export * from "./interactionAuditLog";
 export * from "./interactionAlertDismissals";
+export * from "./interactionQuickEntries";

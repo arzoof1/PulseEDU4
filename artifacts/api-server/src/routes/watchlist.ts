@@ -49,6 +49,7 @@ import {
   witnessStatementsTable,
   interactionAuditLogTable,
   interactionAlertDismissalsTable,
+  interactionQuickEntriesTable,
   studentMtssPlansTable,
   tier2InterventionEntriesTable,
   adminNotificationsTable,
@@ -1038,6 +1039,22 @@ router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
     )
     .orderBy(desc(interactionCaseNotesTable.createdAt));
 
+  // Witness statements for any incident in this case (powers the
+  // expandable per-player drawer in the case detail UI).
+  const statements =
+    incidentIds.length > 0
+      ? await db
+          .select()
+          .from(witnessStatementsTable)
+          .where(
+            and(
+              eq(witnessStatementsTable.schoolId, schoolId),
+              inArray(witnessStatementsTable.interactionId, incidentIds),
+            ),
+          )
+          .orderBy(desc(witnessStatementsTable.requestedAt))
+      : [];
+
   // Aggregate players across incidents with role tally
   const playerAgg = new Map<
     string,
@@ -1089,6 +1106,7 @@ router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
     })),
     players,
     notes,
+    statements,
   });
 });
 
@@ -1675,6 +1693,142 @@ router.post("/watchlist/statements/:id/remind", async (req: Request, res: Respon
   res.json({ statement: row });
 });
 
+// Create (or upsert) a witness statement for a student against an incident.
+// Used by the per-player drawer in the case detail when a Core Team member
+// opens up a player and wants to capture or request their statement.
+router.post(
+  "/watchlist/interactions/:id/statements",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const studentId = clean(b["studentId"], 60);
+    const body = clean(b["body"], 4000);
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const [interaction] = await db
+      .select()
+      .from(interactionsTable)
+      .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)));
+    if (!interaction) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const [stu] = await db
+      .select()
+      .from(studentsTable)
+      .where(and(eq(studentsTable.studentId, studentId), eq(studentsTable.schoolId, schoolId)));
+    if (!stu) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+    // Reject statements for students who aren't participants on this
+    // incident — keeps the per-player drawer / case detail model honest.
+    const [link] = await db
+      .select({ id: interactionParticipantsTable.id })
+      .from(interactionParticipantsTable)
+      .where(
+        and(
+          eq(interactionParticipantsTable.schoolId, schoolId),
+          eq(interactionParticipantsTable.interactionId, id),
+          eq(interactionParticipantsTable.studentId, studentId),
+        ),
+      );
+    if (!link) {
+      res.status(400).json({
+        error: "Student is not a participant on this interaction",
+      });
+      return;
+    }
+    const [row] = await db
+      .insert(witnessStatementsTable)
+      .values({
+        schoolId,
+        interactionId: id,
+        studentId,
+        status: body ? "completed" : "requested",
+        requestedByStaffId: staff.id,
+        requestedByName: staff.displayName,
+        body,
+        completedAt: body ? new Date() : null,
+      })
+      .onConflictDoUpdate({
+        target: [
+          witnessStatementsTable.interactionId,
+          witnessStatementsTable.studentId,
+        ],
+        set: {
+          // Only flip to completed when a body was supplied; preserve
+          // existing status (e.g. "reminded") otherwise.
+          ...(body
+            ? { body, status: "completed", completedAt: new Date() }
+            : {}),
+        },
+      })
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "statement",
+      entityId: row.id,
+      action: body ? "completed" : "requested",
+      staff,
+      payload: { interactionId: id, studentId },
+    });
+    res.json({ statement: row });
+  },
+);
+
+// Update a statement's body without forcing a status change. Used by the
+// in-app dictation flow so a Core Team member can save a working draft
+// before marking the statement complete.
+router.patch("/watchlist/statements/:id", async (req: Request, res: Response) => {
+  const staff = (req as ReqWithStaff).staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const id = asInt(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const b = req.body as Record<string, unknown>;
+  const body = typeof b["body"] === "string" ? clean(b["body"], 4000) : null;
+  if (body === null) {
+    res.status(400).json({ error: "body required" });
+    return;
+  }
+  const [row] = await db
+    .update(witnessStatementsTable)
+    .set({ body })
+    .where(
+      and(
+        eq(witnessStatementsTable.id, id),
+        eq(witnessStatementsTable.schoolId, schoolId),
+      ),
+    )
+    .returning();
+  if (!row) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  await audit({
+    schoolId,
+    entityType: "statement",
+    entityId: id,
+    action: "edited",
+    staff,
+    payload: { length: body.length },
+  });
+  res.json({ statement: row });
+});
+
 router.post("/watchlist/statements/:id/complete", async (req: Request, res: Response) => {
   const staff = (req as ReqWithStaff).staff;
   const schoolId = requireSchool(req, res);
@@ -1702,5 +1856,166 @@ router.post("/watchlist/statements/:id/complete", async (req: Request, res: Resp
   await audit({ schoolId, entityType: "statement", entityId: id, action: "completed", staff });
   res.json({ statement: row });
 });
+
+// --- quick entries ---------------------------------------------------
+//
+// Core-Team-managed catalog of "quick entry" templates. Selecting one in
+// the Log Interaction modal pre-fills kind/severity/location/summary so
+// common scenarios (hallway shove, cafeteria verbal, bus rumor, etc.)
+// can be captured in two clicks. All routes are core-team-gated by the
+// router-level middleware above.
+
+router.get("/watchlist/quick-entries", async (req: Request, res: Response) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select()
+    .from(interactionQuickEntriesTable)
+    .where(eq(interactionQuickEntriesTable.schoolId, schoolId))
+    .orderBy(
+      asc(interactionQuickEntriesTable.sortOrder),
+      asc(interactionQuickEntriesTable.label),
+    );
+  res.json({ entries: rows });
+});
+
+router.post("/watchlist/quick-entries", async (req: Request, res: Response) => {
+  const staff = (req as ReqWithStaff).staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const b = req.body as Record<string, unknown>;
+  const label = clean(b["label"], 80);
+  const kind = isKind(b["kind"]) ? (b["kind"] as InteractionKind) : null;
+  const severity = Math.max(1, Math.min(4, asInt(b["severity"]) ?? 2));
+  const location = clean(b["location"], 200);
+  const summaryTemplate = clean(b["summaryTemplate"], 280);
+  const sortOrder = asInt(b["sortOrder"]) ?? 0;
+  if (!label || !kind) {
+    res.status(400).json({ error: "label and valid kind required" });
+    return;
+  }
+  try {
+    const [row] = await db
+      .insert(interactionQuickEntriesTable)
+      .values({
+        schoolId,
+        label,
+        kind,
+        severity,
+        location,
+        summaryTemplate,
+        sortOrder,
+        createdByStaffId: staff.id,
+        createdByName: staff.displayName,
+      })
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "quick_entry",
+      entityId: row.id,
+      action: "created",
+      staff,
+      payload: { label, kind },
+    });
+    res.json({ entry: row });
+  } catch (e) {
+    req.log.warn({ err: e }, "quick entry create failed");
+    res.status(400).json({ error: "Label must be unique within school" });
+  }
+});
+
+router.patch(
+  "/watchlist/quick-entries/:id",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const patch: Partial<typeof interactionQuickEntriesTable.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    if (typeof b["label"] === "string") patch.label = clean(b["label"], 80);
+    if (isKind(b["kind"])) patch.kind = b["kind"] as InteractionKind;
+    if (b["severity"] !== undefined) {
+      const sv = asInt(b["severity"]);
+      if (sv != null) patch.severity = Math.max(1, Math.min(4, sv));
+    }
+    if (typeof b["location"] === "string")
+      patch.location = clean(b["location"], 200);
+    if (typeof b["summaryTemplate"] === "string")
+      patch.summaryTemplate = clean(b["summaryTemplate"], 280);
+    if (typeof b["sortOrder"] === "number") patch.sortOrder = b["sortOrder"];
+    if (typeof b["active"] === "boolean") patch.active = b["active"];
+    try {
+      const [row] = await db
+        .update(interactionQuickEntriesTable)
+        .set(patch)
+        .where(
+          and(
+            eq(interactionQuickEntriesTable.id, id),
+            eq(interactionQuickEntriesTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      if (!row) {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      await audit({
+        schoolId,
+        entityType: "quick_entry",
+        entityId: id,
+        action: "updated",
+        staff,
+        payload: patch,
+      });
+      res.json({ entry: row });
+    } catch (e) {
+      req.log.warn({ err: e }, "quick entry update failed");
+      res.status(400).json({ error: "Label must be unique within school" });
+    }
+  },
+);
+
+router.delete(
+  "/watchlist/quick-entries/:id",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const deleted = await db
+      .delete(interactionQuickEntriesTable)
+      .where(
+        and(
+          eq(interactionQuickEntriesTable.id, id),
+          eq(interactionQuickEntriesTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (deleted.length === 0) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "quick_entry",
+      entityId: id,
+      action: "deleted",
+      staff,
+      payload: {},
+    });
+    res.json({ ok: true });
+  },
+);
 
 export default router;
