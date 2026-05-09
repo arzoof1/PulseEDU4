@@ -114,6 +114,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     schoolWideExpectationLetters,
     issDailyCapacity,
     issCapacityBehavior,
+    finderShowAbsentBanner,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -382,6 +383,18 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     } else {
       updates.issDailyCapacity = issDailyCapacity;
     }
+  }
+  // Finder absent-banner toggle. School-wide policy — anyone who can
+  // already manage School Settings can flip it; no extra role gate beyond
+  // the page itself. Boolean only.
+  if (finderShowAbsentBanner !== undefined) {
+    if (typeof finderShowAbsentBanner !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "finderShowAbsentBanner must be a boolean" });
+      return;
+    }
+    updates.finderShowAbsentBanner = finderShowAbsentBanner;
   }
   if (issCapacityBehavior !== undefined) {
     if (issCapacityBehavior !== "soft" && issCapacityBehavior !== "hard") {

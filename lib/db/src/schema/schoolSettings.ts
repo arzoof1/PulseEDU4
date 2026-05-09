@@ -51,6 +51,16 @@ export const schoolSettingsTable = pgTable(
   pbisNegativeAffectsTotal: boolean("pbis_negative_affects_total")
     .notNull()
     .default(false),
+  // Finder ("Where is this student right now?") — show the "Absent today"
+  // banner when the student's attendance day is marked absent. Off by
+  // default because attendance currently arrives from the SIS on a delay
+  // (not same-day), so a stale banner would mis-locate a student who
+  // actually IS on campus. Schools that take attendance directly in
+  // PulseEDU (or whose SIS feed is reliably same-day) can flip this on
+  // from School Settings.
+  finderShowAbsentBanner: boolean("finder_show_absent_banner")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //

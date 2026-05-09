@@ -4451,6 +4451,7 @@ function App() {
     pbisInvisibleStudentDays: number;
     pbisReasonImbalancePct: number;
     pbisColdPeriodMultiple: number;
+    finderShowAbsentBanner: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -4502,6 +4503,7 @@ function App() {
     pbisInvisibleStudentDays: 10,
     pbisReasonImbalancePct: 60,
     pbisColdPeriodMultiple: 5,
+    finderShowAbsentBanner: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -6126,6 +6128,10 @@ function App() {
             typeof data.pbisColdPeriodMultiple === "number"
               ? data.pbisColdPeriodMultiple
               : 5,
+          finderShowAbsentBanner:
+            typeof data.finderShowAbsentBanner === "boolean"
+              ? data.finderShowAbsentBanner
+              : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -6221,6 +6227,10 @@ function App() {
           typeof data.pbisColdPeriodMultiple === "number"
             ? data.pbisColdPeriodMultiple
             : 5,
+        finderShowAbsentBanner:
+          typeof data.finderShowAbsentBanner === "boolean"
+            ? data.finderShowAbsentBanner
+            : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
         featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -19653,6 +19663,47 @@ function App() {
                   })
                 }
               />
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.5rem",
+                padding: "0.6rem 0.75rem",
+                border: "1px solid var(--border-subtle, #e2e8f0)",
+                borderRadius: 6,
+                background: "var(--surface-subtle, #f8fafc)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={schoolSettings.finderShowAbsentBanner}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    finderShowAbsentBanner: e.target.checked,
+                  })
+                }
+                style={{ marginTop: "0.2rem" }}
+              />
+              <span style={{ display: "grid", gap: "0.15rem" }}>
+                <span style={{ fontWeight: 600 }}>
+                  Show "Absent today" banner in Finder
+                </span>
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.85rem",
+                    fontWeight: "normal",
+                  }}
+                >
+                  Off by default. Only turn on when your SIS attendance
+                  feed lands in PulseEDU the same day — otherwise the
+                  banner can mis-locate a student who is actually on
+                  campus. The green "current period" highlight and the
+                  active hall pass banner work either way.
+                </span>
+              </span>
             </label>
             <label style={{ display: "grid", gap: "0.25rem" }}>
               <span>

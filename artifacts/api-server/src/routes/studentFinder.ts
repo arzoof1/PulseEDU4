@@ -9,6 +9,7 @@ import {
   bellSchedulePeriodsTable,
   hallPassesTable,
   studentAttendanceDayTable,
+  schoolSettingsTable,
 } from "@workspace/db";
 import { and, asc, eq, ilike, inArray, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -288,23 +289,40 @@ router.get(
       )
       .limit(1);
 
-    // 6. Absent today (Option C).
-    const [attendance] = await db
-      .select({ status: studentAttendanceDayTable.status })
-      .from(studentAttendanceDayTable)
-      .where(
-        and(
-          eq(studentAttendanceDayTable.schoolId, schoolId),
-          eq(studentAttendanceDayTable.studentId, studentIdParam),
-          eq(studentAttendanceDayTable.day, localToday()),
-        ),
-      )
+    // 6. Absent today (Option C). Gated behind a per-school toggle that
+    // defaults OFF: most schools' attendance feed comes from the SIS on
+    // a delay (not same-day), so an "Absent today" banner driven off
+    // stale data would actively mis-locate a student who is on campus.
+    // The query is skipped entirely when the toggle is off — both for
+    // performance and to make it impossible to accidentally surface the
+    // raw status anywhere downstream.
+    const [settings] = await db
+      .select({
+        finderShowAbsentBanner: schoolSettingsTable.finderShowAbsentBanner,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId))
       .limit(1);
+    const showAbsentBanner = Boolean(settings?.finderShowAbsentBanner);
 
-    const absentToday =
-      !!attendance &&
-      typeof attendance.status === "string" &&
-      attendance.status.toLowerCase() === "absent";
+    let absentToday = false;
+    if (showAbsentBanner) {
+      const [attendance] = await db
+        .select({ status: studentAttendanceDayTable.status })
+        .from(studentAttendanceDayTable)
+        .where(
+          and(
+            eq(studentAttendanceDayTable.schoolId, schoolId),
+            eq(studentAttendanceDayTable.studentId, studentIdParam),
+            eq(studentAttendanceDayTable.day, localToday()),
+          ),
+        )
+        .limit(1);
+      absentToday =
+        !!attendance &&
+        typeof attendance.status === "string" &&
+        attendance.status.toLowerCase() === "absent";
+    }
 
     // Narrow contract: schedule + room + active hall pass + absent flag
     // only. We deliberately do NOT echo the raw attendance status string
