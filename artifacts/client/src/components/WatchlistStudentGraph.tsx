@@ -113,6 +113,70 @@ function roleSoft(role: string): string {
   return meta?.soft ?? C.brandSoft;
 }
 
+// Darken a #RRGGBB hex by `amt` (0..1). Used for the rim of the radial
+// gradient so each sphere reads as a lit 3D ball, not a flat disc.
+function darken(hex: string, amt = 0.4): string {
+  const m = (hex || "").replace("#", "");
+  if (m.length !== 3 && m.length !== 6) return hex;
+  const full = m.length === 3 ? m.split("").map((c) => c + c).join("") : m;
+  const r = parseInt(full.slice(0, 2), 16);
+  const g = parseInt(full.slice(2, 4), 16);
+  const b = parseInt(full.slice(4, 6), 16);
+  const f = (n: number) => Math.max(0, Math.min(255, Math.round(n * (1 - amt))));
+  return `#${[f(r), f(g), f(b)]
+    .map((n) => n.toString(16).padStart(2, "0"))
+    .join("")}`;
+}
+
+// Render a "3D" sphere: drop shadow + radial gradient (highlight → base
+// → darkened rim) + a small specular highlight ellipse near the top.
+interface SphereProps {
+  cx: number;
+  cy: number;
+  r: number;
+  base: string;
+  gradId: string;
+  selected?: boolean;
+  selectedRing?: string;
+}
+function Sphere({ cx, cy, r, base, gradId, selected, selectedRing }: SphereProps) {
+  return (
+    <g filter="url(#sphereShadow)">
+      <circle
+        cx={cx}
+        cy={cy}
+        r={r}
+        fill={`url(#${gradId})`}
+        stroke={selected ? selectedRing ?? "#FFFFFF" : "rgba(255,255,255,0.85)"}
+        strokeWidth={selected ? 3.5 : 1.5}
+      />
+      <ellipse
+        cx={cx - r * 0.32}
+        cy={cy - r * 0.42}
+        rx={r * 0.48}
+        ry={r * 0.22}
+        fill="#FFFFFF"
+        opacity={0.55}
+        pointerEvents="none"
+      />
+    </g>
+  );
+}
+
+interface SphereDefsProps {
+  id: string;
+  base: string;
+}
+function SphereGradient({ id, base }: SphereDefsProps) {
+  return (
+    <radialGradient id={id} cx="35%" cy="30%" r="75%">
+      <stop offset="0%" stopColor="#FFFFFF" stopOpacity={0.55} />
+      <stop offset="35%" stopColor={base} stopOpacity={1} />
+      <stop offset="100%" stopColor={darken(base, 0.45)} stopOpacity={1} />
+    </radialGradient>
+  );
+}
+
 export default function WatchlistStudentGraph({
   initialStudentId,
   onBack,
@@ -455,6 +519,40 @@ export default function WatchlistStudentGraph({
                 className="h-auto w-full"
                 preserveAspectRatio="xMidYMid meet"
               >
+                <defs>
+                  <filter
+                    id="sphereShadow"
+                    x="-30%"
+                    y="-30%"
+                    width="160%"
+                    height="160%"
+                  >
+                    <feDropShadow
+                      dx="0"
+                      dy="3"
+                      stdDeviation="3"
+                      floodColor="#000000"
+                      floodOpacity="0.28"
+                    />
+                  </filter>
+                  <SphereGradient id="grad-center" base={C.brand} />
+                  {positioned.map((c) => (
+                    <SphereGradient
+                      key={`gc-${c.id}`}
+                      id={`grad-case-${c.id}`}
+                      base={statusPillStyle(c.status).bg}
+                    />
+                  ))}
+                  {positioned.flatMap((c) =>
+                    c.players.map((p) => (
+                      <SphereGradient
+                        key={`gp-${c.id}-${p.studentId}`}
+                        id={`grad-player-${c.id}-${p.studentId}`}
+                        base={roleSoft(p.primaryRole)}
+                      />
+                    )),
+                  )}
+                </defs>
                 {/* edges: center -> each case */}
                 {positioned.map((c) => {
                   const isSel = c.id === selectedCaseId;
@@ -487,13 +585,12 @@ export default function WatchlistStudentGraph({
 
                 {/* center student sphere */}
                 <g>
-                  <circle
+                  <Sphere
                     cx={CX}
                     cy={CY}
                     r={CENTER_RADIUS}
-                    fill={C.brand}
-                    stroke="#FFFFFF"
-                    strokeWidth={3}
+                    base={C.brand}
+                    gradId="grad-center"
                   />
                   <text
                     x={CX}
@@ -536,18 +633,20 @@ export default function WatchlistStudentGraph({
                     <g
                       key={`case-${c.id}`}
                       style={{ cursor: "pointer" }}
-                      onClick={() => {
-                        setSelectedCaseId(c.id);
-                        setOpenIncidentIds(new Set());
-                      }}
+                      onClick={() => onOpenCase?.(c.id)}
+                      onMouseEnter={() => setSelectedCaseId(c.id)}
                     >
-                      <circle
+                      <title>
+                        Open Case #{c.caseNumber} — {c.title}
+                      </title>
+                      <Sphere
                         cx={c.x}
                         cy={c.y}
                         r={CASE_RADIUS}
-                        fill={sp.bg}
-                        stroke={isSel ? C.brand : "#FFFFFF"}
-                        strokeWidth={isSel ? 4 : 2}
+                        base={sp.bg}
+                        gradId={`grad-case-${c.id}`}
+                        selected={isSel}
+                        selectedRing={C.brand}
                       />
                       <text
                         x={c.x}
@@ -556,7 +655,8 @@ export default function WatchlistStudentGraph({
                         fontSize={11}
                         fontWeight={700}
                         fill={sp.fg}
-                        opacity={0.8}
+                        opacity={0.85}
+                        pointerEvents="none"
                       >
                         CASE
                       </text>
@@ -577,7 +677,6 @@ export default function WatchlistStudentGraph({
                 {/* peripheral player spheres */}
                 {positioned.map((c) =>
                   c.players.map((p) => {
-                    const fill = roleSoft(p.primaryRole);
                     const ring = roleColor(p.primaryRole);
                     return (
                       <g
@@ -585,21 +684,21 @@ export default function WatchlistStudentGraph({
                         style={{ cursor: "pointer" }}
                         onClick={(e) => {
                           e.stopPropagation();
-                          // Drill-down: peek this player on this case
-                          // without losing the current center.
+                          // Drill-down: peek this player's incidents on
+                          // this case without losing the current center.
                           setSelectedCaseId(c.id);
                           setPeek({ caseId: c.id, studentId: p.studentId });
                         }}
-                      ><title>
-                          Click to peek {p.firstName} {p.lastName} on Case #{c.caseNumber}
+                      >
+                        <title>
+                          Read {p.firstName} {p.lastName}'s incidents on Case #{c.caseNumber}
                         </title>
-                        <circle
+                        <Sphere
                           cx={p.x}
                           cy={p.y}
                           r={PLAYER_RADIUS}
-                          fill={fill}
-                          stroke={ring}
-                          strokeWidth={2}
+                          base={roleSoft(p.primaryRole)}
+                          gradId={`grad-player-${c.id}-${p.studentId}`}
                         />
                         <text
                           x={p.x}
@@ -608,6 +707,7 @@ export default function WatchlistStudentGraph({
                           fontSize={11}
                           fontWeight={700}
                           fill={ring}
+                          pointerEvents="none"
                         >
                           {initials(p.firstName, p.lastName)}
                         </text>
@@ -618,6 +718,7 @@ export default function WatchlistStudentGraph({
                           fontSize={10}
                           fontWeight={600}
                           fill={C.ink}
+                          pointerEvents="none"
                         >
                           {p.firstName} {p.lastName[0]}.
                         </text>
