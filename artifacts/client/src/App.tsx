@@ -8776,16 +8776,6 @@ function App() {
               label: "Teacher Roster",
               icon: IconUser,
             })}
-            {/* Spotlight — fair, randomized "pull a name" picker for the
-                current period. Sits in Quick Access because teachers reach
-                for it mid-lesson. Custom standout button (not a regular
-                .nav-item) so it reads as a playful tool rather than a
-                page; the rotating label invites a tap. */}
-            <SpotlightLaunchButton
-              active={activeSection === "spotlight"}
-              onClick={() => setActiveSection("spotlight")}
-            />
-
             {effectiveFeatures.RequestPullout &&
               renderNavItem({
                 key: "requestPullout",
@@ -8816,6 +8806,14 @@ function App() {
                 label: "Verify Pullout",
                 icon: IconClipboard,
               })}
+            {/* Spotlight — anchored at the bottom of Quick Access by user
+                request so it reads as the "fun bonus" tool sitting under
+                the workhorse items. Custom standout button (not a regular
+                .nav-item) — gradient + rotating label invites a tap. */}
+            <SpotlightLaunchButton
+              active={activeSection === "spotlight"}
+              onClick={() => setActiveSection("spotlight")}
+            />
             {/* Active Kiosks moved out of Quick Access into School Admin
                 (admin-only operational monitoring lives with the other
                 admin tools — Bell Schedule, Settings). */}
