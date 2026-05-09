@@ -488,8 +488,8 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase }: Props) {
                       type="button"
                       onClick={() => checkIn(a)}
                       disabled={busyAlert === a.id}
-                      className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
-                      style={{ background: C.brand }}
+                      className="inline-flex items-center gap-1 rounded-md px-2.5 py-1 text-[11px] font-bold disabled:opacity-50"
+                      style={{ background: C.brand, color: "#FFFFFF" }}
                       title="Routes to Behavior Specialist + opens an MTSS Tier 2 plan"
                     >
                       Schedule check-in <ChevronRight className="h-3 w-3" />
