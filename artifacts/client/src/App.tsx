@@ -4,7 +4,6 @@ import AdminHubPage from "./components/AdminHubPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
-import { HallPassQueueChip } from "./components/HallPassQueueChip";
 import { KioskBanner } from "./components/KioskBanner";
 import SpotlightPanel from "./components/SpotlightPanel";
 import LogTardyModal from "./components/LogTardyModal";
@@ -8973,15 +8972,7 @@ function App() {
           Previously sat below the stats — fine on desktop, awkward on
           a narrow viewport where the stats stack into a tall column. */}
       <div className="card cp-cta-card">
-        <div className="cp-cta-text" style={{ display: "flex", alignItems: "center", gap: "0.75rem", flexWrap: "wrap" }}>
-          <span>Need to Create a Pass?</span>
-          <HallPassQueueChip />
-          {/* "Open Kiosk Mode" was here but removed — teachers manage
-              their device's kiosk from the actual kiosk URL or the
-              Admin Hub, not from inside the staff app. The Companion
-              Queue Panel below covers the only thing teachers actually
-              need (reorder/remove from their seat). */}
-        </div>
+        <div className="cp-cta-text">Need to Create a Pass?</div>
         <button
           type="button"
           className="cp-cta-button cp-cta-button--blue"

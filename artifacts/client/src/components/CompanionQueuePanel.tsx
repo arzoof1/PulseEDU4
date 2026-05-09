@@ -3,25 +3,20 @@ import QRCode from "qrcode";
 import { authFetch } from "../lib/authToken";
 
 // "Companion Queue Panel" — a small dashboard inside the staff app that
-// surfaces every live kiosk waiting line the signed-in user is allowed
-// to manage (admin/core team see every room; teachers see their default
-// room or any room they personally activated). Reorder + remove flow
-// through the staff endpoints; the kiosk in the front of the room
-// repaints on its next poll without any handoff.
+// surfaces every live hall-pass kiosk the signed-in user is allowed to
+// manage. The server returns ONLY rooms the user can manage (admin/core
+// team see every room; teachers see their default room or any room they
+// personally activated), so this component just renders what the API
+// hands back without redoing authz client-side.
 //
-// "Show QR" mints a read-only viewer token and renders an SVG QR pointing
-// at /kiosk-view/<token>, so anyone in the room can pull up the same
-// list on their phone in view-only mode.
+// Per room we show:
+//  · who is currently OUT on a pass from that room
+//  · the waiting line, with reorder and remove
+//  · a "Show QR" button that mints a read-only viewer token and renders
+//    /kiosk-view/<token> so phones in the room can mirror the line.
 
 interface AuthUser {
   id: number;
-  defaultRoom?: string | null;
-  isAdmin?: boolean | null;
-  isSuperUser?: boolean | null;
-  isDistrictAdmin?: boolean | null;
-  isBehaviorSpecialist?: boolean | null;
-  isMtssCoordinator?: boolean | null;
-  isSchoolPsychologist?: boolean | null;
 }
 
 interface QueueEntry {
@@ -36,30 +31,26 @@ interface QueueEntry {
   kioskActivationId: number;
 }
 
-function isCoreTeam(u: AuthUser | null | undefined): boolean {
-  if (!u) return false;
-  return Boolean(
-    u.isSuperUser ||
-      u.isDistrictAdmin ||
-      u.isAdmin ||
-      u.isBehaviorSpecialist ||
-      u.isMtssCoordinator ||
-      u.isSchoolPsychologist,
-  );
+interface ActivePass {
+  kioskActivationId: number | null;
+  room: string;
+  studentId: string;
+  firstName: string | null;
+  lastName: string | null;
+  destination: string;
+  createdAt: string;
+  maxDurationMinutes: number;
 }
 
-// Mirrors the server's canManageRoomQueue. Used here just to filter the
-// rooms a teacher sees in the panel — the server is the source of truth
-// for write authorization.
-function canSee(user: AuthUser, entry: QueueEntry): boolean {
-  if (isCoreTeam(user)) return true;
-  if (user.defaultRoom && user.defaultRoom === entry.room) return true;
-  // Note: the staff endpoint doesn't return activation.staffId, so a
-  // teacher who activated a "different room" kiosk for sub coverage will
-  // see it via the QR / direct link flow but not the bulk panel. That's
-  // an acceptable v1 trade-off — the activation owner already has the
-  // "Kiosk active on this device" banner pointing at the actual kiosk.
-  return false;
+interface KioskRef {
+  kioskActivationId: number;
+  room: string;
+}
+
+interface PanelData {
+  entries: QueueEntry[];
+  activePasses: ActivePass[];
+  kiosks: KioskRef[];
 }
 
 function formatWait(addedAt: string): string {
@@ -73,15 +64,32 @@ function formatWait(addedAt: string): string {
   return `${h}h${m ? ` ${m}m` : ""}`;
 }
 
-function displayName(e: QueueEntry): string {
-  const fn = (e.firstName ?? "").trim();
-  const ln = (e.lastName ?? "").trim();
-  if (!fn && !ln) return e.studentId;
-  return [fn, ln].filter(Boolean).join(" ");
+function formatPassAge(createdAt: string, maxMinutes: number): string {
+  const start = new Date(createdAt).getTime();
+  if (!Number.isFinite(start)) return "";
+  const mins = Math.max(0, Math.floor((Date.now() - start) / 60_000));
+  const over = mins > maxMinutes;
+  const label = mins < 1 ? "<1m" : `${mins}m`;
+  return over ? `${label} · over by ${mins - maxMinutes}m` : label;
+}
+
+function studentName(
+  fn: string | null,
+  ln: string | null,
+  fallback: string,
+): string {
+  const f = (fn ?? "").trim();
+  const l = (ln ?? "").trim();
+  if (!f && !l) return fallback;
+  return [f, l].filter(Boolean).join(" ");
 }
 
 export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
-  const [entries, setEntries] = useState<QueueEntry[]>([]);
+  const [data, setData] = useState<PanelData>({
+    entries: [],
+    activePasses: [],
+    kiosks: [],
+  });
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<number | null>(null);
   const [qrFor, setQrFor] = useState<string | null>(null);
@@ -95,18 +103,18 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
     try {
       const res = await authFetch("/api/hall-pass-queue");
       if (!res.ok) {
-        // Silent retry on every non-OK status. 401 = not signed in
-        // (panel is irrelevant); 5xx/502 = api restart blip and the
-        // next poll will succeed. Surfacing an error banner here was
-        // confusing — users read "Couldn't load queue (502)" as
-        // "there's no kiosk for my room", which it is not.
+        // Silent on transient errors. 401 = signed out; 5xx = api blip.
         if (res.status === 401) {
-          setEntries([]);
+          setData({ entries: [], activePasses: [], kiosks: [] });
         }
         return;
       }
-      const body = (await res.json()) as { entries: QueueEntry[] };
-      setEntries(body.entries ?? []);
+      const body = (await res.json()) as Partial<PanelData>;
+      setData({
+        entries: body.entries ?? [],
+        activePasses: body.activePasses ?? [],
+        kiosks: body.kiosks ?? [],
+      });
       setError(null);
     } catch {
       // Network blip — let the next interval try again silently.
@@ -126,25 +134,52 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
     };
   }, [user, load]);
 
-  const visibleByRoom = useMemo(() => {
-    if (!user) return new Map<string, QueueEntry[]>();
-    const grouped = new Map<string, QueueEntry[]>();
-    for (const e of entries) {
-      if (!canSee(user, e)) continue;
-      const list = grouped.get(e.room) ?? [];
-      list.push(e);
-      grouped.set(e.room, list);
+  // Group queue entries by activationId, then attach active passes by
+  // matching room. Rooms with no queue but a live kiosk still appear
+  // (server includes them in `kiosks`) so a teacher with a kiosk up
+  // and one student out always sees the room block.
+  const rooms = useMemo(() => {
+    const byKiosk = new Map<
+      number,
+      { kioskActivationId: number; room: string; queue: QueueEntry[] }
+    >();
+    for (const k of data.kiosks) {
+      byKiosk.set(k.kioskActivationId, {
+        kioskActivationId: k.kioskActivationId,
+        room: k.room,
+        queue: [],
+      });
     }
-    for (const list of grouped.values()) {
-      list.sort((a, b) => a.position - b.position || a.id - b.id);
+    for (const e of data.entries) {
+      let bucket = byKiosk.get(e.kioskActivationId);
+      if (!bucket) {
+        bucket = {
+          kioskActivationId: e.kioskActivationId,
+          room: e.room,
+          queue: [],
+        };
+        byKiosk.set(e.kioskActivationId, bucket);
+      }
+      bucket.queue.push(e);
     }
-    return grouped;
-  }, [entries, user]);
+    for (const b of byKiosk.values()) {
+      b.queue.sort((a, b2) => a.position - b2.position || a.id - b2.id);
+    }
+    const passesByRoom = new Map<string, ActivePass[]>();
+    for (const p of data.activePasses) {
+      const list = passesByRoom.get(p.room) ?? [];
+      list.push(p);
+      passesByRoom.set(p.room, list);
+    }
+    return Array.from(byKiosk.values())
+      .map((b) => ({ ...b, activePasses: passesByRoom.get(b.room) ?? [] }))
+      .sort((a, b) => a.room.localeCompare(b.room));
+  }, [data]);
 
   async function move(entryId: number, direction: -1 | 1) {
-    const target = entries.find((e) => e.id === entryId);
+    const target = data.entries.find((e) => e.id === entryId);
     if (!target) return;
-    const roomList = entries
+    const roomList = data.entries
       .filter((e) => e.kioskActivationId === target.kioskActivationId)
       .sort((a, b) => a.position - b.position || a.id - b.id);
     const idx = roomList.findIndex((e) => e.id === entryId);
@@ -193,7 +228,7 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
   }
 
   if (!user) return null;
-  if (visibleByRoom.size === 0 && !error) return null;
+  if (rooms.length === 0 && !error) return null;
 
   return (
     <div
@@ -206,23 +241,13 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
         gap: "0.85rem",
       }}
     >
-      <div
-        style={{
-          display: "flex",
-          alignItems: "center",
-          justifyContent: "space-between",
-          gap: "0.5rem",
-          flexWrap: "wrap",
-        }}
-      >
-        <div>
-          <div style={{ fontWeight: 700, fontSize: "1rem" }}>
-            🖥️ Live Hall Pass Kiosks
-          </div>
-          <div style={{ fontSize: "0.8rem", opacity: 0.65 }}>
-            Reorder or remove from here — the kiosk in the room updates
-            on its own.
-          </div>
+      <div>
+        <div style={{ fontWeight: 700, fontSize: "1rem" }}>
+          🖥️ Live Hall Pass Kiosks
+        </div>
+        <div style={{ fontSize: "0.8rem", opacity: 0.65 }}>
+          See who's out and who's waiting. Reorder or remove from here —
+          the kiosk in the room updates on its own.
         </div>
       </div>
 
@@ -241,15 +266,16 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
         </div>
       )}
 
-      {Array.from(visibleByRoom.entries()).map(([room, list]) => (
+      {rooms.map((r) => (
         <RoomBlock
-          key={room}
-          room={room}
-          entries={list}
+          key={r.kioskActivationId}
+          room={r.room}
+          queue={r.queue}
+          activePasses={r.activePasses}
           busyId={busy}
           onMove={move}
           onRemove={remove}
-          onShowQr={() => setQrFor(room)}
+          onShowQr={() => setQrFor(r.room)}
         />
       ))}
 
@@ -262,14 +288,16 @@ export function CompanionQueuePanel({ user }: { user: AuthUser | null }) {
 
 function RoomBlock({
   room,
-  entries,
+  queue,
+  activePasses,
   busyId,
   onMove,
   onRemove,
   onShowQr,
 }: {
   room: string;
-  entries: QueueEntry[];
+  queue: QueueEntry[];
+  activePasses: ActivePass[];
   busyId: number | null;
   onMove: (id: number, dir: -1 | 1) => void;
   onRemove: (id: number) => void;
@@ -295,7 +323,7 @@ function RoomBlock({
         <div style={{ fontWeight: 600 }}>
           {room}{" "}
           <span style={{ fontWeight: 400, opacity: 0.6, fontSize: "0.85rem" }}>
-            · {entries.length} waiting
+            · {activePasses.length} out · {queue.length} waiting
           </span>
         </div>
         <button
@@ -318,8 +346,76 @@ function RoomBlock({
         </button>
       </div>
 
-      {entries.length === 0 ? (
-        <div style={{ fontSize: "0.85rem", opacity: 0.6 }}>
+      {/* Currently OUT — students with an active pass from this room. */}
+      <div style={{ marginBottom: queue.length > 0 ? "0.6rem" : 0 }}>
+        <div
+          style={{
+            fontSize: "0.7rem",
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+            opacity: 0.55,
+            margin: "0.1rem 0 0.3rem",
+          }}
+        >
+          Currently out
+        </div>
+        {activePasses.length === 0 ? (
+          <div style={{ fontSize: "0.82rem", opacity: 0.55 }}>
+            Nobody is out from this room right now.
+          </div>
+        ) : (
+          <ul
+            style={{
+              listStyle: "none",
+              padding: 0,
+              margin: 0,
+              display: "flex",
+              flexDirection: "column",
+              gap: 4,
+            }}
+          >
+            {activePasses.map((p) => (
+              <li
+                key={`${p.studentId}-${p.createdAt}`}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 8,
+                  padding: "0.35rem 0.5rem",
+                  background: "#fff7ed",
+                  border: "1px solid #fed7aa",
+                  borderRadius: 6,
+                  fontSize: "0.88rem",
+                }}
+              >
+                <span aria-hidden>🚶</span>
+                <span style={{ flex: 1, minWidth: 0, fontWeight: 600 }}>
+                  {studentName(p.firstName, p.lastName, p.studentId)}
+                </span>
+                <span style={{ opacity: 0.65, fontSize: "0.78rem" }}>
+                  → {p.destination} ·{" "}
+                  {formatPassAge(p.createdAt, p.maxDurationMinutes)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Waiting line */}
+      <div
+        style={{
+          fontSize: "0.7rem",
+          letterSpacing: "0.08em",
+          textTransform: "uppercase",
+          opacity: 0.55,
+          margin: "0.1rem 0 0.3rem",
+        }}
+      >
+        Waiting line
+      </div>
+      {queue.length === 0 ? (
+        <div style={{ fontSize: "0.82rem", opacity: 0.55 }}>
           Line is empty.
         </div>
       ) : (
@@ -333,7 +429,7 @@ function RoomBlock({
             gap: 6,
           }}
         >
-          {entries.map((e, i) => (
+          {queue.map((e, i) => (
             <li
               key={e.id}
               style={{
@@ -364,14 +460,8 @@ function RoomBlock({
                 {i + 1}
               </span>
               <span style={{ flex: 1, minWidth: 0 }}>
-                <span
-                  style={{
-                    fontWeight: 600,
-                    overflow: "hidden",
-                    textOverflow: "ellipsis",
-                  }}
-                >
-                  {displayName(e)}
+                <span style={{ fontWeight: 600 }}>
+                  {studentName(e.firstName, e.lastName, e.studentId)}
                 </span>{" "}
                 <span style={{ opacity: 0.6, fontSize: "0.8rem" }}>
                   · {e.destination} · {formatWait(e.addedAt)}
@@ -389,11 +479,9 @@ function RoomBlock({
               <button
                 type="button"
                 onClick={() => onMove(e.id, 1)}
-                disabled={busyId === e.id || i === entries.length - 1}
+                disabled={busyId === e.id || i === queue.length - 1}
                 title="Move down"
-                style={iconBtn(
-                  busyId === e.id || i === entries.length - 1,
-                )}
+                style={iconBtn(busyId === e.id || i === queue.length - 1)}
               >
                 ▼
               </button>
@@ -461,8 +549,6 @@ function ViewerQrModal({
           });
           return;
         }
-        // Render the QR as an inline SVG string so we don't need a React
-        // wrapper component — keeps the dependency footprint small.
         const svg = await QRCode.toString(body.url, {
           type: "svg",
           margin: 1,
