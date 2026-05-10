@@ -366,7 +366,7 @@ export default function NewCaseModal({ onClose, onCreated, initialPlayers }: Pro
                 checked={logFirst}
                 onChange={(e) => setLogFirst(e.target.checked)}
               />
-              <span>Log the first incident now</span>
+              <span>Log the first Incident Report now</span>
               <span className="text-[11px] font-normal" style={{ color: C.inkSoft }}>
                 (attaches all roster members as participants)
               </span>
@@ -476,6 +476,7 @@ export default function NewCaseModal({ onClose, onCreated, initialPlayers }: Pro
                     value={incDetail}
                     onChange={setIncDetail}
                     rows={3}
+                    placeholder="Click here to type, or tap the mic to use voice-to-text…"
                     className="w-full rounded-md border px-2 py-1.5 text-sm"
                     style={{ borderColor: C.line, background: C.panel }}
                     brandColor={C.brand}

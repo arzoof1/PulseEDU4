@@ -411,6 +411,7 @@ export default function LogInteractionModal({
               value={detail}
               onChange={setDetail}
               rows={3}
+              placeholder="Click here to type, or tap the mic to use voice-to-text…"
               className="w-full rounded-md border px-2 py-1.5 text-sm"
               style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
               brandColor={WL_COLORS.brand}
