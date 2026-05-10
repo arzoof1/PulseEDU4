@@ -1333,6 +1333,38 @@ export async function ensureOnboardingChecklistSchema() {
   );
 }
 
+// Generic mentions index for free-text fields on a discipline case
+// (witness statements first; video-evidence notes and case notes later).
+// Always rebuildable from the source body, so we don't worry about
+// downtime — the table is an index, not a source of truth.
+export async function ensureCaseMentionsSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_mentions (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      source_kind TEXT NOT NULL,
+      source_id INTEGER NOT NULL,
+      case_id INTEGER,
+      student_id TEXT NOT NULL,
+      display_name_at_time TEXT NOT NULL,
+      position INTEGER NOT NULL DEFAULT 0,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_mentions_school_idx ON case_mentions (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_mentions_source_idx ON case_mentions (source_kind, source_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_mentions_student_idx ON case_mentions (school_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_mentions_case_idx ON case_mentions (school_id, case_id)`,
+  );
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1498,6 +1530,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
   await ensureOnboardingChecklistSchema();
+  await ensureCaseMentionsSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

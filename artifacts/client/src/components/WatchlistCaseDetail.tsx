@@ -11,6 +11,7 @@ import {
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import VoiceTextarea from "./watchlist/VoiceTextarea";
+import MentionTextarea from "./watchlist/MentionTextarea";
 import {
   ROLE_META,
   WL_COLORS as C,
@@ -1728,11 +1729,11 @@ function PlayerDrawer({
                   (mic to dictate)
                 </span>
               </div>
-              <VoiceTextarea
+              <MentionTextarea
                 value={draft}
                 onChange={(v) => setDraft(studentId, inc.id, v)}
                 rows={3}
-                placeholder={`What did ${firstName} see or do?`}
+                placeholder={`What did ${firstName} see or do? Type @ or tap "+ Tag student" to name another student.`}
                 className="w-full rounded-md border px-2 py-1.5 text-xs"
                 style={{ borderColor: C.line, background: C.panel }}
                 brandColor={C.brand}

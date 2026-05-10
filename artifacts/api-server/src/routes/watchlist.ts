@@ -48,6 +48,7 @@ import {
   interactionCasePlayerImpactTable,
   interactionCaseNotesTable,
   witnessStatementsTable,
+  caseMentionsTable,
   interactionAuditLogTable,
   interactionAlertDismissalsTable,
   interactionQuickEntriesTable,
@@ -66,6 +67,10 @@ import {
 } from "@workspace/db";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import {
+  syncWitnessStatementMentions,
+  updateMentionCaseIdForInteraction,
+} from "../lib/mentions.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
@@ -2158,6 +2163,15 @@ router.patch("/watchlist/interactions/:id", async (req: Request, res: Response) 
     res.status(404).json({ error: "Not found" });
     return;
   }
+  // Keep the case_mentions denormalised pointer in sync when the
+  // interaction's case attachment changes (attach / detach / move).
+  if (b["caseId"] !== undefined) {
+    await updateMentionCaseIdForInteraction({
+      schoolId,
+      interactionId: id,
+      newCaseId: row.caseId ?? null,
+    });
+  }
   await audit({
     schoolId,
     entityType: "interaction",
@@ -2368,6 +2382,16 @@ router.post(
 
       return { ok: true, caseRow };
     });
+
+    if (result.ok) {
+      // Promote just attached this interaction to a new case; re-point
+      // any existing witness-statement mentions at the new case_id.
+      await updateMentionCaseIdForInteraction({
+        schoolId,
+        interactionId: id,
+        newCaseId: result.caseRow.id,
+      });
+    }
 
     if (!result.ok) {
       res.status(result.status).json({ error: result.error });
@@ -2633,6 +2657,15 @@ router.post(
         },
       })
       .returning();
+    // Use the *persisted* row body — onConflictDoUpdate preserves the
+    // existing body when the incoming body is empty, so syncing on the
+    // request body would wipe the index even though canonical text still
+    // contains tokens.
+    await syncWitnessStatementMentions({
+      schoolId,
+      statementId: row.id,
+      body: row.body ?? "",
+    });
     await audit({
       schoolId,
       entityType: "statement",
@@ -2677,6 +2710,7 @@ router.patch("/watchlist/statements/:id", async (req: Request, res: Response) =>
     res.status(404).json({ error: "Not found" });
     return;
   }
+  await syncWitnessStatementMentions({ schoolId, statementId: id, body });
   await audit({
     schoolId,
     entityType: "statement",
@@ -2712,8 +2746,35 @@ router.post("/watchlist/statements/:id/complete", async (req: Request, res: Resp
     res.status(404).json({ error: "Not found" });
     return;
   }
+  await syncWitnessStatementMentions({ schoolId, statementId: id, body });
   await audit({ schoolId, entityType: "statement", entityId: id, action: "completed", staff });
   res.json({ statement: row });
+});
+
+// All structured @-mentions on every witness statement linked to this
+// case. Admin-only (router-level core-team gate). Used by the case detail
+// to render a "Students named in this case" chip row above the player
+// pills, and later by Phase 3's consistency check to give the AI a clean
+// list of named entities instead of having to re-parse prose.
+router.get("/watchlist/cases/:id/mentions", async (req: Request, res: Response) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const id = asInt(req.params["id"]);
+  if (!id) {
+    res.status(400).json({ error: "Invalid id" });
+    return;
+  }
+  const rows = await db
+    .select()
+    .from(caseMentionsTable)
+    .where(
+      and(
+        eq(caseMentionsTable.schoolId, schoolId),
+        eq(caseMentionsTable.caseId, id),
+      ),
+    )
+    .orderBy(asc(caseMentionsTable.createdAt));
+  res.json({ mentions: rows });
 });
 
 // --- quick entries ---------------------------------------------------
