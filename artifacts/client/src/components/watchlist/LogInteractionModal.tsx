@@ -95,6 +95,11 @@ export default function LogInteractionModal({
   const [error, setError] = useState<string | null>(null);
   const [quickEntries, setQuickEntries] = useState<QuickEntry[]>([]);
   const [showManage, setShowManage] = useState(false);
+  // Holds the last-applied quick-entry id so the dropdown actually
+  // *shows* the user's selection. Clears when the user manually edits
+  // any of the fields the template touches (kind/sev/location/summary)
+  // so the dropdown doesn't lie about what's currently in the form.
+  const [selectedQuickEntryId, setSelectedQuickEntryId] = useState<number | null>(null);
 
   const loadQuickEntries = async () => {
     const r = await authFetch("/api/watchlist/quick-entries");
@@ -124,6 +129,7 @@ export default function LogInteractionModal({
     setSeverity(q.severity);
     if (q.location) setLocation(q.location);
     if (q.summaryTemplate) setSummary(q.summaryTemplate);
+    setSelectedQuickEntryId(id);
   };
 
   useEffect(() => {
@@ -279,11 +285,14 @@ export default function LogInteractionModal({
               </button>
             </div>
             <select
-              value=""
+              value={selectedQuickEntryId ?? ""}
               onChange={(e) => {
                 const id = Number(e.target.value);
-                if (id) applyQuickEntry(id);
-                e.target.value = "";
+                if (id) {
+                  applyQuickEntry(id);
+                } else {
+                  setSelectedQuickEntryId(null);
+                }
               }}
               className="w-full rounded-md border px-2 py-1.5 text-sm"
               style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
@@ -302,6 +311,12 @@ export default function LogInteractionModal({
                   </option>
                 ))}
             </select>
+            {selectedQuickEntryId !== null && (
+              <div className="mt-1 text-[11px]" style={{ color: WL_COLORS.brand }}>
+                Template applied — Kind, Severity, Location, and Summary
+                were pre-filled. Edit any field below to override.
+              </div>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-3">
