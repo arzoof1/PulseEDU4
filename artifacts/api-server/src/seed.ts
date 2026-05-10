@@ -1395,6 +1395,38 @@ export async function ensureCaseVideoEvidenceSchema() {
   );
 }
 
+// (clip × player) junction for Phase 2.1 — confidence-rated linkage of
+// a student to a video clip. See lib/db/src/schema/caseVideoEvidencePlayers.ts
+// for the rationale on the closed-enum confidence tier and the
+// orthogonal `cleared_by_footage` flag.
+export async function ensureCaseVideoEvidencePlayersSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_video_evidence_players (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      evidence_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      confidence TEXT NOT NULL,
+      cleared_by_footage BOOLEAN NOT NULL DEFAULT FALSE,
+      reason TEXT,
+      set_by_staff_id INTEGER,
+      set_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS case_vid_evidence_players_uniq ON case_video_evidence_players (school_id, evidence_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_vid_evidence_players_clip_idx ON case_video_evidence_players (school_id, evidence_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_vid_evidence_players_case_idx ON case_video_evidence_players (school_id, case_id)`,
+  );
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1562,6 +1594,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureOnboardingChecklistSchema();
   await ensureCaseMentionsSchema();
   await ensureCaseVideoEvidenceSchema();
+  await ensureCaseVideoEvidencePlayersSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

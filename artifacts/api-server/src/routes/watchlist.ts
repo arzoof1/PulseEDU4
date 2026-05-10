@@ -50,6 +50,9 @@ import {
   witnessStatementsTable,
   caseMentionsTable,
   caseVideoEvidenceTable,
+  caseVideoEvidencePlayersTable,
+  VIDEO_CONFIDENCE_TIERS,
+  type VideoConfidenceTier,
   interactionAuditLogTable,
   interactionAlertDismissalsTable,
   interactionQuickEntriesTable,
@@ -2837,7 +2840,369 @@ router.get(
         ),
       )
       .orderBy(asc(caseVideoEvidenceTable.timestampStart));
-    res.json({ evidence: rows });
+    // Embed player links per clip — single grouped read so the panel
+    // can render the chip strip without an N+1 follow-up.
+    const links = rows.length
+      ? await db
+          .select()
+          .from(caseVideoEvidencePlayersTable)
+          .where(
+            and(
+              eq(caseVideoEvidencePlayersTable.schoolId, schoolId),
+              eq(caseVideoEvidencePlayersTable.caseId, caseId),
+            ),
+          )
+      : [];
+    const byClip = new Map<number, typeof links>();
+    for (const l of links) {
+      const arr = byClip.get(l.evidenceId) ?? [];
+      arr.push(l);
+      byClip.set(l.evidenceId, arr);
+    }
+    const evidence = rows.map((r) => ({
+      ...r,
+      players: byClip.get(r.id) ?? [],
+    }));
+    res.json({ evidence });
+  },
+);
+
+// Per-case rollup feeding the camera badge on the WatchlistNetwork
+// player spheres. Aggregates link rows into one entry per student so
+// the client can paint badges in a single tiny call. `topTier` orders
+// confirmed > inferred > possible — that's the "strongest evidence we
+// have on this kid" signal, separate from the orthogonal `hasCleared`
+// flag (which still wants to be visible even if there's no
+// implication).
+router.get(
+  "/watchlist/cases/:id/player-clip-summary",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const rows = (
+      await db.execute(sql`
+        SELECT student_id AS "studentId",
+               COUNT(*)::int AS "count",
+               CASE
+                 WHEN BOOL_OR(confidence = 'confirmed') THEN 'confirmed'
+                 WHEN BOOL_OR(confidence = 'inferred')  THEN 'inferred'
+                 ELSE 'possible'
+               END AS "topTier",
+               BOOL_OR(cleared_by_footage) AS "hasCleared"
+          FROM case_video_evidence_players
+         WHERE school_id = ${schoolId}
+           AND case_id   = ${caseId}
+         GROUP BY student_id
+      `)
+    ).rows as Array<{
+      studentId: string;
+      count: number;
+      topTier: VideoConfidenceTier;
+      hasCleared: boolean;
+    }>;
+    res.json({ summary: rows });
+  },
+);
+
+// Helper: load a clip row and verify it lives in this school.
+// Returns null + sends a 404 when missing.
+async function loadEvidenceForSchool(
+  evidenceId: number,
+  schoolId: number,
+  res: Response,
+) {
+  const [row] = await db
+    .select()
+    .from(caseVideoEvidenceTable)
+    .where(
+      and(
+        eq(caseVideoEvidenceTable.id, evidenceId),
+        eq(caseVideoEvidenceTable.schoolId, schoolId),
+      ),
+    );
+  if (!row) {
+    res.status(404).json({ error: "Evidence not found" });
+    return null;
+  }
+  return row;
+}
+
+function isConfidenceTier(v: unknown): v is VideoConfidenceTier {
+  return typeof v === "string" &&
+    (VIDEO_CONFIDENCE_TIERS as readonly string[]).includes(v);
+}
+
+// Link a player to a clip with a confidence tier. Default to "inferred"
+// — the least committal middle. "Confirmed" requires a non-empty
+// reason; the client pre-fills that with `Viewed by {staff name}` so
+// the friction is "type more if it warrants it" rather than a hard
+// stop. The (school_id, evidence_id, student_id) unique index means
+// re-tagging the same student is a no-op upsert; we PATCH instead of
+// throwing.
+router.post(
+  "/watchlist/video-evidence/:id/players",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const evidenceId = asInt(req.params["id"]);
+    if (!evidenceId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const evidence = await loadEvidenceForSchool(evidenceId, schoolId, res);
+    if (!evidence) return;
+    const b = req.body as Record<string, unknown>;
+    const studentId = clean(b["studentId"], 64);
+    const confidence = isConfidenceTier(b["confidence"])
+      ? b["confidence"]
+      : "inferred";
+    const clearedByFootage = Boolean(b["clearedByFootage"]);
+    const reason = clean(b["reason"], 4000) || null;
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    if (confidence === "confirmed" && !reason) {
+      res.status(400).json({
+        error:
+          "A reason is required when marking a clip as Confirmed.",
+      });
+      return;
+    }
+    // Confirm the student is actually a player on this case — guards
+    // against tagging an unrelated student via a forged studentId.
+    const [participant] = await db
+      .select({ studentId: interactionParticipantsTable.studentId })
+      .from(interactionParticipantsTable)
+      .innerJoin(
+        interactionsTable,
+        eq(interactionParticipantsTable.interactionId, interactionsTable.id),
+      )
+      .where(
+        and(
+          eq(interactionParticipantsTable.schoolId, schoolId),
+          eq(interactionParticipantsTable.studentId, studentId),
+          eq(interactionsTable.caseId, evidence.caseId),
+        ),
+      )
+      .limit(1);
+    if (!participant) {
+      res.status(400).json({
+        error: "studentId is not a player on this case",
+      });
+      return;
+    }
+    // Upsert on the (school, evidence, student) triple.
+    const [row] = await db
+      .insert(caseVideoEvidencePlayersTable)
+      .values({
+        schoolId,
+        evidenceId,
+        caseId: evidence.caseId,
+        studentId,
+        confidence,
+        clearedByFootage,
+        reason,
+        setByStaffId: staff.id,
+        setByName: staff.displayName,
+      })
+      .onConflictDoUpdate({
+        target: [
+          caseVideoEvidencePlayersTable.schoolId,
+          caseVideoEvidencePlayersTable.evidenceId,
+          caseVideoEvidencePlayersTable.studentId,
+        ],
+        set: {
+          confidence,
+          clearedByFootage,
+          reason,
+          setByStaffId: staff.id,
+          setByName: staff.displayName,
+          updatedAt: new Date(),
+        },
+      })
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "video_evidence_player",
+      entityId: row.id,
+      action: "linked",
+      staff,
+      payload: {
+        caseId: evidence.caseId,
+        evidenceId,
+        studentId,
+        confidence,
+        clearedByFootage,
+      },
+    });
+    res.json({ link: row });
+  },
+);
+
+router.patch(
+  "/watchlist/video-evidence/players/:linkId",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const linkId = asInt(req.params["linkId"]);
+    if (!linkId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    // Race-safe load-merge-validate-update: hold a row lock on the
+    // link from SELECT through UPDATE so a concurrent PATCH cannot
+    // change one half of the (confidence, reason) invariant after we
+    // read it. Without the lock, two interleaved patches can persist
+    // a `confirmed` row with `reason = null`.
+    const txResult = await db.transaction(async (tx) => {
+      const locked = await tx.execute(sql`
+        SELECT id, school_id, case_id, evidence_id, student_id,
+               confidence, cleared_by_footage, reason
+          FROM case_video_evidence_players
+         WHERE id = ${linkId} AND school_id = ${schoolId}
+         FOR UPDATE
+      `);
+      const lockedRow = (locked.rows ?? [])[0] as
+        | {
+            confidence: string;
+            cleared_by_footage: boolean;
+            reason: string | null;
+          }
+        | undefined;
+      if (!lockedRow) return { kind: "notfound" as const };
+
+      const patch: Partial<typeof caseVideoEvidencePlayersTable.$inferInsert> = {
+        updatedAt: new Date(),
+        setByStaffId: staff.id,
+        setByName: staff.displayName,
+      };
+      let mergedConfidence: VideoConfidenceTier =
+        lockedRow.confidence as VideoConfidenceTier;
+      let mergedReason: string | null = lockedRow.reason;
+      if (b["confidence"] !== undefined) {
+        if (!isConfidenceTier(b["confidence"])) {
+          return { kind: "badreq" as const, error: "invalid confidence tier" };
+        }
+        patch.confidence = b["confidence"];
+        mergedConfidence = b["confidence"];
+      }
+      if (b["clearedByFootage"] !== undefined) {
+        patch.clearedByFootage = Boolean(b["clearedByFootage"]);
+      }
+      if (b["reason"] !== undefined) {
+        const v =
+          typeof b["reason"] === "string"
+            ? clean(b["reason"], 4000) || null
+            : null;
+        patch.reason = v;
+        mergedReason = v;
+      }
+      if (mergedConfidence === "confirmed" && !mergedReason) {
+        return {
+          kind: "badreq" as const,
+          error: "A reason is required when marking a clip as Confirmed.",
+        };
+      }
+      const [updated] = await tx
+        .update(caseVideoEvidencePlayersTable)
+        .set(patch)
+        .where(
+          and(
+            eq(caseVideoEvidencePlayersTable.id, linkId),
+            eq(caseVideoEvidencePlayersTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      return {
+        kind: "ok" as const,
+        before: {
+          confidence: lockedRow.confidence,
+          clearedByFootage: lockedRow.cleared_by_footage,
+          reason: lockedRow.reason,
+        },
+        row: updated,
+      };
+    });
+    if (txResult.kind === "notfound") {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    if (txResult.kind === "badreq") {
+      res.status(400).json({ error: txResult.error });
+      return;
+    }
+    const row = txResult.row;
+    await audit({
+      schoolId,
+      entityType: "video_evidence_player",
+      entityId: linkId,
+      action: "updated",
+      staff,
+      payload: {
+        caseId: row.caseId,
+        evidenceId: row.evidenceId,
+        before: txResult.before,
+        after: {
+          confidence: row.confidence,
+          clearedByFootage: row.clearedByFootage,
+          reason: row.reason,
+        },
+      },
+    });
+    res.json({ link: row });
+  },
+);
+
+router.delete(
+  "/watchlist/video-evidence/players/:linkId",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const linkId = asInt(req.params["linkId"]);
+    if (!linkId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .delete(caseVideoEvidencePlayersTable)
+      .where(
+        and(
+          eq(caseVideoEvidencePlayersTable.id, linkId),
+          eq(caseVideoEvidencePlayersTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "video_evidence_player",
+      entityId: linkId,
+      action: "unlinked",
+      staff,
+      payload: {
+        caseId: row.caseId,
+        evidenceId: row.evidenceId,
+        studentId: row.studentId,
+      },
+    });
+    res.json({ ok: true });
   },
 );
 
@@ -3053,16 +3418,32 @@ router.delete(
       res.status(400).json({ error: "Invalid id" });
       return;
     }
-    const [row] = await db
-      .delete(caseVideoEvidenceTable)
-      .where(
-        and(
-          eq(caseVideoEvidenceTable.id, id),
-          eq(caseVideoEvidenceTable.schoolId, schoolId),
-        ),
-      )
-      .returning();
-    if (!row) {
+    // Cascade delete: remove player links first so the clip going
+    // away never leaves orphan rows that would surface as phantom
+    // camera badges in /player-clip-summary. Wrapped in a tx so the
+    // two deletes commit together.
+    const result = await db.transaction(async (tx) => {
+      const removedLinks = await tx
+        .delete(caseVideoEvidencePlayersTable)
+        .where(
+          and(
+            eq(caseVideoEvidencePlayersTable.schoolId, schoolId),
+            eq(caseVideoEvidencePlayersTable.evidenceId, id),
+          ),
+        )
+        .returning();
+      const [row] = await tx
+        .delete(caseVideoEvidenceTable)
+        .where(
+          and(
+            eq(caseVideoEvidenceTable.id, id),
+            eq(caseVideoEvidenceTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      return { row, removedLinkCount: removedLinks.length };
+    });
+    if (!result.row) {
       res.status(404).json({ error: "Not found" });
       return;
     }
@@ -3072,7 +3453,11 @@ router.delete(
       entityId: id,
       action: "deleted",
       staff,
-      payload: { caseId: row.caseId, cameraLabel: row.cameraLabel },
+      payload: {
+        caseId: result.row.caseId,
+        cameraLabel: result.row.cameraLabel,
+        removedPlayerLinks: result.removedLinkCount,
+      },
     });
     res.json({ ok: true });
   },

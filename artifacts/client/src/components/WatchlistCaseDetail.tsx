@@ -131,12 +131,16 @@ interface Props {
   // Case Insights). Threaded down from the App.tsx call site so the
   // detail view never has to fetch /me itself.
   isAdmin?: boolean;
+  // Display name of the logged-in admin — used to pre-fill the
+  // "Viewed by {name}" reason text on Confirmed video tags.
+  viewerName?: string;
 }
 
 export default function WatchlistCaseDetail({
   caseId,
   onBack,
   isAdmin = false,
+  viewerName = "",
 }: Props) {
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -832,9 +836,15 @@ export default function WatchlistCaseDetail({
             </div>
 
             {/* Video evidence (admin-only — Phase 2 of case enhancement suite) */}
-            {isAdmin && (
+            {isAdmin && data && (
               <VideoEvidencePanel
                 caseId={caseId}
+                casePlayers={data.players.map((p) => ({
+                  studentId: p.studentId,
+                  firstName: p.firstName,
+                  lastName: p.lastName,
+                }))}
+                viewerName={viewerName || "admin"}
                 brandColor={C.brand}
                 panelBg={C.panel}
                 pageBg={C.bg}

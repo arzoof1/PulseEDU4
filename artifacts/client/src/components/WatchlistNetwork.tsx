@@ -227,6 +227,17 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
   // null = overview (all clusters); a number = zoom into one cluster
   // (case id, or -1 for the loose / no-case ring).
   const [zoomedClusterId, setZoomedClusterId] = useState<number | null>(null);
+  // Phase 2.1 — per-student rollup of video evidence on the currently
+  // zoomed case. Empty map when not zoomed or when the viewer is not
+  // an admin (the endpoint 403s for non-admins, which we silently treat
+  // as "no badges to paint" so the network surface itself stays
+  // available to core-team viewers).
+  const [evidenceSummary, setEvidenceSummary] = useState<
+    Map<
+      string,
+      { count: number; topTier: "confirmed" | "inferred" | "possible"; hasCleared: boolean }
+    >
+  >(new Map());
 
   const reload = useCallback(async () => {
     setError(null);
@@ -242,6 +253,52 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  // Refresh the per-case evidence rollup whenever we zoom into (or
+  // out of) a case. Loose-cluster zoom (id < 0) has no case, so skip.
+  useEffect(() => {
+    if (zoomedClusterId === null || zoomedClusterId < 0) {
+      setEvidenceSummary(new Map());
+      return;
+    }
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await authFetch(
+          `/api/watchlist/cases/${zoomedClusterId}/player-clip-summary`,
+        );
+        if (cancelled) return;
+        if (r.status === 403 || !r.ok) {
+          setEvidenceSummary(new Map());
+          return;
+        }
+        const j = (await r.json()) as {
+          summary: Array<{
+            studentId: string;
+            count: number;
+            topTier: "confirmed" | "inferred" | "possible";
+            hasCleared: boolean;
+          }>;
+        };
+        const m = new Map<
+          string,
+          { count: number; topTier: "confirmed" | "inferred" | "possible"; hasCleared: boolean }
+        >();
+        for (const row of j.summary)
+          m.set(row.studentId, {
+            count: row.count,
+            topTier: row.topTier,
+            hasCleared: row.hasCleared,
+          });
+        setEvidenceSummary(m);
+      } catch {
+        if (!cancelled) setEvidenceSummary(new Map());
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [zoomedClusterId]);
 
   // When zoomed, restrict to nodes that belong to that cluster and run a
   // single-cluster layout so the bubbles fill the viewport. Edges are
@@ -627,6 +684,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
                 selectedId={selectedId}
                 zoomed={zoomedClusterId !== null}
                 anchorIds={layoutResult!.anchorIds}
+                evidenceSummary={evidenceSummary}
                 onSelectNode={(id) => setSelectedId(id)}
                 onOpenCase={(id) => onOpenCase?.(id)}
                 onZoomCluster={(id) => {
@@ -911,6 +969,7 @@ function NetworkSVG({
   selectedId,
   zoomed,
   anchorIds,
+  evidenceSummary,
   onSelectNode,
   onOpenCase,
   onZoomCluster,
@@ -921,6 +980,13 @@ function NetworkSVG({
   selectedId: string | null;
   zoomed: boolean;
   anchorIds: Set<string>;
+  // Per-student rollup of video clip evidence on the currently zoomed
+  // case. Empty in overview mode (we only paint badges on the per-case
+  // zoom — overview rings are too dense for the glyph to read).
+  evidenceSummary: Map<
+    string,
+    { count: number; topTier: "confirmed" | "inferred" | "possible"; hasCleared: boolean }
+  >;
   onSelectNode: (id: string) => void;
   onOpenCase: (id: number) => void;
   onZoomCluster: (id: number) => void;
@@ -1235,6 +1301,122 @@ function NetworkSVG({
             >
               {n.lastName} · {n.grade ?? "?"}
             </text>
+            {/* Phase 2.1 video-evidence badge. Sits in a fixed corner
+                (upper-right) of every player sphere with ≥1 linked
+                clip so admins can scan "who's actually on tape" at a
+                glance. Style by topTier; small green check overlay
+                when any clip has Cleared-by-footage; numeric chip
+                when count > 1. Drops out gracefully at small radii
+                so the overview ring isn't littered with tiny glyphs. */}
+            {(() => {
+              const ev = evidenceSummary.get(n.studentId);
+              if (!ev) return null;
+              if (r < 18) return null;
+              const cx = n.x + r * 0.7;
+              const cy = n.y - r * 0.7;
+              const bs = Math.max(8, r * 0.34); // badge half-size
+              const tier = ev.topTier;
+              const fill =
+                tier === "confirmed" ? "#9F1D1D" : tier === "inferred" ? "#FFFFFF" : "#FFFFFF";
+              const stroke =
+                tier === "confirmed" ? "#9F1D1D" : tier === "inferred" ? "#9F1D1D" : "#B58A8A";
+              const opacity = tier === "possible" ? 0.85 : 1;
+              const iconStroke = tier === "confirmed" ? "#FFFFFF" : "#9F1D1D";
+              return (
+                <g style={{ pointerEvents: "none" }} opacity={opacity}>
+                  <title>
+                    Video evidence: {ev.count} clip{ev.count === 1 ? "" : "s"} ({tier}
+                    {ev.hasCleared ? ", cleared by footage" : ""})
+                  </title>
+                  {/* Halo so the badge reads on top of the sphere */}
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={bs + 1.5}
+                    fill={C.graphBg}
+                    stroke={stroke}
+                    strokeWidth={1.2}
+                  />
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={bs}
+                    fill={fill}
+                    stroke={stroke}
+                    strokeWidth={1.4}
+                  />
+                  {/* Camera glyph: small body rect + lens circle. Hand-
+                      rolled so we don't need lucide inside <svg>. */}
+                  <rect
+                    x={cx - bs * 0.55}
+                    y={cy - bs * 0.35}
+                    width={bs * 1.1}
+                    height={bs * 0.7}
+                    rx={bs * 0.12}
+                    fill="none"
+                    stroke={iconStroke}
+                    strokeWidth={Math.max(1, bs * 0.18)}
+                  />
+                  <rect
+                    x={cx - bs * 0.18}
+                    y={cy - bs * 0.55}
+                    width={bs * 0.36}
+                    height={bs * 0.22}
+                    fill={iconStroke}
+                  />
+                  <circle
+                    cx={cx}
+                    cy={cy}
+                    r={bs * 0.22}
+                    fill="none"
+                    stroke={iconStroke}
+                    strokeWidth={Math.max(1, bs * 0.16)}
+                  />
+                  {ev.hasCleared && (
+                    <g>
+                      <circle
+                        cx={cx + bs * 0.85}
+                        cy={cy - bs * 0.85}
+                        r={bs * 0.55}
+                        fill="#1E6E3A"
+                        stroke="#FFFFFF"
+                        strokeWidth={1}
+                      />
+                      <path
+                        d={`M ${cx + bs * 0.6},${cy - bs * 0.85} l ${bs * 0.18},${bs * 0.18} l ${bs * 0.32},${-bs * 0.32}`}
+                        fill="none"
+                        stroke="#FFFFFF"
+                        strokeWidth={Math.max(1.2, bs * 0.18)}
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </g>
+                  )}
+                  {ev.count > 1 && (
+                    <g>
+                      <circle
+                        cx={cx - bs * 0.85}
+                        cy={cy + bs * 0.7}
+                        r={bs * 0.55}
+                        fill="#1F2937"
+                        stroke="#FFFFFF"
+                        strokeWidth={1}
+                      />
+                      <text
+                        x={cx - bs * 0.85}
+                        y={cy + bs * 0.7 + bs * 0.22}
+                        fontSize={bs * 0.75}
+                        fontWeight={800}
+                        fill="#FFFFFF"
+                        textAnchor="middle"
+                      >
+                        {ev.count}
+                      </text>
+                    </g>
+                  )}
+                </g>
+              );
+            })()}
           </g>
         );
       })}

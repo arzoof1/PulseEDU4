@@ -1,12 +1,50 @@
 import { useEffect, useState } from "react";
-import { Plus, Trash2, Video, Save, X, ExternalLink } from "lucide-react";
+import {
+  Plus,
+  Trash2,
+  Video,
+  Save,
+  X,
+  ExternalLink,
+  ShieldCheck,
+  AlertTriangle,
+} from "lucide-react";
 import { authFetch } from "../../lib/authToken";
 
-// Admin-only Phase 2 panel. Lists the video evidence the investigator
-// has identified for this case and lets them add / edit / remove rows.
-// All routes are 403'd for non-admins server-side, but we also gate the
-// render so a teacher who somehow lands here sees nothing rather than
-// an empty-state hint that betrays the surface exists.
+// Admin-only Phase 2 panel + Phase 2.1 player-tagging UI.
+//
+// The panel lists per-case video evidence and lets the admin link
+// specific players to a clip with a confidence rating
+// (`confirmed` / `inferred` / `possible`) plus an orthogonal
+// "Cleared by footage" flag. Confirmed requires a justification —
+// pre-filled with `Viewed by {staff name}` so the friction is "type
+// more if it warrants it" rather than a hard stop. All routes are
+// 403'd for non-admins server-side; we also gate the render so a
+// teacher who somehow lands here sees nothing.
+
+type Tier = "confirmed" | "inferred" | "possible";
+const TIER_ORDER: Tier[] = ["confirmed", "inferred", "possible"];
+const TIER_LABEL: Record<Tier, string> = {
+  confirmed: "Confirmed",
+  inferred: "Inferred",
+  possible: "Possible",
+};
+const TIER_HINT: Record<Tier, string> = {
+  confirmed: "Clearly visible performing the action on camera.",
+  inferred: "In frame; action obscured but circumstances are strong.",
+  possible: "In frame around the relevant time; role unclear.",
+};
+
+interface PlayerLink {
+  id: number;
+  evidenceId: number;
+  studentId: string;
+  confidence: Tier;
+  clearedByFootage: boolean;
+  reason: string | null;
+  setByName: string | null;
+  updatedAt: string;
+}
 
 interface EvidenceRow {
   id: number;
@@ -19,10 +57,21 @@ interface EvidenceRow {
   notes: string | null;
   loggedByName: string | null;
   createdAt: string;
+  players: PlayerLink[];
+}
+
+export interface CasePlayerLite {
+  studentId: string;
+  firstName: string;
+  lastName: string;
 }
 
 interface Props {
   caseId: number;
+  casePlayers: CasePlayerLite[];
+  // Used as the default "Viewed by {name}" reason text when the admin
+  // promotes a link to Confirmed.
+  viewerName: string;
   brandColor: string;
   panelBg: string;
   pageBg: string;
@@ -30,10 +79,6 @@ interface Props {
   inkSoft: string;
 }
 
-// Convert a JS Date <-> the value a <input type="datetime-local"> wants
-// (no timezone, minute precision). We store TIMESTAMPTZ on the server,
-// but display in local time so the admin sees what the camera clock
-// said.
 function toLocalInput(iso: string | null | undefined): string {
   if (!iso) return "";
   const d = new Date(iso);
@@ -46,13 +91,29 @@ function toLocalInput(iso: string | null | undefined): string {
 
 function fromLocalInput(v: string): string {
   if (!v) return "";
-  // datetime-local has no zone — interpret as local and serialise to ISO.
   const d = new Date(v);
   return Number.isNaN(d.getTime()) ? "" : d.toISOString();
 }
 
+function tierBadgeStyle(t: Tier, brand: string): React.CSSProperties {
+  switch (t) {
+    case "confirmed":
+      return { background: brand, color: "#FFFFFF", borderColor: brand };
+    case "inferred":
+      return { background: "#FFFFFF", color: brand, borderColor: brand };
+    case "possible":
+      return {
+        background: "#FFFFFF",
+        color: "#7A5C5C",
+        borderColor: "#D9C7C7",
+      };
+  }
+}
+
 export default function VideoEvidencePanel({
   caseId,
+  casePlayers,
+  viewerName,
   brandColor,
   panelBg,
   pageBg,
@@ -78,6 +139,20 @@ export default function VideoEvidencePanel({
   const [editUrl, setEditUrl] = useState("");
   const [editNotes, setEditNotes] = useState("");
 
+  // Per-clip "tag a player" picker: which clip is currently in
+  // tagging mode, and the form state for that pick.
+  const [tagFor, setTagFor] = useState<number | null>(null);
+  const [tagStudentId, setTagStudentId] = useState<string>("");
+  const [tagTier, setTagTier] = useState<Tier>("inferred");
+  const [tagCleared, setTagCleared] = useState(false);
+  const [tagReason, setTagReason] = useState("");
+
+  // Per-link inline edit (changing tier on an existing chip).
+  const [editingLinkId, setEditingLinkId] = useState<number | null>(null);
+  const [editLinkTier, setEditLinkTier] = useState<Tier>("inferred");
+  const [editLinkCleared, setEditLinkCleared] = useState(false);
+  const [editLinkReason, setEditLinkReason] = useState("");
+
   async function load() {
     setError(null);
     try {
@@ -86,7 +161,6 @@ export default function VideoEvidencePanel({
         { credentials: "include" },
       );
       if (r.status === 403) {
-        // Non-admin somehow rendered this panel; fail silent (no leak).
         setRows([]);
         return;
       }
@@ -207,7 +281,7 @@ export default function VideoEvidencePanel({
   async function remove(id: number) {
     if (
       !window.confirm(
-        "Remove this video evidence entry? The change will be recorded in the audit log.",
+        "Remove this video evidence entry and its player tags? The change will be recorded in the audit log.",
       )
     )
       return;
@@ -227,11 +301,144 @@ export default function VideoEvidencePanel({
     }
   }
 
-  // Quick chip — when an admin clicks a recently-used label, prefill
-  // the new-row label field.
   function chooseLabel(l: string) {
     if (showAdd) setNewLabel(l);
     else if (editingId != null) setEditLabel(l);
+  }
+
+  function startTag(evidenceId: number) {
+    setTagFor(evidenceId);
+    setTagStudentId("");
+    setTagTier("inferred");
+    setTagCleared(false);
+    setTagReason("");
+  }
+  function cancelTag() {
+    setTagFor(null);
+  }
+  // When the admin selects "Confirmed", auto-fill the reason with
+  // the viewer attribution. They can append details before saving.
+  function onTierChange(next: Tier) {
+    setTagTier(next);
+    if (next === "confirmed" && !tagReason.trim()) {
+      setTagReason(`Viewed by ${viewerName}`);
+    }
+  }
+
+  async function saveTag() {
+    if (tagFor == null || !tagStudentId) return;
+    if (tagTier === "confirmed" && !tagReason.trim()) {
+      setError("A reason is required when marking as Confirmed.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/video-evidence/${tagFor}/players`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            studentId: tagStudentId,
+            confidence: tagTier,
+            clearedByFootage: tagCleared,
+            reason: tagReason.trim() || null,
+          }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      cancelTag();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEditLink(p: PlayerLink) {
+    setEditingLinkId(p.id);
+    setEditLinkTier(p.confidence);
+    setEditLinkCleared(p.clearedByFootage);
+    setEditLinkReason(p.reason ?? "");
+  }
+  function cancelEditLink() {
+    setEditingLinkId(null);
+  }
+  function onEditLinkTierChange(next: Tier) {
+    setEditLinkTier(next);
+    if (next === "confirmed" && !editLinkReason.trim()) {
+      setEditLinkReason(`Viewed by ${viewerName}`);
+    }
+  }
+  async function saveEditLink(linkId: number) {
+    if (editLinkTier === "confirmed" && !editLinkReason.trim()) {
+      setError("A reason is required when marking as Confirmed.");
+      return;
+    }
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/video-evidence/players/${linkId}`,
+        {
+          method: "PATCH",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confidence: editLinkTier,
+            clearedByFootage: editLinkCleared,
+            reason: editLinkReason.trim() || null,
+          }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      cancelEditLink();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function removeLink(linkId: number) {
+    if (
+      !window.confirm(
+        "Remove this player tag from the clip? The change will be recorded in the audit log.",
+      )
+    )
+      return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/video-evidence/players/${linkId}`,
+        {
+          method: "DELETE",
+          credentials: "include",
+        },
+      );
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function playerName(studentId: string): string {
+    const p = casePlayers.find((x) => x.studentId === studentId);
+    return p ? `${p.firstName} ${p.lastName}` : studentId;
   }
 
   const hasRows = rows && rows.length > 0;
@@ -280,7 +487,10 @@ export default function VideoEvidencePanel({
 
       {labels.length > 0 && (showAdd || editingId != null) && (
         <div className="mt-3 flex flex-wrap items-center gap-1">
-          <span className="text-[10px] font-bold uppercase" style={{ color: inkSoft }}>
+          <span
+            className="text-[10px] font-bold uppercase"
+            style={{ color: inkSoft }}
+          >
             Recent cameras:
           </span>
           {labels.slice(0, 12).map((l) => (
@@ -289,7 +499,11 @@ export default function VideoEvidencePanel({
               type="button"
               onClick={() => chooseLabel(l)}
               className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-              style={{ borderColor: lineColor, color: brandColor, background: pageBg }}
+              style={{
+                borderColor: lineColor,
+                color: brandColor,
+                background: pageBg,
+              }}
             >
               {l}
             </button>
@@ -362,7 +576,11 @@ export default function VideoEvidencePanel({
               onClick={resetAdd}
               disabled={saving}
               className="rounded-md px-3 py-1 text-xs font-semibold"
-              style={{ background: panelBg, color: brandColor, border: `1px solid ${lineColor}` }}
+              style={{
+                background: panelBg,
+                color: brandColor,
+                border: `1px solid ${lineColor}`,
+              }}
             >
               Cancel
             </button>
@@ -440,7 +658,11 @@ export default function VideoEvidencePanel({
                     onClick={cancelEdit}
                     disabled={saving}
                     className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold"
-                    style={{ borderColor: lineColor, background: panelBg, color: brandColor }}
+                    style={{
+                      borderColor: lineColor,
+                      background: panelBg,
+                      color: brandColor,
+                    }}
                   >
                     <X className="h-3 w-3" /> Cancel
                   </button>
@@ -464,7 +686,10 @@ export default function VideoEvidencePanel({
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
-                      <Video className="h-3.5 w-3.5" style={{ color: brandColor }} />
+                      <Video
+                        className="h-3.5 w-3.5"
+                        style={{ color: brandColor }}
+                      />
                       <span>{r.cameraLabel}</span>
                     </div>
                     <div className="mt-1 text-[11px]" style={{ color: inkSoft }}>
@@ -493,6 +718,299 @@ export default function VideoEvidencePanel({
                         {r.notes}
                       </div>
                     )}
+
+                    {/* Linked players strip — chips for each, "+ Tag player"
+                        opens the picker. Skippable; defaults to Inferred. */}
+                    <div
+                      className="mt-3 border-t pt-2"
+                      style={{ borderColor: lineColor }}
+                    >
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span
+                          className="text-[10px] font-bold uppercase"
+                          style={{ color: inkSoft }}
+                        >
+                          Linked players:
+                        </span>
+                        {r.players.length === 0 && (
+                          <span
+                            className="text-[11px] italic"
+                            style={{ color: inkSoft }}
+                          >
+                            none yet
+                          </span>
+                        )}
+                        {r.players.map((p) =>
+                          editingLinkId === p.id ? null : (
+                            <button
+                              key={p.id}
+                              type="button"
+                              onClick={() => startEditLink(p)}
+                              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                              style={tierBadgeStyle(p.confidence, brandColor)}
+                              title={`${TIER_LABEL[p.confidence]}${
+                                p.clearedByFootage ? " · cleared by footage" : ""
+                              }${p.reason ? ` · ${p.reason}` : ""}`}
+                            >
+                              <Video className="h-3 w-3" />
+                              <span>{playerName(p.studentId)}</span>
+                              <span className="opacity-80">
+                                · {TIER_LABEL[p.confidence]}
+                              </span>
+                              {p.clearedByFootage && (
+                                <ShieldCheck className="h-3 w-3" />
+                              )}
+                            </button>
+                          ),
+                        )}
+                        {tagFor !== r.id && (
+                          <button
+                            type="button"
+                            onClick={() => startTag(r.id)}
+                            className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                            style={{
+                              borderColor: lineColor,
+                              color: brandColor,
+                              background: panelBg,
+                            }}
+                          >
+                            <Plus className="h-3 w-3" /> Tag player
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Inline edit-link form */}
+                      {r.players
+                        .filter((p) => p.id === editingLinkId)
+                        .map((p) => (
+                          <div
+                            key={`edit-${p.id}`}
+                            className="mt-2 rounded-md border p-2"
+                            style={{ borderColor: brandColor, background: panelBg }}
+                          >
+                            <div
+                              className="text-[11px] font-bold"
+                              style={{ color: brandColor }}
+                            >
+                              Edit tag — {playerName(p.studentId)}
+                            </div>
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {TIER_ORDER.map((t) => (
+                                <button
+                                  key={t}
+                                  type="button"
+                                  onClick={() => onEditLinkTierChange(t)}
+                                  className="rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                                  style={
+                                    editLinkTier === t
+                                      ? tierBadgeStyle(t, brandColor)
+                                      : {
+                                          borderColor: lineColor,
+                                          color: inkSoft,
+                                          background: pageBg,
+                                        }
+                                  }
+                                  title={TIER_HINT[t]}
+                                >
+                                  {TIER_LABEL[t]}
+                                </button>
+                              ))}
+                              <label className="ml-2 inline-flex items-center gap-1 text-[11px] font-semibold">
+                                <input
+                                  type="checkbox"
+                                  checked={editLinkCleared}
+                                  onChange={(e) =>
+                                    setEditLinkCleared(e.target.checked)
+                                  }
+                                />
+                                Cleared by footage
+                              </label>
+                            </div>
+                            {editLinkTier === "confirmed" && (
+                              <div
+                                className="mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px]"
+                                style={{
+                                  background: "#FEF3C7",
+                                  color: "#92400E",
+                                  border: "1px solid #FDE68A",
+                                }}
+                              >
+                                <AlertTriangle className="h-3 w-3" />
+                                Confirmed creates a strong record. State what
+                                you saw — this will be in the audit trail.
+                              </div>
+                            )}
+                            <textarea
+                              value={editLinkReason}
+                              onChange={(e) => setEditLinkReason(e.target.value)}
+                              placeholder={`Reason${
+                                editLinkTier === "confirmed" ? " (required)" : " (optional)"
+                              }`}
+                              rows={2}
+                              className="mt-1 w-full rounded-md border px-2 py-1 text-xs"
+                              style={{ borderColor: lineColor, background: pageBg }}
+                            />
+                            <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void removeLink(p.id)}
+                                disabled={saving}
+                                className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
+                                style={{
+                                  borderColor: "#FCA5A5",
+                                  background: "#FEF2F2",
+                                  color: "#991B1B",
+                                }}
+                              >
+                                <Trash2 className="h-3 w-3" /> Remove tag
+                              </button>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  onClick={cancelEditLink}
+                                  disabled={saving}
+                                  className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                                  style={{
+                                    borderColor: lineColor,
+                                    background: pageBg,
+                                    color: brandColor,
+                                  }}
+                                >
+                                  Cancel
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => void saveEditLink(p.id)}
+                                  disabled={saving}
+                                  className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+                                  style={{
+                                    background: brandColor,
+                                    color: "#FFFFFF",
+                                  }}
+                                >
+                                  Save
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+
+                      {/* Inline new-tag form */}
+                      {tagFor === r.id && (
+                        <div
+                          className="mt-2 rounded-md border p-2"
+                          style={{ borderColor: brandColor, background: panelBg }}
+                        >
+                          <div className="flex flex-wrap items-center gap-2">
+                            <select
+                              value={tagStudentId}
+                              onChange={(e) => setTagStudentId(e.target.value)}
+                              className="rounded-md border px-2 py-1 text-xs"
+                              style={{
+                                borderColor: lineColor,
+                                background: pageBg,
+                              }}
+                            >
+                              <option value="">Choose player…</option>
+                              {casePlayers
+                                .filter(
+                                  (p) =>
+                                    !r.players.some(
+                                      (pl) => pl.studentId === p.studentId,
+                                    ),
+                                )
+                                .map((p) => (
+                                  <option key={p.studentId} value={p.studentId}>
+                                    {p.firstName} {p.lastName}
+                                  </option>
+                                ))}
+                            </select>
+                            <div className="flex flex-wrap gap-1">
+                              {TIER_ORDER.map((t) => (
+                                <button
+                                  key={t}
+                                  type="button"
+                                  onClick={() => onTierChange(t)}
+                                  className="rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                                  style={
+                                    tagTier === t
+                                      ? tierBadgeStyle(t, brandColor)
+                                      : {
+                                          borderColor: lineColor,
+                                          color: inkSoft,
+                                          background: pageBg,
+                                        }
+                                  }
+                                  title={TIER_HINT[t]}
+                                >
+                                  {TIER_LABEL[t]}
+                                </button>
+                              ))}
+                            </div>
+                            <label className="inline-flex items-center gap-1 text-[11px] font-semibold">
+                              <input
+                                type="checkbox"
+                                checked={tagCleared}
+                                onChange={(e) => setTagCleared(e.target.checked)}
+                              />
+                              Cleared by footage
+                            </label>
+                          </div>
+                          {tagTier === "confirmed" && (
+                            <div
+                              className="mt-2 inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px]"
+                              style={{
+                                background: "#FEF3C7",
+                                color: "#92400E",
+                                border: "1px solid #FDE68A",
+                              }}
+                            >
+                              <AlertTriangle className="h-3 w-3" />
+                              Confirmed creates a strong record. State what
+                              you saw — this will be in the audit trail.
+                            </div>
+                          )}
+                          <textarea
+                            value={tagReason}
+                            onChange={(e) => setTagReason(e.target.value)}
+                            placeholder={`Reason${
+                              tagTier === "confirmed" ? " (required)" : " (optional)"
+                            }`}
+                            rows={2}
+                            className="mt-1 w-full rounded-md border px-2 py-1 text-xs"
+                            style={{ borderColor: lineColor, background: pageBg }}
+                          />
+                          <div className="mt-2 flex justify-end gap-2">
+                            <button
+                              type="button"
+                              onClick={cancelTag}
+                              disabled={saving}
+                              className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                              style={{
+                                borderColor: lineColor,
+                                background: pageBg,
+                                color: brandColor,
+                              }}
+                            >
+                              Cancel
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void saveTag()}
+                              disabled={saving || !tagStudentId}
+                              className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+                              style={{
+                                background: brandColor,
+                                color: "#FFFFFF",
+                              }}
+                            >
+                              {saving ? "Saving…" : "Save tag"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+
                     <div
                       className="mt-2 text-[10px]"
                       style={{ color: inkSoft }}

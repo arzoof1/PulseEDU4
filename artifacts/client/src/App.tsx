@@ -19151,6 +19151,7 @@ function App() {
               authUser?.isSuperUser ||
               authUser?.isDistrictAdmin,
           )}
+          viewerName={authUser?.displayName ?? ""}
         />
       )}
 
