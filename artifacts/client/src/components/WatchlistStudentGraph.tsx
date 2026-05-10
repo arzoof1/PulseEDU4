@@ -201,7 +201,7 @@ export default function WatchlistStudentGraph({
       setSearching(true);
       try {
         const r = await authFetch(
-          `/api/student-finder/search?q=${encodeURIComponent(query.trim())}`,
+          `/api/watchlist/student-search?q=${encodeURIComponent(query.trim())}`,
           { signal: ac.signal },
         );
         if (r.ok) {
@@ -440,7 +440,7 @@ export default function WatchlistStudentGraph({
               className="absolute left-0 right-0 top-full z-20 mt-1 rounded-md border px-3 py-2 text-sm shadow-lg"
               style={{ borderColor: C.line, background: C.panel, color: C.inkSoft }}
             >
-              No students match "{query.trim()}".
+              No students with an investigation footprint match "{query.trim()}".
             </div>
           )}
         </div>

@@ -64,7 +64,7 @@ import {
   type InteractionKind,
   type StaffRow,
 } from "@workspace/db";
-import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 
@@ -256,6 +256,69 @@ router.get("/watchlist/summary", async (req: Request, res: Response) => {
     windowDays: 14,
   });
 });
+
+// --- student search (Investigations-only) ----------------------------
+//
+// Typeahead used by the Student Spider. Unlike the generic
+// /api/student-finder/search (which returns any student in the school),
+// this is scoped to students with at least one investigation footprint
+// — i.e. they appear as a participant in any interaction in this school,
+// regardless of whether a witness statement was ever filed. This is what
+// keeps a Spider search from landing on a student with zero connections
+// and an empty web.
+
+router.get(
+  "/watchlist/student-search",
+  async (req: Request, res: Response) => {
+    if (!req.staffId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (qRaw.length < 1) {
+      res.json({ students: [] });
+      return;
+    }
+    const q = qRaw.slice(0, 64);
+
+    // Subquery: distinct student_ids that appear as a participant in an
+    // interaction belonging to this school. Using EXISTS keeps the join
+    // costs sane and naturally dedupes.
+    const rows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          or(
+            ilike(studentsTable.firstName, `%${q}%`),
+            ilike(studentsTable.lastName, `%${q}%`),
+            ilike(studentsTable.studentId, `%${q}%`),
+          ),
+          sql`EXISTS (
+            SELECT 1
+              FROM ${interactionParticipantsTable} p
+              JOIN ${interactionsTable} i
+                ON i.id = p.interaction_id
+             WHERE p.student_id = ${studentsTable.studentId}
+               AND i.school_id = ${schoolId}
+          )`,
+        ),
+      )
+      .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName))
+      .limit(20);
+
+    res.json({ students: rows });
+  },
+);
 
 // --- orbit (top-of-orbit chart data) ---------------------------------
 
