@@ -1638,10 +1638,22 @@ function pageBreakIfNear(needed: number) {
   }
 }
 
+function isAtTopOfPage(): boolean {
+  return doc.y <= doc.page.margins.top + 2;
+}
+
+function startNewPageIfNotAtTop() {
+  if (!isAtTopOfPage()) doc.addPage();
+}
+
 function drawFootersOnAllPages() {
   const range = doc.bufferedPageRange();
   for (let i = 0; i < range.count; i++) {
     doc.switchToPage(range.start + i);
+    // Zero the bottom margin so writing into the footer band does not
+    // trigger pdfkit's auto-pagination (which would spawn blank pages).
+    const origBottom = doc.page.margins.bottom;
+    doc.page.margins.bottom = 0;
     const w =
       doc.page.width - doc.page.margins.left - doc.page.margins.right;
     doc.font(FONT_BODY).fontSize(8).fillColor(COLORS.inkFaint);
@@ -1657,6 +1669,7 @@ function drawFootersOnAllPages() {
       doc.page.height - 40,
       { width: w, align: "right", lineBreak: false },
     );
+    doc.page.margins.bottom = origBottom;
   }
 }
 
@@ -1805,14 +1818,14 @@ function renderScreen(s: ScreenSpec) {
 }
 
 for (const sec of SECTIONS) {
-  doc.addPage();
+  startNewPageIfNotAtTop();
   h1(sec.title);
   if (sec.blurb) p(sec.blurb, { soft: true });
   for (const screen of sec.screens) renderScreen(screen);
 }
 
 // ---------- Closing page ----------
-doc.addPage();
+startNewPageIfNotAtTop();
 h1("Maintenance");
 p(
   "When you ship a new screen or function, append a row to this document — do not let it drift. The 'How to use' panels inside the app (HowToUseHelp / RoleSection) should mirror the per-role behavior recorded here.",
