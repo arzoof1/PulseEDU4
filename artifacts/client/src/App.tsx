@@ -12887,10 +12887,46 @@ function App() {
             track.
           </HowToSection>
           <RoleSection for="teacher" title="Daily use for teachers">
-            Read-only — you can see the active accommodations for
-            any student on your roster. Print this page right before
-            an IEP / 504 meeting so the team has the current list in
-            hand.
+            <p style={{ margin: "0 0 0.5rem" }}>
+              You'll log <strong>Provided</strong> or <strong>Refused</strong>{" "}
+              for each student with accommodations, once per class period.
+              Step-by-step:
+            </p>
+            <ol style={howtoListStyle}>
+              <li>
+                Open the <strong>Class Log</strong> tab at the top of this
+                page.
+              </li>
+              <li>
+                Pick the <strong>period</strong> you're logging from the
+                period dropdown. The roster fills with the students in that
+                period who have active accommodations — anyone without
+                accommodations is hidden, so you'll only see the kids who
+                need a log entry.
+              </li>
+              <li>
+                <strong>Click a student's name</strong> to expand their row.
+                You'll see each of their accommodations listed underneath.
+              </li>
+              <li>
+                For every accommodation, tap <strong>Provided</strong> (you
+                gave it) or <strong>Refused</strong> (the student declined
+                it). Leaving an accommodation untouched marks it skipped —
+                use that only for absent students.
+              </li>
+              <li>
+                Repeat for the rest of the roster, then scroll to the bottom
+                and press the <strong>Submit</strong> button to record the
+                whole period at once. You'll see a confirmation when it
+                saves.
+              </li>
+            </ol>
+            <p style={{ margin: "0.5rem 0 0", fontSize: "0.85rem", opacity: 0.8 }}>
+              Tip: you can also view the read-only list of any student's
+              active accommodations from your Teacher Roster. Print this
+              page right before an IEP / 504 meeting so the team has the
+              current list in hand.
+            </p>
           </RoleSection>
           <RoleSection for={["eseCoordinator", "admin"]} title="ESE Coordinator">
             Use this page to add accommodations the SIS hasn't
