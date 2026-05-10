@@ -136,6 +136,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   const [savingSevId, setSavingSevId] = useState<number | null>(null);
   const [editingImpactSid, setEditingImpactSid] = useState<string | null>(null);
   const [savingImpactSid, setSavingImpactSid] = useState<string | null>(null);
+  const [detachingId, setDetachingId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
@@ -594,6 +595,37 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                               · {i.location}
                             </span>
                           )}
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              const ok = window.confirm(
+                                "Return this incident to the unattached queue?\n\nIt stays in the system — only the link to this case is removed. The detach is audit-logged.",
+                              );
+                              if (!ok) return;
+                              setDetachingId(i.id);
+                              try {
+                                const r = await authFetch(
+                                  `/api/watchlist/interactions/${i.id}`,
+                                  {
+                                    method: "PATCH",
+                                    headers: {
+                                      "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify({ caseId: null }),
+                                  },
+                                );
+                                if (r.ok) await reload();
+                              } finally {
+                                setDetachingId(null);
+                              }
+                            }}
+                            disabled={detachingId === i.id}
+                            className="ml-auto text-[11px] font-semibold underline-offset-2 hover:underline disabled:opacity-50"
+                            style={{ color: C.inkSoft }}
+                            title="Sends the incident back to the unattached queue. The incident itself is preserved."
+                          >
+                            {detachingId === i.id ? "Detaching…" : "Detach"}
+                          </button>
                         </div>
                         <div className="mt-0.5 text-sm" style={{ color: C.ink }}>
                           {i.summary}
