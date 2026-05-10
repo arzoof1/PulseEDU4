@@ -198,7 +198,7 @@ function layout(nodes: NetNode[]): {
 function layoutFullWeb(
   nodes: NetNode[],
   edges: NetEdge[],
-): { positioned: Positioned[]; rendered: number; suppressed: number } {
+): { positioned: Positioned[]; rendered: number; suppressed: number; nodeScale: number } {
   const W = 1180;
   const H = 820;
   const cx = W / 2;
@@ -218,11 +218,18 @@ function layoutFullWeb(
       a.lastName.localeCompare(b.lastName),
   );
   const golden = Math.PI * (3 - Math.sqrt(5));
-  // Spacing tuned so ~250 nodes fill the canvas without spilling out.
-  // sqrt(i)*spacing keeps the spiral evenly dense; clamp to keep the
-  // outer ring inside the viewBox even when there are fewer nodes.
+  // sqrt(i)*spacing keeps the spiral evenly dense and the outer ring
+  // sits at maxR. We let `spacing` grow without an upper cap so that
+  // sparse graphs fill the canvas instead of huddling in the center.
   const maxR = Math.min(W, H) * 0.46;
-  const spacing = sorted.length > 0 ? Math.min(24, maxR / Math.sqrt(sorted.length)) : 24;
+  const spacing = sorted.length > 0 ? maxR / Math.sqrt(sorted.length) : 24;
+  // Sphere scale derived from spacing so the largest sphere is just
+  // under the inter-node spacing — spheres pop as large as possible
+  // without overlap. Tuned against baseR's ceiling of ~26 so a 1.0
+  // scale ≈ a 52px-diameter sphere; spacing/30 keeps a small breathing
+  // gap. Floor at 0.45 so 500-node webs stay readable, ceiling at 1.6
+  // so a 5-node web doesn't end up with absurd planet-spheres.
+  const nodeScale = Math.max(0.45, Math.min(1.6, spacing / 30));
   const positioned: Positioned[] = sorted.map((n, i) => {
     const angle = i * golden;
     const r = Math.sqrt(i + 0.5) * spacing;
@@ -237,6 +244,7 @@ function layoutFullWeb(
     positioned,
     rendered: positioned.length,
     suppressed: nodes.length - positioned.length,
+    nodeScale,
   };
 }
 
@@ -483,6 +491,7 @@ export default function WatchlistNetwork({
         clusters: z.clusters,
         anchorIds: z.anchorId ? new Set([z.anchorId]) : new Set<string>(),
         suppressed: 0,
+        nodeScale: 1,
       };
     }
     if (viewMode === "full-web") {
@@ -492,6 +501,7 @@ export default function WatchlistNetwork({
         clusters: new Map<number, { cx: number; cy: number; r: number; size: number }>(),
         anchorIds: new Set<string>(),
         suppressed: f.suppressed,
+        nodeScale: f.nodeScale,
       };
     }
     const o = layout(data.nodes);
@@ -500,6 +510,7 @@ export default function WatchlistNetwork({
       clusters: o.clusters,
       anchorIds: o.anchorIds,
       suppressed: 0,
+      nodeScale: 1,
     };
   }, [data, zoomedClusterId, zoomedData, viewMode]);
 
@@ -980,6 +991,7 @@ export default function WatchlistNetwork({
                 zoomed={zoomedClusterId !== null}
                 mode={zoomedClusterId !== null ? "case-grid" : viewMode}
                 anchorIds={layoutResult!.anchorIds}
+                nodeScale={layoutResult!.nodeScale}
                 evidenceSummary={evidenceSummary}
                 onSelectNode={(id) => setSelectedId(id)}
                 onOpenCase={(id) => onOpenCase?.(id)}
@@ -1511,6 +1523,7 @@ function NetworkSVG({
   onOpenCase,
   onZoomCluster,
   mode,
+  nodeScale = 1,
 }: {
   data: Resp;
   positioned: Positioned[];
@@ -1518,6 +1531,10 @@ function NetworkSVG({
   selectedId: string | null;
   zoomed: boolean;
   anchorIds: Set<string>;
+  // Full-web only — sphere-radius multiplier derived from spiral
+  // spacing so nodes pop as large as possible without overlap.
+  // Ignored in case-grid / zoomed modes (they have their own sizing).
+  nodeScale?: number;
   // Per-student rollup of video clip evidence on the currently zoomed
   // case. Empty in overview mode (we only paint badges on the per-case
   // zoom — overview rings are too dense for the glyph to read).
@@ -1788,12 +1805,12 @@ function NetworkSVG({
         const baseR = 12 + Math.min(14, Math.log2(Math.max(1, n.total) + 1) * 4);
         const overviewScale = isAnchor ? 2.0 : 1.0;
         const zoomScale = isAnchor ? 2.2 : 1.35;
-        // Full-web packs many more nodes onto the same canvas, so
-        // shrink the spheres so the spiral doesn't overlap and the
-        // edge web stays readable.
-        const fullWebScale = 0.55;
+        // Full-web sphere size adapts to the spiral spacing computed
+        // by layoutFullWeb so spheres pop as large as possible without
+        // overlap. Sparse webs get bigger nodes; dense webs (~500
+        // nodes) shrink toward the legibility floor.
         const r = isFullWeb
-          ? baseR * fullWebScale
+          ? baseR * nodeScale
           : zoomed
             ? baseR * zoomScale
             : baseR * overviewScale;
