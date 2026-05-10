@@ -78,8 +78,12 @@ export default function NewCaseModal({ onClose, onCreated, initialPlayers }: Pro
         `/api/student-finder/search?q=${encodeURIComponent(search.trim())}`,
       );
       if (!alive || !r.ok) return;
-      const d = (await r.json()) as { hits?: StudentHit[]; results?: StudentHit[] };
-      setHits(d.hits ?? d.results ?? []);
+      const d = (await r.json()) as {
+        students?: StudentHit[];
+        hits?: StudentHit[];
+        results?: StudentHit[];
+      };
+      setHits(d.students ?? d.hits ?? d.results ?? []);
     }, 250);
     return () => {
       alive = false;
