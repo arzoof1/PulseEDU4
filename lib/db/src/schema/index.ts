@@ -86,3 +86,4 @@ export * from "./cameraRegistry";
 export * from "./caseConsistencyRuns";
 export * from "./caseConsistencyFindings";
 export * from "./caseConsistencyState";
+export * from "./caseFootageRequests";

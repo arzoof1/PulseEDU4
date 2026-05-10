@@ -1658,6 +1658,55 @@ export async function ensureCaseConsistencySchema() {
   `);
 }
 
+// Footage requests — internal record of "we need this video and have
+// asked for it (typically over Microsoft Teams DM to whoever owns the
+// camera system)." No outbound integration; the row exists so a stale
+// case shows the gap immediately. See lib/db/src/schema/caseFootageRequests.ts
+// for column rationale.
+export async function ensureCaseFootageRequestsSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_footage_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      source TEXT NOT NULL,
+      location_text TEXT,
+      window_start TIMESTAMPTZ NOT NULL,
+      window_end TIMESTAMPTZ,
+      reason TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'requested',
+      requested_by_staff_id INTEGER,
+      requested_by_name TEXT,
+      requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      fulfilled_by_staff_id INTEGER,
+      fulfilled_by_name TEXT,
+      fulfilled_at TIMESTAMPTZ,
+      fulfillment_note TEXT,
+      linked_clip_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_footage_requests_case_idx ON case_footage_requests (school_id, case_id, status)`,
+  );
+  // Cascade-delete with the owning case so deleting a case cleans up
+  // its outstanding-footage record instead of orphaning rows.
+  await db.execute(sql`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'case_footage_requests_case_id_fkey'
+      ) THEN
+        ALTER TABLE case_footage_requests
+          ADD CONSTRAINT case_footage_requests_case_id_fkey
+          FOREIGN KEY (case_id)
+          REFERENCES interaction_cases(id) ON DELETE CASCADE;
+      END IF;
+    END$$;
+  `);
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1829,6 +1878,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureCameraRegistrySchema();
   await seedDemoCamerasForSchools();
   await ensureCaseConsistencySchema();
+  await ensureCaseFootageRequestsSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

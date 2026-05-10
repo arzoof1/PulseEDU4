@@ -12,6 +12,7 @@ import {
 import { authFetch } from "../../lib/authToken";
 import DictateButton, { appendDictated } from "../DictateButton";
 import CameraPicker from "../CameraPicker";
+import FootageRequestsPanel from "./FootageRequestsPanel";
 
 // Admin-only Phase 2 panel + Phase 2.1 player-tagging UI.
 //
@@ -465,6 +466,15 @@ export default function VideoEvidencePanel({
           {error}
         </div>
       )}
+
+      <FootageRequestsPanel
+        caseId={caseId}
+        brandColor={brandColor}
+        panelBg={panelBg}
+        pageBg={pageBg}
+        lineColor={lineColor}
+        inkSoft={inkSoft}
+      />
 
       {/* The legacy "Recent cameras" chip row that surfaced free-text
           labels from /watchlist/camera-labels was removed — it

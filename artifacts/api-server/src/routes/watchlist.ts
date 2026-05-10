@@ -72,6 +72,7 @@ import {
   caseConsistencyRunsTable,
   caseConsistencyFindingsTable,
   caseConsistencyStateTable,
+  caseFootageRequestsTable,
 } from "@workspace/db";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
@@ -3614,6 +3615,370 @@ router.get(
       `)
     ).rows as Array<{ cameraLabel: string }>;
     res.json({ labels: rows.map((r) => r.cameraLabel) });
+  },
+);
+
+// ─────────────────────────────────────────────────────────────
+// Footage Requests — internal record of "we know we need this
+// video, we asked for it." No outbound integration; investigators
+// request video out-of-band (Microsoft Teams DM to the admin who
+// owns the camera system, walkie to the bus garage). The row
+// exists so a stale case immediately surfaces what's still
+// outstanding.
+//
+// Same audience as the rest of VideoEvidencePanel — gated through
+// adminGate (admin tier + Behavior Specialist + MTSS + Dean).
+// ─────────────────────────────────────────────────────────────
+
+const FOOTAGE_REQUEST_SOURCES = [
+  "bus",
+  "hallway_camera",
+  "classroom_camera",
+  "cafeteria_camera",
+  "exterior_camera",
+  "external",
+  "other",
+] as const;
+type FootageRequestSource = (typeof FOOTAGE_REQUEST_SOURCES)[number];
+
+const FOOTAGE_REQUEST_STATUSES = [
+  "requested",
+  "received",
+  "unavailable",
+  "cancelled",
+] as const;
+type FootageRequestStatus = (typeof FOOTAGE_REQUEST_STATUSES)[number];
+
+// Verify the caller's school owns this case. Returns true on success,
+// otherwise sends 404 and returns false. Mirrors the same defensive
+// check used by the video evidence routes — defends against a forged
+// caseId from another tenant.
+async function assertCaseInSchool(
+  caseId: number,
+  schoolId: number,
+  res: Response,
+): Promise<boolean> {
+  const [c] = await db
+    .select({ id: interactionCasesTable.id })
+    .from(interactionCasesTable)
+    .where(
+      and(
+        eq(interactionCasesTable.id, caseId),
+        eq(interactionCasesTable.schoolId, schoolId),
+      ),
+    );
+  if (!c) {
+    res.status(404).json({ error: "Case not found" });
+    return false;
+  }
+  return true;
+}
+
+router.get(
+  "/watchlist/cases/:id/footage-requests",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await assertCaseInSchool(caseId, schoolId, res))) return;
+    // Open requests first (requested), then resolved by most recent
+    // requestedAt — investigators want "what's still outstanding"
+    // at a glance.
+    const rows = await db
+      .select()
+      .from(caseFootageRequestsTable)
+      .where(
+        and(
+          eq(caseFootageRequestsTable.schoolId, schoolId),
+          eq(caseFootageRequestsTable.caseId, caseId),
+        ),
+      )
+      .orderBy(
+        sql`CASE WHEN status = 'requested' THEN 0 ELSE 1 END`,
+        desc(caseFootageRequestsTable.requestedAt),
+      );
+    res.json({ requests: rows });
+  },
+);
+
+router.post(
+  "/watchlist/cases/:id/footage-requests",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await assertCaseInSchool(caseId, schoolId, res))) return;
+    const b = req.body as Record<string, unknown>;
+    const source = clean(b["source"], 40) as FootageRequestSource;
+    if (!FOOTAGE_REQUEST_SOURCES.includes(source)) {
+      res.status(400).json({ error: "Invalid source" });
+      return;
+    }
+    const reason = clean(b["reason"], 2000);
+    if (reason.length < 3) {
+      res.status(400).json({ error: "Reason is required" });
+      return;
+    }
+    const locationText = clean(b["locationText"], 200) || null;
+    const startRaw =
+      typeof b["windowStart"] === "string" ? (b["windowStart"] as string) : "";
+    const endRaw =
+      typeof b["windowEnd"] === "string" ? (b["windowEnd"] as string) : "";
+    const start = startRaw ? new Date(startRaw) : null;
+    if (!start || Number.isNaN(start.getTime())) {
+      res.status(400).json({ error: "windowStart is required" });
+      return;
+    }
+    const end = endRaw ? new Date(endRaw) : null;
+    if (end && Number.isNaN(end.getTime())) {
+      res.status(400).json({ error: "Invalid windowEnd" });
+      return;
+    }
+    if (end && end.getTime() < start.getTime()) {
+      res.status(400).json({ error: "windowEnd must be after windowStart" });
+      return;
+    }
+    const [row] = await db
+      .insert(caseFootageRequestsTable)
+      .values({
+        schoolId,
+        caseId,
+        source,
+        locationText,
+        windowStart: start,
+        windowEnd: end,
+        reason,
+        status: "requested",
+        requestedByStaffId: staff?.id ?? null,
+        requestedByName: staff?.displayName ?? null,
+      })
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "footage_request",
+      entityId: row.id,
+      action: "created",
+      staff,
+      payload: {
+        caseId,
+        source,
+        locationText: row.locationText,
+        windowStart: row.windowStart,
+        windowEnd: row.windowEnd,
+      },
+    });
+    res.json({ request: row });
+  },
+);
+
+router.patch(
+  "/watchlist/footage-requests/:reqId",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const reqId = asInt(req.params["reqId"]);
+    if (!reqId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const [existing] = await db
+      .select()
+      .from(caseFootageRequestsTable)
+      .where(
+        and(
+          eq(caseFootageRequestsTable.id, reqId),
+          eq(caseFootageRequestsTable.schoolId, schoolId),
+        ),
+      );
+    if (!existing) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const patch: Partial<typeof caseFootageRequestsTable.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    let statusChanged = false;
+    let nextStatus: FootageRequestStatus = existing.status as FootageRequestStatus;
+    if (b["status"] !== undefined) {
+      const next = clean(b["status"], 40) as FootageRequestStatus;
+      if (!FOOTAGE_REQUEST_STATUSES.includes(next)) {
+        res.status(400).json({ error: "Invalid status" });
+        return;
+      }
+      nextStatus = next;
+      if (next !== existing.status) {
+        patch.status = next;
+        statusChanged = true;
+        if (next === "requested") {
+          // Re-opening: clear all fulfillment metadata so the row
+          // reflects "outstanding again" cleanly. Includes the linked
+          // clip — if there's still a clip it should be re-linked
+          // explicitly when the request is re-resolved.
+          patch.fulfilledAt = null;
+          patch.fulfilledByStaffId = null;
+          patch.fulfilledByName = null;
+          patch.fulfillmentNote = null;
+          patch.linkedClipId = null;
+        } else {
+          patch.fulfilledAt = new Date();
+          patch.fulfilledByStaffId = staff?.id ?? null;
+          patch.fulfilledByName = staff?.displayName ?? null;
+          // Cancelled / unavailable means there's no clip to link;
+          // strip any stale clip reference. `received` keeps whatever
+          // the body provides (or whatever was already linked).
+          if (next === "cancelled" || next === "unavailable") {
+            patch.linkedClipId = null;
+          }
+        }
+      }
+    }
+    if (b["fulfillmentNote"] !== undefined) {
+      patch.fulfillmentNote = clean(b["fulfillmentNote"], 2000) || null;
+    }
+    if (b["linkedClipId"] !== undefined) {
+      const raw = b["linkedClipId"];
+      // Only allow setting a linked clip when the resolved status is
+      // `received` — a clip on a cancelled or unavailable request is
+      // a logical contradiction.
+      if (raw == null) {
+        patch.linkedClipId = null;
+      } else {
+        if (typeof raw !== "number" || !Number.isInteger(raw)) {
+          res.status(400).json({ error: "linkedClipId must be an integer" });
+          return;
+        }
+        if (nextStatus !== "received") {
+          res.status(400).json({
+            error: "linkedClipId is only valid when status is 'received'",
+          });
+          return;
+        }
+        const [clip] = await db
+          .select({ id: caseVideoEvidenceTable.id })
+          .from(caseVideoEvidenceTable)
+          .where(
+            and(
+              eq(caseVideoEvidenceTable.id, raw),
+              eq(caseVideoEvidenceTable.schoolId, schoolId),
+              eq(caseVideoEvidenceTable.caseId, existing.caseId),
+            ),
+          );
+        if (!clip) {
+          res
+            .status(400)
+            .json({ error: "linkedClipId does not match a clip on this case" });
+          return;
+        }
+        patch.linkedClipId = clip.id;
+      }
+    }
+    if (b["reason"] !== undefined) {
+      const trimmed = clean(b["reason"], 2000);
+      if (trimmed.length < 3) {
+        res.status(400).json({ error: "Reason is required" });
+        return;
+      }
+      patch.reason = trimmed;
+    }
+    if (b["locationText"] !== undefined) {
+      patch.locationText = clean(b["locationText"], 200) || null;
+    }
+    if (b["source"] !== undefined) {
+      const src = clean(b["source"], 40) as FootageRequestSource;
+      if (!FOOTAGE_REQUEST_SOURCES.includes(src)) {
+        res.status(400).json({ error: "Invalid source" });
+        return;
+      }
+      patch.source = src;
+    }
+    const [row] = await db
+      .update(caseFootageRequestsTable)
+      .set(patch)
+      .where(
+        and(
+          eq(caseFootageRequestsTable.id, reqId),
+          eq(caseFootageRequestsTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "footage_request",
+      entityId: reqId,
+      action: statusChanged ? `status:${row.status}` : "updated",
+      staff,
+      payload: {
+        caseId: row.caseId,
+        before: {
+          status: existing.status,
+          source: existing.source,
+          locationText: existing.locationText,
+          reason: existing.reason,
+          linkedClipId: existing.linkedClipId,
+          fulfillmentNote: existing.fulfillmentNote,
+        },
+        after: {
+          status: row.status,
+          source: row.source,
+          locationText: row.locationText,
+          reason: row.reason,
+          linkedClipId: row.linkedClipId,
+          fulfillmentNote: row.fulfillmentNote,
+        },
+      },
+    });
+    res.json({ request: row });
+  },
+);
+
+router.delete(
+  "/watchlist/footage-requests/:reqId",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const reqId = asInt(req.params["reqId"]);
+    if (!reqId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .delete(caseFootageRequestsTable)
+      .where(
+        and(
+          eq(caseFootageRequestsTable.id, reqId),
+          eq(caseFootageRequestsTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "footage_request",
+      entityId: reqId,
+      action: "deleted",
+      staff,
+      payload: { caseId: row.caseId, status: row.status, reason: row.reason },
+    });
+    res.json({ ok: true });
   },
 );
 
