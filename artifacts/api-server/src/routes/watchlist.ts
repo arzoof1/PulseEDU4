@@ -64,7 +64,7 @@ import {
   type InteractionKind,
   type StaffRow,
 } from "@workspace/db";
-import { and, asc, desc, eq, gte, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, lte, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 
@@ -104,6 +104,48 @@ function ymdLocal(d: Date): string {
   const m = String(d.getMonth() + 1).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   return `${y}-${m}-${day}`;
+}
+
+// Resolve the time window for a watchlist query. Custom date ranges
+// (?from=YYYY-MM-DD&to=YYYY-MM-DD) take priority; otherwise we fall back
+// to the legacy ?windowDays preset (default supplied by caller). `untilYmd`
+// is null for the rolling-window case so callers can skip the upper bound.
+function parseWindow(
+  req: Request,
+  defaultWindowDays = 14,
+): { sinceYmd: string; untilYmd: string | null; windowDays: number } {
+  const ymdRe = /^\d{4}-\d{2}-\d{2}$/;
+  const fromRaw = req.query["from"];
+  const toRaw = req.query["to"];
+  const from = typeof fromRaw === "string" && ymdRe.test(fromRaw) ? fromRaw : null;
+  const to = typeof toRaw === "string" && ymdRe.test(toRaw) ? toRaw : null;
+  if (from) {
+    // Effective span (inclusive) — used so client-facing copy that says
+    // "in Nd" still reads sensibly when the user picked a custom range.
+    const days = to
+      ? Math.max(
+          1,
+          Math.round(
+            (new Date(`${to}T00:00:00`).getTime() -
+              new Date(`${from}T00:00:00`).getTime()) /
+              (24 * 3600 * 1000),
+          ) + 1,
+        )
+      : Math.max(
+          1,
+          Math.round(
+            (Date.now() - new Date(`${from}T00:00:00`).getTime()) /
+              (24 * 3600 * 1000),
+          ) + 1,
+        );
+    return { sinceYmd: from, untilYmd: to, windowDays: days };
+  }
+  const windowDays = asInt(req.query["windowDays"]) ?? defaultWindowDays;
+  return {
+    sinceYmd: ymdLocal(new Date(Date.now() - windowDays * 24 * 3600 * 1000)),
+    untilYmd: null,
+    windowDays,
+  };
 }
 
 function clean(s: unknown, max = 4000): string {
@@ -220,9 +262,7 @@ router.get("/watchlist/summary", async (req: Request, res: Response) => {
 router.get("/watchlist/orbit", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const windowDays = asInt(req.query["windowDays"]) ?? 14;
-  const since = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
-  const sinceYmd = ymdLocal(since);
+  const { sinceYmd, untilYmd, windowDays } = parseWindow(req, 14);
 
   // Per-student counts (total + by-role) over the window.
   const rows = (await db.execute(sql`
@@ -236,6 +276,7 @@ router.get("/watchlist/orbit", async (req: Request, res: Response) => {
       ON i.id = p.interaction_id AND i.school_id = p.school_id
     WHERE p.school_id = ${schoolId}
       AND i.occurred_date >= ${sinceYmd}
+      ${untilYmd ? sql`AND i.occurred_date <= ${untilYmd}` : sql``}
       AND i.status = 'open'
     GROUP BY p.student_id
     HAVING COUNT(*) >= 2
@@ -293,9 +334,8 @@ type Alert = {
 router.get("/watchlist/alerts", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const windowDays = asInt(req.query["windowDays"]) ?? 14;
-  const since = new Date(Date.now() - windowDays * 24 * 3600 * 1000);
-  const sinceYmd = ymdLocal(since);
+  const { sinceYmd, untilYmd, windowDays } = parseWindow(req, 14);
+  const untilClause = untilYmd ? sql`AND i.occurred_date <= ${untilYmd}` : sql``;
   const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 3600 * 1000);
 
   const alerts: Alert[] = [];
@@ -307,6 +347,7 @@ router.get("/watchlist/alerts", async (req: Request, res: Response) => {
     JOIN interactions i ON i.id = p.interaction_id AND i.school_id = p.school_id
     WHERE p.school_id = ${schoolId}
       AND i.occurred_date >= ${sinceYmd}
+      ${untilClause}
       AND i.status = 'open'
     GROUP BY p.student_id
     HAVING COUNT(*) >= 5
@@ -321,6 +362,7 @@ router.get("/watchlist/alerts", async (req: Request, res: Response) => {
     JOIN interactions i ON i.id = p.interaction_id AND i.school_id = p.school_id
     WHERE p.school_id = ${schoolId}
       AND i.occurred_date >= ${sinceYmd}
+      ${untilClause}
       AND i.status = 'open'
     GROUP BY p.student_id
     HAVING COUNT(*) >= 3 AND SUM(CASE WHEN p.role IN ('direct','target','instigator') THEN 1 ELSE 0 END) = 0
@@ -334,6 +376,7 @@ router.get("/watchlist/alerts", async (req: Request, res: Response) => {
     WHERE p.school_id = ${schoolId}
       AND i.case_id IS NULL
       AND i.occurred_date >= ${sinceYmd}
+      ${untilClause}
       AND i.status = 'open'
     GROUP BY p.student_id
     HAVING COUNT(*) >= 3
@@ -350,6 +393,7 @@ router.get("/watchlist/alerts", async (req: Request, res: Response) => {
     JOIN interactions i ON i.id = p1.interaction_id AND i.school_id = p1.school_id
     WHERE p1.school_id = ${schoolId}
       AND i.occurred_date >= ${sinceYmd}
+      ${untilClause}
       AND i.status = 'open'
     GROUP BY p1.student_id, p2.student_id
     HAVING COUNT(DISTINCT p1.interaction_id) >= 3
@@ -1770,13 +1814,13 @@ router.get("/watchlist/interactions", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const limit = Math.min(asInt(req.query["limit"]) ?? 25, 100);
-  const windowDays = asInt(req.query["windowDays"]) ?? 30;
-  const sinceYmd = ymdLocal(new Date(Date.now() - windowDays * 24 * 3600 * 1000));
+  const { sinceYmd, untilYmd } = parseWindow(req, 30);
   const onlyLoose = req.query["loose"] === "1";
   const conds = [
     eq(interactionsTable.schoolId, schoolId),
     gte(interactionsTable.occurredDate, sinceYmd),
   ];
+  if (untilYmd) conds.push(lte(interactionsTable.occurredDate, untilYmd));
   if (onlyLoose) conds.push(sql`${interactionsTable.caseId} IS NULL`);
   // Default: hide dismissed statements from the recent feed; opt in
   // explicitly with ?includeDismissed=1 (used by the Dismissed tab).

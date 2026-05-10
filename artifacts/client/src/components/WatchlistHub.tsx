@@ -151,6 +151,20 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
   const [interactions, setInteractions] = useState<InteractionRow[]>([]);
   const [statements, setStatements] = useState<StatementRow[]>([]);
   const [windowDays, setWindowDays] = useState(14);
+  // Custom date range. When both ends are set, we send `from`/`to` to the
+  // API instead of the rolling-window `windowDays` preset. `from` alone is
+  // also accepted (treated as "from this date through today").
+  const [customFrom, setCustomFrom] = useState<string>("");
+  const [customTo, setCustomTo] = useState<string>("");
+  const [showRange, setShowRange] = useState(false);
+  // Pending picker values — let the user type both dates before applying,
+  // so the page doesn't refetch on every keystroke.
+  const [draftFrom, setDraftFrom] = useState<string>("");
+  const [draftTo, setDraftTo] = useState<string>("");
+  const customActive = Boolean(customFrom);
+  const rangeQS = customActive
+    ? `from=${customFrom}${customTo ? `&to=${customTo}` : ""}`
+    : `windowDays=${windowDays}`;
   const [showLog, setShowLog] = useState(false);
   const [showNewCase, setShowNewCase] = useState(false);
   const [promoteStmt, setPromoteStmt] = useState<InteractionRow | null>(null);
@@ -168,11 +182,11 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
     try {
       const [r1, r2, r3, r4, r5, r6] = await Promise.all([
         authFetch(`/api/watchlist/summary`),
-        authFetch(`/api/watchlist/alerts?windowDays=${windowDays}`),
-        authFetch(`/api/watchlist/orbit?windowDays=${windowDays}`),
+        authFetch(`/api/watchlist/alerts?${rangeQS}`),
+        authFetch(`/api/watchlist/orbit?${rangeQS}`),
         authFetch(`/api/watchlist/cases`),
         authFetch(
-          `/api/watchlist/interactions?windowDays=${windowDays}&limit=20${
+          `/api/watchlist/interactions?${rangeQS}&limit=20${
             intakeTab === "dismissed" ? "&onlyDismissed=1&includeDismissed=1" : ""
           }`,
         ),
@@ -198,7 +212,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     }
-  }, [windowDays, intakeTab]);
+  }, [windowDays, intakeTab, customFrom, customTo, rangeQS]);
 
   // Triage actions on a single statement (intake row).
   const dismissStmt = async (s: InteractionRow) => {
@@ -449,21 +463,128 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
           >
             Window
           </span>
-          {[7, 14, 30, 90].map((w) => (
+          {[7, 14, 30, 90].map((w) => {
+            const active = !customActive && w === windowDays;
+            return (
+              <button
+                key={w}
+                type="button"
+                onClick={() => {
+                  // Picking a preset clears any custom range so the two
+                  // controls can't get out of sync.
+                  setCustomFrom("");
+                  setCustomTo("");
+                  setShowRange(false);
+                  setWindowDays(w);
+                }}
+                className="rounded-md px-2.5 py-1 text-xs font-semibold"
+                style={{
+                  background: active ? C.ink : "transparent",
+                  color: active ? "#fff" : C.ink,
+                  border: `1px solid ${active ? C.ink : C.line}`,
+                }}
+              >
+                {w === 90 ? "Term" : `${w} days`}
+              </button>
+            );
+          })}
+          {/* Custom date range. Toggling open seeds the draft fields with
+              the current selection (or sensible defaults), and Apply commits
+              them — keeps fetches debounced behind a single user gesture. */}
+          <div className="relative">
             <button
-              key={w}
               type="button"
-              onClick={() => setWindowDays(w)}
+              onClick={() => {
+                setDraftFrom(
+                  customFrom ||
+                    new Date(Date.now() - windowDays * 24 * 3600 * 1000)
+                      .toISOString()
+                      .slice(0, 10),
+                );
+                setDraftTo(customTo || new Date().toISOString().slice(0, 10));
+                setShowRange((s) => !s);
+              }}
               className="rounded-md px-2.5 py-1 text-xs font-semibold"
               style={{
-                background: w === windowDays ? C.ink : "transparent",
-                color: w === windowDays ? "#fff" : C.ink,
-                border: `1px solid ${w === windowDays ? C.ink : C.line}`,
+                background: customActive ? C.ink : "transparent",
+                color: customActive ? "#fff" : C.ink,
+                border: `1px solid ${customActive ? C.ink : C.line}`,
               }}
+              title="Pick a custom date range."
             >
-              {w === 90 ? "Term" : `${w} days`}
+              {customActive
+                ? `${customFrom}${customTo ? ` → ${customTo}` : " → today"}`
+                : "Custom…"}
             </button>
-          ))}
+            {showRange && (
+              <div
+                className="absolute left-0 top-full z-20 mt-1 w-72 rounded-md border p-3 shadow-lg"
+                style={{ borderColor: C.line, background: C.panel }}
+              >
+                <div
+                  className="mb-1 text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: C.inkSoft }}
+                >
+                  From
+                </div>
+                <input
+                  type="date"
+                  value={draftFrom}
+                  onChange={(e) => setDraftFrom(e.target.value)}
+                  className="w-full rounded-md border px-2 py-1 text-sm"
+                  style={{ borderColor: C.line, background: C.bg }}
+                />
+                <div
+                  className="mb-1 mt-2 text-[11px] font-semibold uppercase tracking-wider"
+                  style={{ color: C.inkSoft }}
+                >
+                  To
+                </div>
+                <input
+                  type="date"
+                  value={draftTo}
+                  onChange={(e) => setDraftTo(e.target.value)}
+                  className="w-full rounded-md border px-2 py-1 text-sm"
+                  style={{ borderColor: C.line, background: C.bg }}
+                />
+                <div className="mt-3 flex items-center justify-between gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCustomFrom("");
+                      setCustomTo("");
+                      setShowRange(false);
+                    }}
+                    className="rounded-md border px-2 py-1 text-[11px] font-semibold"
+                    style={{ borderColor: C.line, color: C.inkSoft, background: C.panel }}
+                  >
+                    Clear
+                  </button>
+                  <button
+                    type="button"
+                    disabled={
+                      !draftFrom ||
+                      Boolean(draftTo && draftTo < draftFrom)
+                    }
+                    onClick={() => {
+                      setCustomFrom(draftFrom);
+                      setCustomTo(draftTo);
+                      setShowRange(false);
+                    }}
+                    className="rounded-md px-3 py-1 text-[11px] font-bold disabled:opacity-50"
+                    style={{ background: C.brand, color: "#FFFFFF" }}
+                  >
+                    Apply
+                  </button>
+                </div>
+                {draftTo && draftFrom && draftTo < draftFrom ? (
+                  <div className="mt-2 text-[11px]" style={{ color: C.alert }}>
+                    "To" must be on or after "From".
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
           <div
             className="ml-auto flex items-center gap-2 rounded-md border px-2.5 py-1.5"
             style={{ borderColor: C.line, background: C.bg }}
