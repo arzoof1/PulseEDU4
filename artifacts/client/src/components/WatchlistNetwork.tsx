@@ -245,14 +245,44 @@ function clusterFill(idx: number): string {
   return tints[idx % tints.length];
 }
 
+// Per-kind edge palette. Severity-coded: physical (fight) is loudest,
+// then verbal/bullying, then social (rumor), then peripheral/other in
+// muted gray. Picks the most severe kind on the edge so a fight that
+// also has a rumor draws as a fight.
+const EDGE_KIND_COLOR: Record<string, string> = {
+  fight: C.alert, // #9B1C2E — deep red
+  bullying: "#6B2D8C", // purple — distinct from fight + verbal
+  verbal: C.brand, // #7A1F2B — burgundy
+  rumor: C.warn, // #B8531A — orange
+  peripheral_note: "#A89A85",
+};
+const EDGE_KIND_PRIORITY = [
+  "fight",
+  "bullying",
+  "verbal",
+  "rumor",
+  "peripheral_note",
+];
+
 function edgeColor(kinds: string[]): string {
-  if (kinds.includes("rumor")) return C.warn;
-  if (kinds.some((k) => ["fight", "verbal", "bullying"].includes(k))) return C.alert;
+  for (const k of EDGE_KIND_PRIORITY) {
+    if (kinds.includes(k)) return EDGE_KIND_COLOR[k]!;
+  }
   return "#A89A85";
 }
 
 function edgeDashed(kinds: string[]): boolean {
   return kinds.every((k) => k === "peripheral_note");
+}
+
+// Map shared-incident `weight` to a stroke width with a steeper curve
+// than the previous (max(1.8, weight*1.5)). Single-incident edges stay
+// thin (1.5px), 5+ incident pairs render visibly heavy (~9px) so the
+// network surfaces intensity even when every edge shares one color.
+function edgeWidth(weight: number, selected: boolean): number {
+  const w = Math.max(1, Math.min(8, weight));
+  const base = 1 + Math.log2(w + 1) * 2.6; // 1→1, 2→3.1, 5→5.6, 8→8
+  return selected ? base * 1.7 : base;
 }
 
 export default function WatchlistNetwork({
@@ -831,14 +861,40 @@ export default function WatchlistNetwork({
               className="flex flex-wrap items-center justify-between gap-3 border-t px-4 py-2.5 text-[11px]"
               style={{ borderColor: C.line, background: C.bg, color: C.inkSoft }}
             >
-              <div className="flex flex-wrap items-center gap-4">
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+                {/* Edge kind palette — most severe wins when an edge has
+                    multiple kinds. Width is independent (count of shared
+                    incidents), so a thick orange edge means many rumor
+                    interactions between the same pair. */}
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block h-0.5 w-6" style={{ background: C.alert }} /> Incident
+                  <span className="inline-block h-[3px] w-6" style={{ background: EDGE_KIND_COLOR.fight }} /> Fight
                 </span>
                 <span className="inline-flex items-center gap-1.5">
-                  <span className="inline-block h-0.5 w-6" style={{ background: C.warn }} /> Rumor
+                  <span className="inline-block h-[3px] w-6" style={{ background: EDGE_KIND_COLOR.bullying }} /> Bullying
                 </span>
                 <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-[3px] w-6" style={{ background: EDGE_KIND_COLOR.verbal }} /> Verbal
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-[3px] w-6" style={{ background: EDGE_KIND_COLOR.rumor }} /> Rumor
+                </span>
+                <span className="inline-flex items-center gap-1.5">
+                  <span className="inline-block h-[3px] w-6" style={{ background: EDGE_KIND_COLOR.peripheral_note }} /> Other
+                </span>
+                {/* Width legend — thin = 1 incident, thick = 5+. */}
+                <span
+                  className="inline-flex items-center gap-1.5 border-l pl-3"
+                  style={{ borderColor: C.line }}
+                  title="Line thickness = number of shared incidents between the pair"
+                >
+                  <span className="inline-block h-[1.5px] w-4" style={{ background: C.inkSoft }} />
+                  <span className="inline-block h-[5px] w-5" style={{ background: C.inkSoft }} />
+                  Thicker = more shared incidents
+                </span>
+                <span
+                  className="inline-flex items-center gap-1.5 border-l pl-3"
+                  style={{ borderColor: C.line }}
+                >
                   <CircleDot className="h-3 w-3" style={{ color: C.alert }} /> Always peripheral
                 </span>
                 <span className="inline-flex items-center gap-1.5">
@@ -1533,8 +1589,8 @@ function NetworkSVG({
             x2={B.x}
             y2={B.y}
             stroke={edgeColor(e.kinds)}
-            strokeOpacity={0.3}
-            strokeWidth={Math.max(1.8, e.weight * 1.5)}
+            strokeOpacity={0.35}
+            strokeWidth={edgeWidth(e.weight, false)}
             strokeDasharray={edgeDashed(e.kinds) ? "5 4" : undefined}
           />
         );
@@ -1553,7 +1609,7 @@ function NetworkSVG({
                 y2={B.y}
                 stroke={edgeColor(e.kinds)}
                 strokeOpacity={0.95}
-                strokeWidth={Math.max(3, e.weight * 2.2)}
+                strokeWidth={edgeWidth(e.weight, true)}
                 strokeDasharray={edgeDashed(e.kinds) ? "5 4" : undefined}
               />
               <text
