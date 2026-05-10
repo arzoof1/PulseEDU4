@@ -68,6 +68,29 @@ _Populate as you build_
 
 ## Future work
 
+- **Witness statement chronological numbering (raise at end of 4-phase case enhancement rollout).**
+  Today witness statements are addressable only by internal DB id. Admins
+  asked for a human-readable identifier they can write on a printed copy
+  or quote to a parent/officer when the original is requested later.
+  Recommended approach: per-case sequence rather than a global counter —
+  format `CASE-{year}-{caseNumber}-WS-{seq}` (e.g. `CASE-2026-0042-WS-03`).
+  - Assign `ws_seq INT` on the witness_statements row at the moment the
+    owning interaction is attached to a case (promote-to-case OR PATCH
+    interaction caseId). Statements on still-loose interactions stay
+    un-numbered until promotion, which matches investigative reality.
+  - Composite unique index `(school_id, case_id, ws_seq)`. Sequence is
+    derived as `MAX(ws_seq) + 1` within the case under the same `FOR
+    UPDATE` lock the promote/attach flow already takes, so two concurrent
+    attaches can't collide.
+  - Surface the formatted ID in: PlayerDrawer header, Case Detail
+    statements list, witness statement PDF/print, and the audit log
+    payload. Make it copy-on-click.
+  - Backfill existing already-attached statements once at deploy time
+    using `created_at ASC` order within each case.
+  - A separate global statement number (`WS-2026-04412`) was considered
+    and rejected: admins look up by case first, and a global counter
+    duplicates the cross-reference work case# already does.
+
 - **Admin Hub ISS log: view detail + edit/delete with audit guardrails**
   Click into a row in the Admin Hub recent feed to see the full assignment.
   - **Delete entire assignment**: only allowed if **no day has been served yet** (no `iss_attendance_day` rows for that `admin_log_id` show any served signal — present periods, marked-served, or rolled-from). Audit retention for partially-served assignments is intentional.
