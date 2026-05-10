@@ -24,6 +24,7 @@ import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import NewCaseModal from "./watchlist/NewCaseModal";
 import PromoteToCaseModal from "./watchlist/PromoteToCaseModal";
+import StatementDetailsModal from "./watchlist/StatementDetailsModal";
 import {
   WL_COLORS as C,
   initialsOf,
@@ -153,6 +154,10 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
   const [showLog, setShowLog] = useState(false);
   const [showNewCase, setShowNewCase] = useState(false);
   const [promoteStmt, setPromoteStmt] = useState<InteractionRow | null>(null);
+  // ID of the statement whose full-detail modal is open. The modal is a
+  // pure overlay — closing returns the user to the same intake position
+  // they were on (no nav, no scroll reset, no reload).
+  const [detailsStmtId, setDetailsStmtId] = useState<number | null>(null);
   const [intakeTab, setIntakeTab] = useState<"pending" | "dismissed">("pending");
   const [busyStmtId, setBusyStmtId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -897,45 +902,61 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                           flow lives on the Case Detail page (which has
                           the case context to pick the right thread).
                           Already-attached statements just show a chevron. */}
-                      {i.caseId ? (
-                        <ChevronRight
-                          className="mt-2 h-4 w-4"
-                          style={{ color: C.inkSoft }}
-                        />
-                      ) : intakeTab === "dismissed" ? (
+                      <div className="flex shrink-0 flex-col items-end gap-1">
+                        {/* View details is available on every row regardless
+                            of triage state — investigators frequently need
+                            to read the full statement body before promoting
+                            or dismissing, and reviewers want to read
+                            already-attached entries in context. */}
                         <button
                           type="button"
-                          onClick={() => void restoreStmt(i)}
-                          disabled={busyStmtId === i.id}
-                          className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                          onClick={() => setDetailsStmtId(i.id)}
+                          className="rounded-md border px-2 py-1 text-[11px] font-semibold"
                           style={{ borderColor: C.line, color: C.ink, background: C.panel }}
+                          title="Read the full student statement and tagged participants."
                         >
-                          {busyStmtId === i.id ? "…" : "Restore"}
+                          View details
                         </button>
-                      ) : (
-                        <div className="flex shrink-0 flex-col items-end gap-1">
+                        {i.caseId ? (
+                          <ChevronRight
+                            className="mt-1 h-4 w-4"
+                            style={{ color: C.inkSoft }}
+                          />
+                        ) : intakeTab === "dismissed" ? (
                           <button
                             type="button"
-                            onClick={() => setPromoteStmt(i)}
-                            disabled={busyStmtId === i.id}
-                            className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
-                            style={{ background: C.brand, color: "#FFFFFF" }}
-                            title="Open a new case with this as its lead statement."
-                          >
-                            Promote
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => void dismissStmt(i)}
+                            onClick={() => void restoreStmt(i)}
                             disabled={busyStmtId === i.id}
                             className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
-                            style={{ borderColor: C.line, color: C.inkSoft, background: C.panel }}
-                            title="Audit-logged. Restore later from the Dismissed tab."
+                            style={{ borderColor: C.line, color: C.ink, background: C.panel }}
                           >
-                            Dismiss
+                            {busyStmtId === i.id ? "…" : "Restore"}
                           </button>
-                        </div>
-                      )}
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => setPromoteStmt(i)}
+                              disabled={busyStmtId === i.id}
+                              className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+                              style={{ background: C.brand, color: "#FFFFFF" }}
+                              title="Open a new case with this as its lead statement."
+                            >
+                              Promote
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void dismissStmt(i)}
+                              disabled={busyStmtId === i.id}
+                              className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                              style={{ borderColor: C.line, color: C.inkSoft, background: C.panel }}
+                              title="Audit-logged. Restore later from the Dismissed tab."
+                            >
+                              Dismiss
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                   );
                 })
@@ -1045,6 +1066,13 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
             void reload();
             onOpenCase?.(caseId);
           }}
+        />
+      )}
+      {detailsStmtId !== null && (
+        <StatementDetailsModal
+          interactionId={detailsStmtId}
+          onClose={() => setDetailsStmtId(null)}
+          onOpenCase={onOpenCase}
         />
       )}
       {promoteStmt && (
