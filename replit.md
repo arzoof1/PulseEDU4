@@ -68,6 +68,14 @@ _Populate as you build_
 
 ## Future work
 
+- **Refresh Core Team "How this works" / directions copy after the 4-phase
+  case enhancement suite ships.** Each new feature (mention tagging,
+  video evidence panel, AI consistency check, Case Insights dashboard)
+  needs its blurb added to the Core Team-facing help/directions panels
+  so a new admin onboarding mid-year understands what each affordance
+  does and where the admin-only gating starts/stops. Do this as a single
+  pass after Phase 4 — writing it piecemeal per phase invites drift.
+
 - **Witness statement chronological numbering (raise at end of 4-phase case enhancement rollout).**
   Today witness statements are addressable only by internal DB id. Admins
   asked for a human-readable identifier they can write on a printed copy
