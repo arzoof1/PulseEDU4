@@ -3955,77 +3955,98 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       }
     }
 
-    // High-concern: 4–7 incidents each, mostly severity 3–5, anchored in their
-    // case. Includes at least one pending witness statement per student.
-    // We rotate through the *full* case roster (excluding self) when picking
-    // co-participants so every roster member ends up in at least one incident
-    // — fixes the empty peek modal for case-mates that previously were never
-    // co-participants.
-    high.forEach((stu, sIdx) => {
-      const myCase = insertedCases[sIdx % insertedCases.length];
-      const fullMates = caseRoster
-        .filter((r) => r.caseId === myCase.id && r.studentId !== stu.studentId)
-        .map((r) => ({
-          studentId: r.studentId,
-          baseRole: r.role,
-        }));
-      const flipRole = (base: string) =>
-        base === "target" ? "instigator" : base === "instigator" ? "target" : "direct";
-      const incidentCount = 4 + Math.floor(rng() * 4);
-      for (let i = 0; i < incidentCount; i++) {
-        const sev = rng() < 0.35 ? 5 : rng() < 0.6 ? 4 : 3;
-        // Rotate the mate window so every roster member shows up across the
-        // 4-7 incidents on this case.
-        const mateCount = Math.min(fullMates.length, 1 + Math.floor(rng() * 2));
+    // Hard cap: every case gets exactly MAX_STMTS_PER_CASE statements,
+    // one at each severity in CASE_SEVERITIES. Demo cases were previously
+    // generated per-anchor (4–7 each × 2 anchors = 8–14 per case) which
+    // overwhelmed the case detail view. The cap keeps the timeline
+    // legible while still showing the full severity spread (5/4/3/2).
+    const MAX_STMTS_PER_CASE = 4;
+    const CASE_SEVERITIES = [5, 4, 3, 2];
+    const flipRole = (base: string) =>
+      base === "target" ? "instigator" : base === "instigator" ? "target" : "direct";
+    const studentById = new Map(picked.map((s) => [s.studentId, s] as const));
+
+    insertedCases.forEach((myCase) => {
+      const members = caseRoster.filter((r) => r.caseId === myCase.id);
+      if (members.length === 0) return;
+      // Prefer the high-tier anchors as the primary actor on each statement;
+      // fall back to any member if a case ended up with no high anchors.
+      const anchors = members.filter((m) =>
+        (WL_ROLES_HIGH as readonly string[]).includes(m.role),
+      );
+      const anchorPool = anchors.length > 0 ? anchors : members;
+
+      for (let i = 0; i < MAX_STMTS_PER_CASE; i++) {
+        const sev = CASE_SEVERITIES[i];
+        const anchor = anchorPool[i % anchorPool.length];
+        const stu = studentById.get(anchor.studentId);
+        if (!stu) continue;
+        const others = members.filter((m) => m.studentId !== anchor.studentId);
+        // 1–2 mates per incident, rotated so every roster member surfaces
+        // at least once across the 4 statements.
+        const mateCount = Math.min(others.length, 1 + (i % 2));
         const mates: { studentId: string; role: string }[] = [];
         for (let j = 0; j < mateCount; j++) {
-          const m = fullMates[(i + j) % fullMates.length];
+          const m = others[(i + j) % others.length];
           if (!m) continue;
-          mates.push({ studentId: m.studentId, role: flipRole(m.baseRole) });
+          mates.push({ studentId: m.studentId, role: flipRole(m.role) });
         }
         pushIncident({
-          anchor: stu,
-          anchorRole: WL_ROLES_HIGH[i % WL_ROLES_HIGH.length],
+          anchor: { studentId: stu.studentId },
+          anchorRole: anchor.role,
           coStudents: mates,
           severity: sev,
           kind: pick(rng, [...WL_KINDS].filter((k) => k !== "peripheral_note")),
-          daysAgo: 1 + Math.floor(rng() * 21),
+          // Spread across the last ~3 weeks so the case timeline isn't
+          // bunched on the same day.
+          daysAgo: 1 + i * 5 + Math.floor(rng() * 3),
           caseId: myCase.id,
-          summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(rng, ["physical", "verbal", "ongoing", "escalating"])} incident; staff intervened.`,
+          summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(
+            rng,
+            ["physical", "verbal", "ongoing", "escalating"],
+          )} incident; staff intervened.`,
           withWitnessFor: i === 0 && mates[0] ? [{ studentId: mates[0].studentId }] : undefined,
         });
       }
     });
 
-    // Medium: 2–3 incidents, mixed severity, sometimes attached to a case.
-    // When attached, optionally pull in one case-mate as a co-participant so
-    // medium-tier roster members also surface on the case timeline.
-    med.forEach((stu, sIdx) => {
+    // Any high-concern student who isn't anchored on a case still gets a
+    // single off-case incident so they show up on the orbit / alerts feed
+    // without inflating any case beyond MAX_STMTS_PER_CASE.
+    const anchoredOnCase = new Set(
+      caseRoster
+        .filter((r) => (WL_ROLES_HIGH as readonly string[]).includes(r.role))
+        .map((r) => r.studentId),
+    );
+    high.forEach((stu) => {
+      if (anchoredOnCase.has(stu.studentId)) return;
+      pushIncident({
+        anchor: stu,
+        anchorRole: WL_ROLES_HIGH[0],
+        coStudents: [],
+        severity: 4,
+        kind: pick(rng, [...WL_KINDS].filter((k) => k !== "peripheral_note")),
+        daysAgo: 2 + Math.floor(rng() * 14),
+        caseId: null,
+        summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ongoing concern; not yet linked to a case.`,
+      });
+    });
+
+    // Medium incidents are intentionally NEVER attached to a case so the
+    // MAX_STMTS_PER_CASE cap above stays a true ceiling. They still feed
+    // the orbit / alerts views and the loose-escalation rule.
+    med.forEach((stu) => {
       const incidentCount = 2 + Math.floor(rng() * 2);
-      const attachToCase = rng() < 0.5;
-      const myCase = attachToCase ? insertedCases[sIdx % insertedCases.length] : null;
-      const myMates = myCase
-        ? caseRoster
-            .filter((r) => r.caseId === myCase.id && r.studentId !== stu.studentId)
-            .map((r) => r.studentId)
-        : [];
       for (let i = 0; i < incidentCount; i++) {
         const sev = rng() < 0.25 ? 4 : rng() < 0.6 ? 3 : 2;
-        const co: { studentId: string; role: string }[] = [];
-        if (myMates.length > 0 && rng() < 0.5) {
-          co.push({
-            studentId: myMates[Math.floor(rng() * myMates.length)],
-            role: pick(rng, ["witness", "peripheral"]),
-          });
-        }
         pushIncident({
           anchor: stu,
           anchorRole: WL_ROLES_MED[i % WL_ROLES_MED.length],
-          coStudents: co,
+          coStudents: [],
           severity: sev,
           kind: pick(rng, [...WL_KINDS]),
           daysAgo: 2 + Math.floor(rng() * 28),
-          caseId: myCase?.id ?? null,
+          caseId: null,
           summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(rng, ["raised voices", "name-calling", "shoving", "rumor reported"])} in ${pick(rng, WL_LOCATIONS)}.`,
         });
       }
