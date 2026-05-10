@@ -2937,7 +2937,20 @@ router.get(
       topTier: VideoConfidenceTier;
       hasCleared: boolean;
     }>;
-    res.json({ summary: rows });
+    // Total clip count on the case — separate from per-player links so
+    // the case ring can show "footage exists" even before any players
+    // are tagged. Otherwise a freshly-logged clip leaves no visible
+    // trail on the network view until someone opens the case file.
+    const totalClipsRow = (
+      await db.execute(sql`
+        SELECT COUNT(*)::int AS "count"
+          FROM case_video_evidence
+         WHERE school_id = ${schoolId}
+           AND case_id   = ${caseId}
+      `)
+    ).rows as Array<{ count: number }>;
+    const totalClips = totalClipsRow[0]?.count ?? 0;
+    res.json({ summary: rows, totalClips });
   },
 );
 

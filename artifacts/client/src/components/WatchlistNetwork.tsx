@@ -282,6 +282,10 @@ export default function WatchlistNetwork({
   // re-fetches and the player-sphere badges update without a page
   // reload. Cleared when the user zooms out.
   const [evidenceReloadKey, setEvidenceReloadKey] = useState(0);
+  // Total clip count on the zoomed case (independent of player tags) so
+  // the toolbar can show "this case has footage" even before anyone is
+  // tagged. Reset to 0 when zoomed out.
+  const [zoomedCaseClipCount, setZoomedCaseClipCount] = useState(0);
   const [showFootageModal, setShowFootageModal] = useState(false);
 
   const reload = useCallback(async () => {
@@ -304,6 +308,7 @@ export default function WatchlistNetwork({
   useEffect(() => {
     if (zoomedClusterId === null || zoomedClusterId < 0) {
       setEvidenceSummary(new Map());
+      setZoomedCaseClipCount(0);
       return;
     }
     let cancelled = false;
@@ -315,6 +320,7 @@ export default function WatchlistNetwork({
         if (cancelled) return;
         if (r.status === 403 || !r.ok) {
           setEvidenceSummary(new Map());
+          setZoomedCaseClipCount(0);
           return;
         }
         const j = (await r.json()) as {
@@ -324,6 +330,7 @@ export default function WatchlistNetwork({
             topTier: "confirmed" | "inferred" | "possible";
             hasCleared: boolean;
           }>;
+          totalClips?: number;
         };
         const m = new Map<
           string,
@@ -336,8 +343,12 @@ export default function WatchlistNetwork({
             hasCleared: row.hasCleared,
           });
         setEvidenceSummary(m);
+        setZoomedCaseClipCount(j.totalClips ?? 0);
       } catch {
-        if (!cancelled) setEvidenceSummary(new Map());
+        if (!cancelled) {
+          setEvidenceSummary(new Map());
+          setZoomedCaseClipCount(0);
+        }
       }
     })();
     return () => {
@@ -694,6 +705,24 @@ export default function WatchlistNetwork({
                         >
                           {statusPillStyle(zoomedCase.status).label}
                         </span>
+                        {zoomedCaseClipCount > 0 && (
+                          <span
+                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
+                            style={{
+                              background: "#FEF2F2",
+                              color: "#9F1D1D",
+                              border: "1px solid #9F1D1D",
+                            }}
+                            title={
+                              isInvestigator
+                                ? `${zoomedCaseClipCount} clip${zoomedCaseClipCount === 1 ? "" : "s"} on file. Tag players inside the case file so they appear on the spheres.`
+                                : `${zoomedCaseClipCount} clip${zoomedCaseClipCount === 1 ? "" : "s"} on file.`
+                            }
+                          >
+                            <Video className="h-3 w-3" />
+                            {zoomedCaseClipCount}
+                          </span>
+                        )}
                         {isInvestigator && (
                           <button
                             type="button"
