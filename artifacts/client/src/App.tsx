@@ -26,6 +26,7 @@ import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import { StudentFinderModal } from "./components/StudentFinderModal";
 import StaffDirectoryPage from "./components/StaffDirectoryPage";
+import OnboardingChecklist from "./components/OnboardingChecklist";
 import InterventionsTodayPage from "./components/InterventionsTodayPage";
 import InterventionReportsPage from "./components/InterventionReportsPage";
 import MtssReportsPage from "./components/MtssReportsPage";
@@ -4324,6 +4325,12 @@ function App() {
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
   const [settingsTile, setSettingsTile] = useState<SettingsTileId | null>(null);
+  // True after the user clicked "Open" on a row in the Onboarding
+  // Checklist. Drives the floating "← Back to Onboarding" banner that
+  // overlays every page until the admin returns to the checklist (or
+  // dismisses it). Cleared explicitly — never auto-cleared on page
+  // change so it survives multi-step setup flows.
+  const [cameFromOnboarding, setCameFromOnboarding] = useState(false);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
   const [showStudentFinder, setShowStudentFinder] = useState(false);
@@ -8383,6 +8390,64 @@ function App() {
   return (
     <RoleProvider value={rolesFromAuthUser(authUser)}>
     <div className="app-shell">
+      {cameFromOnboarding &&
+        !(activeSection === "settings" && settingsTile === "onboarding") && (
+          <div
+            role="status"
+            style={{
+              position: "fixed",
+              right: 16,
+              bottom: 16,
+              zIndex: 1100,
+              background: "linear-gradient(90deg,#7c3aed,#0d9488)",
+              color: "#fff",
+              padding: "0.55rem 0.9rem",
+              borderRadius: 999,
+              boxShadow: "0 6px 18px rgba(0,0,0,0.25)",
+              display: "flex",
+              alignItems: "center",
+              gap: "0.5rem",
+              fontSize: "0.85rem",
+              fontWeight: 600,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => {
+                setCameFromOnboarding(false);
+                setActiveSection("settings");
+                setSettingsTile("onboarding");
+              }}
+              style={{
+                background: "rgba(255,255,255,0.18)",
+                color: "#fff",
+                border: "none",
+                padding: "0.3rem 0.7rem",
+                borderRadius: 999,
+                cursor: "pointer",
+                fontWeight: 600,
+              }}
+            >
+              ← Back to Onboarding
+            </button>
+            <button
+              type="button"
+              onClick={() => setCameFromOnboarding(false)}
+              aria-label="Dismiss onboarding return banner"
+              style={{
+                background: "transparent",
+                color: "#fff",
+                border: "none",
+                cursor: "pointer",
+                fontSize: "1rem",
+                lineHeight: 1,
+                opacity: 0.8,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
       {authUser?.impersonatorStaffId && authUser?.impersonatorDisplayName && (
         <div
           role="status"
@@ -19060,6 +19125,14 @@ function App() {
             const staffDefaultsCount = Object.keys(staffDefaults).length;
             const tiles: SettingsTile[] = [
               {
+                id: "onboarding",
+                icon: "🚀",
+                title: "Onboarding Checklist",
+                subtitle:
+                  "Step-by-step setup for a new school. Auto-detects what's done, prints to PDF.",
+                group: "school-identity",
+              },
+              {
                 id: "notifications",
                 icon: "🔔",
                 title: "Admin Notifications",
@@ -19309,6 +19382,22 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile !== null && (
         <SettingsBackBar onBack={() => setSettingsTile(null)} />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "onboarding" && (
+        <OnboardingChecklist
+          onNavigate={(route) => {
+            setCameFromOnboarding(true);
+            if (route.kind === "settings") {
+              // Stay in settings, swap the active tile.
+              setSettingsTile(route.target as SettingsTileId);
+            } else {
+              // Jump to a top-level activeSection (pbisHub, parentAccess, etc).
+              setSettingsTile(null);
+              setActiveSection(route.target as typeof activeSection);
+            }
+          }}
+        />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "tenancy" && isSuperUser && (

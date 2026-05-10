@@ -78,3 +78,4 @@ export * from "./interactionWitnessStatements";
 export * from "./interactionAuditLog";
 export * from "./interactionAlertDismissals";
 export * from "./interactionQuickEntries";
+export * from "./onboardingChecklistState";

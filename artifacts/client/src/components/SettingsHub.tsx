@@ -23,7 +23,8 @@ export type SettingsTileId =
   | "iss-settings"
   | "staff-preview"
   | "separation-tags"
-  | "staff-directory";
+  | "staff-directory"
+  | "onboarding";
 
 export type SettingsGroupId =
   | "hall-pass-ops"

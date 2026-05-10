@@ -79,6 +79,7 @@ import staffDirectoryRouter from "./staffDirectory";
 import hallPassQueueRouter from "./hallPassQueue";
 import spotlightRouter from "./spotlight";
 import watchlistRouter from "./watchlist";
+import onboardingRouter from "./onboarding";
 
 const router: IRouter = Router();
 
@@ -162,5 +163,6 @@ router.use(staffDirectoryRouter);
 router.use(hallPassQueueRouter);
 router.use(spotlightRouter);
 router.use(watchlistRouter);
+router.use(onboardingRouter);
 
 export default router;

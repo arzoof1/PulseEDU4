@@ -1313,6 +1313,26 @@ export async function seedWatchlistQuickEntriesIfEmpty(): Promise<void> {
 // Tier-preset table + the three built-in Basic/Pro/Enterprise rows.
 // Idempotent: existing rows are kept (in case the user has edited the
 // preset's feature_keys) but missing rows are inserted.
+// Onboarding checklist state. One row per (school_id, step_key) — created
+// lazily the first time an admin manually toggles the step. Auto-detected
+// statuses are computed at read-time from other tables, never stored here.
+export async function ensureOnboardingChecklistSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS onboarding_checklist_state (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      step_key TEXT NOT NULL,
+      manual_checked BOOLEAN NOT NULL DEFAULT FALSE,
+      completed_by_staff_id INTEGER,
+      completed_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS onboarding_checklist_school_step_uq ON onboarding_checklist_state (school_id, step_key)`,
+  );
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1477,6 +1497,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureSchoolSettingsFeatureFlagsSchema();
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
+  await ensureOnboardingChecklistSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(
