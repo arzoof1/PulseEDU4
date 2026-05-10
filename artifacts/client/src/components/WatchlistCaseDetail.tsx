@@ -155,10 +155,11 @@ interface Props {
   // surface a secondary jump button.
   backLabel?: string;
   // Forwarded to the Investigation Ring's right rail. Opens the
-  // global Student Finder modal pre-populated with `q` so investigators
-  // can jump from a witness/mentioned sphere to today's schedule + live
-  // location without leaving the case.
-  onOpenStudentFinder?: (q: string) => void;
+  // global Student Finder modal directly on the given student's
+  // "today" view so investigators can jump from a witness/mentioned
+  // sphere to today's schedule + live location without leaving the
+  // case (skips the search step entirely).
+  onOpenStudentFinder?: (studentId: string, displayName: string) => void;
   // Strict admin/superuser/district-admin gate — used for the Reopen
   // case button. Server-side `/cases/:id/reopen` rejects anyone outside
   // this set, so we hide the button to match. The wider `isAdmin` prop

@@ -84,12 +84,13 @@ interface StudentStatement {
 interface Props {
   onBack?: () => void;
   onOpenCase?: (caseId: number, anchor?: string) => void;
-  // Opens the global Student Finder modal pre-populated with `q`.
-  // Used by the right-rail "Open in Student Finder" affordance so a
-  // user investigating from the network view can jump to today's
+  // Opens the global Student Finder modal directly on the given
+  // student's "today" view (skips the search step). Used by the
+  // right-rail "Open in Student Finder" affordance so a user
+  // investigating from the network view can jump to today's
   // schedule / live location for the focused student without losing
   // their place on the network surface.
-  onOpenStudentFinder?: (q: string) => void;
+  onOpenStudentFinder?: (studentId: string, displayName: string) => void;
   // True when the viewer is in the Case Investigator group (admin
   // tier + Behavior Specialist + MTSS Coordinator + Dean). Gates the
   // "+ Footage" quick-add button on the case-zoom toolbar; non-
@@ -880,6 +881,7 @@ export default function WatchlistNetwork({
                     type="button"
                     onClick={() =>
                       onOpenStudentFinder(
+                        selected.studentId,
                         `${selected.firstName} ${selected.lastName}`,
                       )
                     }

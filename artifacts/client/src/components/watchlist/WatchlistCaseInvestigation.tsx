@@ -82,11 +82,12 @@ interface Props {
   caseId: number;
   incidents: Array<{ id: number; summary: string; occurredAt: string }>;
   onRequestStatement?: (studentId: string, incidentId: number) => void;
-  // Opens the global Student Finder modal pre-populated with `q`.
-  // Wired from App.tsx through WatchlistCaseDetail. Surfaces as the
-  // "Open in Student Finder" button on the right-rail when a witness
-  // or mentioned-only sphere is selected.
-  onOpenStudentFinder?: (q: string) => void;
+  // Opens the global Student Finder modal directly on the given
+  // student's "today" view (skips the search step). Wired from
+  // App.tsx through WatchlistCaseDetail. Surfaces as the "Open in
+  // Student Finder" button on the right-rail when a witness or
+  // mentioned-only sphere is selected.
+  onOpenStudentFinder?: (studentId: string, displayName: string) => void;
 }
 
 const W = 760;
@@ -545,7 +546,10 @@ export default function WatchlistCaseInvestigation({
                   <button
                     type="button"
                     onClick={() =>
-                      onOpenStudentFinder(selectedStatement.displayName)
+                      onOpenStudentFinder(
+                        selectedStatement.studentId,
+                        selectedStatement.displayName,
+                      )
                     }
                     className="mt-2 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-bold"
                     style={{
@@ -582,6 +586,7 @@ export default function WatchlistCaseInvestigation({
                     type="button"
                     onClick={() =>
                       onOpenStudentFinder(
+                        selectedMentioned.studentId,
                         `${selectedMentioned.firstName} ${selectedMentioned.lastName}`,
                       )
                     }

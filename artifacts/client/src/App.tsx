@@ -4335,17 +4335,24 @@ function App() {
   const [cameFromOnboarding, setCameFromOnboarding] = useState(false);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
-  // Student Finder state. `null` = closed; string = open with that
-  // initial query (empty string = open with blank field, the default
-  // top-bar entry point). Carrying the initial query lets deep-links
-  // from the network views' right panel pre-populate the search.
-  const [studentFinderQuery, setStudentFinderQuery] = useState<string | null>(
-    null,
-  );
-  const showStudentFinder = studentFinderQuery !== null;
+  // Student Finder state. `null` = closed. Otherwise a discriminated
+  // open-state: either { kind: "search", query } for the top-bar entry
+  // point (search field shown) or { kind: "student", studentId,
+  // displayName } for deep-links from the network views' right panel
+  // (skips search entirely and loads today's schedule directly —
+  // avoids "no students match" misses on a name we already resolved).
+  type FinderState =
+    | null
+    | { kind: "search"; query: string }
+    | { kind: "student"; studentId: string; displayName: string };
+  const [studentFinder, setStudentFinder] = useState<FinderState>(null);
+  const showStudentFinder = studentFinder !== null;
   const setShowStudentFinder = (open: boolean) =>
-    setStudentFinderQuery(open ? "" : null);
-  const openStudentFinderWith = (q: string) => setStudentFinderQuery(q);
+    setStudentFinder(open ? { kind: "search", query: "" } : null);
+  const openStudentFinderForStudent = (
+    studentId: string,
+    displayName: string,
+  ) => setStudentFinder({ kind: "student", studentId, displayName });
   const [changePwCurrent, setChangePwCurrent] = useState("");
   const [changePwNew, setChangePwNew] = useState("");
   const [changePwBusy, setChangePwBusy] = useState(false);
@@ -8721,8 +8728,15 @@ function App() {
 
       {showStudentFinder && (
         <StudentFinderModal
-          onClose={() => setStudentFinderQuery(null)}
-          initialQuery={studentFinderQuery ?? ""}
+          onClose={() => setStudentFinder(null)}
+          initialQuery={
+            studentFinder?.kind === "search" ? studentFinder.query : ""
+          }
+          initialStudentId={
+            studentFinder?.kind === "student"
+              ? studentFinder.studentId
+              : undefined
+          }
         />
       )}
 
@@ -19174,7 +19188,7 @@ function App() {
             setCaseOpenOrigin("watchlistNetwork");
             setActiveSection("watchlistCase");
           }}
-          onOpenStudentFinder={openStudentFinderWith}
+          onOpenStudentFinder={openStudentFinderForStudent}
           isInvestigator={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||
@@ -19197,7 +19211,7 @@ function App() {
                 ? "Back to Student Graph"
                 : "Back to Investigations"
           }
-          onOpenStudentFinder={openStudentFinderWith}
+          onOpenStudentFinder={openStudentFinderForStudent}
           isAdmin={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||

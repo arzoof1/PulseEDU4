@@ -90,6 +90,7 @@ function fmtTime(hhmm: string | null): string {
 export function StudentFinderModal({
   onClose,
   initialQuery = "",
+  initialStudentId,
 }: {
   onClose: () => void;
   // When provided, the search field opens pre-populated with this string
@@ -97,11 +98,19 @@ export function StudentFinderModal({
   // network views' right panel ("Open in Student Finder") so a user
   // jumping from a sphere to the finder doesn't have to retype the name.
   initialQuery?: string;
+  // When provided, the modal skips the search step entirely and loads
+  // this student's schedule directly. Preferred over initialQuery for
+  // deep-links from network/case views where we already know the
+  // canonical studentId — avoids "no students match" misses caused by
+  // search heuristics on a name we already resolved.
+  initialStudentId?: string;
 }) {
   const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [selected, setSelected] = useState<string | null>(
+    initialStudentId ?? null,
+  );
   const [today, setToday] = useState<TodayPayload | null>(null);
   const [loadingToday, setLoadingToday] = useState(false);
   const [error, setError] = useState<string | null>(null);
