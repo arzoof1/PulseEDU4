@@ -367,7 +367,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                   type="button"
                   onClick={saveTitle}
                   className="rounded-md px-3 py-1.5 text-sm font-semibold text-white"
-                  style={{ background: C.brand }}
+                  style={{ background: C.brand, color: "#FFFFFF" }}
                 >
                   Save
                 </button>
@@ -478,7 +478,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                     type="button"
                     onClick={() => setShowLog(true)}
                     className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold text-white"
-                    style={{ background: C.brand }}
+                    style={{ background: C.brand, color: "#FFFFFF" }}
                   >
                     <Plus className="h-3 w-3" /> Log new
                   </button>
@@ -1145,7 +1145,7 @@ function AttachExistingIncidentModal({
                         onClick={() => void attach(r.id)}
                         disabled={busyId === r.id}
                         className="shrink-0 rounded-md px-2 py-1 text-[11px] font-bold text-white disabled:opacity-50"
-                        style={{ background: C.brand }}
+                        style={{ background: C.brand, color: "#FFFFFF" }}
                       >
                         {busyId === r.id ? "Attaching…" : "Attach"}
                       </button>
@@ -1407,7 +1407,7 @@ function AddPlayerModal({
             onClick={submit}
             disabled={saving || !picked}
             className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-semibold text-white disabled:opacity-50"
-            style={{ background: C.brand }}
+            style={{ background: C.brand, color: "#FFFFFF" }}
           >
             {saving ? "Saving…" : "Add player"} <ChevronRight className="h-3 w-3" />
           </button>
