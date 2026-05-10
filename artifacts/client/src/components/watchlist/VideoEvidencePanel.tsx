@@ -10,6 +10,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { authFetch } from "../../lib/authToken";
+import DictateButton, { appendDictated } from "../DictateButton";
 
 // Admin-only Phase 2 panel + Phase 2.1 player-tagging UI.
 //
@@ -840,6 +841,18 @@ export default function VideoEvidencePanel({
                                 you saw — this will be in the audit trail.
                               </div>
                             )}
+                            <div className="mt-1 flex justify-end">
+                              <DictateButton
+                                onAppend={(chunk) =>
+                                  setEditLinkReason((prev) =>
+                                    appendDictated(prev, chunk),
+                                  )
+                                }
+                                borderColor={lineColor}
+                                inkSoft={inkSoft}
+                                panelBg={panelBg}
+                              />
+                            </div>
                             <textarea
                               value={editLinkReason}
                               onChange={(e) => setEditLinkReason(e.target.value)}
@@ -970,6 +983,18 @@ export default function VideoEvidencePanel({
                               you saw — this will be in the audit trail.
                             </div>
                           )}
+                          <div className="mt-1 flex justify-end">
+                            <DictateButton
+                              onAppend={(chunk) =>
+                                setTagReason((prev) =>
+                                  appendDictated(prev, chunk),
+                                )
+                              }
+                              borderColor={lineColor}
+                              inkSoft={inkSoft}
+                              panelBg={panelBg}
+                            />
+                          </div>
                           <textarea
                             value={tagReason}
                             onChange={(e) => setTagReason(e.target.value)}
