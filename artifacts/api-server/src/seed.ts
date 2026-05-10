@@ -45,6 +45,7 @@ import {
   interactionCaseNotesTable,
   witnessStatementsTable,
   interactionQuickEntriesTable,
+  cameraRegistryTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -1472,6 +1473,61 @@ export async function ensureCaseVideoEvidencePlayersSchema() {
   );
 }
 
+// Per-school registry of named security cameras. See
+// lib/db/src/schema/cameraRegistry.ts for the soft-delete + audit
+// rationale. The case-insensitive uniqueness constraint is added in
+// raw SQL because drizzle-zod doesn't currently emit `lower(name)`.
+export async function ensureCameraRegistrySchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_camera_registry (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      location TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_camera_registry_school_active_idx ON case_camera_registry (school_id, active)`,
+  );
+  // Case-insensitive uniqueness — admins type "Cafeteria North" or
+  // "cafeteria north" and we want both rejected as duplicates.
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS case_camera_registry_school_name_lower_uidx ON case_camera_registry (school_id, lower(name))`,
+  );
+}
+
+// Demo cameras seeded once per school so a freshly-seeded environment
+// has a working dropdown out of the box. Skipped if the school already
+// has any camera rows so re-seeding doesn't re-add deleted ones.
+async function seedDemoCamerasForSchools() {
+  const DEMO_CAMERAS: Array<{ name: string; location: string }> = [
+    { name: "Cafeteria North", location: "Cafeteria, north entrance" },
+    { name: "Main Hallway", location: "Building 1, ground floor" },
+    { name: "Gym Entrance", location: "Gymnasium foyer" },
+    { name: "Front Office", location: "Administration suite" },
+    { name: "Bus Loop", location: "East parking, bus loading zone" },
+  ];
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM case_camera_registry WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+    await db.insert(cameraRegistryTable).values(
+      DEMO_CAMERAS.map((cam) => ({
+        schoolId: school.id,
+        name: cam.name,
+        location: cam.location,
+      })),
+    );
+  }
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1640,6 +1696,8 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseMentionsSchema();
   await ensureCaseVideoEvidenceSchema();
   await ensureCaseVideoEvidencePlayersSchema();
+  await ensureCameraRegistrySchema();
+  await seedDemoCamerasForSchools();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

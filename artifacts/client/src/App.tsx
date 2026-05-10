@@ -15,6 +15,7 @@ import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import IssSettingsPage from "./components/IssSettingsPage";
+import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
@@ -19183,6 +19184,10 @@ function App() {
         <IssSettingsPage />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "cameras" && (
+        <CameraRegistryPage />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === null && (
         <SettingsHub
           tiles={(() => {
@@ -19331,6 +19336,18 @@ function App() {
               title: "ISS Settings",
               subtitle:
                 "Daily ISS seat capacity, school-closed days, and discipline reasons.",
+              group: "feature-config",
+            });
+            // Camera Registry — admin-managed list of named security
+            // cameras. Powers the dropdown in the case file's video
+            // evidence form so admins don't retype "Building 4 / Floor 2
+            // / East / Cam 12" on every clip.
+            tiles.push({
+              id: "cameras",
+              icon: "🎥",
+              title: "Camera Registry",
+              subtitle:
+                "Named security cameras for the case file's video evidence dropdown.",
               group: "feature-config",
             });
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV

@@ -51,6 +51,7 @@ import {
   caseMentionsTable,
   caseVideoEvidenceTable,
   caseVideoEvidencePlayersTable,
+  cameraRegistryTable,
   VIDEO_CONFIDENCE_TIERS,
   type VideoConfidenceTier,
   interactionAuditLogTable,
@@ -3685,6 +3686,243 @@ router.delete(
       action: "deleted",
       staff,
       payload: {},
+    });
+    res.json({ ok: true });
+  },
+);
+
+// =====================================================================
+// Camera Registry — per-school named cameras for the footage dropdown.
+// Replaces the old free-text camera_label workflow where admins typed
+// "Cafeteria North camera" 200 times a year. Soft-deletes preserve
+// historical evidence rows (which still reference the camera by name
+// as text) while removing the camera from the dropdown going forward.
+// All routes are admin-gated (Case Investigator group); other roles
+// don't see the dropdown surface at all.
+// =====================================================================
+
+router.get(
+  "/watchlist/cameras",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const includeInactive = req.query["includeInactive"] === "1";
+    const where = includeInactive
+      ? eq(cameraRegistryTable.schoolId, schoolId)
+      : and(
+          eq(cameraRegistryTable.schoolId, schoolId),
+          eq(cameraRegistryTable.active, true),
+        );
+    const rows = await db
+      .select()
+      .from(cameraRegistryTable)
+      .where(where)
+      .orderBy(
+        // Active first (so the dropdown UX stays clean even when the
+        // settings page asks for inactives), then alphabetical name.
+        desc(cameraRegistryTable.active),
+        asc(cameraRegistryTable.name),
+      );
+    res.json({ cameras: rows });
+  },
+);
+
+// Camera registry mutations are tighter than the rest of the case
+// surface — only true admins (Admin / SuperUser / DistrictAdmin) can
+// add/rename/remove cameras, matching the Settings tile gate
+// (canManageSettings). Other case investigators can READ the registry
+// for the picker dropdown but can't edit it. This prevents drift in
+// the camera list (a Dean accidentally renaming "Cafeteria North" to
+// "cafeteria n" would invalidate the standardization goal).
+function cameraWriteGate(req: Request, res: Response): boolean {
+  const staff = (req as ReqWithStaff).staff;
+  if (!isAdminOrSuperUser(staff)) {
+    res.status(403).json({ error: "Admin role required" });
+    return false;
+  }
+  return true;
+}
+
+router.post(
+  "/watchlist/cameras",
+  async (req: Request, res: Response) => {
+    if (!cameraWriteGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as ReqWithStaff).staff;
+    const b = req.body as Record<string, unknown>;
+    const name = clean(b["name"], 200);
+    const location = clean(b["location"], 200) || null;
+    if (!name) {
+      res.status(400).json({ error: "name required" });
+      return;
+    }
+    try {
+      const [row] = await db
+        .insert(cameraRegistryTable)
+        .values({ schoolId, name, location })
+        .returning();
+      await audit({
+        schoolId,
+        entityType: "camera_registry",
+        entityId: row.id,
+        action: "created",
+        staff,
+        payload: { name, location },
+      });
+      res.json({ camera: row });
+    } catch (e) {
+      // 23505 = unique_violation on (school_id, lower(name)). Surface a
+      // friendly message instead of leaking pg internals.
+      if ((e as { code?: string }).code === "23505") {
+        res.status(409).json({ error: "A camera with that name already exists" });
+        return;
+      }
+      throw e;
+    }
+  },
+);
+
+router.patch(
+  "/watchlist/cameras/:id",
+  async (req: Request, res: Response) => {
+    if (!cameraWriteGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as ReqWithStaff).staff;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    // Snapshot the row BEFORE mutating so the audit log captures
+    // a true before/after pair (the architect review flagged this).
+    // School-scoped lookup so a cross-tenant id can't even leak the
+    // existence of another school's row.
+    const [before] = await db
+      .select()
+      .from(cameraRegistryTable)
+      .where(
+        and(
+          eq(cameraRegistryTable.id, id),
+          eq(cameraRegistryTable.schoolId, schoolId),
+        ),
+      );
+    if (!before) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const patch: Partial<typeof cameraRegistryTable.$inferInsert> = {};
+    if (typeof b["name"] === "string") {
+      const v = clean(b["name"], 200);
+      if (!v) {
+        res.status(400).json({ error: "name cannot be empty" });
+        return;
+      }
+      patch.name = v;
+    }
+    if (typeof b["location"] === "string") {
+      patch.location = clean(b["location"], 200) || null;
+    }
+    if (typeof b["active"] === "boolean") {
+      patch.active = b["active"] as boolean;
+    }
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: "no changes" });
+      return;
+    }
+    patch.updatedAt = new Date();
+    try {
+      const [row] = await db
+        .update(cameraRegistryTable)
+        .set(patch)
+        .where(
+          and(
+            eq(cameraRegistryTable.id, id),
+            eq(cameraRegistryTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      if (!row) {
+        res.status(404).json({ error: "Not found" });
+        return;
+      }
+      await audit({
+        schoolId,
+        entityType: "camera_registry",
+        entityId: id,
+        action: "updated",
+        staff,
+        payload: {
+          before: {
+            name: before.name,
+            location: before.location,
+            active: before.active,
+          },
+          after: {
+            name: row.name,
+            location: row.location,
+            active: row.active,
+          },
+          changedFields: Object.keys(patch).filter((k) => k !== "updatedAt"),
+        },
+      });
+      res.json({ camera: row });
+    } catch (e) {
+      if ((e as { code?: string }).code === "23505") {
+        res.status(409).json({ error: "A camera with that name already exists" });
+        return;
+      }
+      throw e;
+    }
+  },
+);
+
+// Soft delete. We never hard-delete because past video_evidence rows
+// store the name as text and an admin reading an old case file should
+// still see what was logged. A future "purge unused" job can hard-
+// delete inactive rows that have zero evidence references.
+router.delete(
+  "/watchlist/cameras/:id",
+  async (req: Request, res: Response) => {
+    if (!cameraWriteGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as ReqWithStaff).staff;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .update(cameraRegistryTable)
+      .set({ active: false, updatedAt: new Date() })
+      .where(
+        and(
+          eq(cameraRegistryTable.id, id),
+          eq(cameraRegistryTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    // Capture the camera identity at delete time so the audit log is
+    // self-contained — if the row is later restored and renamed, the
+    // forensic trail still shows what was removed and when.
+    await audit({
+      schoolId,
+      entityType: "camera_registry",
+      entityId: id,
+      action: "soft_deleted",
+      staff,
+      payload: {
+        name: row.name,
+        location: row.location,
+      },
     });
     res.json({ ok: true });
   },

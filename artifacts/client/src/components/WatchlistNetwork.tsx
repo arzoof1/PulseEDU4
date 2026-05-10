@@ -19,6 +19,7 @@ import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import { ROLE_META, WL_COLORS as C, statusPillStyle, type Role } from "./watchlist/colors";
 import DictateButton, { appendDictated } from "./DictateButton";
+import CameraPicker from "./CameraPicker";
 import {
   HowToUseHelp,
   HowToSection,
@@ -1606,20 +1607,19 @@ function FootageQuickAddModal({
         </div>
 
         <div className="space-y-3 px-4 py-3 text-sm">
-          <label className="block">
+          <div className="block">
             <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
-              Camera / location <span style={{ color: C.alert }}>*</span>
+              Camera <span style={{ color: C.alert }}>*</span>
             </div>
-            <input
-              type="text"
+            <CameraPicker
               value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="e.g. Hallway B-Wing"
-              className="w-full rounded-md border px-2.5 py-1.5"
-              style={{ borderColor: C.line, background: C.bg }}
-              maxLength={200}
+              onChange={setLabel}
+              borderColor={C.line}
+              bg={C.bg}
+              inkSoft={C.inkSoft}
+              required
             />
-          </label>
+          </div>
           <div className="grid grid-cols-2 gap-2">
             <label className="block">
               <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>

@@ -11,6 +11,7 @@ import {
 } from "lucide-react";
 import { authFetch } from "../../lib/authToken";
 import DictateButton, { appendDictated } from "../DictateButton";
+import CameraPicker from "../CameraPicker";
 
 // Admin-only Phase 2 panel + Phase 2.1 player-tagging UI.
 //
@@ -123,7 +124,6 @@ export default function VideoEvidencePanel({
 }: Props) {
   const [rows, setRows] = useState<EvidenceRow[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [labels, setLabels] = useState<string[]>([]);
 
   const [showAdd, setShowAdd] = useState(false);
   const [newLabel, setNewLabel] = useState("");
@@ -174,22 +174,8 @@ export default function VideoEvidencePanel({
     }
   }
 
-  async function loadLabels() {
-    try {
-      const r = await authFetch(`/api/watchlist/camera-labels`, {
-        credentials: "include",
-      });
-      if (!r.ok) return;
-      const data = (await r.json()) as { labels: string[] };
-      setLabels(data.labels);
-    } catch {
-      /* noop */
-    }
-  }
-
   useEffect(() => {
     void load();
-    void loadLabels();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [caseId]);
 
@@ -228,7 +214,6 @@ export default function VideoEvidencePanel({
       }
       resetAdd();
       await load();
-      await loadLabels();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Save failed");
     } finally {
@@ -300,11 +285,6 @@ export default function VideoEvidencePanel({
     } finally {
       setSaving(false);
     }
-  }
-
-  function chooseLabel(l: string) {
-    if (showAdd) setNewLabel(l);
-    else if (editingId != null) setEditLabel(l);
   }
 
   function startTag(evidenceId: number) {
@@ -486,31 +466,11 @@ export default function VideoEvidencePanel({
         </div>
       )}
 
-      {labels.length > 0 && (showAdd || editingId != null) && (
-        <div className="mt-3 flex flex-wrap items-center gap-1">
-          <span
-            className="text-[10px] font-bold uppercase"
-            style={{ color: inkSoft }}
-          >
-            Recent cameras:
-          </span>
-          {labels.slice(0, 12).map((l) => (
-            <button
-              key={l}
-              type="button"
-              onClick={() => chooseLabel(l)}
-              className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
-              style={{
-                borderColor: lineColor,
-                color: brandColor,
-                background: pageBg,
-              }}
-            >
-              {l}
-            </button>
-          ))}
-        </div>
-      )}
+      {/* The legacy "Recent cameras" chip row that surfaced free-text
+          labels from /watchlist/camera-labels was removed — it
+          undermined the registry standardization goal by re-suggesting
+          unregistered or typo'd names. The CameraPicker datalist now
+          drives all camera selection. */}
 
       {showAdd && (
         <div
@@ -518,17 +478,17 @@ export default function VideoEvidencePanel({
           style={{ borderColor: lineColor, background: pageBg }}
         >
           <div className="grid gap-2 md:grid-cols-2">
-            <label className="text-xs font-semibold">
-              Camera label
-              <input
-                type="text"
+            <div className="text-xs font-semibold">
+              <div className="mb-1">Camera</div>
+              <CameraPicker
                 value={newLabel}
-                onChange={(e) => setNewLabel(e.target.value)}
-                placeholder="e.g. Cafeteria North"
-                className="mt-1 w-full rounded-md border px-2 py-1 text-sm font-normal"
-                style={{ borderColor: lineColor, background: panelBg }}
+                onChange={setNewLabel}
+                borderColor={lineColor}
+                bg={panelBg}
+                inkSoft={inkSoft}
+                required
               />
-            </label>
+            </div>
             <label className="text-xs font-semibold">
               Source URL (optional)
               <input
@@ -616,12 +576,12 @@ export default function VideoEvidencePanel({
                 style={{ borderColor: brandColor, background: pageBg }}
               >
                 <div className="grid gap-2 md:grid-cols-2">
-                  <input
-                    type="text"
+                  <CameraPicker
                     value={editLabel}
-                    onChange={(e) => setEditLabel(e.target.value)}
-                    className="rounded-md border px-2 py-1 text-sm"
-                    style={{ borderColor: lineColor, background: panelBg }}
+                    onChange={setEditLabel}
+                    borderColor={lineColor}
+                    bg={panelBg}
+                    inkSoft={inkSoft}
                   />
                   <input
                     type="url"

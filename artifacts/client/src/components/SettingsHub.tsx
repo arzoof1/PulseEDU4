@@ -24,6 +24,7 @@ export type SettingsTileId =
   | "staff-preview"
   | "separation-tags"
   | "staff-directory"
+  | "cameras"
   | "onboarding";
 
 export type SettingsGroupId =

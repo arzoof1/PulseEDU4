@@ -82,3 +82,4 @@ export * from "./onboardingChecklistState";
 export * from "./caseMentions";
 export * from "./caseVideoEvidence";
 export * from "./caseVideoEvidencePlayers";
+export * from "./cameraRegistry";

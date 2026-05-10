@@ -219,6 +219,18 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
       ),
   },
   {
+    key: "cameras",
+    phase: "Behavior & PBIS",
+    label: "Camera Registry",
+    hint: "Add the named security cameras at your school so admins can pick from a dropdown when logging video evidence on a case (instead of typing long camera names by hand). Schools with 100+ cameras especially benefit. Five demo cameras are seeded automatically; replace them with your real list. Removed cameras are soft-deleted so historical footage rows keep their original camera name.",
+    route: { kind: "settings", target: "cameras" },
+    autoCheck: (db, schoolId) =>
+      countGt0(
+        db,
+        sql`SELECT COUNT(*)::int AS c FROM case_camera_registry WHERE school_id = ${schoolId} AND active = true`,
+      ),
+  },
+  {
     key: "iss-and-discipline",
     phase: "Behavior & PBIS",
     label: "ISS Settings & Discipline Reasons",
