@@ -180,6 +180,15 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
   // they were on (no nav, no scroll reset, no reload).
   const [detailsStmtId, setDetailsStmtId] = useState<number | null>(null);
   const [intakeTab, setIntakeTab] = useState<"pending" | "dismissed">("pending");
+  // Active-cases search & filter. caseStatusFilter === "active" hides
+  // closed cases (the historical default); explicit statuses narrow
+  // further. The 6-case slice only applies when no search/filter is
+  // active so the panel stays compact at rest but acts as a full
+  // browser the moment the user starts looking for something.
+  const [caseSearch, setCaseSearch] = useState("");
+  const [caseStatusFilter, setCaseStatusFilter] = useState<
+    "active" | "open" | "monitoring" | "escalated" | "closed" | "all"
+  >("active");
   const [busyStmtId, setBusyStmtId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAlert, setBusyAlert] = useState<string | null>(null);
@@ -915,16 +924,105 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                 <Plus className="h-3 w-3" /> New
               </button>
             </div>
+            {/* Search + status filter. The list below applies both
+                client-side against the already-loaded cases array, and
+                drops the 6-case slice whenever the user has typed a
+                search or picked a non-default filter. */}
+            <div className="mt-3 flex flex-col gap-2">
+              <div
+                className="flex items-center gap-2 rounded-md border px-2 py-1.5"
+                style={{ borderColor: C.line, background: C.bg }}
+              >
+                <Search className="h-3.5 w-3.5 flex-none" style={{ color: C.inkSoft }} />
+                <input
+                  type="text"
+                  value={caseSearch}
+                  onChange={(e) => setCaseSearch(e.target.value)}
+                  placeholder="Search by title, case #, or lead…"
+                  className="w-full bg-transparent text-sm outline-none"
+                  style={{ color: C.ink }}
+                />
+                {caseSearch && (
+                  <button
+                    type="button"
+                    onClick={() => setCaseSearch("")}
+                    className="text-[11px] font-semibold"
+                    style={{ color: C.inkSoft }}
+                  >
+                    Clear
+                  </button>
+                )}
+              </div>
+              <div className="flex flex-wrap gap-1">
+                {(
+                  [
+                    ["active", "Active"],
+                    ["open", "Open"],
+                    ["monitoring", "Monitoring"],
+                    ["escalated", "Escalated"],
+                    ["closed", "Closed"],
+                    ["all", "All"],
+                  ] as const
+                ).map(([k, label]) => {
+                  const on = caseStatusFilter === k;
+                  return (
+                    <button
+                      key={k}
+                      type="button"
+                      onClick={() => setCaseStatusFilter(k)}
+                      className="rounded-full border px-2.5 py-0.5 text-[11px] font-semibold transition-colors"
+                      style={{
+                        borderColor: on ? C.brand : C.line,
+                        background: on ? C.brand : C.bg,
+                        color: on ? "#FFFFFF" : C.ink,
+                      }}
+                    >
+                      {label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
             <div className="mt-3 flex flex-col gap-2">
               {cases.length === 0 ? (
                 <div className="text-sm" style={{ color: C.inkSoft }}>
                   No cases yet. Open one when a pattern needs a thread.
                 </div>
               ) : (
-                cases
-                  .filter((c) => c.status !== "closed")
-                  .slice(0, 6)
-                  .map((c) => {
+                (() => {
+                  const q = caseSearch.trim().toLowerCase();
+                  const matches = cases.filter((c) => {
+                    if (caseStatusFilter === "active") {
+                      if (c.status === "closed") return false;
+                    } else if (caseStatusFilter !== "all") {
+                      if (c.status !== caseStatusFilter) return false;
+                    }
+                    if (q) {
+                      const num = formatCaseNumber(c).toLowerCase();
+                      const hay = [
+                        c.title?.toLowerCase() ?? "",
+                        num,
+                        // Bare digits too so "42" matches "25-26-0042".
+                        String(c.caseNumber),
+                        c.leadStaffName?.toLowerCase() ?? "",
+                      ];
+                      if (!hay.some((s) => s.includes(q))) return false;
+                    }
+                    return true;
+                  });
+                  // Compact panel at rest — full browser when the user
+                  // narrows. "Active" is the historical default, so we
+                  // keep the slice there too unless they're searching.
+                  const sliced =
+                    !q && caseStatusFilter === "active" ? matches.slice(0, 6) : matches;
+                  if (sliced.length === 0) {
+                    return (
+                      <div className="text-sm" style={{ color: C.inkSoft }}>
+                        No cases match this search.
+                      </div>
+                    );
+                  }
+                  return sliced.map((c) => {
                     const sp = statusPillStyle(c.status);
                     return (
                       <button
@@ -976,7 +1074,8 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                         </div>
                       </button>
                     );
-                  })
+                  });
+                })()
               )}
             </div>
           </div>
