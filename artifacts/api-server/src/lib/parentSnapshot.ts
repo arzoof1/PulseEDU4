@@ -562,7 +562,19 @@ export async function buildParentSnapshot(
       })),
       fastScores: fastScoresRows,
       interventions,
-      mtss: { tier: mtssTier, plans: mtssPlans },
+      mtss: {
+        tier: mtssTier,
+        plans: mtssPlans.map((p) => ({
+          id: p.id,
+          title: p.title,
+          tier: p.tier,
+          openedAt:
+            p.openedAt instanceof Date
+              ? p.openedAt.toISOString()
+              : String(p.openedAt),
+          goals: p.goals ?? null,
+        })),
+      },
       oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
     },
   };

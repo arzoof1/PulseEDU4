@@ -46,7 +46,7 @@ router.post("/send-test-parent-email", async (req, res) => {
 
   try {
     const { client, fromEmail } = await getUncachableResendClient();
-    const fromName = await getFromName(req.schoolId);
+    const fromName = await getFromName(req.schoolId ?? undefined);
     const fromHeader = formatFromHeader(fromName, fromEmail);
     const result = await client.emails.send({
       from: fromHeader,

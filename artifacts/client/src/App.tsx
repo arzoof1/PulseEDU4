@@ -3477,21 +3477,21 @@ function PulloutReportSection({ students }: { students: Student[] }) {
           </div>
           {renderBucket(
             "Top students",
-            data.byStudent as (PulloutReportBucket &
+            data.byStudent as unknown as (PulloutReportBucket &
               Record<string, string>)[],
             "studentId",
             (id) => `${id} - ${studentName(id)}`,
           )}
           {renderBucket(
             "Top referring teachers",
-            data.byTeacher as (PulloutReportBucket &
+            data.byTeacher as unknown as (PulloutReportBucket &
               Record<string, string>)[],
             "referringTeacherName",
             (n) => n,
           )}
           {renderBucket(
             "Top reasons",
-            data.byReason as (PulloutReportBucket &
+            data.byReason as unknown as (PulloutReportBucket &
               Record<string, string>)[],
             "reason",
             (n) => n,
@@ -4310,6 +4310,7 @@ function App() {
     // top-of-app "Previewing as X" banner.
     impersonatorStaffId?: number | null;
     impersonatorDisplayName?: string | null;
+    schoolId?: number | null;
   } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
   const [staffUsers, setStaffUsers] = useState<string[]>([]);
@@ -4431,6 +4432,15 @@ function App() {
     | "watchlistStudentGraph"
     | "separationSuggestions"
     | "spotlight"
+    | "issReporting"
+    | "schoolWidePbis"
+    | "engagementDashboard"
+    | "behaviorDashboard"
+    | "academicsDashboard"
+    | "sebSelDashboard"
+    | "equityDashboard"
+    | "earlyWarningDashboard"
+    | "interventionReportsLegacy"
   >("hallPasses");
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
@@ -8350,7 +8360,15 @@ function App() {
   }
 
   if (!authUser) {
-    return <Login onLogin={(u) => setAuthUser(u)} />;
+    return (
+      <Login
+        onLogin={(u) =>
+          setAuthUser(
+            u as unknown as Parameters<typeof setAuthUser>[0],
+          )
+        }
+      />
+    );
   }
 
   return (
@@ -9737,7 +9755,7 @@ function App() {
       </>)}
       {hpView === "reports" && (authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && hpReportSection === "hub" && (() => {
         type ReportTool = {
-          key: "overview" | "byDay";
+          key: "overview" | "byDay" | "ytd" | "research";
           label: string;
           desc: string;
           color: string;
@@ -11804,10 +11822,12 @@ function App() {
               <div style={{ marginTop: "0.25rem" }}>
                 Selected: <strong>{activityStudentId}</strong>{" "}
                 {(() => {
-                  const s = students.find(
-                    (s) => s.studentId === activityStudentId,
+                  const sel = students.find(
+                    (x) => x.studentId === activityStudentId,
                   );
-                  return s ? `- ${s.firstName} ${s.lastName}` : "";
+                  if (!sel) return "";
+                  const s2 = sel as Student;
+                  return `- ${s2.firstName} ${s2.lastName}`;
                 })()}{" "}
                 <button
                   type="button"
@@ -14452,10 +14472,12 @@ function App() {
                 <div style={{ marginTop: "0.25rem" }}>
                   Selected: <strong>{pbisStudentId}</strong>{" "}
                   {(() => {
-                    const s = students.find(
-                      (s) => s.studentId === pbisStudentId,
+                    const sel = students.find(
+                      (x) => x.studentId === pbisStudentId,
                     );
-                    return s ? `- ${s.firstName} ${s.lastName}` : "";
+                    if (!sel) return "";
+                    const s2 = sel as Student;
+                    return `- ${s2.firstName} ${s2.lastName}`;
                   })()}{" "}
                   <button
                     type="button"

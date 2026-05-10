@@ -41,7 +41,7 @@ router.post("/tardies", async (req, res) => {
     res.status(401).json({ error: "Authentication required" });
     return;
   }
-  const serverCreatedBy = sessionStaff.displayName || sessionStaff.id;
+  const serverCreatedBy = sessionStaff.displayName || String(sessionStaff.id);
 
   if (
     typeof studentId !== "string" ||

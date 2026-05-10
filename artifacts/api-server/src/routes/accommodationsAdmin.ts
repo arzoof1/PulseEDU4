@@ -294,7 +294,7 @@ router.get(
   async (req, res) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     // Confirm the student belongs to this school first; otherwise 404 — an
     // ESE coordinator at school A must not be able to read school B's
     // assignment history by guessing a colliding student id.
@@ -350,7 +350,7 @@ router.post(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     const { accommodationIds } = req.body ?? {};
     if (
       !Array.isArray(accommodationIds) ||
@@ -435,7 +435,7 @@ router.delete(
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect }).staff;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     const assignmentId = Number(req.params.assignmentId);
     if (!Number.isInteger(assignmentId) || assignmentId < 1) {
       res.status(400).json({ error: "Invalid assignment id" });

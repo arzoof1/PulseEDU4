@@ -839,6 +839,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   const allStudents = await db
     .select({
       id: studentsTable.id,
+      studentId: studentsTable.studentId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
     })
@@ -846,7 +847,7 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
     .where(eq(studentsTable.schoolId, req.schoolId!));
   const studentNameById = new Map<string, string>(
     allStudents.map((s) => [
-      s.id,
+      s.studentId,
       `${s.lastName ?? ""}, ${s.firstName ?? ""}`.trim(),
     ]),
   );
@@ -889,11 +890,11 @@ router.get("/pbis/needs-attention", async (req: Request, res: Response) => {
   const recognizedStudentIds = new Set<string>();
   for (const r of recentStudentEntries) recognizedStudentIds.add(r.studentId);
   const invisibleStudents = allStudents.filter(
-    (s) => !recognizedStudentIds.has(s.id),
+    (s) => !recognizedStudentIds.has(s.studentId),
   );
   const invisibleStudentSample = invisibleStudents
     .slice(0, 3)
-    .map((s) => studentNameById.get(s.id) ?? s.id);
+    .map((s) => studentNameById.get(s.studentId) ?? s.studentId);
 
   // ---------- This-week entries (drives alerts 3–5) ----------
   const weekEntries = await db

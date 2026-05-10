@@ -1642,8 +1642,9 @@ const AP3_DATE = new Date("2026-04-10T14:00:00Z");
 // Parse a roster grade string into a number. Numeric strings ("0".."12")
 // pass straight through; "K" / "KG" / "Kindergarten" map to 0; anything
 // else (Pre-K, "TK", malformed) returns null and the caller skips.
-function parseGrade(g: string | null | undefined): number | null {
+function parseGrade(g: string | number | null | undefined): number | null {
   if (g == null) return null;
+  if (typeof g === "number") return Number.isInteger(g) ? g : null;
   const trimmed = String(g).trim().toUpperCase();
   if (trimmed === "K" || trimmed === "KG" || trimmed === "KINDERGARTEN") {
     return 0;
@@ -3283,11 +3284,9 @@ export async function seedIfEmpty() {
         parentPhone: null,
       });
     }
-    const insertedStudents = await chunkedInsertReturning(
-      studentsTable,
-      studentRows,
-      500,
-    );
+    const insertedStudents = await chunkedInsertReturning<
+      typeof studentsTable.$inferSelect
+    >(studentsTable, studentRows, 500);
 
     // ---- Sections: 7 periods per teacher (one is planning).
     type SectionInsert = typeof classSectionsTable.$inferInsert;
@@ -3306,11 +3305,9 @@ export async function seedIfEmpty() {
         });
       }
     }
-    const insertedSections = await chunkedInsertReturning(
-      classSectionsTable,
-      sectionRows,
-      500,
-    );
+    const insertedSections = await chunkedInsertReturning<
+      typeof classSectionsTable.$inferSelect
+    >(classSectionsTable, sectionRows, 500);
 
     const sectionLookup = new Map<string, number>();
     for (const s of insertedSections) {

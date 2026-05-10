@@ -24,6 +24,8 @@ interface PlaylistRow {
   name: string;
   defaultDurationSeconds: number;
   showPbisHousePage: boolean;
+  showActiveHallPasses: boolean;
+  showHeartbeat: boolean;
   // Manual on/off kill switch (independent of the time-window
   // `scheduleEnabled`). When false the public URL serves an
   // "off-air" payload and the cross-display calendar hides the row.

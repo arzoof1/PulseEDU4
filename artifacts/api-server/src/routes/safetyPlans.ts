@@ -228,7 +228,7 @@ router.get(
     }
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     // Confirm student belongs to this school (defense-in-depth).
     const [stu] = await db
       .select({ studentId: studentsTable.studentId })
@@ -268,7 +268,7 @@ router.put(
     }
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     const [stu] = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
@@ -371,7 +371,7 @@ router.post(
     }
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     if (!(await assertStudentInSchool(schoolId, studentId))) {
       res.status(404).json({ error: "Student not found" });
       return;
@@ -417,7 +417,7 @@ router.get(
     }
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const studentId = req.params.studentId;
+    const studentId = String(req.params.studentId);
     if (!(await assertStudentInSchool(schoolId, studentId))) {
       res.status(404).json({ error: "Student not found" });
       return;

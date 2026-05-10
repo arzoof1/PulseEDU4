@@ -302,7 +302,7 @@ router.post(
         parentApproved: parentApproved === true,
         active: true,
         createdByStaffId: staff.id,
-        createdByName: `${staff.firstName} ${staff.lastName}`.trim(),
+        createdByName: staff.displayName,
       })
       .returning();
     res.status(201).json(created);

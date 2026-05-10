@@ -1002,7 +1002,7 @@ router.post(
   requireImporter(),
   async (req, res) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id) || id <= 0) {
       res.status(400).json({ error: "Invalid job id" });
       return;
@@ -2466,7 +2466,7 @@ router.delete(
   requireImporter(),
   async (req, res) => {
     const staff = (req as Request & { staff: StaffRow }).staff;
-    const id = parseInt(req.params.id, 10);
+    const id = parseInt(String(req.params.id), 10);
     if (!Number.isFinite(id) || id <= 0) {
       res.status(400).json({ error: "Invalid template id" });
       return;
