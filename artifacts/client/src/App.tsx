@@ -4470,6 +4470,12 @@ function App() {
   const [pendingCaseAnchor, setPendingCaseAnchor] = useState<string | null>(
     null,
   );
+  // Tracks where the user opened the current case from, so the case
+  // detail's "Back" returns there (network view, student graph, hub)
+  // instead of always dumping the user back at the launcher.
+  const [caseOpenOrigin, setCaseOpenOrigin] = useState<
+    "watchlistHub" | "watchlistNetwork" | "watchlistStudentGraph"
+  >("watchlistHub");
   const [selectedSpiderStudentId, setSelectedSpiderStudentId] = useState<
     string | null
   >(null);
@@ -19122,6 +19128,7 @@ function App() {
           onOpenCase={(id) => {
             setSelectedWatchlistCaseId(id);
             setPendingCaseAnchor(null);
+            setCaseOpenOrigin("watchlistHub");
             setActiveSection("watchlistCase");
           }}
           onOpenStudentGraph={(sid) => {
@@ -19138,6 +19145,7 @@ function App() {
           onOpenCase={(id) => {
             setSelectedWatchlistCaseId(id);
             setPendingCaseAnchor(null);
+            setCaseOpenOrigin("watchlistStudentGraph");
             setActiveSection("watchlistCase");
           }}
         />
@@ -19149,6 +19157,7 @@ function App() {
           onOpenCase={(id, anchor) => {
             setSelectedWatchlistCaseId(id);
             setPendingCaseAnchor(anchor ?? null);
+            setCaseOpenOrigin("watchlistNetwork");
             setActiveSection("watchlistCase");
           }}
           isInvestigator={Boolean(
@@ -19165,7 +19174,7 @@ function App() {
       {activeSection === "watchlistCase" && selectedWatchlistCaseId != null && (
         <WatchlistCaseDetail
           caseId={selectedWatchlistCaseId}
-          onBack={() => setActiveSection("watchlistHub")}
+          onBack={() => setActiveSection(caseOpenOrigin)}
           isAdmin={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||
