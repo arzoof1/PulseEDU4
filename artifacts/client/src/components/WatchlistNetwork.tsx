@@ -1035,7 +1035,7 @@ function NetworkSVG({
             y2={B.y}
             stroke={edgeColor(e.kinds)}
             strokeOpacity={0.3}
-            strokeWidth={Math.max(1, e.weight * 0.9)}
+            strokeWidth={Math.max(1.8, e.weight * 1.5)}
             strokeDasharray={edgeDashed(e.kinds) ? "5 4" : undefined}
           />
         );
@@ -1054,7 +1054,7 @@ function NetworkSVG({
                 y2={B.y}
                 stroke={edgeColor(e.kinds)}
                 strokeOpacity={0.95}
-                strokeWidth={Math.max(2, e.weight * 1.4)}
+                strokeWidth={Math.max(3, e.weight * 2.2)}
                 strokeDasharray={edgeDashed(e.kinds) ? "5 4" : undefined}
               />
               <text
@@ -1141,8 +1141,8 @@ function NetworkSVG({
             </text>
             <text
               x={n.x}
-              y={n.y + r + Math.max(14, r * 0.32)}
-              fontSize={Math.max(12, r * 0.32)}
+              y={n.y + r + Math.max(16, r * 0.34)}
+              fontSize={Math.max(14, r * 0.38)}
               fontWeight={isSelected || isAnchor ? 700 : 600}
               fill={C.ink}
               textAnchor="middle"
