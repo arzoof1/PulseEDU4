@@ -1699,8 +1699,7 @@ doc.addPage();
 
 // ---------- How to read ----------
 function h1(s: string) {
-  pageBreakIfNear(60);
-  doc.moveDown(0.5);
+  // h1 always starts a new section; callers ensure top-of-page placement.
   doc.font(FONT_BOLD).fontSize(20).fillColor(COLORS.brand).text(s);
   doc.moveTo(doc.page.margins.left, doc.y + 2)
     .lineTo(doc.page.width - doc.page.margins.right, doc.y + 2)
@@ -1710,7 +1709,9 @@ function h1(s: string) {
 }
 
 function h2(s: string) {
-  pageBreakIfNear(50);
+  // Reserve only the heading's own line height so a screen heading does
+  // not orphan at the very bottom of a page; let the rest flow naturally.
+  pageBreakIfNear(24);
   doc.moveDown(0.6);
   doc.font(FONT_BOLD).fontSize(14).fillColor(COLORS.accent).text(s);
   doc.moveDown(0.2);
@@ -1718,7 +1719,7 @@ function h2(s: string) {
 }
 
 function h3(s: string) {
-  pageBreakIfNear(40);
+  pageBreakIfNear(20);
   doc.moveDown(0.4);
   doc.font(FONT_BOLD).fontSize(11.5).fillColor(COLORS.ink).text(s);
   doc.moveDown(0.15);
@@ -1791,7 +1792,9 @@ function renderScreen(s: ScreenSpec) {
   p(s.purpose);
 
   for (const f of s.functions) {
-    pageBreakIfNear(80);
+    // Just enough room for the function heading + its first line so the
+    // heading does not orphan; everything else auto-paginates.
+    pageBreakIfNear(40);
     h3(`Function — ${f.name}`);
     p(f.what, { soft: true });
     doc.font(FONT_BOLD).fontSize(9.5).fillColor(COLORS.inkSoft).text("Per-role behavior:");
