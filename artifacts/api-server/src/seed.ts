@@ -1528,6 +1528,136 @@ async function seedDemoCamerasForSchools() {
   }
 }
 
+// Phase 3 (case enhancement suite): AI consistency-check storage. Three
+// tables — runs (one row per AI execution, holds the redacted bundle and
+// raw output for audit), findings (per-finding rows, including human-
+// authored "AI missed this" entries; dismissed rows ARE the suppression
+// list for future runs), and state (denormalised per-case latest-run
+// snapshot so the header pill is one cheap read). All ADMIN/CORE-TEAM
+// only — never joined into teacher/parent/student-facing queries.
+export async function ensureCaseConsistencySchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_consistency_runs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      triggered_by_id INTEGER,
+      triggered_by_name TEXT,
+      trigger_reason TEXT NOT NULL,
+      model TEXT NOT NULL,
+      prompt_hash TEXT NOT NULL,
+      input_bundle_json JSONB NOT NULL,
+      raw_output_json JSONB,
+      score INTEGER NOT NULL,
+      input_tokens INTEGER,
+      output_tokens INTEGER,
+      error_text TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_consistency_runs_case_idx ON case_consistency_runs (school_id, case_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_consistency_runs_hash_idx ON case_consistency_runs (school_id, case_id, prompt_hash)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_consistency_findings (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      run_id INTEGER,
+      source TEXT NOT NULL,
+      kind TEXT NOT NULL,
+      severity TEXT NOT NULL,
+      summary TEXT NOT NULL,
+      detail TEXT,
+      cited_source_refs JSONB NOT NULL,
+      signature_hash TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'open',
+      dismissed_by_id INTEGER,
+      dismissed_by_name TEXT,
+      dismiss_reason TEXT,
+      dismiss_note TEXT,
+      dismissed_at TIMESTAMPTZ,
+      created_by_id INTEGER,
+      created_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_consistency_findings_case_status_idx ON case_consistency_findings (school_id, case_id, status)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_consistency_findings_signature_idx ON case_consistency_findings (school_id, case_id, signature_hash)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_consistency_findings_run_idx ON case_consistency_findings (run_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_consistency_state (
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      latest_run_id INTEGER,
+      score INTEGER NOT NULL DEFAULT 100,
+      open_finding_count INTEGER NOT NULL DEFAULT 0,
+      high_severity_count INTEGER NOT NULL DEFAULT 0,
+      last_run_at TIMESTAMPTZ,
+      last_attempt_at TIMESTAMPTZ,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      PRIMARY KEY (school_id, case_id)
+    )
+  `);
+
+  // Idempotently attach ON DELETE CASCADE foreign keys so that
+  // deleting an interaction_case removes its consistency runs,
+  // findings, and state row automatically. Wrapped in DO blocks
+  // so re-runs are no-ops once the constraints exist.
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'case_consistency_runs_case_id_fkey'
+      ) THEN
+        ALTER TABLE case_consistency_runs
+          ADD CONSTRAINT case_consistency_runs_case_id_fkey
+          FOREIGN KEY (case_id)
+          REFERENCES interaction_cases(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'case_consistency_findings_case_id_fkey'
+      ) THEN
+        ALTER TABLE case_consistency_findings
+          ADD CONSTRAINT case_consistency_findings_case_id_fkey
+          FOREIGN KEY (case_id)
+          REFERENCES interaction_cases(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'case_consistency_findings_run_id_fkey'
+      ) THEN
+        ALTER TABLE case_consistency_findings
+          ADD CONSTRAINT case_consistency_findings_run_id_fkey
+          FOREIGN KEY (run_id)
+          REFERENCES case_consistency_runs(id) ON DELETE CASCADE;
+      END IF;
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+         WHERE conname = 'case_consistency_state_case_id_fkey'
+      ) THEN
+        ALTER TABLE case_consistency_state
+          ADD CONSTRAINT case_consistency_state_case_id_fkey
+          FOREIGN KEY (case_id)
+          REFERENCES interaction_cases(id) ON DELETE CASCADE;
+      END IF;
+    END$$;
+  `);
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1698,6 +1828,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseVideoEvidencePlayersSchema();
   await ensureCameraRegistrySchema();
   await seedDemoCamerasForSchools();
+  await ensureCaseConsistencySchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

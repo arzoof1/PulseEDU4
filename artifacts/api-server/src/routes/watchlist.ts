@@ -69,7 +69,11 @@ import {
   type InteractionRole,
   type InteractionKind,
   type StaffRow,
+  caseConsistencyRunsTable,
+  caseConsistencyFindingsTable,
+  caseConsistencyStateTable,
 } from "@workspace/db";
+import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
@@ -82,6 +86,11 @@ import {
   isCaseInvestigator,
 } from "../lib/coreTeam.js";
 import { schoolYearLabelFor } from "../lib/schoolYear.js";
+import {
+  scheduleConsistencyRun,
+  runConsistencyCheck,
+} from "../lib/caseConsistencyAi.js";
+import { assembleCaseBundle } from "../lib/caseConsistencyBundle.js";
 
 const router: IRouter = Router();
 
@@ -192,6 +201,37 @@ function asInt(v: unknown): number | null {
   if (typeof v === "number" && Number.isInteger(v)) return v;
   if (typeof v === "string" && /^-?\d+$/.test(v)) return Number(v);
   return null;
+}
+
+// Resolve the case_id for a witness statement's parent interaction and,
+// if the interaction is attached to a case, schedule a debounced AI
+// consistency re-run. Used by the statement-edit and statement-complete
+// hooks where we have the statement row but need the owning case to
+// trigger a re-evaluation.
+async function maybeScheduleForStatement(
+  schoolId: number,
+  interactionId: number,
+  trigger: "new_statement" | "new_interaction" | "new_video" | "initial",
+  staff: StaffRow,
+): Promise<void> {
+  const [row] = await db
+    .select({ caseId: interactionsTable.caseId })
+    .from(interactionsTable)
+    .where(
+      and(
+        eq(interactionsTable.id, interactionId),
+        eq(interactionsTable.schoolId, schoolId),
+      ),
+    )
+    .limit(1);
+  if (!row?.caseId) return;
+  scheduleConsistencyRun({
+    schoolId,
+    caseId: row.caseId,
+    triggerReason: trigger,
+    actorStaffId: staff.id,
+    actorName: staff.displayName,
+  });
 }
 
 async function audit(opts: {
@@ -2088,6 +2128,15 @@ router.post("/watchlist/interactions", async (req: Request, res: Response) => {
     staff,
     payload: { kind, severity, caseId, participantCount: participants.length },
   });
+  if (caseId) {
+    scheduleConsistencyRun({
+      schoolId,
+      caseId,
+      triggerReason: "new_interaction",
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+    });
+  }
   res.json({ interaction: row });
 });
 
@@ -2437,6 +2486,13 @@ router.post(
       staff,
       payload: { statementId: id, title, leadStaffId },
     });
+    scheduleConsistencyRun({
+      schoolId,
+      caseId: result.caseRow.id,
+      triggerReason: "initial",
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+    });
     res.json({ case: result.caseRow });
   },
 );
@@ -2706,6 +2762,15 @@ router.post(
       staff,
       payload: { interactionId: id, studentId },
     });
+    if (interaction.caseId) {
+      scheduleConsistencyRun({
+        schoolId,
+        caseId: interaction.caseId,
+        triggerReason: "new_statement",
+        actorStaffId: staff.id,
+        actorName: staff.displayName,
+      });
+    }
     res.json({ statement: row });
   },
 );
@@ -2751,6 +2816,7 @@ router.patch("/watchlist/statements/:id", async (req: Request, res: Response) =>
     staff,
     payload: { length: body.length },
   });
+  await maybeScheduleForStatement(schoolId, row.interactionId, "new_statement", staff);
   res.json({ statement: row });
 });
 
@@ -2780,6 +2846,7 @@ router.post("/watchlist/statements/:id/complete", async (req: Request, res: Resp
   }
   await syncWitnessStatementMentions({ schoolId, statementId: id, body });
   await audit({ schoolId, entityType: "statement", entityId: id, action: "completed", staff });
+  await maybeScheduleForStatement(schoolId, row.interactionId, "new_statement", staff);
   res.json({ statement: row });
 });
 
@@ -3089,6 +3156,19 @@ router.post(
         clearedByFootage,
       },
     });
+    // Confirmed-tier links are the ground-truth anchor — they can flip
+    // existing statements from "uncontradicted" to "contradicts video".
+    // Inferred/possible links don't change the truth ranking, so we
+    // skip the AI re-run for them to keep token spend down.
+    if (confidence === "confirmed") {
+      scheduleConsistencyRun({
+        schoolId,
+        caseId: evidence.caseId,
+        triggerReason: "new_video",
+        actorStaffId: staff.id,
+        actorName: staff.displayName,
+      });
+    }
     res.json({ link: row });
   },
 );
@@ -3336,6 +3416,13 @@ router.post(
       action: "created",
       staff,
       payload: { caseId, cameraLabel },
+    });
+    scheduleConsistencyRun({
+      schoolId,
+      caseId,
+      triggerReason: "new_video",
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
     });
     res.json({ evidence: row });
   },
@@ -3927,5 +4014,493 @@ router.delete(
     res.json({ ok: true });
   },
 );
+
+// =====================================================================
+// AI Consistency Check (Phase 3) — admin / Core-Team-only.
+//
+// All five endpoints are gated by `adminGate` (Case Investigator tier:
+// admin / Behavior Specialist / MTSS / Dean). Findings are NEVER
+// surfaced to teachers, parents, students, signage, or PDF exports —
+// the routes here are the only read surface, and the `requireCoreTeamMW`
+// + `adminGate` combo enforces that at the perimeter.
+//
+// The runner does its own DB-level debounce, but the manual /run
+// endpoint also enforces a per-case daily cap (20 runs/24h) so an
+// over-eager admin can't spend down the AI budget. Cap is read off
+// the runs table — counting createdAt within now-24h.
+// =====================================================================
+
+const MANUAL_RUN_DAILY_CAP = 20;
+
+// Confirm the case actually lives in this school. Returns false +
+// sends 4xx if not. We re-check on every consistency endpoint because
+// a forged caseId in the URL would otherwise leak existence (and
+// later, score) of cases in another tenant.
+async function loadCaseForConsistency(
+  caseId: number,
+  schoolId: number,
+  res: Response,
+): Promise<boolean> {
+  const [c] = await db
+    .select({ id: interactionCasesTable.id })
+    .from(interactionCasesTable)
+    .where(
+      and(
+        eq(interactionCasesTable.id, caseId),
+        eq(interactionCasesTable.schoolId, schoolId),
+      ),
+    )
+    .limit(1);
+  if (!c) {
+    res.status(404).json({ error: "Case not found" });
+    return false;
+  }
+  return true;
+}
+
+// Read the per-case state row + open findings. Pill is a single read
+// against case_consistency_state; findings are limited to status='open'
+// + most-recent-run for the panel default tab.
+router.get(
+  "/watchlist/cases/:id/consistency",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await loadCaseForConsistency(caseId, schoolId, res))) return;
+
+    const [state] = await db
+      .select()
+      .from(caseConsistencyStateTable)
+      .where(
+        and(
+          eq(caseConsistencyStateTable.schoolId, schoolId),
+          eq(caseConsistencyStateTable.caseId, caseId),
+        ),
+      )
+      .limit(1);
+
+    const findings = await db
+      .select()
+      .from(caseConsistencyFindingsTable)
+      .where(
+        and(
+          eq(caseConsistencyFindingsTable.schoolId, schoolId),
+          eq(caseConsistencyFindingsTable.caseId, caseId),
+          eq(caseConsistencyFindingsTable.status, "open"),
+        ),
+      )
+      .orderBy(desc(caseConsistencyFindingsTable.createdAt));
+
+    // Cheap headline of the latest run so the panel can render
+    // "Ran 12m ago by Jane Doe" without a follow-up roundtrip.
+    const [latestRun] = state?.latestRunId
+      ? await db
+          .select({
+            id: caseConsistencyRunsTable.id,
+            createdAt: caseConsistencyRunsTable.createdAt,
+            triggeredByName: caseConsistencyRunsTable.triggeredByName,
+            triggerReason: caseConsistencyRunsTable.triggerReason,
+            model: caseConsistencyRunsTable.model,
+            errorText: caseConsistencyRunsTable.errorText,
+            inputTokens: caseConsistencyRunsTable.inputTokens,
+            outputTokens: caseConsistencyRunsTable.outputTokens,
+          })
+          .from(caseConsistencyRunsTable)
+          .where(
+            and(
+              eq(caseConsistencyRunsTable.schoolId, schoolId),
+              eq(caseConsistencyRunsTable.id, state.latestRunId),
+            ),
+          )
+          .limit(1)
+      : [];
+
+    res.json({
+      state: state ?? null,
+      latestRun: latestRun ?? null,
+      findings,
+    });
+  },
+);
+
+// Full run detail incl. redacted bundle + raw model output. Powers the
+// "What the AI saw" drawer. The bundle is already redacted at write
+// time, but we never join in unredacted student rows on the way out.
+router.get(
+  "/watchlist/cases/:id/consistency/runs/:runId",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    const runId = asInt(req.params["runId"]);
+    if (!caseId || !runId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await loadCaseForConsistency(caseId, schoolId, res))) return;
+    const [run] = await db
+      .select()
+      .from(caseConsistencyRunsTable)
+      .where(
+        and(
+          eq(caseConsistencyRunsTable.schoolId, schoolId),
+          eq(caseConsistencyRunsTable.caseId, caseId),
+          eq(caseConsistencyRunsTable.id, runId),
+        ),
+      )
+      .limit(1);
+    if (!run) {
+      res.status(404).json({ error: "Run not found" });
+      return;
+    }
+    const findings = await db
+      .select()
+      .from(caseConsistencyFindingsTable)
+      .where(
+        and(
+          eq(caseConsistencyFindingsTable.schoolId, schoolId),
+          eq(caseConsistencyFindingsTable.runId, runId),
+        ),
+      );
+    res.json({ run, findings });
+  },
+);
+
+// Manual re-run. Per-case daily cap (20/24h) checked off the runs
+// table. Manual triggers bypass the 60s debounce — that's the whole
+// point of the button. Returns 429 with retryAfter seconds when
+// capped.
+router.post(
+  "/watchlist/cases/:id/consistency/run",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await loadCaseForConsistency(caseId, schoolId, res))) return;
+
+    const since = new Date(Date.now() - 24 * 3600 * 1000);
+    // Cap counts MANUAL re-runs only — auto-triggered runs (the
+    // debounced fire-after-new-evidence ones) shouldn't burn the
+    // admin's budget. A busy case with lots of statements would
+    // otherwise lock the "Re-run" button without the admin doing
+    // anything wrong.
+    const recent = (
+      await db.execute(sql`
+        SELECT COUNT(*)::int AS "count",
+               MIN(created_at) AS "oldest"
+          FROM case_consistency_runs
+         WHERE school_id = ${schoolId}
+           AND case_id   = ${caseId}
+           AND trigger_reason = 'manual'
+           AND created_at >= ${since}
+      `)
+    ).rows as Array<{ count: number; oldest: string | null }>;
+    const used = recent[0]?.count ?? 0;
+    if (used >= MANUAL_RUN_DAILY_CAP) {
+      const oldestMs = recent[0]?.oldest
+        ? new Date(recent[0].oldest).getTime()
+        : Date.now();
+      const retryAfterSec = Math.max(
+        1,
+        Math.round((oldestMs + 24 * 3600 * 1000 - Date.now()) / 1000),
+      );
+      res.status(429).json({
+        error: "Daily AI re-run cap reached for this case (20/day).",
+        retryAfter: retryAfterSec,
+      });
+      return;
+    }
+
+    const result = await runConsistencyCheck({
+      schoolId,
+      caseId,
+      triggerReason: "manual",
+      actorStaffId: staff.id,
+      actorName: staff.displayName,
+    });
+    if (result.kind === "error") {
+      res.status(502).json({ error: result.message });
+      return;
+    }
+    if (result.kind === "debounced") {
+      // Manual ignores debounce in the runner, but if we ever flip
+      // it back on, surface it as 200 + a hint instead of an error.
+      res.json({ ok: true, debounced: true });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "consistency_run",
+      entityId: result.runId,
+      action: "manual_run",
+      staff,
+      payload: { caseId, score: result.score, findingCount: result.findingCount },
+    });
+    res.json({
+      ok: true,
+      runId: result.runId,
+      score: result.score,
+      findingCount: result.findingCount,
+    });
+  },
+);
+
+// Add a human-authored finding the AI missed. source='human', no
+// signature_hash (suppression-by-signature is for AI lookalikes; a
+// human finding stays exactly as written until manually resolved).
+router.post(
+  "/watchlist/cases/:id/consistency/findings",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await loadCaseForConsistency(caseId, schoolId, res))) return;
+    const b = req.body as Record<string, unknown>;
+    const kind = clean(b["kind"], 20);
+    const severity = clean(b["severity"], 10);
+    const summary = clean(b["summary"], 400);
+    const detail = clean(b["detail"], 1200) || null;
+    const refs = Array.isArray(b["citedSourceRefs"]) ? b["citedSourceRefs"] : [];
+    if (!["contradiction", "gap", "corroboration"].includes(kind)) {
+      res.status(400).json({ error: "kind must be contradiction|gap|corroboration" });
+      return;
+    }
+    if (!["high", "med", "low"].includes(severity)) {
+      res.status(400).json({ error: "severity must be high|med|low" });
+      return;
+    }
+    if (!summary) {
+      res.status(400).json({ error: "summary required" });
+      return;
+    }
+    // Deterministic signature for human findings too — blocks the
+    // AI from re-emitting an identical lookalike on the next run.
+    const refsClean = refs
+      .map((r) => r as Record<string, unknown>)
+      .filter(
+        (r) =>
+          typeof r["kind"] === "string" &&
+          ["witness_statement", "interaction", "video_clip", "case_note"].includes(
+            r["kind"] as string,
+          ) &&
+          typeof r["id"] === "number",
+      )
+      .map((r) => ({ kind: r["kind"] as string, id: r["id"] as number }));
+    const sig = createHash("sha256")
+      .update(
+        `${kind}|${refsClean
+          .map((r) => `${r.kind}:${r.id}`)
+          .sort()
+          .join("|")}|human:${Date.now()}`,
+      )
+      .digest("hex");
+    const [row] = await db
+      .insert(caseConsistencyFindingsTable)
+      .values({
+        schoolId,
+        caseId,
+        runId: null,
+        source: "human",
+        kind,
+        severity,
+        summary,
+        detail,
+        citedSourceRefs: refsClean,
+        signatureHash: sig,
+        status: "open",
+        createdById: staff.id,
+        createdByName: staff.displayName,
+      })
+      .returning();
+    // Refresh state row's open count + high count so the pill picks
+    // up the new finding without waiting for the next AI run.
+    await refreshConsistencyStateCounts(schoolId, caseId);
+    await audit({
+      schoolId,
+      entityType: "consistency_finding",
+      entityId: row.id,
+      action: "human_added",
+      staff,
+      payload: { caseId, kind, severity },
+    });
+    res.json({ finding: row });
+  },
+);
+
+// Dismiss (or restore) a finding with required justification. A
+// dismissed finding's signature IS the suppression list — the runner
+// queries `status='dismissed'` rows to skip lookalikes on the next
+// run. Justification is stored in `dismissNote` (≥5 chars enforced).
+router.patch(
+  "/watchlist/cases/:id/consistency/findings/:findingId",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    const findingId = asInt(req.params["findingId"]);
+    if (!caseId || !findingId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    if (!(await loadCaseForConsistency(caseId, schoolId, res))) return;
+    const b = req.body as Record<string, unknown>;
+    const action = clean(b["action"], 20);
+    if (!["dismiss", "reopen", "resolve"].includes(action)) {
+      res.status(400).json({ error: "action must be dismiss|reopen|resolve" });
+      return;
+    }
+    const reason = clean(b["reason"], 32);
+    const note = clean(b["note"], 2000);
+    if (action === "dismiss") {
+      if (
+        !["false_positive", "already_verified", "duplicate", "other"].includes(
+          reason,
+        )
+      ) {
+        res.status(400).json({
+          error: "reason must be false_positive|already_verified|duplicate|other",
+        });
+        return;
+      }
+      if (note.trim().length < 5) {
+        res.status(400).json({
+          error: "Justification must be at least 5 characters.",
+        });
+        return;
+      }
+    }
+    const patch: Partial<typeof caseConsistencyFindingsTable.$inferInsert> = {};
+    if (action === "dismiss") {
+      patch.status = "dismissed";
+      patch.dismissReason = reason;
+      patch.dismissNote = note;
+      patch.dismissedById = staff.id;
+      patch.dismissedByName = staff.displayName;
+      patch.dismissedAt = new Date();
+    } else if (action === "resolve") {
+      patch.status = "resolved";
+    } else {
+      patch.status = "open";
+      patch.dismissReason = null;
+      patch.dismissNote = null;
+      patch.dismissedById = null;
+      patch.dismissedByName = null;
+      patch.dismissedAt = null;
+    }
+    const [row] = await db
+      .update(caseConsistencyFindingsTable)
+      .set(patch)
+      .where(
+        and(
+          eq(caseConsistencyFindingsTable.id, findingId),
+          eq(caseConsistencyFindingsTable.schoolId, schoolId),
+          eq(caseConsistencyFindingsTable.caseId, caseId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Finding not found" });
+      return;
+    }
+    await refreshConsistencyStateCounts(schoolId, caseId);
+    await audit({
+      schoolId,
+      entityType: "consistency_finding",
+      entityId: findingId,
+      action,
+      staff,
+      payload: { caseId, reason: reason || null, noteLen: note.length },
+    });
+    res.json({ finding: row });
+  },
+);
+
+// Recompute open / high counts on the state row and re-derive score
+// from the still-open findings. Called after any human finding insert
+// or status change so the header pill reflects the change without
+// waiting for the next AI run. We rebuild score from open findings
+// (using the same weights as the runner) so the pill stays consistent
+// with what the panel shows.
+async function refreshConsistencyStateCounts(
+  schoolId: number,
+  caseId: number,
+): Promise<void> {
+  const open = await db
+    .select({
+      kind: caseConsistencyFindingsTable.kind,
+      severity: caseConsistencyFindingsTable.severity,
+    })
+    .from(caseConsistencyFindingsTable)
+    .where(
+      and(
+        eq(caseConsistencyFindingsTable.schoolId, schoolId),
+        eq(caseConsistencyFindingsTable.caseId, caseId),
+        eq(caseConsistencyFindingsTable.status, "open"),
+      ),
+    );
+  let score = 100;
+  let high = 0;
+  for (const f of open) {
+    if (f.kind === "contradiction") {
+      score -= f.severity === "high" ? 15 : f.severity === "med" ? 8 : 4;
+      if (f.severity === "high") high += 1;
+    } else if (f.kind === "gap") {
+      score -= f.severity === "high" ? 6 : f.severity === "med" ? 4 : 2;
+    } else if (f.kind === "corroboration") {
+      score += 3;
+    }
+  }
+  if (score < 0) score = 0;
+  if (score > 100) score = 100;
+  await db
+    .insert(caseConsistencyStateTable)
+    .values({
+      schoolId,
+      caseId,
+      score,
+      openFindingCount: open.length,
+      highSeverityCount: high,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [
+        caseConsistencyStateTable.schoolId,
+        caseConsistencyStateTable.caseId,
+      ],
+      set: {
+        score,
+        openFindingCount: open.length,
+        highSeverityCount: high,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+// Silence "imported but unused" — `assembleCaseBundle` is referenced
+// only by the runner today, but we re-export it here so a future
+// admin "preview the bundle without running AI" debug endpoint can
+// reach it without re-importing.
+export { assembleCaseBundle };
 
 export default router;

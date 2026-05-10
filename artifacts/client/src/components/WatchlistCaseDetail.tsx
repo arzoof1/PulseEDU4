@@ -15,6 +15,11 @@ import LogInteractionModal from "./watchlist/LogInteractionModal";
 import VoiceTextarea from "./watchlist/VoiceTextarea";
 import MentionTextarea from "./watchlist/MentionTextarea";
 import VideoEvidencePanel from "./watchlist/VideoEvidencePanel";
+import ConsistencyPill from "./watchlist/ConsistencyPill";
+import {
+  ConsistencyDot,
+  useConsistencyFindings,
+} from "./watchlist/ConsistencyDot";
 import {
   ROLE_META,
   WL_COLORS as C,
@@ -205,6 +210,12 @@ export default function WatchlistCaseDetail({
   // useCallback that owns reload()) can trigger a refresh without hitting
   // the temporal-dead-zone on the const.
   const reloadRef = useRef<(() => Promise<void>) | null>(null);
+
+  // Shared AI consistency findings — one fetch (admin-gated; silently
+  // empty for non-admins) feeds both the header pill's badge and the
+  // per-row ConsistencyDot markers below.
+  const { refMap: consistencyRefMap, refresh: refreshConsistency } =
+    useConsistencyFindings(caseId);
 
   const draftKey = (sid: string, iid: number) => `${sid}:${iid}`;
 
@@ -414,6 +425,10 @@ export default function WatchlistCaseDetail({
                   )}
                 </span>
               )}
+              {/* AI consistency pill — admin-only; the component
+                  silently renders nothing for non-admins (the API
+                  returns 403 and the pill swallows it). */}
+              <ConsistencyPill caseId={c.id} onAnyChange={refreshConsistency} />
             </div>
             {editingTitle ? (
               <div className="mt-2 flex items-center gap-2">
@@ -733,6 +748,11 @@ export default function WatchlistCaseDetail({
                             {new Date(i.occurredAt).toLocaleString()}
                           </span>
                           <span className="text-sm font-semibold">{i.kind}</span>
+                          <ConsistencyDot
+                            refMap={consistencyRefMap}
+                            refKind="interaction"
+                            refId={i.id}
+                          />
                           {data.case.leadStatementId === i.id && (
                             <span
                               className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider"
@@ -948,6 +968,11 @@ export default function WatchlistCaseDetail({
                         <StickyNote className="h-3 w-3" />
                         <span className="font-semibold">{n.authorName ?? "Staff"}</span>
                         <span>· {new Date(n.createdAt).toLocaleString()}</span>
+                        <ConsistencyDot
+                          refMap={consistencyRefMap}
+                          refKind="case_note"
+                          refId={n.id}
+                        />
                       </div>
                       <div className="mt-1 whitespace-pre-wrap text-sm">{n.body}</div>
                     </div>

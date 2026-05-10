@@ -68,6 +68,23 @@ _Populate as you build_
 
 ## Future work
 
+- **AI Consistency Check — onboarding step + admin telemetry tile.**
+  Phase 3 shipped the runtime feature (header pill, side panel,
+  per-row dot, dismiss-with-justification, "What the AI saw"
+  drawer). Two follow-ups remain from the original session plan:
+  - Add a "Review Consistency Check guardrails" step in the
+    Behavior & PBIS onboarding phase. This is server-side step
+    registration in `artifacts/api-server/src/lib/onboardingSteps.ts`
+    plus an "I understand" school setting marker. Informational
+    only — closes by acknowledging that Core Team is the only
+    audience and that dismissals are persistent suppressions.
+  - Add a Settings tile "Consistency Check — this month" with
+    a small ConsistencyTelemetryPage showing runs, open findings,
+    dismissed findings, and total tokens spent. Backed by a new
+    `GET /api/watchlist/consistency-telemetry` aggregate route
+    (admin-gated). Cheap COUNT/SUM over the runs + findings tables
+    grouped by current month.
+
 - **School-local timezone for case-number school-year derivation.**
   Today `schoolYearLabelFor(new Date())` (server) and the seed
   migration's `EXTRACT(MONTH FROM opened_at)` both use server-local

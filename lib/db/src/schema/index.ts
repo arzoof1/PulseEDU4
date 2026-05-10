@@ -83,3 +83,6 @@ export * from "./caseMentions";
 export * from "./caseVideoEvidence";
 export * from "./caseVideoEvidencePlayers";
 export * from "./cameraRegistry";
+export * from "./caseConsistencyRuns";
+export * from "./caseConsistencyFindings";
+export * from "./caseConsistencyState";
