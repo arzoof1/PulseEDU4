@@ -1075,12 +1075,14 @@ function NetworkSVG({
 
       {/* Nodes. Both modes get a base size bump so case spheres are
           legible. Anchors (center of each case ring) get an extra boost
-          so they read as the focal point. Zoomed mode amplifies both. */}
+          so they read as the focal point. Zoomed mode amplifies both.
+          Overview ring spheres are sized to roughly match the previous
+          anchor size, and the anchor itself is ~2× that. */}
       {positioned.map((n) => {
         const isAnchor = anchorIds.has(n.studentId);
         const baseR = 14 + Math.min(22, n.total * 2.2);
-        const overviewScale = isAnchor ? 1.35 : 1.0;
-        const zoomScale = isAnchor ? 2.0 : 1.55;
+        const overviewScale = isAnchor ? 2.7 : 1.35;
+        const zoomScale = isAnchor ? 2.6 : 1.7;
         const r = zoomed ? baseR * zoomScale : baseR * overviewScale;
         const meta = ROLE_META[(n.primaryRole as Role) ?? "peripheral"] ?? ROLE_META.peripheral;
         const ringColor =
@@ -1128,8 +1130,8 @@ function NetworkSVG({
             />
             <text
               x={n.x}
-              y={n.y + 4}
-              fontSize={Math.max(10, r * 0.55)}
+              y={n.y + r * 0.18}
+              fontSize={Math.max(11, r * 0.55)}
               fontWeight={800}
               fill={meta.color}
               textAnchor="middle"
@@ -1139,9 +1141,9 @@ function NetworkSVG({
             </text>
             <text
               x={n.x}
-              y={n.y + r + 12}
-              fontSize={10}
-              fontWeight={isSelected ? 700 : 500}
+              y={n.y + r + Math.max(14, r * 0.32)}
+              fontSize={Math.max(12, r * 0.32)}
+              fontWeight={isSelected || isAnchor ? 700 : 600}
               fill={C.ink}
               textAnchor="middle"
               style={{ paintOrder: "stroke", stroke: C.graphBg, strokeWidth: 3 }}
