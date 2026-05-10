@@ -108,29 +108,52 @@ function layout(nodes: NetNode[]): { positioned: Positioned[]; clusters: Map<num
   return { positioned, clusters };
 }
 
-// Single-cluster layout: one big circle filling the viewport so each
-// student sphere is large and easy to read in the zoomed view.
+// Single-cluster layout: the "primary" student (highest total
+// involvements — i.e. the anchor of the case) sits at the center and
+// the rest ring around it filling most of the viewport. Anchor in the
+// middle reads as the focal point; the surrounding ring is wide enough
+// for the spheres to dominate the canvas instead of floating in a
+// half-empty disc.
 function layoutZoomed(
   nodes: NetNode[],
   clusterId: number,
-): { positioned: Positioned[]; clusters: Map<number, { cx: number; cy: number; r: number; size: number }> } {
+): {
+  positioned: Positioned[];
+  clusters: Map<number, { cx: number; cy: number; r: number; size: number }>;
+  anchorId: string | null;
+} {
   const W = 1180;
   const H = 820;
   const cx = W / 2;
   const cy = H / 2 + 10;
-  const radius = Math.min(W, H) * 0.36;
-  const positioned: Positioned[] = nodes.map((node, i) => {
-    const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2 - Math.PI / 2;
-    return {
+  const positioned: Positioned[] = [];
+  const clusters = new Map<number, { cx: number; cy: number; r: number; size: number }>();
+  if (nodes.length === 0) {
+    clusters.set(clusterId, { cx, cy, r: 50, size: 0 });
+    return { positioned, clusters, anchorId: null };
+  }
+  // Stable anchor pick: highest involvements, tiebreak alphabetical.
+  const sorted = [...nodes].sort(
+    (a, b) => b.total - a.total || a.lastName.localeCompare(b.lastName),
+  );
+  const anchor = sorted[0]!;
+  const others = sorted.slice(1);
+  // Ring radius is sized so big spheres (~r=50) clear the halo edge
+  // and the anchor (~r=60 in the middle). 0.40 of the short edge fills
+  // most of the canvas without crowding the labels.
+  const ringRadius = Math.min(W, H) * 0.40;
+  positioned.push({ ...anchor, cluster: clusterId, x: cx, y: cy });
+  others.forEach((node, i) => {
+    const angle = (i / Math.max(1, others.length)) * Math.PI * 2 - Math.PI / 2;
+    positioned.push({
       ...node,
       cluster: clusterId,
-      x: cx + Math.cos(angle) * radius * (nodes.length === 1 ? 0 : 1),
-      y: cy + Math.sin(angle) * radius * (nodes.length === 1 ? 0 : 1),
-    };
+      x: cx + Math.cos(angle) * ringRadius,
+      y: cy + Math.sin(angle) * ringRadius,
+    });
   });
-  const clusters = new Map<number, { cx: number; cy: number; r: number; size: number }>();
-  clusters.set(clusterId, { cx, cy, r: radius + 70, size: nodes.length });
-  return { positioned, clusters };
+  clusters.set(clusterId, { cx, cy, r: ringRadius + 90, size: nodes.length });
+  return { positioned, clusters, anchorId: anchor.studentId };
 }
 
 function clusterFill(idx: number): string {
@@ -198,9 +221,11 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
   const layoutResult = useMemo(() => {
     if (!data) return null;
     if (zoomedClusterId !== null && zoomedData) {
-      return layoutZoomed(zoomedData.nodes, zoomedClusterId);
+      const z = layoutZoomed(zoomedData.nodes, zoomedClusterId);
+      return { positioned: z.positioned, clusters: z.clusters, anchorId: z.anchorId };
     }
-    return layout(data.nodes);
+    const o = layout(data.nodes);
+    return { positioned: o.positioned, clusters: o.clusters, anchorId: null as string | null };
   }, [data, zoomedClusterId, zoomedData]);
 
   const activeData: Resp | null = zoomedData ?? data;
@@ -477,6 +502,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
                 clusters={layoutResult!.clusters}
                 selectedId={selectedId}
                 zoomed={zoomedClusterId !== null}
+                anchorId={layoutResult!.anchorId}
                 onSelectNode={(id) => setSelectedId(id)}
                 onOpenCase={(id) => onOpenCase?.(id)}
                 onZoomCluster={(id) => {
@@ -760,6 +786,7 @@ function NetworkSVG({
   clusters,
   selectedId,
   zoomed,
+  anchorId,
   onSelectNode,
   onOpenCase,
   onZoomCluster,
@@ -769,6 +796,7 @@ function NetworkSVG({
   clusters: Map<number, { cx: number; cy: number; r: number; size: number }>;
   selectedId: string | null;
   zoomed: boolean;
+  anchorId: string | null;
   onSelectNode: (id: string) => void;
   onOpenCase: (id: number) => void;
   onZoomCluster: (id: number) => void;
@@ -1006,9 +1034,14 @@ function NetworkSVG({
           );
         })}
 
-      {/* Nodes */}
+      {/* Nodes. In zoomed mode the sphere radii are bumped substantially
+          and the anchor (center) gets an extra boost so it visually
+          dominates as the case focal point. Label font scales with the
+          radius so it stays legible at the larger sizes. */}
       {positioned.map((n) => {
-        const r = 10 + Math.min(20, n.total * 2);
+        const isAnchor = zoomed && n.studentId === anchorId;
+        const baseR = 10 + Math.min(20, n.total * 2);
+        const r = zoomed ? baseR * (isAnchor ? 2.0 : 1.55) : baseR;
         const meta = ROLE_META[(n.primaryRole as Role) ?? "peripheral"] ?? ROLE_META.peripheral;
         const ringColor =
           n.flag === "always-peripheral"
