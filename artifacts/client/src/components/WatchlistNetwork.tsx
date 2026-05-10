@@ -668,6 +668,86 @@ function NetworkSVG({
           <stop offset="0%" stopColor={C.alert} stopOpacity="0.35" />
           <stop offset="100%" stopColor={C.alert} stopOpacity="0" />
         </radialGradient>
+        {/* Per-role 3D sphere gradients. The highlight is offset toward
+            the upper-left (cx=35%, cy=30%) so every node reads as a lit
+            sphere instead of a flat disc. White tip → role.soft midtone
+            → role.color rim gives depth without losing role identity. */}
+        {(Object.keys(ROLE_META) as Role[]).map((role) => {
+          const m = ROLE_META[role];
+          return (
+            <radialGradient
+              key={role}
+              id={`wl-sphere-${role}`}
+              cx="35%"
+              cy="30%"
+              r="75%"
+              fx="30%"
+              fy="25%"
+            >
+              <stop offset="0%" stopColor="#FFFFFF" stopOpacity="0.95" />
+              <stop offset="35%" stopColor={m.soft} stopOpacity="1" />
+              <stop offset="100%" stopColor={m.color} stopOpacity="0.85" />
+            </radialGradient>
+          );
+        })}
+        {/* Cluster halo gradients — same lighting direction, much
+            subtler so they recede behind the nodes. */}
+        {[0, 1, 2, 3, 4, 5].map((i) => {
+          const tints = [
+            ["rgba(255,255,255,0.55)", "rgba(155,28,46,0.10)", "rgba(155,28,46,0.18)"],
+            ["rgba(255,255,255,0.55)", "rgba(45,79,107,0.10)", "rgba(45,79,107,0.18)"],
+            ["rgba(255,255,255,0.55)", "rgba(184,83,26,0.10)", "rgba(184,83,26,0.18)"],
+            ["rgba(255,255,255,0.55)", "rgba(122,31,43,0.09)", "rgba(122,31,43,0.16)"],
+            ["rgba(255,255,255,0.55)", "rgba(59,107,76,0.10)", "rgba(59,107,76,0.18)"],
+            ["rgba(255,255,255,0.55)", "rgba(122,107,90,0.10)", "rgba(122,107,90,0.18)"],
+          ][i]!;
+          return (
+            <radialGradient
+              key={i}
+              id={`wl-cluster-${i}`}
+              cx="35%"
+              cy="30%"
+              r="80%"
+              fx="30%"
+              fy="25%"
+            >
+              <stop offset="0%" stopColor={tints[0]} />
+              <stop offset="55%" stopColor={tints[1]} />
+              <stop offset="100%" stopColor={tints[2]} />
+            </radialGradient>
+          );
+        })}
+        {/* Soft drop-shadow used by both halos and nodes. Two stacked
+            blurs (tight + soft) give the "floating" look without the
+            flat hard edge of a single shadow. */}
+        <filter id="wl-shadow" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="1.4" result="b1" />
+          <feGaussianBlur in="SourceAlpha" stdDeviation="3.5" result="b2" />
+          <feOffset in="b1" dx="0" dy="1.2" result="o1" />
+          <feOffset in="b2" dx="0" dy="3" result="o2" />
+          <feComponentTransfer in="o1" result="s1">
+            <feFuncA type="linear" slope="0.45" />
+          </feComponentTransfer>
+          <feComponentTransfer in="o2" result="s2">
+            <feFuncA type="linear" slope="0.22" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode in="s2" />
+            <feMergeNode in="s1" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
+        <filter id="wl-shadow-soft" x="-50%" y="-50%" width="200%" height="200%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="b" />
+          <feOffset in="b" dx="0" dy="3" result="o" />
+          <feComponentTransfer in="o" result="s">
+            <feFuncA type="linear" slope="0.18" />
+          </feComponentTransfer>
+          <feMerge>
+            <feMergeNode in="s" />
+            <feMergeNode in="SourceGraphic" />
+          </feMerge>
+        </filter>
       </defs>
 
       <rect x={0} y={0} width={W} height={H} fill={C.graphBg} />
@@ -684,10 +764,11 @@ function NetworkSVG({
               cx={cl.cx}
               cy={cl.cy}
               r={cl.r}
-              fill={clusterFill(idx)}
+              fill={`url(#wl-cluster-${idx % 6})`}
               stroke="#D9CFB8"
               strokeDasharray="4 6"
               strokeWidth={1}
+              filter="url(#wl-shadow-soft)"
             />
             {c ? (
               <g
@@ -826,9 +907,21 @@ function NetworkSVG({
               cx={n.x}
               cy={n.y}
               r={r}
-              fill={meta.soft}
+              fill={`url(#wl-sphere-${(n.primaryRole as Role) ?? "peripheral"})`}
               stroke={meta.color}
               strokeWidth={isSelected ? 3 : 1.5}
+              filter="url(#wl-shadow)"
+            />
+            {/* Specular highlight — small, very soft white blob on the
+                upper-left to sell the 3D illusion. */}
+            <ellipse
+              cx={n.x - r * 0.32}
+              cy={n.y - r * 0.42}
+              rx={r * 0.42}
+              ry={r * 0.26}
+              fill="#FFFFFF"
+              opacity={0.55}
+              style={{ pointerEvents: "none" }}
             />
             <text
               x={n.x}
