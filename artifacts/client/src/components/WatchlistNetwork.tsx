@@ -15,6 +15,11 @@ import {
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import { ROLE_META, WL_COLORS as C, statusPillStyle, type Role } from "./watchlist/colors";
+import {
+  HowToUseHelp,
+  HowToSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface NetNode {
   studentId: string;
@@ -377,6 +382,86 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
               School-wide map of who keeps showing up together. Click a student to focus their
               connections. Click a case label to open the case file.
             </p>
+
+            <HowToUseHelp title="How to use Network view">
+              <HowToSection title="What this is">
+                The school's full incident graph for the selected
+                window. Every active case is its own ring; every
+                student tied to a case is a sphere on that ring.
+                Students who appear in incidents but aren't (yet)
+                attached to a case sit on the loose ring at the top.
+                It's the fastest way to see clusters forming, repeat
+                actors across cases, and which cases share players.
+              </HowToSection>
+              <HowToSection title="Reading the graph">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Case ring</strong> — one case. The student
+                    in the center is the anchor (highest involvement);
+                    the rest orbit around them.
+                  </li>
+                  <li>
+                    <strong>Sphere size</strong> — bigger = more
+                    appearances across this window. The center anchor
+                    is enlarged on purpose to highlight the focal
+                    student.
+                  </li>
+                  <li>
+                    <strong>Sphere color</strong> — primary role
+                    (Direct, Target, Witness, Peripheral, Rumor
+                    spreader, De-escalator, Instigator).
+                  </li>
+                  <li>
+                    <strong>Edges</strong> — two students co-appearing
+                    in incidents. Thicker = more co-appearances.
+                    Dashed = statement-only link with no shared
+                    incident yet.
+                  </li>
+                  <li>
+                    <strong>Loose ring</strong> (top) — students with
+                    interactions but no case attached. Watch this for
+                    patterns that should become a case.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Drilling in">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Click a case ring</strong> (the halo
+                    body) to zoom into just that case — the anchor
+                    sits in the middle and the players spread out.
+                    Use <strong>Back</strong> to return to the
+                    overview.
+                  </li>
+                  <li>
+                    <strong>Click the case title pill</strong> at the
+                    top of any ring (or "Open case file" in zoom) to
+                    leave the network and open the full Case Detail
+                    page.
+                  </li>
+                  <li>
+                    <strong>Click a student sphere</strong> to open
+                    the side rail with their role breakdown across
+                    every interaction in this window, plus quick
+                    actions (Schedule check-in, Open case).
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Window & filters">
+                The <strong>Last N days</strong> chip (top left) shows
+                the active window. Change it on the Hub before opening
+                this view; the network re-computes for that range.
+                Smaller windows surface fresh activity; larger windows
+                surface chronic patterns.
+              </HowToSection>
+              <HowToSection title="When to use this vs. Spider">
+                Use Network when you want the whole school at a glance
+                — finding new clusters, seeing who bridges multiple
+                cases, spotting an emerging hotspot. Use Student
+                Spider when you already have a name in mind and want
+                that one student's complete footprint.
+              </HowToSection>
+            </HowToUseHelp>
           </div>
           <div className="flex items-center gap-2">
             <button

@@ -23,6 +23,11 @@ import {
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import NewCaseModal from "./watchlist/NewCaseModal";
+import {
+  HowToUseHelp,
+  HowToSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 import PromoteToCaseModal from "./watchlist/PromoteToCaseModal";
 import StatementDetailsModal from "./watchlist/StatementDetailsModal";
 import {
@@ -384,6 +389,88 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
               </span>{" "}
               but never quite in the middle. Triage alerts, open cases, request statements.
             </p>
+
+            <HowToUseHelp title="How to use Investigations">
+              <HowToSection title="What this is">
+                The control room for incident investigations. Every
+                statement logged by a teacher or admin lands here first;
+                the Hub turns that stream into a triage queue (alerts),
+                an awareness chart (top of orbit), and the open case
+                book. Use it to decide who needs a check-in today, what
+                cases need movement, and which statements still need to
+                come in.
+              </HowToSection>
+              <HowToSection title="Reading the page">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Stats row</strong> — open cases, active
+                    alerts, statements in flight, and students surfacing
+                    in the selected window.
+                  </li>
+                  <li>
+                    <strong>Window filter</strong> — 7 / 14 / 30 / 90
+                    days, or a custom range. Every panel below respects
+                    it, so you can compare "this week" vs. "this month"
+                    without leaving the page.
+                  </li>
+                  <li>
+                    <strong>Alerts</strong> — automatic flags from five
+                    rules (rumor cluster, repeat target, escalating
+                    severity, missing statement, dormant case). Each
+                    alert has triage actions; dismissed alerts come
+                    back if the underlying pattern repeats.
+                  </li>
+                  <li>
+                    <strong>Top of orbit</strong> — students appearing
+                    most often across the log. Bubble size = total
+                    appearances; color = primary role.
+                  </li>
+                  <li>
+                    <strong>Open cases</strong> — chronological list of
+                    cases with severity, lead, last activity, and
+                    statement progress.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Day-to-day actions">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Log new statement</strong> (top right) —
+                    capture an incident or witness statement and tag the
+                    students involved with their role.
+                  </li>
+                  <li>
+                    <strong>New case</strong> — open a case file when a
+                    pattern is forming and you need a place to gather
+                    notes, players, and statements over time.
+                  </li>
+                  <li>
+                    <strong>Schedule check-in</strong> on any student
+                    card or alert — auto-creates a Tier 2 CICO entry,
+                    routes the student to a Behavior Specialist, and
+                    notifies the MTSS coordinator. Use this when you're
+                    moving from "watch" to "act".
+                  </li>
+                  <li>
+                    <strong>Student spider</strong> — search one
+                    student to see every case they're tied to and who
+                    else is in those cases.
+                  </li>
+                  <li>
+                    <strong>Network view</strong> — zoom out to the
+                    whole school's incident graph for the selected
+                    window.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Privacy & access">
+                The Investigations Hub is core-team-only (admin,
+                guidance, behavior specialist, MTSS coordinator).
+                Teachers can log statements through the standard
+                Behavior tools; what they file shows up here for the
+                core team to triage. Students never see this page.
+              </HowToSection>
+            </HowToUseHelp>
           </div>
           <div className="flex items-center gap-2">
             <button

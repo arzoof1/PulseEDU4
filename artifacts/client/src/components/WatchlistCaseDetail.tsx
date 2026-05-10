@@ -18,6 +18,11 @@ import {
   statusPillStyle,
   type Role,
 } from "./watchlist/colors";
+import {
+  HowToUseHelp,
+  HowToSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface CaseRow {
   id: number;
@@ -402,6 +407,113 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
               {c.createdByName ? ` by ${c.createdByName}` : ""}
               {c.leadStaffName ? ` · Lead: ${c.leadStaffName}` : ""}
             </p>
+
+            <HowToUseHelp title="How to use the Case file">
+              <HowToSection title="What this is">
+                One case — every statement, note, and player tied to
+                a single incident or pattern. The case is the durable
+                container: incidents come and go, but the case
+                remembers who's involved, who said what, and what
+                the team has decided. Use it as the running record
+                investigators (you) and admins refer back to.
+              </HowToSection>
+              <HowToSection title="Reading the page">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Header</strong> — case number, status,
+                    and the case severity (auto-computed as the
+                    highest severity across all linked statements).
+                    Click the title to rename. Use the Status
+                    dropdown to move it through Open → Monitoring →
+                    Escalated → Closed.
+                  </li>
+                  <li>
+                    <strong>Stats row</strong> — count of statements,
+                    players, notes, and the date of the most recent
+                    activity.
+                  </li>
+                  <li>
+                    <strong>Players</strong> — students attached to
+                    this case with their primary role. Color matches
+                    the role (Direct, Target, Witness, Peripheral,
+                    etc.).
+                  </li>
+                  <li>
+                    <strong>Statements</strong> — every incident /
+                    witness statement linked to the case in
+                    chronological order. Severity, location,
+                    submitter, and the participants for that
+                    specific statement are shown inline.
+                  </li>
+                  <li>
+                    <strong>Notes</strong> — internal timeline for
+                    the investigators. Anything added here is
+                    visible to the core team only.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Day-to-day actions">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>+ Log new statement</strong> — record a
+                    new incident or witness statement and
+                    automatically link it to this case. Pick the
+                    type, severity, location, and tag everyone
+                    involved with their role.
+                  </li>
+                  <li>
+                    <strong>Add player</strong> — attach a student
+                    who's part of the case but isn't on a statement
+                    yet. Search by name; the picker only shows
+                    students at this school.
+                  </li>
+                  <li>
+                    <strong>Add note</strong> — drop a quick update
+                    or decision. Use the mic icon to dictate
+                    instead of typing — useful right after a
+                    conversation in the hallway.
+                  </li>
+                  <li>
+                    <strong>Statement actions</strong> — open a
+                    statement to view the full text, request a
+                    follow-up from a witness, mark it complete, or
+                    detach it from the case if it was linked by
+                    mistake.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Status guide">
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Open</strong> — actively being worked.
+                    New statements are most likely.
+                  </li>
+                  <li>
+                    <strong>Monitoring</strong> — investigation is
+                    paused but the case is still alive (e.g. waiting
+                    on a parent meeting or for a behavior plan to
+                    take effect).
+                  </li>
+                  <li>
+                    <strong>Escalated</strong> — admin or district
+                    is involved. Used to flag for leadership
+                    visibility.
+                  </li>
+                  <li>
+                    <strong>Closed</strong> — resolved. Case stays
+                    searchable but stops surfacing in alerts and
+                    the Hub's open-case list.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Privacy">
+                Case files are visible to the core team (admin,
+                guidance, behavior specialist, MTSS coordinator).
+                Teachers can see statements they personally filed
+                from their own profile, but they don't see the case
+                walls, notes, or other players' contributions.
+              </HowToSection>
+            </HowToUseHelp>
           </div>
           {/* Single status control. Four side-by-side buttons made
               status changes look like four primary actions; a labeled
