@@ -581,6 +581,67 @@ const TIER3_GOAL_TEXTS = [
   "Track speaker and raise hand before contributing to class discussion.",
 ];
 
+// One-shot cleanup: prior runs of `seedIfEmpty()` created loose
+// (case_id IS NULL) demo interactions for high-not-on-case, all
+// medium, and all low tier students. Those rows padded the
+// "Loose / no case" cluster on the Schoolwide Behavior Network and
+// added node-spam to the Full School Web view. The seeder no longer
+// emits them, but the existing rows stay in the DB until we sweep
+// them out. This sweep is gated to **demo-seeded schools only** (the
+// `school_accommodations`-non-empty marker that the rest of the
+// seed uses) so we never touch a real SIS school's loose
+// interactions. Idempotent — once the rows are gone the DELETEs are
+// no-ops on subsequent boots.
+export async function cleanupLooseSeedInteractionsOnce() {
+  // Self-contained: ensure the watchlist tables exist before we
+  // touch them. seedIfEmpty() also calls this, but on a fresh DB
+  // where seedIfEmpty short-circuited (e.g. partial migration
+  // state) the tables may not exist yet. Idempotent IF NOT EXISTS.
+  await ensureWatchlistSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c: demoMarker }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM school_accommodations
+            WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (demoMarker === 0) continue;
+
+    // No FK constraints on interaction_id (bare int columns), so we
+    // delete child rows in dependency order before the parent. The
+    // subquery is school-scoped and case_id IS NULL, so we never touch
+    // any interaction tied to a real case (or a different school).
+    // Drizzle's sql template flattens JS arrays as separate params
+    // rather than a Postgres ARRAY, which broke an earlier ANY()
+    // version of this — using a nested SELECT avoids that entirely.
+    const looseSelect = sql`SELECT id FROM interactions
+        WHERE school_id = ${school.id}
+          AND case_id IS NULL`;
+    await db.execute(
+      sql`DELETE FROM interaction_participants
+          WHERE school_id = ${school.id}
+            AND interaction_id IN (${looseSelect})`,
+    );
+    await db.execute(
+      sql`DELETE FROM witness_statements
+          WHERE school_id = ${school.id}
+            AND interaction_id IN (${looseSelect})`,
+    );
+    const removed = await db.execute(
+      sql`DELETE FROM interactions
+          WHERE school_id = ${school.id}
+            AND case_id IS NULL`,
+    );
+    if ((removed.rowCount ?? 0) > 0) {
+      logger.info(
+        { schoolId: school.id, removed: removed.rowCount },
+        "[seed] cleaned up loose (case_id IS NULL) demo interactions",
+      );
+    }
+  }
+}
+
 export async function seedTieredInterventionsIfEmpty() {
   await ensureMtssPlansSchema();
 
@@ -4481,62 +4542,21 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       }
     });
 
-    // Any high-concern student who isn't anchored on a case still gets a
-    // single off-case incident so they show up on the orbit / alerts feed
-    // without inflating any case beyond MAX_STMTS_PER_CASE.
-    const anchoredOnCase = new Set(
-      caseRoster
-        .filter((r) => (WL_ROLES_HIGH as readonly string[]).includes(r.role))
-        .map((r) => r.studentId),
-    );
-    high.forEach((stu) => {
-      if (anchoredOnCase.has(stu.studentId)) return;
-      pushIncident({
-        anchor: stu,
-        anchorRole: WL_ROLES_HIGH[0],
-        coStudents: [],
-        severity: 4,
-        kind: pick(rng, [...WL_KINDS].filter((k) => k !== "peripheral_note")),
-        daysAgo: 2 + Math.floor(rng() * 14),
-        caseId: null,
-        summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ongoing concern; not yet linked to a case.`,
-      });
-    });
-
-    // Medium incidents are intentionally NEVER attached to a case so the
-    // MAX_STMTS_PER_CASE cap above stays a true ceiling. They still feed
-    // the orbit / alerts views and the loose-escalation rule.
-    med.forEach((stu) => {
-      const incidentCount = 2 + Math.floor(rng() * 2);
-      for (let i = 0; i < incidentCount; i++) {
-        const sev = rng() < 0.25 ? 4 : rng() < 0.6 ? 3 : 2;
-        pushIncident({
-          anchor: stu,
-          anchorRole: WL_ROLES_MED[i % WL_ROLES_MED.length],
-          coStudents: [],
-          severity: sev,
-          kind: pick(rng, [...WL_KINDS]),
-          daysAgo: 2 + Math.floor(rng() * 28),
-          caseId: null,
-          summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${pick(rng, ["raised voices", "name-calling", "shoving", "rumor reported"])} in ${pick(rng, WL_LOCATIONS)}.`,
-        });
-      }
-    });
-
-    // Low: 1 incident each, usually peripheral / witness / observation.
-    low.forEach((stu, sIdx) => {
-      const sev = rng() < 0.15 ? 3 : rng() < 0.5 ? 2 : 1;
-      pushIncident({
-        anchor: stu,
-        anchorRole: WL_ROLES_LOW[sIdx % WL_ROLES_LOW.length],
-        coStudents: [],
-        severity: sev,
-        kind: sev === 1 ? "peripheral_note" : pick(rng, [...WL_KINDS]),
-        daysAgo: 3 + Math.floor(rng() * 35),
-        caseId: null,
-        summary: `${stu.firstName} ${stu.lastName.charAt(0)}. — ${sev === 1 ? "noted on the periphery; flagged for awareness only." : "minor incident logged for awareness."}`,
-      });
-    });
+    // NOTE: Loose (caseId: null) seed incidents for high-not-on-case,
+    // medium, and low tiers were removed. They were padding the
+    // "Loose / no case" cluster on the Schoolwide Behavior Network and
+    // adding hundreds of node-spam to the Full School Web view. Demo
+    // data now stays focused on the case-anchored incidents above. If
+    // a future demo needs loose behavior data again, re-add a small
+    // (e.g. 5–10 incident) cap rather than per-student counts.
+    void high;
+    void med;
+    void low;
+    void WL_ROLES_HIGH;
+    void WL_ROLES_MED;
+    void WL_ROLES_LOW;
+    void WL_LOCATIONS;
+    void WL_KINDS;
 
     const insertedInteractions = await chunkedInsertReturning<{ id: number }>(
       interactionsTable,

@@ -1,6 +1,7 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import {
+  cleanupLooseSeedInteractionsOnce,
   seedIfEmpty,
   seedTenancy,
   seedMtssPlansIfEmpty,
@@ -51,6 +52,10 @@ if (Number.isNaN(port) || port <= 0) {
 async function runSeed(): Promise<void> {
   await seedTenancy();
   await seedIfEmpty();
+  // One-shot sweep of loose (case_id IS NULL) demo interactions left
+  // over from prior seed runs. Demo-school-gated; safe no-op once
+  // empty. See cleanupLooseSeedInteractionsOnce in seed.ts.
+  await cleanupLooseSeedInteractionsOnce();
   // Runs after the main seed so studentsTable is populated. Idempotent
   // per-school: skipped for any school that already has at least one plan.
   await seedMtssPlansIfEmpty();
