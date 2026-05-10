@@ -58,6 +58,10 @@ function bullet(t) {
 function ensureSpace(h) {
   if (doc.y + h > 720) doc.addPage();
 }
+function newSection() {
+  // only break if we're not already near the top of a fresh page
+  if (doc.y > 110) doc.addPage();
+}
 function rule() {
   const y = doc.y + 4;
   doc.strokeColor(C.rule).lineWidth(0.5).moveTo(54, y).lineTo(558, y).stroke();
@@ -149,7 +153,7 @@ bullet("Section 5 — Per-feature access detail: each feature, who can do what, 
 bullet("Section 6 — API surface by feature (route → guard).");
 bullet("Section 7 — Cross-feature dependency map (writes that touch other modules).");
 
-doc.addPage();
+newSection();
 
 // === SECTION 1: ROLES ===
 H1("1. Master User Type List");
@@ -198,7 +202,7 @@ table({
   ],
 });
 
-doc.addPage();
+newSection();
 
 // === SECTION 2: CAPS ===
 H1("2. Capability Flags (cap_*)");
@@ -247,7 +251,7 @@ table({
   ],
 });
 
-doc.addPage();
+newSection();
 
 // === SECTION 3: HELPERS ===
 H1("3. Helper Predicates");
@@ -280,7 +284,7 @@ table({
   ],
 });
 
-doc.addPage();
+newSection();
 
 // === SECTION 4: MATRIX ===
 H1("4. Page × Role Matrix");
@@ -388,7 +392,7 @@ matrix("4f. School Admin & Settings", [
   { feat: "Notifications (admin alerts)", su: "W", da: "W", ad: "W", core: "—", gc: "—", dean: "—", pbis: "—", ese: "—", iss: "—", tch: "—", par: "—", sig: "—" },
 ]);
 
-doc.addPage();
+newSection();
 
 // === SECTION 5: PER-FEATURE DETAIL ===
 H1("5. Per-Feature Access Detail");
@@ -489,7 +493,7 @@ feature({
   deps: "Surfaced on Student Profile, Teacher Roster, Parent Portal `accommodations` section.",
 });
 
-doc.addPage();
+newSection();
 
 // === SECTION 6: API by feature ===
 H1("6. API Surface (route → guard)");
@@ -589,7 +593,7 @@ apiBlock("Accommodations", [
   { method: "GET / POST", path: "/school-accommodations", guard: "requireSchool (POST: ESE/Admin)", what: "Library" },
 ]);
 
-doc.addPage();
+newSection();
 
 // === SECTION 7: CROSS-FEATURE DEPENDENCY MAP ===
 H1("7. Cross-Feature Dependency Map");
@@ -629,6 +633,127 @@ bullet("More-specific routes must be registered before broader dynamic routes (a
 bullet("Cron jobs are gated on NODE_ENV plus EMAIL_REMINDERS_ENABLED and RESEND_FROM_ADDRESS. Verify both before relying on emails.");
 bullet("Drizzle-kit db push can block on rename prompts — additive schema changes use direct ALTER TABLE in seed.ts.");
 bullet("Names on public signage are masked to `First L.` to keep privacy on hallway TVs.");
+
+// === SECTION 8: PER-ROLE QUICK REFERENCE ===
+newSection();
+H1("8. Per-Role Quick Reference");
+P("Row-first companion to the matrix. For each role, the complete list of pages they can reach and the actions they can take in one place — useful for onboarding docs, support, and QA scripts.", { color: C.sub });
+doc.moveDown(0.3);
+
+function role({ name, who, sees, does, cannot }) {
+  H3(name);
+  P(`Who:  ${who}`, { color: C.sub, size: 9 });
+  P(`Can see:  ${sees}`, { size: 9.5 });
+  P(`Can do:  ${does}`, { size: 9.5 });
+  if (cannot) P(`Cannot:  ${cannot}`, { color: C.warn, size: 9 });
+  rule();
+}
+
+role({
+  name: "SuperUser (SU)",
+  who: "District-wide top-level operator. Replit/PulseEDU staff or district IT lead.",
+  sees: "Everything in every school in the district. Tenancy, School Plans, Logo Generator, all Admin surfaces, all Insights, all Watchlist, all Stores, all Signage.",
+  does: "Switch active school via override; grant/revoke any role or capability; create custom roles; assign feature tiers; impersonate any staff via Staff Preview; trigger imports.",
+  cannot: "Reach a different district's data.",
+});
+role({
+  name: "District Admin (DA)",
+  who: "District-level administrator (no PulseEDU access).",
+  sees: "All schools in their district: rosters, staff, imports, Admin Hub, Insights, Watchlist (per school).",
+  does: "Manage staff and rosters across district schools; run district-wide imports; impersonate via Staff Preview.",
+  cannot: "Edit School Plans, Tenancy, or other districts. Cannot manage SuperUsers.",
+});
+role({
+  name: "School Admin",
+  who: "Principal, AP, or designated school administrator.",
+  sees: "Every page for their school: Insights Hub (all 6 dashboards), PBIS Hub, Watchlist, MTSS, Safety Plans, ISS, Displays, Settings, Staff Roles, Parent Portal admin, Branding.",
+  does: "Manage staff roles & capabilities; configure bell schedules, kiosks, displays, branding; send parent invites; trigger imports; verify pullouts; edit safety plans; manage school store.",
+  cannot: "Touch other schools. Cannot create custom roles (SU only).",
+});
+role({
+  name: "Behavior Specialist / MTSS Coordinator / School Psychologist (Core Team)",
+  who: "Tier 2/3 intervention staff and school psychologist.",
+  sees: "All Insights dashboards, Watchlist Hub/Network/Cases, MTSS Plans, Safety Plans, Trusted Adults, PBIS Hub, Verify Pullouts, Behavior Review.",
+  does: "Create/edit MTSS plans; manage interventions; run intervention reports; receive Watchlist check-in notifications; manage cases, players, witness statements; edit safety plans (Psych and standard staff).",
+  cannot: "Manage staff roles, branding, displays (unless granted), kiosk setup, importer.",
+});
+role({
+  name: "Guidance Counselor",
+  who: "School counselor focused on safety and student support.",
+  sees: "Safety Plans, Student Profile, Teacher Roster, basic PBIS / Hall Pass / Tardy logging.",
+  does: "Manage safety plan library and per-student plans; log accommodations; award PBIS; issue hall passes.",
+  cannot: "Access Insights dashboards, Watchlist, MTSS plans, ISS dashboard, admin settings.",
+});
+role({
+  name: "Dean",
+  who: "School dean / discipline lead.",
+  sees: "ISS Reporting, Hall Pass log school-wide, Displays mgmt, Student Profile, basic logging.",
+  does: "Manage signage; oversee ISS rolls; log hall passes/tardies/PBIS.",
+  cannot: "Manage staff roles, MTSS plans, Insights dashboards (unless also Core Team).",
+});
+role({
+  name: "PBIS Coordinator",
+  who: "Staff member who owns the school's PBIS program.",
+  sees: "PBIS Hub, PBIS Lists, PBIS reasons & milestone emails, School Store (browse + manage), Houses signage data.",
+  does: "Configure PBIS reasons; set milestone emails; bulk awards; manage student/staff eligibility lists; edit school store catalog.",
+  cannot: "Manage staff roles, branding, importer, MTSS plans.",
+});
+role({
+  name: "ESE Coordinator",
+  who: "ESE / 504 coordinator.",
+  sees: "Accommodations library + logs, Teacher Roster, Hall Pass reports, Student Profile.",
+  does: "Add/edit school accommodations; review accommodation logs; log basic teacher actions.",
+  cannot: "Manage staff roles, MTSS plans, Watchlist, dashboards (unless Core Team).",
+});
+role({
+  name: "ISS Teacher",
+  who: "Teacher running the in-school suspension room.",
+  sees: "ISS Dashboard (live), ISS Reporting, daily attendance sheet.",
+  does: "Mark per-period presence, rollover absent students; adds notes; basic logging actions for own classroom.",
+  cannot: "Edit ISS rosters across the school (Admin only); manage other teachers.",
+});
+role({
+  name: "Teacher (default staff)",
+  who: "Any signed-in staff with no elevated roles.",
+  sees: "Hall Pass / Tardy tools, PBIS award, Log Intervention, Request Pullout, Classroom Store, Teacher Roster (own), Student Profile, My Watch List.",
+  does: "Issue hall passes; tardy log; award PBIS; submit pullout requests; log interventions; record accommodations; edit own classroom store; PBIS milestones (read).",
+  cannot: "School-wide hall pass log (cap), Insights dashboards, Watchlist, MTSS plans, Safety Plan editing, ISS dashboard, any settings.",
+});
+role({
+  name: "Parent",
+  who: "Verified parent linked to one or more students.",
+  sees: "Snapshot dashboard for each linked student: PBIS recognition, hall passes, tardies, accommodations, staff notes, FAST scores, intervention/MTSS summary — only the sections admin enabled.",
+  does: "Switch between linked children; download snapshot PDF; toggle own visible sections.",
+  cannot: "See any other family's data; see any internal staff field; see Watchlist/Insights/Cases.",
+});
+role({
+  name: "Kiosk (active device)",
+  who: "Hallway kiosk activated with staff credentials.",
+  sees: "Hall pass queue for its assigned room.",
+  does: "Add students to the queue; issue passes for that room.",
+  cannot: "Read student PII outside the queue; act outside its room.",
+});
+role({
+  name: "Kiosk Viewer (QR display)",
+  who: "Read-only hallway TV / QR-loaded screen.",
+  sees: "Waiting queue list for the assigned room.",
+  does: "Nothing — display only.",
+  cannot: "Issue passes, mutate any state.",
+});
+role({
+  name: "Public Signage / TV",
+  who: "Unauthenticated hallway TVs running playlist or Heartbeat / Houses screens.",
+  sees: "Playlist content; PBIS house standings; live pulse events with names masked to first + last initial; active hall pass list when admin enables it.",
+  does: "Display only; pulls from /api/displays/public/*.",
+  cannot: "Show full names; perform writes; reach private routes.",
+});
+role({
+  name: "Anonymous / public",
+  who: "Unauthenticated browser.",
+  sees: "Login pages, parent invite acceptance, public branding assets, /api/healthz.",
+  does: "Submit credentials.",
+  cannot: "Reach any tenant data or staff routes.",
+});
 
 // Page numbers footer
 const range = doc.bufferedPageRange();
