@@ -109,6 +109,11 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   const [showLog, setShowLog] = useState(false);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
+  // Inline severity editor: which incident's chip is currently open. The
+  // server PATCH route already accepts severity changes and writes an audit
+  // row, so this is a thin client affordance.
+  const [editingSevId, setEditingSevId] = useState<number | null>(null);
+  const [savingSevId, setSavingSevId] = useState<number | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
@@ -439,6 +444,30 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                 ) : (
                   data.incidents.map((i) => {
                     const sev = severityChipStyle(i.severity);
+                    const isEditingSev = editingSevId === i.id;
+                    const updateSeverity = async (next: number) => {
+                      if (next === i.severity) {
+                        setEditingSevId(null);
+                        return;
+                      }
+                      setSavingSevId(i.id);
+                      try {
+                        const r = await authFetch(
+                          `/api/watchlist/interactions/${i.id}`,
+                          {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ severity: next }),
+                          },
+                        );
+                        if (r.ok) {
+                          setEditingSevId(null);
+                          await reload();
+                        }
+                      } finally {
+                        setSavingSevId(null);
+                      }
+                    };
                     return (
                       <div key={i.id} className="py-3">
                         <div className="flex flex-wrap items-center gap-2">
@@ -449,12 +478,69 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                             {new Date(i.occurredAt).toLocaleString()}
                           </span>
                           <span className="text-sm font-semibold">{i.kind}</span>
-                          <span
-                            className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
-                            style={{ background: sev.bg, color: sev.fg }}
-                          >
-                            {sev.label}
-                          </span>
+                          <div className="relative">
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingSevId(isEditingSev ? null : i.id)
+                              }
+                              disabled={savingSevId === i.id}
+                              className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold disabled:opacity-50"
+                              style={{ background: sev.bg, color: sev.fg }}
+                              title="Click to change severity as the investigation progresses"
+                            >
+                              {savingSevId === i.id ? "Saving…" : sev.label}
+                              <span className="opacity-60">▾</span>
+                            </button>
+                            {isEditingSev && (
+                              <div
+                                className="absolute left-0 top-full z-20 mt-1 flex flex-col rounded-md border shadow-md"
+                                style={{
+                                  borderColor: C.line,
+                                  background: C.panel,
+                                  minWidth: 140,
+                                }}
+                              >
+                                {[1, 2, 3, 4].map((lvl) => {
+                                  const opt = severityChipStyle(lvl);
+                                  const isCurrent = lvl === i.severity;
+                                  return (
+                                    <button
+                                      key={lvl}
+                                      type="button"
+                                      onClick={() => void updateSeverity(lvl)}
+                                      className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-[11px] font-semibold"
+                                      style={{
+                                        background: isCurrent ? C.bg : "transparent",
+                                        color: C.ink,
+                                      }}
+                                    >
+                                      <span
+                                        className="inline-flex items-center rounded-full px-2 py-0.5"
+                                        style={{
+                                          background: opt.bg,
+                                          color: opt.fg,
+                                        }}
+                                      >
+                                        {opt.label}
+                                      </span>
+                                      {isCurrent && (
+                                        <span style={{ color: C.inkSoft }}>
+                                          current
+                                        </span>
+                                      )}
+                                    </button>
+                                  );
+                                })}
+                                <div
+                                  className="border-t px-2.5 py-1 text-[10px]"
+                                  style={{ borderColor: C.line, color: C.inkSoft }}
+                                >
+                                  Change is audit-logged.
+                                </div>
+                              </div>
+                            )}
+                          </div>
                           {i.location && (
                             <span className="text-[11px]" style={{ color: C.inkSoft }}>
                               · {i.location}
