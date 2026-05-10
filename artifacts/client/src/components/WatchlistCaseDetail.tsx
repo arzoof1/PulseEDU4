@@ -14,6 +14,7 @@ import { formatCaseNumber } from "../lib/caseNumber";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import VoiceTextarea from "./watchlist/VoiceTextarea";
 import MentionTextarea from "./watchlist/MentionTextarea";
+import MentionSuggestStrip from "./watchlist/MentionSuggestStrip";
 import VideoEvidencePanel from "./watchlist/VideoEvidencePanel";
 import ConsistencyPill from "./watchlist/ConsistencyPill";
 import {
@@ -32,6 +33,8 @@ import {
   HowToSection,
   howtoListStyle,
 } from "./HowToUseHelp";
+import CloseCaseModal from "./watchlist/CloseCaseModal";
+import WatchlistCaseInvestigation from "./watchlist/WatchlistCaseInvestigation";
 
 interface CaseRow {
   id: number;
@@ -45,6 +48,9 @@ interface CaseRow {
   openedAt: string;
   closedAt: string | null;
   leadStatementId: number | null;
+  outcomeCode?: string | null;
+  outcomeNote?: string | null;
+  closedByName?: string | null;
 }
 
 interface Player {
@@ -143,6 +149,12 @@ interface Props {
   // School Counselor by design — they sit outside the discipline
   // investigation chain.
   isAdmin?: boolean;
+  // Strict admin/superuser/district-admin gate — used for the Reopen
+  // case button. Server-side `/cases/:id/reopen` rejects anyone outside
+  // this set, so we hide the button to match. The wider `isAdmin` prop
+  // above also includes Behavior Specialist / MTSS Coordinator / Dean
+  // for video evidence + AI consistency surfaces; reopen is tighter.
+  canReopenCase?: boolean;
   // Display name of the logged-in admin — used to pre-fill the
   // "Viewed by {name}" reason text on Confirmed video tags.
   viewerName?: string;
@@ -160,11 +172,18 @@ export default function WatchlistCaseDetail({
   caseId,
   onBack,
   isAdmin = false,
+  canReopenCase = false,
   viewerName = "",
   initialAnchor = null,
   onAnchorConsumed,
 }: Props) {
   const [data, setData] = useState<Resp | null>(null);
+  const [showClose, setShowClose] = useState(false);
+  // Investigation Ring tab — per-incident witness graph. Visible to
+  // anyone who can see the case (no extra gating per project guardrail).
+  const [activeTab, setActiveTab] = useState<"overview" | "investigation">(
+    "overview",
+  );
   const [error, setError] = useState<string | null>(null);
   const videoEvidenceAnchorRef = useRef<HTMLDivElement | null>(null);
   // Once `data` is loaded and the section we want to deep-link into is
@@ -330,11 +349,37 @@ export default function WatchlistCaseDetail({
   };
 
   const setStatus = async (status: string) => {
+    // Closing a case must go through the modal (outcome required).
+    // Reopening from the dropdown is handled by the explicit Reopen
+    // button via askReopen() — direct status='open' from a closed case
+    // would skip the audit reason capture.
+    if (status === "closed") {
+      setShowClose(true);
+      return;
+    }
     await authFetch(`/api/watchlist/cases/${caseId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ status }),
     });
+    void reload();
+  };
+
+  const askReopen = async () => {
+    const reason = window.prompt(
+      "Why are you reopening this case? (min 5 chars, recorded on audit log)",
+    );
+    if (!reason || reason.trim().length < 5) return;
+    const r = await authFetch(`/api/watchlist/cases/${caseId}/reopen`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    if (!r.ok) {
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      window.alert(j.error ?? "Failed to reopen case");
+      return;
+    }
     void reload();
   };
 
@@ -429,6 +474,35 @@ export default function WatchlistCaseDetail({
                   silently renders nothing for non-admins (the API
                   returns 403 and the pill swallows it). */}
               <ConsistencyPill caseId={c.id} onAnyChange={refreshConsistency} />
+              {/* Outcome chip — only visible when the case is closed.
+                  Captures the closure decision in one glance and gives
+                  admins a one-click reopen path (with mandatory reason
+                  recorded to the audit trail). */}
+              {c.status === "closed" && c.outcomeCode && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                  style={{ background: "#E2E8F0", color: "#1E293B" }}
+                  title={
+                    c.outcomeNote
+                      ? `${c.outcomeNote}${c.closedByName ? ` — ${c.closedByName}` : ""}`
+                      : c.closedByName
+                        ? `Closed by ${c.closedByName}`
+                        : "Closure outcome"
+                  }
+                >
+                  Outcome: {c.outcomeCode.replace(/_/g, " ")}
+                </span>
+              )}
+              {c.status === "closed" && canReopenCase && (
+                <button
+                  type="button"
+                  onClick={() => void askReopen()}
+                  className="inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-semibold"
+                  style={{ borderColor: C.line, color: C.brand }}
+                >
+                  Reopen…
+                </button>
+              )}
             </div>
             {editingTitle ? (
               <div className="mt-2 flex items-center gap-2">
@@ -617,6 +691,47 @@ export default function WatchlistCaseDetail({
           </div>
         </div>
 
+        {/* Tabs — Overview vs Investigation Ring (per-incident witness graph). */}
+        <div
+          className="mb-4 flex gap-1 border-b"
+          style={{ borderColor: C.line }}
+        >
+          {(["overview", "investigation"] as const).map((t) => (
+            <button
+              key={t}
+              type="button"
+              onClick={() => setActiveTab(t)}
+              className="px-3 py-2 text-xs font-bold capitalize"
+              style={{
+                color: activeTab === t ? C.brand : C.inkSoft,
+                borderBottom:
+                  activeTab === t
+                    ? `2px solid ${C.brand}`
+                    : "2px solid transparent",
+                marginBottom: -1,
+              }}
+            >
+              {t === "investigation" ? "Investigation Ring" : "Overview"}
+            </button>
+          ))}
+        </div>
+
+        {activeTab === "investigation" && (
+          <WatchlistCaseInvestigation
+            caseId={caseId}
+            incidents={data.incidents.map((i) => ({
+              id: i.id,
+              summary: i.summary,
+              occurredAt: i.occurredAt,
+            }))}
+            onRequestStatement={(studentId, incidentId) =>
+              void requestStatement(incidentId, studentId, "")
+            }
+          />
+        )}
+
+        {activeTab === "overview" && (
+        <>
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           {[
@@ -1241,7 +1356,19 @@ export default function WatchlistCaseDetail({
             </div>
           </div>
         </div>
+        </>
+        )}
       </div>
+
+      {showClose && (
+        <CloseCaseModal
+          caseId={caseId}
+          caseTitle={c.title}
+          open={showClose}
+          onClose={() => setShowClose(false)}
+          onClosed={() => void reload()}
+        />
+      )}
 
       {showLog && (
         <LogInteractionModal
@@ -1839,6 +1966,24 @@ function PlayerDrawer({
                 className="w-full rounded-md border px-2 py-1.5 text-xs"
                 style={{ borderColor: C.line, background: C.panel }}
                 brandColor={C.brand}
+              />
+              {/* AI mention suggestions — advisory only. Inserts a chip
+                  token into the draft on click; never auto-applies. The
+                  Investigation Ring only draws edges from confirmed
+                  structured @-mentions, so the user's click is required
+                  before the suggestion becomes a graph edge. */}
+              <MentionSuggestStrip
+                statementId={stmt?.id ?? null}
+                body={draft}
+                onInsert={(chip) =>
+                  setDraft(
+                    studentId,
+                    inc.id,
+                    draft.endsWith(" ") || draft.length === 0
+                      ? `${draft}${chip} `
+                      : `${draft} ${chip} `,
+                  )
+                }
               />
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {stmt ? (

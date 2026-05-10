@@ -73,6 +73,7 @@ import {
   caseConsistencyFindingsTable,
   caseConsistencyStateTable,
   caseFootageRequestsTable,
+  caseOutcomeTypesTable,
 } from "@workspace/db";
 import { createHash } from "node:crypto";
 import { and, asc, desc, eq, gte, ilike, inArray, lte, or, sql } from "drizzle-orm";
@@ -242,8 +243,14 @@ async function audit(opts: {
   action: string;
   staff: StaffRow;
   payload?: Record<string, unknown>;
+  // Optional transactional client. When supplied, the audit insert
+  // joins the caller's tx so a partial failure rolls back both the
+  // mutation AND the audit row together. When omitted, audit writes
+  // through the shared db handle (legacy behavior).
+  tx?: Parameters<Parameters<typeof db.transaction>[0]>[0];
 }) {
-  await db.insert(interactionAuditLogTable).values({
+  const exec = opts.tx ?? db;
+  await exec.insert(interactionAuditLogTable).values({
     schoolId: opts.schoolId,
     entityType: opts.entityType,
     entityId: opts.entityId,
@@ -1725,9 +1732,18 @@ router.patch("/watchlist/cases/:id", async (req: Request, res: Response) => {
   if (typeof b["title"] === "string") patch.title = clean(b["title"], 200);
   if (typeof b["summary"] === "string") patch.summary = clean(b["summary"], 2000);
   if (isCaseStatus(b["status"])) {
+    // Closing requires an outcome — refuse the shortcut and direct the
+    // caller to /close where outcomeCode is enforced. Reopening from the
+    // PATCH path is also blocked so the audit trail stays in /reopen.
+    if (b["status"] === "closed") {
+      res.status(400).json({
+        error:
+          "Use POST /watchlist/cases/:id/close to close a case (outcome required).",
+      });
+      return;
+    }
     patch.status = b["status"] as string;
-    if (b["status"] === "closed") patch.closedAt = new Date();
-    else patch.closedAt = null;
+    patch.closedAt = null;
   }
   if (b["leadStaffId"] !== undefined) {
     const lid = asInt(b["leadStaffId"]);
@@ -4922,6 +4938,670 @@ async function refreshConsistencyStateCounts(
       },
     });
 }
+
+// =====================================================================
+// Case Outcome Catalog (per-school configurable closure types)
+// =====================================================================
+//
+// Closing a case requires picking one of these outcomes — see
+// POST /watchlist/cases/:id/close. The catalog itself is admin-managed
+// via the School Settings → Case Closure Outcomes tile.
+
+// Helper: lowercase-snake_case slug from a free-text label, used when
+// admins add a new outcome and don't supply an explicit code.
+function slugifyOutcomeCode(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 60);
+}
+
+// List the school's catalog. Default to active-only; pass ?all=1 for
+// the admin editor (which needs to see retired entries too).
+router.get("/watchlist/case-outcomes", async (req: Request, res: Response) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const all = req.query["all"] === "1";
+  const where = all
+    ? eq(caseOutcomeTypesTable.schoolId, schoolId)
+    : and(
+        eq(caseOutcomeTypesTable.schoolId, schoolId),
+        eq(caseOutcomeTypesTable.active, true),
+      );
+  const rows = await db
+    .select()
+    .from(caseOutcomeTypesTable)
+    .where(where)
+    .orderBy(asc(caseOutcomeTypesTable.sortOrder), asc(caseOutcomeTypesTable.label));
+  res.json({ outcomes: rows });
+});
+
+// Add a new outcome. Admin/SuperUser only.
+router.post("/watchlist/case-outcomes", async (req: Request, res: Response) => {
+  const staff = (req as ReqWithStaff).staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  if (!isAdminOrSuperUser(staff)) {
+    res.status(403).json({ error: "Admin role required" });
+    return;
+  }
+  const b = req.body as Record<string, unknown>;
+  const label = clean(b["label"], 80);
+  if (label.length < 2) {
+    res.status(400).json({ error: "label required (min 2 chars)" });
+    return;
+  }
+  let code = clean(b["code"], 60);
+  if (!code) code = slugifyOutcomeCode(label);
+  if (!/^[a-z0-9_]+$/.test(code)) {
+    res
+      .status(400)
+      .json({ error: "code must be lowercase letters / digits / underscores" });
+    return;
+  }
+  const description = clean(b["description"], 400);
+  const sortOrder =
+    typeof b["sortOrder"] === "number" && Number.isFinite(b["sortOrder"])
+      ? Math.round(b["sortOrder"] as number)
+      : 100;
+  try {
+    const row = await db.transaction(async (tx) => {
+      const [r] = await tx
+        .insert(caseOutcomeTypesTable)
+        .values({
+          schoolId,
+          code,
+          label,
+          description,
+          sortOrder,
+          createdByName: staff.displayName,
+        })
+        .returning();
+      await audit({
+        schoolId,
+        entityType: "case_outcome_type",
+        entityId: r.id,
+        action: "created",
+        staff,
+        payload: { code, label, sortOrder },
+        tx,
+      });
+      return r;
+    });
+    res.json({ outcome: row });
+  } catch (e) {
+    // Unique-violation on (school_id, code) — surface as 409 so the UI
+    // can show "an outcome with that code already exists".
+    res.status(409).json({
+      error: "An outcome with that code already exists for this school.",
+    });
+    req.log?.warn({ err: e }, "case-outcome create conflict");
+  }
+});
+
+// Edit an existing outcome's label/description/sort/active flag. The
+// `code` field is intentionally immutable post-create — historical
+// closed cases reference it and we don't want to chase rewrites.
+router.patch(
+  "/watchlist/case-outcomes/:id",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!isAdminOrSuperUser(staff)) {
+      res.status(403).json({ error: "Admin role required" });
+      return;
+    }
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const patch: Partial<typeof caseOutcomeTypesTable.$inferInsert> = {};
+    if (typeof b["label"] === "string") patch.label = clean(b["label"], 80);
+    if (typeof b["description"] === "string")
+      patch.description = clean(b["description"], 400);
+    if (typeof b["sortOrder"] === "number")
+      patch.sortOrder = Math.round(b["sortOrder"] as number);
+    if (typeof b["active"] === "boolean") patch.active = b["active"];
+    if (Object.keys(patch).length === 0) {
+      res.status(400).json({ error: "no changes" });
+      return;
+    }
+    const row = await db.transaction(async (tx) => {
+      const [r] = await tx
+        .update(caseOutcomeTypesTable)
+        .set(patch)
+        .where(
+          and(
+            eq(caseOutcomeTypesTable.id, id),
+            eq(caseOutcomeTypesTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      if (!r) return null;
+      await audit({
+        schoolId,
+        entityType: "case_outcome_type",
+        entityId: id,
+        action: "updated",
+        staff,
+        payload: patch as Record<string, unknown>,
+        tx,
+      });
+      return r;
+    });
+    if (!row) {
+      res.status(404).json({ error: "Outcome not found" });
+      return;
+    }
+    res.json({ outcome: row });
+  },
+);
+
+// =====================================================================
+// Close / Reopen case (outcome required)
+// =====================================================================
+
+router.post(
+  "/watchlist/cases/:id/close",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid case id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const outcomeCode = clean(b["outcomeCode"], 60);
+    if (!outcomeCode) {
+      res
+        .status(400)
+        .json({ error: "outcomeCode required (pick from the catalog)" });
+      return;
+    }
+    const outcomeNote = clean(b["outcomeNote"], 2000);
+    // Verify the outcome belongs to this school AND is active. Inactive
+    // codes can be referenced by historical rows but never NEW closures.
+    const [outcome] = await db
+      .select()
+      .from(caseOutcomeTypesTable)
+      .where(
+        and(
+          eq(caseOutcomeTypesTable.schoolId, schoolId),
+          eq(caseOutcomeTypesTable.code, outcomeCode),
+          eq(caseOutcomeTypesTable.active, true),
+        ),
+      );
+    if (!outcome) {
+      res
+        .status(400)
+        .json({ error: "Unknown or retired outcomeCode for this school" });
+      return;
+    }
+    // The 'other' outcome (or any future outcome whose label flags
+    // "note required") demands a note. Today we only enforce by code.
+    if (outcomeCode === "other" && outcomeNote.length < 5) {
+      res.status(400).json({
+        error: "outcomeNote required (min 5 chars) when closing as 'other'",
+      });
+      return;
+    }
+    const row = await db.transaction(async (tx) => {
+      const [r] = await tx
+        .update(interactionCasesTable)
+        .set({
+          status: "closed",
+          closedAt: new Date(),
+          outcomeCode,
+          outcomeNote,
+          closedByStaffId: staff.id,
+          closedByName: staff.displayName,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(interactionCasesTable.id, id),
+            eq(interactionCasesTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      if (!r) return null;
+      await audit({
+        schoolId,
+        entityType: "case",
+        entityId: id,
+        action: "closed",
+        staff,
+        payload: {
+          outcomeCode,
+          outcomeLabel: outcome.label,
+          outcomeNote: outcomeNote || null,
+        },
+        tx,
+      });
+      return r;
+    });
+    if (!row) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+    res.json({ case: row });
+  },
+);
+
+router.post(
+  "/watchlist/cases/:id/reopen",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!isAdminOrSuperUser(staff)) {
+      res
+        .status(403)
+        .json({ error: "Admin role required to reopen a closed case" });
+      return;
+    }
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid case id" });
+      return;
+    }
+    const reason = clean((req.body as Record<string, unknown>)["reason"], 500);
+    if (reason.length < 5) {
+      res.status(400).json({ error: "reason required (min 5 chars)" });
+      return;
+    }
+    // We deliberately PRESERVE outcomeCode/outcomeNote/closedByName so
+    // the historical record of the prior closure cycle stays visible.
+    // Only status + closedAt flip back to open.
+    const row = await db.transaction(async (tx) => {
+      const [r] = await tx
+        .update(interactionCasesTable)
+        .set({ status: "open", closedAt: null, updatedAt: new Date() })
+        .where(
+          and(
+            eq(interactionCasesTable.id, id),
+            eq(interactionCasesTable.schoolId, schoolId),
+          ),
+        )
+        .returning();
+      if (!r) return null;
+      await audit({
+        schoolId,
+        entityType: "case",
+        entityId: id,
+        action: "reopened",
+        staff,
+        payload: { reason, priorOutcomeCode: r.outcomeCode },
+        tx,
+      });
+      return r;
+    });
+    if (!row) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+    res.json({ case: row });
+  },
+);
+
+// =====================================================================
+// Investigation aggregate (per-incident witness ring)
+// =====================================================================
+//
+// One incident at a time. Returns:
+//   - the incident itself
+//   - principals (target/instigator participants)
+//   - witnesses (anyone with a witness_statements row on the incident)
+//   - mentioned-but-silent (students named in any witness statement on
+//     the incident via case_mentions, who aren't already principals or
+//     witness-statement authors)
+//   - edges drawn from case_mentions: every (witness statement) ⇨
+//     (mentioned student) becomes an edge anchored on the witness's
+//     student id (when the witness IS a student) or on the incident
+//     (when the witness is staff with no student id of their own)
+//   - edges drawn from case_consistency_findings: corroboration and
+//     contradiction pairs between witness statement rows
+router.get(
+  "/watchlist/cases/:caseId/investigation/:interactionId",
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["caseId"]);
+    const interactionId = asInt(req.params["interactionId"]);
+    if (!caseId || !interactionId) {
+      res.status(400).json({ error: "Invalid ids" });
+      return;
+    }
+    // Confirm the incident actually belongs to the case AND school.
+    const [incident] = await db
+      .select()
+      .from(interactionsTable)
+      .where(
+        and(
+          eq(interactionsTable.id, interactionId),
+          eq(interactionsTable.schoolId, schoolId),
+          eq(interactionsTable.caseId, caseId),
+        ),
+      );
+    if (!incident) {
+      res
+        .status(404)
+        .json({ error: "Incident not found on this case" });
+      return;
+    }
+    // Participants on the incident (principals + witness-role students).
+    const participants = await db
+      .select()
+      .from(interactionParticipantsTable)
+      .where(
+        and(
+          eq(interactionParticipantsTable.schoolId, schoolId),
+          eq(interactionParticipantsTable.interactionId, interactionId),
+        ),
+      );
+    // All witness statements on this incident (the witnesses ring).
+    const statements = await db
+      .select()
+      .from(witnessStatementsTable)
+      .where(
+        and(
+          eq(witnessStatementsTable.schoolId, schoolId),
+          eq(witnessStatementsTable.interactionId, interactionId),
+        ),
+      );
+    const statementIds = statements.map((s) => s.id);
+    // case_mentions filtered to just THIS incident's statements.
+    const mentions = statementIds.length
+      ? await db
+          .select()
+          .from(caseMentionsTable)
+          .where(
+            and(
+              eq(caseMentionsTable.schoolId, schoolId),
+              eq(caseMentionsTable.sourceKind, "witness_statement"),
+              inArray(caseMentionsTable.sourceId, statementIds),
+            ),
+          )
+      : [];
+    // Resolve student display names for every studentId we'll surface.
+    const studentIdSet = new Set<string>();
+    for (const p of participants) studentIdSet.add(p.studentId);
+    for (const s of statements) if (s.studentId) studentIdSet.add(s.studentId);
+    for (const m of mentions) studentIdSet.add(m.studentId);
+    const studentMap = await loadStudents(schoolId, [...studentIdSet]);
+
+    type StudentMeta = {
+      studentId: string;
+      firstName: string;
+      lastName: string;
+      grade: number | string | null;
+      initials: string;
+    };
+    const toMeta = (sid: string): StudentMeta | null => {
+      const s = studentMap.get(sid);
+      if (!s) return null;
+      const initials = `${(s.firstName?.[0] ?? "?").toUpperCase()}${(s.lastName?.[0] ?? "?").toUpperCase()}`;
+      return {
+        studentId: sid,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        grade: s.grade,
+        initials,
+      };
+    };
+
+    // Principals = students with role target/instigator.
+    const principalIds = new Set(
+      participants
+        .filter((p) => p.role === "target" || p.role === "instigator")
+        .map((p) => p.studentId),
+    );
+    const principals = [...principalIds]
+      .map((sid) => {
+        const meta = toMeta(sid);
+        if (!meta) return null;
+        const myParts = participants.filter((p) => p.studentId === sid);
+        return {
+          ...meta,
+          roles: myParts.map((p) => p.role),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x != null);
+
+    // Witnesses (students with statements on this incident). The schema
+    // requires `studentId NOT NULL`, so every statement IS a student
+    // statement; staff who recorded statements appear as `requestedByName`.
+    const witnesses = statements.map((s) => {
+      const meta = toMeta(s.studentId);
+      return {
+        statementId: s.id,
+        studentId: s.studentId,
+        displayName: meta
+          ? `${meta.firstName} ${meta.lastName}`
+          : `Student ${s.studentId}`,
+        initials: meta?.initials ?? "?",
+        grade: meta?.grade ?? null,
+        status: s.status,
+        body: s.body ?? "",
+        requestedAt: s.requestedAt,
+        completedAt: s.completedAt,
+        requestedByName: s.requestedByName,
+      };
+    });
+
+    // Mentioned-but-silent: anyone named in a statement who isn't a
+    // principal AND doesn't have their own statement on this incident.
+    const witnessStudentIds = new Set(
+      statements.map((s) => s.studentId).filter((x): x is string => Boolean(x)),
+    );
+    const mentionedOnly: Array<
+      StudentMeta & { mentionedInStatementIds: number[] }
+    > = [];
+    {
+      const seen = new Map<string, Set<number>>();
+      for (const m of mentions) {
+        if (principalIds.has(m.studentId)) continue;
+        if (witnessStudentIds.has(m.studentId)) continue;
+        let set = seen.get(m.studentId);
+        if (!set) {
+          set = new Set<number>();
+          seen.set(m.studentId, set);
+        }
+        set.add(m.sourceId);
+      }
+      for (const [sid, idSet] of seen.entries()) {
+        const meta = toMeta(sid);
+        if (!meta) continue;
+        mentionedOnly.push({
+          ...meta,
+          mentionedInStatementIds: [...idSet],
+        });
+      }
+    }
+
+    // Edges from mentions: source = the witness statement's author
+    // student, target = the mentioned student. We collapse multiple
+    // mentions of the same target by the same author into one edge with
+    // a weight (used by the client for line thickness).
+    const statementById = new Map(statements.map((s) => [s.id, s] as const));
+    type MentionEdge = {
+      kind: "mention";
+      fromStudentId: string;
+      fromStatementId: number;
+      toStudentId: string;
+      weight: number;
+    };
+    type ConsistencyEdge = {
+      kind: "corroborates" | "contradicts";
+      aStatementId: number;
+      bStatementId: number;
+      findingId: number;
+      severity: string;
+    };
+    const mentionEdges = new Map<string, MentionEdge>();
+    for (const m of mentions) {
+      const stmt = statementById.get(m.sourceId);
+      if (!stmt) continue;
+      const key = `${stmt.studentId}|${m.studentId}`;
+      const existing = mentionEdges.get(key);
+      if (existing) {
+        existing.weight += 1;
+      } else {
+        mentionEdges.set(key, {
+          kind: "mention",
+          fromStudentId: stmt.studentId,
+          fromStatementId: stmt.id,
+          toStudentId: m.studentId,
+          weight: 1,
+        });
+      }
+    }
+
+    // Consistency-derived edges (corroborates / contradicts) between
+    // pairs of witness statements on this incident, if Phase 3 has run.
+    const consistencyEdges: ConsistencyEdge[] = [];
+    if (statementIds.length > 1) {
+      const findings = await db
+        .select()
+        .from(caseConsistencyFindingsTable)
+        .where(
+          and(
+            eq(caseConsistencyFindingsTable.schoolId, schoolId),
+            eq(caseConsistencyFindingsTable.caseId, caseId),
+            eq(caseConsistencyFindingsTable.status, "open"),
+          ),
+        );
+      for (const f of findings) {
+        if (f.kind !== "contradiction" && f.kind !== "corroboration") continue;
+        const refs = (f.citedSourceRefs ?? []) as Array<{
+          kind: string;
+          id: number;
+        }>;
+        const stmtRefs = refs
+          .filter(
+            (r) =>
+              r.kind === "witness_statement" && statementIds.includes(r.id),
+          )
+          .map((r) => r.id);
+        // Emit pairwise edges between every pair of statements the
+        // finding cites within THIS incident (most findings cite 2).
+        for (let i = 0; i < stmtRefs.length; i++) {
+          for (let j = i + 1; j < stmtRefs.length; j++) {
+            consistencyEdges.push({
+              kind: f.kind === "contradiction" ? "contradicts" : "corroborates",
+              aStatementId: stmtRefs[i],
+              bStatementId: stmtRefs[j],
+              findingId: f.id,
+              severity: f.severity,
+            });
+          }
+        }
+      }
+    }
+
+    res.json({
+      incident: {
+        id: incident.id,
+        kind: incident.kind,
+        severity: incident.severity,
+        occurredAt: incident.occurredAt,
+        location: incident.location ?? "",
+        summary: incident.summary,
+        detail: incident.detail ?? "",
+      },
+      principals,
+      witnesses,
+      mentionedOnly,
+      edges: {
+        mentions: [...mentionEdges.values()],
+        consistency: consistencyEdges,
+      },
+    });
+  },
+);
+
+// =====================================================================
+// AI mention suggester (server-side, optional)
+// =====================================================================
+//
+// Given a witness statement id, ask Claude (via the Replit AI proxy
+// already wired for the consistency check) which roster students the
+// free-text body appears to reference. The client uses this to show
+// a "we think this also references: X, Y — confirm?" strip; it never
+// auto-applies, the writer must click to insert chips.
+
+router.post(
+  "/watchlist/statements/:id/suggest-mentions",
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [stmt] = await db
+      .select()
+      .from(witnessStatementsTable)
+      .where(
+        and(
+          eq(witnessStatementsTable.schoolId, schoolId),
+          eq(witnessStatementsTable.id, id),
+        ),
+      );
+    if (!stmt) {
+      res.status(404).json({ error: "Statement not found" });
+      return;
+    }
+    const body = (stmt.body ?? "").trim();
+    if (body.length < 20) {
+      res.json({ suggestions: [] });
+      return;
+    }
+    // Parse the chips already in the body so we don't re-suggest them.
+    const already = new Set<string>();
+    for (const m of body.matchAll(/@\[[^|\]]+\|([A-Za-z0-9_-]+)\]/g)) {
+      already.add(m[1]);
+    }
+    const roster = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, schoolId));
+    if (roster.length === 0) {
+      res.json({ suggestions: [] });
+      return;
+    }
+    try {
+      // Lazy import — keep AI dep out of the route's hot path.
+      const { suggestMentions } = await import(
+        "../lib/mentionSuggest.js"
+      );
+      const suggestions = await suggestMentions({
+        body,
+        roster,
+        already,
+      });
+      res.json({ suggestions });
+    } catch (e) {
+      req.log?.warn({ err: e }, "mention-suggest failed");
+      // Failure is silent for the user — the suggest strip just stays
+      // empty. The witness-statement flow should never break because
+      // the AI helper hiccupped.
+      res.json({ suggestions: [] });
+    }
+  },
+);
 
 // Silence "imported but unused" — `assembleCaseBundle` is referenced
 // only by the runner today, but we re-export it here so a future

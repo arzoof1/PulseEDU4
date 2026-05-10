@@ -41,6 +41,17 @@ export const interactionCasesTable = pgTable(
       .notNull()
       .defaultNow(),
     closedAt: timestamp("closed_at", { withTimezone: true }),
+    // Closure metadata — set when the case moves to status='closed' via
+    // the dedicated /close endpoint. `outcomeCode` references
+    // `case_outcome_types.code` (per-school catalog). Closing a case
+    // requires both an outcomeCode and (for the 'other' outcome or any
+    // outcome the catalog marks "note required") an outcomeNote. Reopening
+    // does NOT clear these — they are preserved as the historical record
+    // of the previous closure cycle.
+    outcomeCode: text("outcome_code"),
+    outcomeNote: text("outcome_note").notNull().default(""),
+    closedByStaffId: integer("closed_by_staff_id"),
+    closedByName: text("closed_by_name").notNull().default(""),
     createdByStaffId: integer("created_by_staff_id"),
     createdByName: text("created_by_name").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })

@@ -11,6 +11,7 @@ import {
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
 import WatchlistHub from "./components/WatchlistHub";
+import CaseOutcomesPage from "./components/CaseOutcomesPage";
 import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
@@ -19183,6 +19184,11 @@ function App() {
               authUser?.isMtssCoordinator ||
               authUser?.isDean,
           )}
+          canReopenCase={Boolean(
+            authUser?.isAdmin ||
+              authUser?.isSuperUser ||
+              authUser?.isDistrictAdmin,
+          )}
           viewerName={authUser?.displayName ?? ""}
           initialAnchor={pendingCaseAnchor}
           onAnchorConsumed={() => setPendingCaseAnchor(null)}
@@ -19454,6 +19460,22 @@ function App() {
                 group: "feature-config",
               });
             }
+            // Case-closure outcome catalog — admin-only. Per-school list
+            // of canonical outcomes ("ISS assigned", "parent contact",
+            // "no action", etc) that drives the required dropdown when
+            // closing a Watchlist case. Defaults are seeded; admins can
+            // add/edit/disable but every close must pick from the live
+            // catalog (no skip path on the modal).
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "case-outcomes",
+                icon: "🏷️",
+                title: "Case Closure Outcomes",
+                subtitle:
+                  "Curate the dropdown shown when closing a Watchlist case. Every close requires picking from this list.",
+                group: "feature-config",
+              });
+            }
             // QA tool: swap your session to view PulseEDU as another staff
             // member. Server enforces the same Admin/DA/SU gate.
             if (isAdmin || isDistrictAdmin || isSuperUser) {
@@ -19545,6 +19567,10 @@ function App() {
           <h2 style={{ marginTop: 0 }}>Separation Reason Tags</h2>
           <SeparationTagsAdmin />
         </div>
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "case-outcomes" && (isAdmin || isDistrictAdmin || isSuperUser) && (
+        <CaseOutcomesPage />
       )}
 
       {activeSection === "separationSuggestions" && (

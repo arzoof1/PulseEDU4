@@ -46,6 +46,8 @@ import {
   witnessStatementsTable,
   interactionQuickEntriesTable,
   cameraRegistryTable,
+  caseOutcomeTypesTable,
+  DEFAULT_CASE_OUTCOMES,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -1707,6 +1709,74 @@ export async function ensureCaseFootageRequestsSchema() {
   `);
 }
 
+// Per-school configurable catalog of case-closure outcomes. Seeded with
+// the DEFAULT_CASE_OUTCOMES list (no_action, conflict_resolution, etc.)
+// the first time a school is touched. Closing a case requires picking
+// one of these — see /watchlist/cases/:id/close.
+export async function ensureCaseOutcomeCatalogSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_outcome_types (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      code TEXT NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      created_by_name TEXT NOT NULL DEFAULT ''
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_outcome_types_school_idx ON case_outcome_types (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS case_outcome_types_school_code_idx ON case_outcome_types (school_id, code)`,
+  );
+
+  // Closure metadata columns on interaction_cases. Additive — safe to
+  // run on every boot.
+  await db.execute(
+    sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS outcome_code TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS outcome_note TEXT NOT NULL DEFAULT ''`,
+  );
+  await db.execute(
+    sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS closed_by_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS closed_by_name TEXT NOT NULL DEFAULT ''`,
+  );
+
+  // Seed the default catalog into every school that doesn't have any
+  // outcomes yet. We only seed when the school's catalog is empty so an
+  // admin who has retired one of the defaults isn't punished by having
+  // it silently re-added on the next boot.
+  const schools = await db.select({ id: schoolsTable.id }).from(schoolsTable);
+  for (const s of schools) {
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM case_outcome_types WHERE school_id = ${s.id}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+    for (const o of DEFAULT_CASE_OUTCOMES) {
+      await db
+        .insert(caseOutcomeTypesTable)
+        .values({
+          schoolId: s.id,
+          code: o.code,
+          label: o.label,
+          description: o.description,
+          sortOrder: o.sortOrder,
+          createdByName: "system (seeded default)",
+        })
+        .onConflictDoNothing();
+    }
+  }
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1879,6 +1949,7 @@ export async function seedFastScoresIfEmpty() {
   await seedDemoCamerasForSchools();
   await ensureCaseConsistencySchema();
   await ensureCaseFootageRequestsSchema();
+  await ensureCaseOutcomeCatalogSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

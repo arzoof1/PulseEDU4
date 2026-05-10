@@ -524,7 +524,7 @@ export default function WatchlistNetwork({
             <h1
               className="mt-2 text-3xl font-bold tracking-tight"
             >
-              Interaction network
+              Schoolwide Behavior Network
             </h1>
             <p className="mt-1 max-w-2xl text-sm" style={{ color: C.inkSoft }}>
               School-wide map of who keeps showing up together. Click a student to focus their
@@ -562,8 +562,6 @@ export default function WatchlistNetwork({
                   <li>
                     <strong>Edges</strong> — two students co-appearing
                     in incidents. Thicker = more co-appearances.
-                    Dashed = statement-only link with no shared
-                    incident yet.
                   </li>
                   <li>
                     <strong>Loose ring</strong> (top) — students with
@@ -831,16 +829,6 @@ export default function WatchlistNetwork({
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <span className="inline-block h-0.5 w-6" style={{ background: C.warn }} /> Rumor
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <span
-                    className="inline-block h-0.5 w-6"
-                    style={{
-                      background:
-                        "repeating-linear-gradient(90deg, #A89A85 0 4px, transparent 4px 8px)",
-                    }}
-                  />
-                  Peripheral
                 </span>
                 <span className="inline-flex items-center gap-1.5">
                   <CircleDot className="h-3 w-3" style={{ color: C.alert }} /> Always peripheral
@@ -1563,7 +1551,11 @@ function NetworkSVG({
           anchor size, and the anchor itself is ~2× that. */}
       {positioned.map((n) => {
         const isAnchor = anchorIds.has(n.studentId);
-        const baseR = 14 + Math.min(22, n.total * 2.2);
+        // Amplified scaling so high-volume students visibly dominate
+        // the canvas (was 14 + min(22, total * 2.2)). Logarithmic curve
+        // keeps a noticeable size delta without one giant sphere
+        // crowding out the rest of the ring.
+        const baseR = 14 + Math.min(40, Math.log2(Math.max(1, n.total) + 1) * 12);
         const overviewScale = isAnchor ? 2.7 : 1.35;
         const zoomScale = isAnchor ? 2.6 : 1.7;
         const r = zoomed ? baseR * zoomScale : baseR * overviewScale;
