@@ -44,8 +44,14 @@ export const interactionsTable = pgTable(
     caseId: integer("case_id"),
     loggedByStaffId: integer("logged_by_staff_id"),
     loggedByName: text("logged_by_name").notNull().default(""),
-    // 'open' | 'resolved' | 'dismissed'. Dismissed = logged in error.
+    // 'open' | 'resolved' | 'dismissed'. Dismissed = triaged out
+    // (no-action, false alarm). Stays in DB for audit trail.
     status: text("status").notNull().default("open"),
+    // Triage dismissal metadata — populated only when status='dismissed'.
+    dismissedAt: timestamp("dismissed_at", { withTimezone: true }),
+    dismissedReason: text("dismissed_reason").notNull().default(""),
+    dismissedByStaffId: integer("dismissed_by_staff_id"),
+    dismissedByName: text("dismissed_by_name").notNull().default(""),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

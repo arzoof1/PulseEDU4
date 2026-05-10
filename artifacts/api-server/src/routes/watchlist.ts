@@ -1778,6 +1778,14 @@ router.get("/watchlist/interactions", async (req: Request, res: Response) => {
     gte(interactionsTable.occurredDate, sinceYmd),
   ];
   if (onlyLoose) conds.push(sql`${interactionsTable.caseId} IS NULL`);
+  // Default: hide dismissed statements from the recent feed; opt in
+  // explicitly with ?includeDismissed=1 (used by the Dismissed tab).
+  if (req.query["includeDismissed"] !== "1") {
+    conds.push(sql`${interactionsTable.status} <> 'dismissed'`);
+  }
+  if (req.query["onlyDismissed"] === "1") {
+    conds.push(sql`${interactionsTable.status} = 'dismissed'`);
+  }
   const rows = await db
     .select()
     .from(interactionsTable)
@@ -2122,6 +2130,227 @@ router.delete(
       payload: { interactionId: id },
     });
     res.json({ ok: true });
+  },
+);
+
+// --- statement-first triage actions ---------------------------------
+
+// Promote a witness statement to a brand-new case. The statement
+// becomes the case's lead_statement_id; its tagged participants
+// remain on the statement and surface on the case automatically via
+// the GET /cases/:id rollup (case players are derived from
+// interaction_participants, not stored separately).
+//
+// Concurrency: wrapped in a transaction with `SELECT … FOR UPDATE`
+// on the source statement so two clicks (or two browser tabs) can't
+// both create a case from the same statement.
+router.post(
+  "/watchlist/interactions/:id/promote-to-case",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const title = clean(b["title"], 200);
+    const summary = clean(b["summary"], 2000);
+    const leadStaffId = asInt(b["leadStaffId"]);
+    const status = isCaseStatus(b["status"]) ? (b["status"] as string) : "open";
+    if (!title) {
+      res.status(400).json({ error: "title required" });
+      return;
+    }
+
+    let leadName = "";
+    if (leadStaffId) {
+      const [s] = await db
+        .select()
+        .from(staffTable)
+        .where(and(eq(staffTable.id, leadStaffId), eq(staffTable.schoolId, schoolId)));
+      if (s) leadName = s.displayName;
+    }
+
+    type PromoteResult =
+      | { ok: true; caseRow: typeof interactionCasesTable.$inferSelect }
+      | { ok: false; status: number; error: string };
+
+    const result: PromoteResult = await db.transaction(async (tx) => {
+      // Lock the source statement row so a concurrent promote/attach
+      // can't slip in between our check and our write.
+      const locked = (
+        await tx.execute(sql`
+          SELECT id, school_id, case_id, status
+            FROM interactions
+           WHERE id = ${id}
+             AND school_id = ${schoolId}
+           FOR UPDATE
+        `)
+      ).rows as Array<{ id: number; case_id: number | null; status: string }>;
+      const stmt = locked[0];
+      if (!stmt) {
+        return { ok: false, status: 404, error: "Statement not found" };
+      }
+      if (stmt.case_id) {
+        return {
+          ok: false,
+          status: 409,
+          error: "Statement is already attached to a case. Detach it first.",
+        };
+      }
+      if (stmt.status === "dismissed") {
+        return {
+          ok: false,
+          status: 409,
+          error: "Cannot promote a dismissed statement. Restore it first.",
+        };
+      }
+
+      const [{ next }] = (
+        await tx.execute(sql`
+          SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"
+            FROM interaction_cases WHERE school_id = ${schoolId}
+        `)
+      ).rows as { next: number }[];
+
+      const [caseRow] = await tx
+        .insert(interactionCasesTable)
+        .values({
+          schoolId,
+          caseNumber: next,
+          title,
+          summary,
+          status,
+          leadStaffId: leadStaffId ?? null,
+          leadStaffName: leadName,
+          leadStatementId: id,
+          createdByStaffId: staff.id,
+          createdByName: staff.displayName,
+        })
+        .returning();
+
+      await tx
+        .update(interactionsTable)
+        .set({ caseId: caseRow.id, updatedAt: new Date() })
+        .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)));
+
+      return { ok: true, caseRow };
+    });
+
+    if (!result.ok) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "case",
+      entityId: result.caseRow.id,
+      action: "promoted_from_statement",
+      staff,
+      payload: { statementId: id, title, leadStaffId },
+    });
+    res.json({ case: result.caseRow });
+  },
+);
+
+// Dismiss a statement (triage no-action). Required: short reason.
+// Idempotent — re-dismissing updates reason/timestamp.
+router.post(
+  "/watchlist/interactions/:id/dismiss",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const reason = clean((req.body as Record<string, unknown>)["reason"], 1000);
+    if (reason.length < 5) {
+      res
+        .status(400)
+        .json({ error: "Reason required (min 5 chars) for the audit trail." });
+      return;
+    }
+    const [stmt] = await db
+      .select()
+      .from(interactionsTable)
+      .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)));
+    if (!stmt) {
+      res.status(404).json({ error: "Statement not found" });
+      return;
+    }
+    if (stmt.caseId) {
+      res
+        .status(409)
+        .json({ error: "Detach this statement from its case before dismissing." });
+      return;
+    }
+    const [row] = await db
+      .update(interactionsTable)
+      .set({
+        status: "dismissed",
+        dismissedAt: new Date(),
+        dismissedReason: reason,
+        dismissedByStaffId: staff.id,
+        dismissedByName: staff.displayName,
+        updatedAt: new Date(),
+      })
+      .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)))
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "interaction",
+      entityId: id,
+      action: "dismissed",
+      staff,
+      payload: { reason },
+    });
+    res.json({ interaction: row });
+  },
+);
+
+// Restore a dismissed statement back to the intake queue.
+router.post(
+  "/watchlist/interactions/:id/restore",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .update(interactionsTable)
+      .set({
+        status: "open",
+        dismissedAt: null,
+        dismissedReason: "",
+        dismissedByStaffId: null,
+        dismissedByName: "",
+        updatedAt: new Date(),
+      })
+      .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)))
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Statement not found" });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "interaction",
+      entityId: id,
+      action: "restored",
+      staff,
+      payload: {},
+    });
+    res.json({ interaction: row });
   },
 );
 

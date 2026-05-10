@@ -213,7 +213,7 @@ export default function LogInteractionModal({
       onCreated?.(d.interaction.id);
       onClose();
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Failed to log interaction");
+      setError(e instanceof Error ? e.message : "Failed to log statement");
     } finally {
       setSubmitting(false);
     }
@@ -245,7 +245,7 @@ export default function LogInteractionModal({
           style={{ borderColor: WL_COLORS.line }}
         >
           <h2 className="text-lg font-bold" style={{ color: WL_COLORS.ink }}>
-            {titleOverride ?? "Log interaction"}
+            {titleOverride ?? "Log new statement"}
           </h2>
           <button
             onClick={onClose}
@@ -431,7 +431,7 @@ export default function LogInteractionModal({
               className="w-full rounded-md border px-2 py-1.5 text-sm"
               style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
             >
-              <option value="">— No case (loose incident)</option>
+              <option value="">— No case (statement goes to intake)</option>
               {cases.map((c) => (
                 <option key={c.id} value={c.id}>
                   #{c.caseNumber} · {c.title}
@@ -584,7 +584,7 @@ export default function LogInteractionModal({
             className="rounded-md px-3 py-1.5 text-sm font-bold disabled:opacity-50"
             style={{ background: WL_COLORS.brand, color: "#FFFFFF" }}
           >
-            {submitting ? "Saving…" : "Save interaction"}
+            {submitting ? "Saving…" : "Save statement"}
           </button>
         </div>
       </div>
@@ -703,7 +703,7 @@ function ManageQuickEntriesModal({
               Manage quick-entry catalog
             </h2>
             <p className="text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
-              Templates pre-fill the Log Interaction form. Visible to all Core Team staff.
+              Templates pre-fill the Log Statement form. Visible to all Core Team staff.
             </p>
           </div>
           <button

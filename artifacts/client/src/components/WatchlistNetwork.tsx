@@ -257,7 +257,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
               className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-bold shadow-sm"
               style={{ background: C.brand, color: "#FFFFFF" }}
             >
-              <Plus className="h-4 w-4" /> Log interaction
+              <Plus className="h-4 w-4" /> Log new statement
             </button>
           </div>
         </div>

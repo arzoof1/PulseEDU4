@@ -29,6 +29,7 @@ interface CaseRow {
   createdByName: string | null;
   openedAt: string;
   closedAt: string | null;
+  leadStatementId: number | null;
 }
 
 interface Player {
@@ -429,7 +430,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
         {/* Stats */}
         <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
           {[
-            { label: "Incidents", value: data.incidents.length },
+            { label: "Statements", value: data.incidents.length },
             { label: "Players", value: data.players.length },
             { label: "Notes", value: data.notes.length },
             {
@@ -464,14 +465,14 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
               style={{ borderColor: C.line, background: C.panel }}
             >
               <div className="flex items-baseline justify-between gap-2">
-                <h2 className="text-lg font-bold tracking-tight">Incidents in this case</h2>
+                <h2 className="text-lg font-bold tracking-tight">Statements on this case</h2>
                 <div className="flex items-center gap-1.5">
                   <button
                     type="button"
                     onClick={() => setShowAttach(true)}
                     className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
                     style={{ borderColor: C.line, background: C.panel, color: C.ink }}
-                    title="Pull a loose (no-case) incident onto this thread"
+                    title="Pull an unattached statement onto this case"
                   >
                     Attach existing
                   </button>
@@ -488,7 +489,7 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
               <div className="mt-3 divide-y" style={{ borderColor: C.line }}>
                 {data.incidents.length === 0 ? (
                   <div className="py-6 text-center text-sm" style={{ color: C.inkSoft }}>
-                    No incidents linked yet. Log one above.
+                    No statements on this case yet. Log one above.
                   </div>
                 ) : (
                   data.incidents.map((i) => {
@@ -527,6 +528,15 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                             {new Date(i.occurredAt).toLocaleString()}
                           </span>
                           <span className="text-sm font-semibold">{i.kind}</span>
+                          {data.case.leadStatementId === i.id && (
+                            <span
+                              className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-bold uppercase tracking-wider"
+                              style={{ background: C.brand, color: "#FFFFFF" }}
+                              title="This is the originating witness statement that opened the case."
+                            >
+                              Lead
+                            </span>
+                          )}
                           <div className="relative">
                             <button
                               type="button"
@@ -1115,9 +1125,9 @@ function AttachExistingIncidentModal({
           style={{ borderColor: C.line }}
         >
           <div>
-            <h2 className="text-lg font-bold">Attach existing incident</h2>
+            <h2 className="text-lg font-bold">Attach existing statement</h2>
             <div className="text-[11px]" style={{ color: C.inkSoft }}>
-              Pick a loose incident (no case) to add to this thread.
+              Pick an unattached statement to add to this case.
             </div>
           </div>
           <button onClick={onClose} className="text-sm" style={{ color: C.inkSoft }}>
@@ -1134,11 +1144,11 @@ function AttachExistingIncidentModal({
           />
           {loading ? (
             <div className="text-sm" style={{ color: C.inkSoft }}>
-              Loading loose incidents…
+              Loading unattached statements…
             </div>
           ) : filtered.length === 0 ? (
             <div className="text-sm" style={{ color: C.inkSoft }}>
-              No loose incidents to attach.
+              No unattached statements to pull in.
             </div>
           ) : (
             <div

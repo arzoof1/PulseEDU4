@@ -23,6 +23,7 @@ import {
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import NewCaseModal from "./watchlist/NewCaseModal";
+import PromoteToCaseModal from "./watchlist/PromoteToCaseModal";
 import {
   WL_COLORS as C,
   initialsOf,
@@ -85,6 +86,10 @@ interface InteractionRow {
   location: string | null;
   summary: string;
   caseId: number | null;
+  status?: string;
+  dismissedAt?: string | null;
+  dismissedReason?: string | null;
+  dismissedByName?: string | null;
   participants: Array<{
     studentId: string;
     firstName: string;
@@ -147,6 +152,9 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
   const [windowDays, setWindowDays] = useState(14);
   const [showLog, setShowLog] = useState(false);
   const [showNewCase, setShowNewCase] = useState(false);
+  const [promoteStmt, setPromoteStmt] = useState<InteractionRow | null>(null);
+  const [intakeTab, setIntakeTab] = useState<"pending" | "dismissed">("pending");
+  const [busyStmtId, setBusyStmtId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busyAlert, setBusyAlert] = useState<string | null>(null);
 
@@ -158,7 +166,11 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
         authFetch(`/api/watchlist/alerts?windowDays=${windowDays}`),
         authFetch(`/api/watchlist/orbit?windowDays=${windowDays}`),
         authFetch(`/api/watchlist/cases`),
-        authFetch(`/api/watchlist/interactions?windowDays=${windowDays}&limit=12`),
+        authFetch(
+          `/api/watchlist/interactions?windowDays=${windowDays}&limit=20${
+            intakeTab === "dismissed" ? "&onlyDismissed=1&includeDismissed=1" : ""
+          }`,
+        ),
         authFetch(`/api/watchlist/statements`),
       ]);
       if (!r1.ok || !r2.ok || !r3.ok || !r4.ok || !r5.ok || !r6.ok) {
@@ -181,7 +193,51 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load");
     }
-  }, [windowDays]);
+  }, [windowDays, intakeTab]);
+
+  // Triage actions on a single statement (intake row).
+  const dismissStmt = async (s: InteractionRow) => {
+    const reason = window.prompt(
+      "Why are you dismissing this statement? (audit-logged, min 5 chars)",
+      "",
+    );
+    if (reason === null) return;
+    if (reason.trim().length < 5) {
+      window.alert("Reason must be at least 5 characters.");
+      return;
+    }
+    setBusyStmtId(s.id);
+    try {
+      const r = await authFetch(`/api/watchlist/interactions/${s.id}/dismiss`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || "Failed to dismiss");
+      }
+      await reload();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to dismiss");
+    } finally {
+      setBusyStmtId(null);
+    }
+  };
+  const restoreStmt = async (s: InteractionRow) => {
+    setBusyStmtId(s.id);
+    try {
+      const r = await authFetch(`/api/watchlist/interactions/${s.id}/restore`, {
+        method: "POST",
+      });
+      if (!r.ok) throw new Error("Failed to restore");
+      await reload();
+    } catch (e) {
+      window.alert(e instanceof Error ? e.message : "Failed to restore");
+    } finally {
+      setBusyStmtId(null);
+    }
+  };
 
   useEffect(() => {
     void reload();
@@ -341,7 +397,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
               className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-bold shadow-sm"
               style={{ background: C.brand, color: "#FFFFFF" }}
             >
-              <Plus className="h-4 w-4" /> Log interaction
+              <Plus className="h-4 w-4" /> Log new statement
             </button>
           </div>
         </div>
@@ -717,13 +773,43 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
             className="rounded-xl border p-5 lg:col-span-2"
             style={{ borderColor: C.line, background: C.panel }}
           >
-            <div className="flex items-baseline justify-between">
-              <h2 className="text-lg font-bold tracking-tight">Recent incidents</h2>
+            <div className="flex flex-wrap items-baseline justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-bold tracking-tight">
+                  Statements — intake
+                </h2>
+                <div className="text-[11px]" style={{ color: C.inkSoft }}>
+                  {intakeTab === "pending"
+                    ? "New witness statements awaiting triage. Promote to a case, attach to an open one, or dismiss with a reason."
+                    : "Statements that were dismissed during triage. Restore if it turns out to be relevant."}
+                </div>
+              </div>
+              <div
+                className="inline-flex rounded-md border p-0.5"
+                style={{ borderColor: C.line, background: C.bg }}
+              >
+                {(["pending", "dismissed"] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    type="button"
+                    onClick={() => setIntakeTab(tab)}
+                    className="rounded px-2.5 py-1 text-[11px] font-semibold capitalize"
+                    style={{
+                      background: intakeTab === tab ? C.ink : "transparent",
+                      color: intakeTab === tab ? "#fff" : C.ink,
+                    }}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="mt-3 divide-y" style={{ borderColor: C.line }}>
               {interactions.length === 0 ? (
                 <div className="py-6 text-center text-sm" style={{ color: C.inkSoft }}>
-                  Nothing logged in this window.
+                  {intakeTab === "pending"
+                    ? "No new statements waiting on triage."
+                    : "Nothing has been dismissed in this window."}
                 </div>
               ) : (
                 interactions.map((i) => {
@@ -770,12 +856,20 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                             >
                               Case #{i.caseId}
                             </button>
+                          ) : intakeTab === "dismissed" ? (
+                            <span
+                              className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                              style={{ background: C.alertSoft, color: C.alert }}
+                              title={i.dismissedReason || ""}
+                            >
+                              Dismissed
+                            </span>
                           ) : (
                             <span
                               className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
                               style={{ background: C.bg, color: C.inkSoft }}
                             >
-                              Loose
+                              Awaiting triage
                             </span>
                           )}
                         </div>
@@ -790,9 +884,58 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                             <Users className="h-3 w-3" /> {i.participants.length} tagged
                           </span>
                           {i.location ? <span>· {i.location}</span> : null}
+                          {intakeTab === "dismissed" && i.dismissedByName ? (
+                            <span>
+                              · dismissed by {i.dismissedByName}
+                              {i.dismissedReason ? ` — "${i.dismissedReason}"` : ""}
+                            </span>
+                          ) : null}
                         </div>
                       </div>
-                      <ChevronRight className="mt-2 h-4 w-4" style={{ color: C.inkSoft }} />
+                      {/* Triage rail. Pending statements get the full
+                          Promote/Dismiss treatment; the Attach-to-existing
+                          flow lives on the Case Detail page (which has
+                          the case context to pick the right thread).
+                          Already-attached statements just show a chevron. */}
+                      {i.caseId ? (
+                        <ChevronRight
+                          className="mt-2 h-4 w-4"
+                          style={{ color: C.inkSoft }}
+                        />
+                      ) : intakeTab === "dismissed" ? (
+                        <button
+                          type="button"
+                          onClick={() => void restoreStmt(i)}
+                          disabled={busyStmtId === i.id}
+                          className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                          style={{ borderColor: C.line, color: C.ink, background: C.panel }}
+                        >
+                          {busyStmtId === i.id ? "…" : "Restore"}
+                        </button>
+                      ) : (
+                        <div className="flex shrink-0 flex-col items-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setPromoteStmt(i)}
+                            disabled={busyStmtId === i.id}
+                            className="rounded-md px-2 py-1 text-[11px] font-bold disabled:opacity-50"
+                            style={{ background: C.brand, color: "#FFFFFF" }}
+                            title="Open a new case with this as its lead statement."
+                          >
+                            Promote
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => void dismissStmt(i)}
+                            disabled={busyStmtId === i.id}
+                            className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                            style={{ borderColor: C.line, color: C.inkSoft, background: C.panel }}
+                            title="Audit-logged. Restore later from the Dismissed tab."
+                          >
+                            Dismiss
+                          </button>
+                        </div>
+                      )}
                     </div>
                   );
                 })
@@ -899,6 +1042,27 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
           onClose={() => setShowNewCase(false)}
           onCreated={(caseId) => {
             setShowNewCase(false);
+            void reload();
+            onOpenCase?.(caseId);
+          }}
+        />
+      )}
+      {promoteStmt && (
+        <PromoteToCaseModal
+          statement={{
+            id: promoteStmt.id,
+            summary: promoteStmt.summary,
+            kind: promoteStmt.kind,
+            occurredAt: promoteStmt.occurredAt,
+            participants: promoteStmt.participants.map((p) => ({
+              studentId: p.studentId,
+              firstName: p.firstName,
+              lastName: p.lastName,
+            })),
+          }}
+          onClose={() => setPromoteStmt(null)}
+          onPromoted={(caseId) => {
+            setPromoteStmt(null);
             void reload();
             onOpenCase?.(caseId);
           }}

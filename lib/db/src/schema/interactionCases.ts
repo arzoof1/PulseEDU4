@@ -28,6 +28,10 @@ export const interactionCasesTable = pgTable(
     leadStaffId: integer("lead_staff_id"),
     leadStaffName: text("lead_staff_name").notNull().default(""),
     summary: text("summary").notNull().default(""),
+    // The originating witness statement (interactions row) that triggered
+    // this case. NULL is allowed because some cases are opened proactively
+    // ("admin reported", "outside report") with no seeding statement.
+    leadStatementId: integer("lead_statement_id"),
     openedAt: timestamp("opened_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

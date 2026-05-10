@@ -1233,6 +1233,30 @@ export async function ensureWatchlistSchema() {
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_quick_entries_school_idx ON interaction_quick_entries(school_id)`);
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_quick_entries_school_label_idx ON interaction_quick_entries(school_id, label)`);
+
+  // ---- Statement-first rework migration (additive) -------------------
+  // 1) interaction_cases.lead_statement_id — the originating witness
+  //    statement that triggered the case. Backfilled to the earliest
+  //    attached interaction so existing cases get a sensible "Lead".
+  await db.execute(sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS lead_statement_id INTEGER`);
+  await db.execute(sql`
+    UPDATE interaction_cases c
+       SET lead_statement_id = sub.first_id
+      FROM (
+        SELECT case_id, MIN(id) AS first_id
+          FROM interactions
+         WHERE case_id IS NOT NULL
+         GROUP BY case_id
+      ) sub
+     WHERE c.id = sub.case_id
+       AND c.lead_statement_id IS NULL
+  `);
+  // 2) interactions.dismissed_* — triage dismissal metadata. Status
+  //    'dismissed' moves the row out of intake but keeps it for audit.
+  await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_at TIMESTAMPTZ`);
+  await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_reason TEXT NOT NULL DEFAULT ''`);
+  await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_by_staff_id INTEGER`);
+  await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_by_name TEXT NOT NULL DEFAULT ''`);
 }
 
 // Per-school default quick-entry catalog. Idempotent: only seeds when
