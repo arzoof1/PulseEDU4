@@ -2627,6 +2627,67 @@ router.get("/watchlist/statements", async (req: Request, res: Response) => {
   });
 });
 
+// All witness statements ever requested from a single student, with the
+// originating interaction summary + (when the interaction has been
+// promoted to a case) the case number/title. Powers the inline
+// "Witness statements" block in the WatchlistNetwork side panel so an
+// investigator can read the student's own words without leaving the
+// network view.
+router.get(
+  "/watchlist/students/:studentId/statements",
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const studentId = String(req.params["studentId"] ?? "").trim();
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const rows = await db
+      .select({
+        id: witnessStatementsTable.id,
+        interactionId: witnessStatementsTable.interactionId,
+        status: witnessStatementsTable.status,
+        body: witnessStatementsTable.body,
+        requestedByName: witnessStatementsTable.requestedByName,
+        requestedAt: witnessStatementsTable.requestedAt,
+        completedAt: witnessStatementsTable.completedAt,
+        remindCount: witnessStatementsTable.remindCount,
+        interactionSummary: interactionsTable.summary,
+        interactionOccurredAt: interactionsTable.occurredAt,
+        interactionKind: interactionsTable.kind,
+        caseId: interactionsTable.caseId,
+        caseNumber: interactionCasesTable.caseNumber,
+        caseTitle: interactionCasesTable.title,
+        caseStatus: interactionCasesTable.status,
+      })
+      .from(witnessStatementsTable)
+      .innerJoin(
+        interactionsTable,
+        and(
+          eq(interactionsTable.id, witnessStatementsTable.interactionId),
+          eq(interactionsTable.schoolId, schoolId),
+        ),
+      )
+      .leftJoin(
+        interactionCasesTable,
+        and(
+          eq(interactionCasesTable.id, interactionsTable.caseId),
+          eq(interactionCasesTable.schoolId, schoolId),
+        ),
+      )
+      .where(
+        and(
+          eq(witnessStatementsTable.schoolId, schoolId),
+          eq(witnessStatementsTable.studentId, studentId),
+        ),
+      )
+      .orderBy(desc(witnessStatementsTable.requestedAt))
+      .limit(50);
+    res.json({ statements: rows });
+  },
+);
+
 router.post("/watchlist/statements/:id/remind", async (req: Request, res: Response) => {
   const staff = (req as ReqWithStaff).staff;
   const schoolId = requireSchool(req, res);

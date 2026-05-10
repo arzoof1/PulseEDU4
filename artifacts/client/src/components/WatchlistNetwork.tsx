@@ -63,6 +63,24 @@ interface Resp {
   windowDays: number;
 }
 
+interface StudentStatement {
+  id: number;
+  interactionId: number;
+  status: string;
+  body: string;
+  requestedByName: string | null;
+  requestedAt: string;
+  completedAt: string | null;
+  remindCount: number;
+  interactionSummary: string | null;
+  interactionOccurredAt: string | null;
+  interactionKind: string | null;
+  caseId: number | null;
+  caseNumber: number | null;
+  caseTitle: string | null;
+  caseStatus: string | null;
+}
+
 interface Props {
   onBack?: () => void;
   onOpenCase?: (caseId: number, anchor?: string) => void;
@@ -263,6 +281,16 @@ export default function WatchlistNetwork({
   // tagged. Reset to 0 when zoomed out.
   const [zoomedCaseClipCount, setZoomedCaseClipCount] = useState(0);
   const [showFootageModal, setShowFootageModal] = useState(false);
+  // Witness statements authored by the currently selected student. Loaded
+  // on demand when a node is picked so investigators can read the
+  // student's own words inline without leaving the network view.
+  const [selectedStatements, setSelectedStatements] = useState<
+    StudentStatement[] | null
+  >(null);
+  const [statementsLoading, setStatementsLoading] = useState(false);
+  const [expandedStatements, setExpandedStatements] = useState<Set<number>>(
+    new Set(),
+  );
 
   const reload = useCallback(async () => {
     setError(null);
@@ -380,6 +408,37 @@ export default function WatchlistNetwork({
     setZoomedClusterId(null);
     setSelectedId(null);
   }, [windowDays]);
+
+  // Pull this student's witness statements when they're picked. Reset
+  // expanded set so a previously-opened statement doesn't carry over to
+  // a new student. Cleared on deselect to keep memory tidy.
+  useEffect(() => {
+    if (!selectedId) {
+      setSelectedStatements(null);
+      setExpandedStatements(new Set());
+      return;
+    }
+    let alive = true;
+    setStatementsLoading(true);
+    setExpandedStatements(new Set());
+    void (async () => {
+      try {
+        const r = await authFetch(
+          `/api/watchlist/students/${encodeURIComponent(selectedId)}/statements`,
+        );
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = (await r.json()) as { statements: StudentStatement[] };
+        if (alive) setSelectedStatements(d.statements);
+      } catch {
+        if (alive) setSelectedStatements([]);
+      } finally {
+        if (alive) setStatementsLoading(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [selectedId]);
 
   const selected = selectedId ? nodeById.get(selectedId) ?? null : null;
 
@@ -905,6 +964,195 @@ export default function WatchlistNetwork({
                 style={{ borderColor: C.line, background: C.panel, color: C.inkSoft }}
               >
                 Click a student node to see their role breakdown and top connections.
+              </div>
+            )}
+
+            {/* Witness statements — read-inline so the investigator
+                doesn't have to leave the network view to skim what this
+                student actually said. Most-recent first, collapsed by
+                default. */}
+            {selected && (
+              <div
+                className="rounded-xl border p-5"
+                style={{ borderColor: C.line, background: C.panel }}
+              >
+                <div className="flex items-center justify-between">
+                  <div
+                    className="text-[11px] font-semibold uppercase tracking-wider"
+                    style={{ color: C.inkSoft }}
+                  >
+                    Witness statements
+                  </div>
+                  {selectedStatements && selectedStatements.length > 0 && (
+                    <span
+                      className="text-[11px] tabular-nums"
+                      style={{ color: C.inkSoft }}
+                    >
+                      {selectedStatements.length}
+                    </span>
+                  )}
+                </div>
+                <div className="mt-2">
+                  {statementsLoading ? (
+                    <div className="text-[12px]" style={{ color: C.inkSoft }}>
+                      Loading…
+                    </div>
+                  ) : !selectedStatements || selectedStatements.length === 0 ? (
+                    <div className="text-[12px]" style={{ color: C.inkSoft }}>
+                      No witness statements on record for this student.
+                    </div>
+                  ) : (
+                    <div className="flex flex-col">
+                      {selectedStatements.map((s) => {
+                        const isOpen = expandedStatements.has(s.id);
+                        const completed = s.status === "completed";
+                        const waived = s.status === "waived";
+                        const hasBody = (s.body ?? "").trim().length > 0;
+                        const statusBg = completed
+                          ? "#DCFCE7"
+                          : waived
+                            ? C.bg
+                            : C.warnSoft;
+                        const statusFg = completed
+                          ? "#166534"
+                          : waived
+                            ? C.inkSoft
+                            : C.warn;
+                        const dt = new Date(s.requestedAt);
+                        const dateLabel = Number.isNaN(dt.getTime())
+                          ? ""
+                          : dt.toLocaleDateString(undefined, {
+                              month: "short",
+                              day: "numeric",
+                              year: "numeric",
+                            });
+                        return (
+                          <div
+                            key={s.id}
+                            className="border-b py-2 last:border-b-0"
+                            style={{ borderColor: C.line }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setExpandedStatements((prev) => {
+                                  const next = new Set(prev);
+                                  if (next.has(s.id)) next.delete(s.id);
+                                  else next.add(s.id);
+                                  return next;
+                                });
+                              }}
+                              className="flex w-full items-start gap-2 text-left"
+                            >
+                              <ChevronRight
+                                className="mt-0.5 h-3.5 w-3.5 shrink-0 transition-transform"
+                                style={{
+                                  color: C.inkSoft,
+                                  transform: isOpen
+                                    ? "rotate(90deg)"
+                                    : undefined,
+                                }}
+                              />
+                              <div className="min-w-0 flex-1">
+                                <div className="flex flex-wrap items-center gap-1.5">
+                                  <span
+                                    className="rounded-full px-1.5 py-0.5 text-[10px] font-bold uppercase"
+                                    style={{
+                                      background: statusBg,
+                                      color: statusFg,
+                                    }}
+                                  >
+                                    {s.status}
+                                  </span>
+                                  {s.caseId != null && (
+                                    <span
+                                      className="text-[11px] font-semibold"
+                                      style={{ color: C.ink }}
+                                    >
+                                      Case{" "}
+                                      {s.caseNumber != null
+                                        ? formatCaseNumber({
+                                            caseNumber: s.caseNumber,
+                                          } as NetCase)
+                                        : `#${s.caseId}`}
+                                    </span>
+                                  )}
+                                  <span
+                                    className="text-[11px]"
+                                    style={{ color: C.inkSoft }}
+                                  >
+                                    {dateLabel}
+                                  </span>
+                                </div>
+                                <div
+                                  className="mt-0.5 truncate text-[12px]"
+                                  style={{ color: C.inkSoft }}
+                                >
+                                  {s.interactionSummary || s.caseTitle || "—"}
+                                </div>
+                              </div>
+                            </button>
+                            {isOpen && (
+                              <div className="mt-2 pl-5">
+                                {hasBody ? (
+                                  <div
+                                    className="whitespace-pre-wrap rounded-md border p-2.5 text-[12px] leading-relaxed"
+                                    style={{
+                                      borderColor: C.line,
+                                      background: C.bg,
+                                      color: C.ink,
+                                    }}
+                                  >
+                                    {s.body}
+                                  </div>
+                                ) : (
+                                  <div
+                                    className="text-[12px] italic"
+                                    style={{ color: C.inkSoft }}
+                                  >
+                                    No body recorded yet
+                                    {s.status !== "completed" &&
+                                      s.status !== "waived"
+                                      ? " — request still outstanding."
+                                      : "."}
+                                  </div>
+                                )}
+                                <div
+                                  className="mt-1.5 flex flex-wrap items-center gap-2 text-[11px]"
+                                  style={{ color: C.inkSoft }}
+                                >
+                                  {s.requestedByName && (
+                                    <span>
+                                      Requested by {s.requestedByName}
+                                    </span>
+                                  )}
+                                  {s.completedAt && (
+                                    <span>
+                                      · Completed{" "}
+                                      {new Date(
+                                        s.completedAt,
+                                      ).toLocaleDateString()}
+                                    </span>
+                                  )}
+                                  {s.caseId != null && (
+                                    <button
+                                      type="button"
+                                      onClick={() => onOpenCase?.(s.caseId!)}
+                                      className="ml-auto underline"
+                                      style={{ color: C.brand }}
+                                    >
+                                      Open case →
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             )}
 
