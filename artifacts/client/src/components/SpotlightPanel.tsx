@@ -199,6 +199,21 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     }
   }, [animStyle]);
 
+  // When the teacher switches animation style, wipe the last-picked
+  // student card so the new picker starts fresh. Otherwise the old
+  // winner sits on top of, say, the new wheel — confusing, and it
+  // makes it look like nothing happened when they tap the new style.
+  // Skip the very first run (style was just hydrated from localStorage,
+  // there's no result to clear yet) by remembering the previous style.
+  const prevStyleRef = useRef(animStyle);
+  useEffect(() => {
+    if (prevStyleRef.current === animStyle) return;
+    prevStyleRef.current = animStyle;
+    clearAnimTimer();
+    setSpin({ kind: "idle" });
+    setError(null);
+  }, [animStyle]);
+
   // Detect current period from the school's default bell schedule. The
   // server already has the matching helper but we mirror the light bit
   // here so the UI can show "Period 3" without a round-trip first.
