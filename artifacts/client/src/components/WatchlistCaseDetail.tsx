@@ -278,6 +278,18 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   }
   const c = data.case;
   const sp = statusPillStyle(c.status);
+  // Case-level severity is a derived rollup: the max severity across all
+  // linked incidents. This is what propagates a per-incident change up to
+  // the case header — no separate column to keep in sync, and audit history
+  // lives on the incident PATCH that drove the change.
+  const caseSeverity = data.incidents.reduce(
+    (mx, inc) => Math.max(mx, inc.severity ?? 0),
+    0,
+  );
+  const caseSevStyle = caseSeverity > 0 ? severityChipStyle(caseSeverity) : null;
+  const caseSevDriverCount = data.incidents.filter(
+    (inc) => inc.severity === caseSeverity,
+  ).length;
 
   return (
     <div className="min-h-screen" style={{ background: C.bg, color: C.ink }}>
@@ -306,6 +318,20 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
               >
                 {sp.label}
               </span>
+              {caseSevStyle && (
+                <span
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-semibold"
+                  style={{ background: caseSevStyle.bg, color: caseSevStyle.fg }}
+                  title={`Highest severity across ${data.incidents.length} incident${
+                    data.incidents.length === 1 ? "" : "s"
+                  } — driven by ${caseSevDriverCount} at this level. Updates automatically when any incident severity changes.`}
+                >
+                  Case severity: {caseSevStyle.label}
+                  {caseSevDriverCount > 1 && (
+                    <span className="opacity-70">· {caseSevDriverCount}×</span>
+                  )}
+                </span>
+              )}
             </div>
             {editingTitle ? (
               <div className="mt-2 flex items-center gap-2">
