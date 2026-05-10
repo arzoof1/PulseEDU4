@@ -1551,13 +1551,12 @@ function NetworkSVG({
           anchor size, and the anchor itself is ~2× that. */}
       {positioned.map((n) => {
         const isAnchor = anchorIds.has(n.studentId);
-        // Amplified scaling so high-volume students visibly dominate
-        // the canvas (was 14 + min(22, total * 2.2)). Logarithmic curve
-        // keeps a noticeable size delta without one giant sphere
-        // crowding out the rest of the ring.
-        const baseR = 14 + Math.min(40, Math.log2(Math.max(1, n.total) + 1) * 12);
-        const overviewScale = isAnchor ? 2.7 : 1.35;
-        const zoomScale = isAnchor ? 2.6 : 1.7;
+        // Logarithmic scaling so high-volume students are visibly larger
+        // without crowding out the rest of the ring or covering name
+        // labels. Tuned to keep the largest sphere ~1.8× the smallest.
+        const baseR = 12 + Math.min(14, Math.log2(Math.max(1, n.total) + 1) * 4);
+        const overviewScale = isAnchor ? 2.0 : 1.0;
+        const zoomScale = isAnchor ? 2.2 : 1.35;
         const r = zoomed ? baseR * zoomScale : baseR * overviewScale;
         const meta = ROLE_META[(n.primaryRole as Role) ?? "peripheral"] ?? ROLE_META.peripheral;
         const ringColor =

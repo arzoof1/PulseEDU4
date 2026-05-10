@@ -691,29 +691,40 @@ export default function WatchlistCaseDetail({
           </div>
         </div>
 
-        {/* Tabs — Overview vs Investigation Ring (per-incident witness graph). */}
-        <div
-          className="mb-4 flex gap-1 border-b"
-          style={{ borderColor: C.line }}
-        >
-          {(["overview", "investigation"] as const).map((t) => (
-            <button
-              key={t}
-              type="button"
-              onClick={() => setActiveTab(t)}
-              className="px-3 py-2 text-xs font-bold capitalize"
-              style={{
-                color: activeTab === t ? C.brand : C.inkSoft,
-                borderBottom:
-                  activeTab === t
-                    ? `2px solid ${C.brand}`
-                    : "2px solid transparent",
-                marginBottom: -1,
-              }}
-            >
-              {t === "investigation" ? "Investigation Ring" : "Overview"}
-            </button>
-          ))}
+        {/* Tabs — Overview vs Investigation Ring (per-incident witness graph).
+            Rendered as chunky pill buttons rather than a thin underlined
+            strip so the case-level network view is actually discoverable.
+            Earlier underline-only treatment was repeatedly missed. */}
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          {(
+            [
+              { key: "overview", label: "Overview", icon: "📋" },
+              { key: "investigation", label: "Investigation Ring", icon: "🕸️" },
+            ] as const
+          ).map((t) => {
+            const active = activeTab === t.key;
+            return (
+              <button
+                key={t.key}
+                type="button"
+                onClick={() => setActiveTab(t.key)}
+                className="inline-flex items-center gap-1.5 rounded-full border px-3.5 py-1.5 text-xs font-bold transition"
+                style={{
+                  borderColor: active ? C.brand : C.line,
+                  background: active ? C.brand : C.panel,
+                  color: active ? "#FFFFFF" : C.ink,
+                }}
+                title={
+                  t.key === "investigation"
+                    ? "Per-incident witness graph: principals, witnesses, and mentioned-but-silent students with edges from confirmed @-mentions and AI consistency findings."
+                    : "All incidents, players, statements, and notes for this case."
+                }
+              >
+                <span aria-hidden>{t.icon}</span>
+                {t.label}
+              </button>
+            );
+          })}
         </div>
 
         {activeTab === "investigation" && (
