@@ -10,7 +10,6 @@ import {
   ChevronDown,
   TrendingUp,
   TrendingDown,
-  TrendingFlat,
   Calendar,
   AlertCircle,
   CheckCircle2,
