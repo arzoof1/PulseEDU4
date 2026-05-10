@@ -78,9 +78,13 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
       and(
         eq(studentsTable.schoolId, schoolId),
         or(
-          ilike(studentsTable.firstName, `%${q}%`),
-          ilike(studentsTable.lastName, `%${q}%`),
-          ilike(studentsTable.studentId, `%${q}%`),
+          // Prefix match on first or last name (and student ID). Typing
+          // "joh" returns "John Smith" or "Mike Johnson" but NOT
+          // "Stephanie Cohen" — substring matches anywhere in the name
+          // were noisy and pulled in unrelated kids.
+          ilike(studentsTable.firstName, `${q}%`),
+          ilike(studentsTable.lastName, `${q}%`),
+          ilike(studentsTable.studentId, `${q}%`),
         ),
       ),
     )

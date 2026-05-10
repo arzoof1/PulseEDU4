@@ -299,9 +299,11 @@ router.get(
         and(
           eq(studentsTable.schoolId, schoolId),
           or(
-            ilike(studentsTable.firstName, `%${q}%`),
-            ilike(studentsTable.lastName, `%${q}%`),
-            ilike(studentsTable.studentId, `%${q}%`),
+            // Prefix match on first/last/ID — see studentFinder.ts for
+            // the rationale. Substring-anywhere was too noisy.
+            ilike(studentsTable.firstName, `${q}%`),
+            ilike(studentsTable.lastName, `${q}%`),
+            ilike(studentsTable.studentId, `${q}%`),
           ),
           sql`EXISTS (
             SELECT 1

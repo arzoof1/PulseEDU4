@@ -24,9 +24,13 @@ router.get("/students", async (req, res) => {
     ? and(
         eq(studentsTable.schoolId, schoolId),
         or(
-          ilike(studentsTable.firstName, `%${q}%`),
-          ilike(studentsTable.lastName, `%${q}%`),
-          ilike(studentsTable.studentId, `%${q}%`),
+          // Prefix match: typing "joh" returns "John Smith" or
+          // "Mike Johnson" — but NOT "Stephanie Cohen". Matches the
+          // beginning of first or last name only. Student ID stays a
+          // prefix match too (admins typically know the leading digits).
+          ilike(studentsTable.firstName, `${q}%`),
+          ilike(studentsTable.lastName, `${q}%`),
+          ilike(studentsTable.studentId, `${q}%`),
         ),
       )
     : eq(studentsTable.schoolId, schoolId);
