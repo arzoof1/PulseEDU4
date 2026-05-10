@@ -511,8 +511,8 @@ export default function NewCaseModal({ onClose, onCreated, initialPlayers }: Pro
             type="button"
             onClick={submit}
             disabled={submitting}
-            className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-bold text-white disabled:opacity-50"
-            style={{ background: C.brand }}
+            className="inline-flex items-center gap-1 rounded-md px-3 py-1.5 text-sm font-bold disabled:opacity-50"
+            style={{ background: C.brand, color: "#FFFFFF" }}
           >
             <Plus className="h-3 w-3" /> {submitting ? "Opening…" : "Open case"}
           </button>
