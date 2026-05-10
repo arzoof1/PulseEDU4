@@ -558,7 +558,7 @@ export default function LogInteractionModal({
           {error && (
             <div
               className="rounded-md px-3 py-2 text-sm font-semibold"
-              style={{ background: WL_COLORS.alertSoft, color: WL_COLORS.alert }}
+              style={{ background: WL_COLORS.alert, color: "#FFFFFF" }}
             >
               {error}
             </div>
@@ -913,7 +913,7 @@ function ManageQuickEntriesModal({
           {error && (
             <div
               className="rounded-md px-3 py-2 text-sm font-semibold"
-              style={{ background: WL_COLORS.alertSoft, color: WL_COLORS.alert }}
+              style={{ background: WL_COLORS.alert, color: "#FFFFFF" }}
             >
               {error}
             </div>

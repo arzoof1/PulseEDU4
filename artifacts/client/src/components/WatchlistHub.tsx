@@ -417,7 +417,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
         {error && (
           <div
             className="mt-4 rounded-md px-3 py-2 text-sm font-semibold"
-            style={{ background: C.alertSoft, color: C.alert }}
+            style={{ background: C.alert, color: "#FFFFFF" }}
           >
             {error}
           </div>
@@ -596,7 +596,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                     orbit.slice(0, 10).map((o, i) => {
                       const flag =
                         o.total >= 3 && o.direct === 0
-                          ? { label: "Always peripheral", bg: C.alertSoft, fg: C.alert }
+                          ? { label: "Always peripheral", bg: C.alert, fg: "#FFFFFF" }
                           : o.nonDirectPct >= 75
                             ? { label: `${o.nonDirectPct}% non-direct`, bg: C.warnSoft, fg: C.warn }
                             : { label: `${o.nonDirectPct}% non-direct`, bg: C.bg, fg: C.inkSoft };
@@ -820,7 +820,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                 statements.slice(0, 8).map((s) => {
                   const stale = s.ageDays >= 7;
                   const pill = stale
-                    ? { bg: C.alertSoft, fg: C.alert, label: "Stale" }
+                    ? { bg: C.alert, fg: "#FFFFFF", label: "Stale" }
                     : s.status === "reminded"
                       ? { bg: C.warnSoft, fg: C.warn, label: "Reminded" }
                       : { bg: C.coolSoft, fg: C.cool, label: "Requested" };

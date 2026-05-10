@@ -291,7 +291,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
         {error && (
           <div
             className="mt-4 rounded-md px-3 py-2 text-sm font-semibold"
-            style={{ background: C.alertSoft, color: C.alert }}
+            style={{ background: C.alert, color: "#FFFFFF" }}
           >
             {error}
           </div>

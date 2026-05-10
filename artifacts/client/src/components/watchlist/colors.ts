@@ -54,14 +54,14 @@ export function initialsOf(first: string, last: string): string {
 }
 
 export function severityChipStyle(s: number): { bg: string; fg: string; label: string } {
-  if (s >= 4) return { bg: WL_COLORS.alertSoft, fg: WL_COLORS.alert, label: "High" };
+  if (s >= 4) return { bg: WL_COLORS.alert, fg: "#FFFFFF", label: "High" };
   if (s === 3) return { bg: WL_COLORS.warnSoft, fg: WL_COLORS.warn, label: "Med" };
   if (s === 2) return { bg: WL_COLORS.okSoft, fg: WL_COLORS.ok, label: "Low" };
   return { bg: WL_COLORS.coolSoft, fg: WL_COLORS.cool, label: "Note" };
 }
 
 export function statusPillStyle(s: string): { bg: string; fg: string; label: string } {
-  if (s === "escalated") return { bg: WL_COLORS.alertSoft, fg: WL_COLORS.alert, label: "Escalated" };
+  if (s === "escalated") return { bg: WL_COLORS.alert, fg: "#FFFFFF", label: "Escalated" };
   if (s === "monitoring") return { bg: WL_COLORS.coolSoft, fg: WL_COLORS.cool, label: "Monitoring" };
   if (s === "closed") return { bg: WL_COLORS.bg, fg: WL_COLORS.inkSoft, label: "Closed" };
   return { bg: WL_COLORS.brandSoft, fg: WL_COLORS.brand, label: "Open" };

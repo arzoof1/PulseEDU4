@@ -489,7 +489,7 @@ export default function NewCaseModal({ onClose, onCreated, initialPlayers }: Pro
           {error && (
             <div
               className="rounded-md px-3 py-2 text-sm font-semibold"
-              style={{ background: C.alertSoft, color: C.alert }}
+              style={{ background: C.alert, color: "#FFFFFF" }}
             >
               {error}
             </div>

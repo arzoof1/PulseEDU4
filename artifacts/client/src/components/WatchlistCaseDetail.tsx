@@ -54,7 +54,7 @@ const IMPACT_META: Record<
   1: { label: "Minor", bg: "#E6F4EA", fg: "#1E6E3A", hint: "Background presence" },
   2: { label: "Contributing", bg: "#FEF3C7", fg: "#8A5A00", hint: "Active participant" },
   3: { label: "Significant", bg: "#FFE4D6", fg: "#A1390B", hint: "Repeated central role" },
-  4: { label: "Driver", bg: "#FDD8D8", fg: "#9F1D1D", hint: "Drives the case arc" },
+  4: { label: "Driver", bg: "#9F1D1D", fg: "#FFFFFF", hint: "Drives the case arc" },
 };
 function impactMeta(n: number) {
   return IMPACT_META[n] ?? IMPACT_META[2];
@@ -1158,7 +1158,7 @@ function AttachExistingIncidentModal({
           {error && (
             <div
               className="rounded-md px-3 py-2 text-sm font-semibold"
-              style={{ background: C.alertSoft, color: C.alert }}
+              style={{ background: C.alert, color: "#FFFFFF" }}
             >
               {error}
             </div>
@@ -1384,7 +1384,7 @@ function AddPlayerModal({
           {error && (
             <div
               className="rounded-md px-3 py-2 text-sm font-semibold"
-              style={{ background: C.alertSoft, color: C.alert }}
+              style={{ background: C.alert, color: "#FFFFFF" }}
             >
               {error}
             </div>
