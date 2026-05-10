@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 type LocationRow = {
   id: number;
@@ -250,6 +251,18 @@ export default function LocationsAdmin({ onChanged }: Props) {
         Passes, Tardies, and the Kiosk. Deactivated rooms stay on existing
         records but won't appear in new pickers.
       </p>
+      <HowToUseHelp title="How to manage Locations">
+        <HowToSection title="What this list feeds">
+          Every dropdown that asks "where?" — the From/To pickers on
+          Hall Passes, the destination on Tardies, the kiosk
+          activation list, and the Spotlight prompt overlay.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Recommended naming">
+          Use the room number first ("207 — Smith"), then a short
+          name. That sort order matches what hall monitors expect
+          and it makes the dropdown easy to skim.
+        </RoleSection>
+      </HowToUseHelp>
 
       {error && (
         <div

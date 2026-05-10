@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 // Staff Directory — per-school list of active staff (fed by the SIS
 // staff import) with two PulseEDU-owned phone columns: a low-sensitivity
@@ -203,6 +204,19 @@ export default function StaffDirectoryPage({
         monitor or front-office staff member can reach the right person
         quickly.
       </p>
+      <HowToUseHelp title="How to use Staff Directory">
+        <HowToSection title="What this page is">
+          The contact card for every active staff member at the school.
+          Edits here are visible in the Student Finder, hall pass
+          flow, and any "find a teacher right now" surface.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Admin tasks">
+          Cell phone numbers are optional and only shown to staff —
+          never to parents. Confirm verbal consent before entering.
+          Default room is the fallback for kiosk activation when SIS
+          sync hasn't placed the teacher yet.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div
         style={{

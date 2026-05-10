@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 type StaffUser = { id: number; displayName: string };
 
@@ -94,6 +95,18 @@ export default function StaffDefaultsAdmin({
         Passes and as the fallback when activating the kiosk. When SIS sync is
         enabled this list is refreshed from the SIS automatically.
       </p>
+      <HowToUseHelp title="How to use Default Rooms">
+        <HowToSection title="When to override the SIS">
+          Only set a value here if the teacher's home room differs
+          from what the SIS reports (typically itinerant or co-taught
+          staff). Anything you set here wins over the next SIS sync.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Itinerant staff">
+          For staff with no fixed room (PE, ESE push-in, social
+          worker), leave blank — the kiosk will prompt them on
+          activation instead of guessing.
+        </RoleSection>
+      </HowToUseHelp>
       <input
         type="text"
         placeholder="Filter staff…"

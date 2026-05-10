@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface Link {
   id: number;
@@ -207,6 +208,19 @@ export default function TrustedAdultsAdmin({ canManage }: Props) {
         membership. Helpful for counselors, deans, mentors, and coaches
         who don't appear on a teacher schedule.
       </p>
+      <HowToUseHelp title="How to assign Trusted Adults">
+        <HowToSection title="Why it matters">
+          A trusted-adult link is the bypass that lets a non-roster
+          staff member see a student's full profile and intervention
+          history. It's also the gate for the "check in with my
+          adult" workflow students can use to self-regulate.
+        </HowToSection>
+        <RoleSection for={["mtssCoordinator", "behaviorSpecialist", "admin", "pbisCoordinator"]} title="Best practice">
+          One adult per student is plenty. A second adult only helps
+          if the first is regularly absent. Inactivate an old link
+          rather than delete — keeps the audit trail intact.
+        </RoleSection>
+      </HowToUseHelp>
 
       {error && (
         <div

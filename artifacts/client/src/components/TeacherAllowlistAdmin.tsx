@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface Props {
   staffUsers: string[];
@@ -77,6 +78,19 @@ export default function TeacherAllowlistAdmin({
         "I've contacted them" before sending. Hall&nbsp;Pass admins skip this
         check entirely.
       </p>
+      <HowToUseHelp title="How to use the Teacher Allowlist">
+        <HowToSection title="What it does">
+          Reduces friction for the destinations each teacher uses
+          every day (their closest bathrooms, the room next door)
+          while keeping the contact-confirmation guardrail for
+          everywhere else.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Quick setup">
+          For most teachers, two or three destinations cover 90% of
+          their passes. Add too many and you defeat the purpose —
+          this list should be small.
+        </RoleSection>
+      </HowToUseHelp>
       <input
         type="text"
         placeholder="Filter staff…"

@@ -3,6 +3,7 @@
 // "Interventions Used This Week" checklist.
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface Cat {
   id: number;
@@ -155,6 +156,18 @@ export default function Tier3StrategiesAdmin() {
         "Interventions Used This Week" checklist. Inactive items are hidden
         from teachers but kept in historical records.
       </p>
+      <HowToUseHelp title="How to manage Tier 3 Strategies">
+        <HowToSection title="What this list controls">
+          The checkbox list teachers see when documenting weekly Tier 3
+          plan progress. Categories are the section headers; strategies
+          are the individual checkboxes inside each.
+        </HowToSection>
+        <RoleSection for={["mtssCoordinator", "admin", "coreTeam"]} title="Editing tips">
+          Keep labels short — they have to fit on a single line in the
+          weekly form. Deactivating an item removes it from new forms
+          but historical entries keep the original label.
+        </RoleSection>
+      </HowToUseHelp>
 
       {msg && (
         <div

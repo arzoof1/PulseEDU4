@@ -8,6 +8,7 @@
 //   GET /api/tier2-entries?studentId=...
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface TeacherStat {
   teacherStaffId: number;
@@ -284,6 +285,21 @@ export default function InterventionReportsPage({ onBack }: Props) {
           ← Back
         </button>
       </div>
+
+      <HowToUseHelp title="How to use Intervention Reports">
+        <HowToSection title="What this page is">
+          Weekly fidelity report — for the chosen Monday, lists every
+          active Tier 2 / Tier 3 plan and whether its weekly check-in
+          was completed, partially completed, or missed. Use the tier
+          filter to focus on one tier at a time.
+        </HowToSection>
+        <RoleSection for={["mtssCoordinator", "coreTeam", "admin"]} title="MTSS / Core Team workflow">
+          The "missed" column is your follow-up list — reach out to
+          the assigned staff before the next MTSS meeting. Click any
+          student to open their plan history and see whether the gap
+          is one week or a pattern.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div
         style={{

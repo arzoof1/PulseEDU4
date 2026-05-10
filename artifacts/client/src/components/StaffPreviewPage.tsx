@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 // Sister page to ParentAccess's "Preview as parent" — lets Admin /
 // DistrictAdmin / SuperUser swap their session to any non-privileged staff
@@ -138,6 +139,20 @@ export default function StaffPreviewPage() {
         stays signed in here. SuperUser and District Admin accounts cannot be
         previewed (privilege guard).
       </p>
+      <HowToUseHelp title="How to use Preview as Staff">
+        <HowToSection title="Read-only view, in a new tab">
+          Opens a fresh tab signed in as the chosen staff member.
+          Your own session stays untouched in this tab. Every preview
+          action is logged with both your identity and the previewed
+          identity for audit.
+        </HowToSection>
+        <RoleSection for={["admin", "districtAdmin"]} title="Common uses">
+          Verifying that a new role preset is showing the right
+          screens, or reproducing a teacher's bug report without
+          asking for their password. Never use to take action on a
+          student record — always sign back in as yourself.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div
         style={{

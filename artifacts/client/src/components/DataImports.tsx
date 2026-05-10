@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // ---------------------------------------------------------------------------
 // Data Imports — Phase 3 first importer (assessments). Wraps the
@@ -1265,6 +1266,28 @@ export default function DataImports({
         importer auto-detects column names — review the mapping, commit,
         and roll back from History if anything looks wrong.
       </p>
+      <HowToUseHelp title="How to use Data Imports">
+        <HowToSection title="The four-step import">
+          <ul style={howtoListStyle}>
+            <li><strong>Choose data type</strong> — assessment, roster, or behavior.</li>
+            <li><strong>Drop the CSV</strong> — column names are auto-detected.</li>
+            <li><strong>Preview</strong> — fix any column mappings; rows that won't import are flagged.</li>
+            <li><strong>Commit</strong> — writes the rows. Every commit gets a History entry you can roll back.</li>
+          </ul>
+        </HowToSection>
+        <HowToSection title="Common issues">
+          <ul style={howtoListStyle}>
+            <li><strong>Student-ID format</strong> — must match what the SIS export uses (most often the state-issued number).</li>
+            <li><strong>Date columns</strong> — accepts ISO (YYYY-MM-DD) or US (MM/DD/YYYY); mixed formats fail per-row.</li>
+            <li><strong>Empty cells</strong> — kept as null, not zero. Important for FAST scores.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Rollback safety">
+          Every commit is reversible from the History tab. Roll back
+          if the file was wrong — don't try to fix in place. A fresh
+          import is always cleaner than a manual patch.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div
         style={{

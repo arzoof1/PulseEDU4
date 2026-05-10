@@ -8,6 +8,7 @@
 
 import { useCallback, useEffect, useMemo, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface TagBreakdown {
   tagId: number;
@@ -159,6 +160,20 @@ export default function SeparationSuggestionsPage({ onBack }: Props) {
             Pairs of students teachers have asked you to keep apart when
             building next year's schedule. {data ? `School year ${data.schoolYear}.` : ""}
           </p>
+          <HowToUseHelp title="How to use Separation Suggestions">
+            <HowToSection title="What this page is">
+              The aggregate list of every "keep these two apart" flag
+              teachers have submitted this year, grouped by reason
+              (using the Separation Tags from school settings). Built
+              for next-year scheduling, not in-year intervention.
+            </HowToSection>
+            <RoleSection for={["admin", "coreTeam"]} title="Scheduling workflow">
+              Export the CSV right before master-schedule build. The
+              Reason column tells the scheduler whether they're
+              looking at safety (must-separate) or social drama
+              (nice-to-separate).
+            </RoleSection>
+          </HowToUseHelp>
         </div>
         {onBack && (
           <button

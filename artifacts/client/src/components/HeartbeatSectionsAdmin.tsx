@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 type SectionKey =
   | "showRecognition"
@@ -251,6 +252,20 @@ export default function HeartbeatSectionsAdmin() {
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Parent portal sections</h2>
+      <HowToUseHelp title="How to use Parent Portal Sections">
+        <HowToSection title="Default-off, school-on, parent-down">
+          School controls the ceiling — you decide which HeartBEAT
+          sections families can ever see. Parents control the floor —
+          they can hide any section you've shown but they cannot
+          reveal a section you've hidden. Sensitive categories ship
+          off so a school has to deliberately turn them on.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Recommended rollout">
+          Start with PBIS Points and Hall Passes (low-risk wins).
+          Hold off on Staff Notes until counselors confirm the
+          phrasing in current notes is parent-appropriate.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "var(--text-muted, #64748b)", marginTop: 0 }}>
         Control which HeartBEAT sections this school's parents can see in their
         snapshot. Sensitive sections are off by default. A parent can hide a

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 // SuperUser-only cross-school feature management. Renders a grid of
 // every school × every super_feature_* flag and a separate panel to
@@ -211,6 +212,20 @@ export default function SchoolPlansAdminPage() {
           features. Admins still control whether enabled features are
           actually live in their school's settings.
         </div>
+        <HowToUseHelp title="How to use School Plans">
+          <HowToSection title="Two-layer feature flags">
+            This page sets what features are <em>available</em> to a
+            school. The school's own admin then decides which available
+            features are <em>turned on</em> in their Settings. Both
+            layers must be true for the feature to render.
+          </HowToSection>
+          <RoleSection for={["superUser"]} title="When to use presets vs grid">
+            Use the preset tab to bring a new school onboard quickly
+            (Basic gets the core, Pro adds Insights + Parent, Enterprise
+            unlocks everything). Use the grid for one-off changes after
+            launch.
+          </RoleSection>
+        </HowToUseHelp>
       </div>
 
       {/* tab strip */}

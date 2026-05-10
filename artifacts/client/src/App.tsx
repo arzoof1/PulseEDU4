@@ -9140,6 +9140,27 @@ function App() {
       )}
 
       {activeSection === "hallPasses" && (<>
+      <HowToUseHelp title="How to use Hall Passes">
+        <HowToSection title="What this page is">
+          The day-of hall pass workflow. Top-of-page CTA logs a new
+          pass; the timeline below shows everyone currently out.
+          Reports tab (admin only) breaks down by student, teacher,
+          and destination.
+        </HowToSection>
+        <RoleSection for="teacher" title="Daily use for teachers">
+          One click on "+ Create Pass" opens the modal. Default
+          destinations from your allowlist appear first; anything
+          else asks you to confirm "I've contacted them" before
+          sending. Use the Queue tab to manage students who are
+          waiting in line.
+        </RoleSection>
+        <RoleSection for={["admin", "coreTeam", "behaviorSpecialist"]} title="Admin uses">
+          The Reports tab is your weekly walk-through — focus on
+          destinations with abnormal traffic and students with high
+          counts. Set the global daily cap in Behavior Specialist →
+          Hall Pass Mgmt.
+        </RoleSection>
+      </HowToUseHelp>
       {(authUser?.isAdmin || authUser?.isSuperUser || authUser?.isEseCoordinator) && (
         <div className="card no-print" style={{ paddingTop: "0.75rem", paddingBottom: "0.75rem" }}>
           <button
@@ -11524,6 +11545,18 @@ function App() {
       </>)}
 
       {activeSection === "tardies" && (<>
+      <HowToUseHelp title="How to use Tardies">
+        <HowToSection title="What this page is">
+          Track late arrivals, early check-outs, and mid-day check-ins
+          in one log. Each entry pulls the timestamp from the system
+          so you can't accidentally back-date.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Admin uses">
+          Heavy tardies show up in the Insights → Flow dashboard and
+          on the parent HeartBEAT snapshot. Use the export to share
+          weekly attendance stats with the front office.
+        </RoleSection>
+      </HowToUseHelp>
       <div className="card cp-cta-card">
         <div className="cp-cta-text">Student Arriving Late?</div>
         <button
@@ -12781,6 +12814,25 @@ function App() {
       )}
 
       {activeSection === "accommodations" && (<>
+        <HowToUseHelp title="How to use Accommodations">
+          <HowToSection title="What this page is">
+            Per-student record of the IEP / 504 / ELL accommodations
+            staff need to honor. Pulled from the SIS where possible;
+            ESE coordinator can hand-edit anything the SIS doesn't
+            track.
+          </HowToSection>
+          <RoleSection for="teacher" title="Daily use for teachers">
+            Read-only — you can see the active accommodations for
+            any student on your roster. Print this page right before
+            an IEP / 504 meeting so the team has the current list in
+            hand.
+          </RoleSection>
+          <RoleSection for={["eseCoordinator", "admin"]} title="ESE Coordinator">
+            Use this page to add accommodations the SIS hasn't
+            picked up yet. Inactivating an accommodation removes it
+            from new daily views but keeps the history.
+          </RoleSection>
+        </HowToUseHelp>
         <section className="card">
           <div className="section-header-bar-teal" />
           <div className="section-header-band-hub">
@@ -14426,6 +14478,20 @@ function App() {
       )}
 
       {(activeSection === "pbisRecent" || activeSection === "pbisReports") && (<>
+        <HowToUseHelp title="How to use PBIS Recent &amp; Reports">
+          <HowToSection title="What these pages are">
+            Recent shows the live ticker of points awarded today.
+            Reports breaks the same data down by student, teacher,
+            reason, and time-of-week so you can see patterns rather
+            than individual entries.
+          </HowToSection>
+          <RoleSection for={["pbisCoordinator", "admin", "coreTeam"]} title="Weekly review">
+            Compare positive vs. corrective ratios by teacher in
+            Reports → Teacher tab. Outlier ratios (under 4:1) usually
+            mean the teacher needs help recognizing positives, not
+            that they need fewer corrections.
+          </RoleSection>
+        </HowToUseHelp>
         <section className="card">
           {/* Legacy "PBIS Points" awarding form. Replaced by <PbisPointsHub />
               above. Kept here (dead-coded) so we can quickly cherry-pick any
@@ -15551,16 +15617,46 @@ function App() {
       </>)}
 
       {activeSection === "requestPullout" && (
-        <RequestPulloutSection
-          students={students}
-          isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
-          interventionTypes={interventionList}
-          reasonOptions={pulloutReasonList}
-        />
+        <>
+          <HowToUseHelp title="How to use Request Pullout">
+            <HowToSection title="What this page is">
+              Submit a request to pull a student from class for an
+              intervention session (counselor, BS, ESE push-in, etc).
+              The request is queued for verification by the receiving
+              staff member.
+            </HowToSection>
+            <RoleSection for="teacher" title="When to use it">
+              Use this when you need a student picked up from your
+              room — not for routine scheduled pullouts. Include the
+              specific reason so the receiving staff knows whether
+              this is urgent.
+            </RoleSection>
+          </HowToUseHelp>
+          <RequestPulloutSection
+            students={students}
+            isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+            interventionTypes={interventionList}
+            reasonOptions={pulloutReasonList}
+          />
+        </>
       )}
 
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
         <>
+          <HowToUseHelp title="How to use Verify Pullouts">
+            <HowToSection title="What this page is">
+              The receiving-staff queue for pullout requests. Each
+              row is a teacher's request to pull a student; you
+              accept (and the student is logged as pulled) or reject
+              (with reason). Acceptance auto-creates the time log.
+            </HowToSection>
+            <RoleSection for={["behaviorSpecialist", "guidanceCounselor", "mtssCoordinator"]} title="Daily workflow">
+              Process the queue at the start of each block so
+              teachers know whether to plan for the student being in
+              class. Rejected requests fire back to the requester
+              with your reason — be specific.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               borderTopLeftRadius: "var(--radius-lg, 8px)",
@@ -15589,11 +15685,41 @@ function App() {
       )}
 
       {activeSection === "issDashboard" && canViewIssDashboard && (
-        <IssDashboardSection students={students} />
+        <>
+          <HowToUseHelp title="How to use the ISS Dashboard">
+            <HowToSection title="What this page is">
+              Today's seat list for In-School Suspension — who's
+              assigned, who's served which periods, and how many
+              days remain on the assignment. Drives the daily ISS
+              roster the ISS teacher works from.
+            </HowToSection>
+            <RoleSection for={["issTeacher", "dean", "admin"]} title="Daily ISS workflow">
+              Mark each period as the student arrives so the row
+              shows green checks. Use "Roll over" at end of day to
+              push partial assignments to tomorrow (skips
+              school-closed days from settings).
+            </RoleSection>
+          </HowToUseHelp>
+          <IssDashboardSection students={students} />
+        </>
       )}
 
       {activeSection === "issReporting" && canViewIssDashboard && (
         <>
+          <HowToUseHelp title="How to use ISS Reporting">
+            <HowToSection title="What this page is">
+              Aggregate ISS / OSS reporting — counts by student,
+              grade, reason, and assignor. Use to spot
+              over-represented sub-groups and to build the disciplinary
+              equity report for district.
+            </HowToSection>
+            <RoleSection for={["dean", "admin", "coreTeam"]} title="Equity check">
+              The "by demographic" tab is the one you'll bring to a
+              district equity review. Disparities here are usually
+              the first conversation an MTSS team has with a teacher
+              who's over-referring.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               borderTopLeftRadius: "var(--radius-lg, 8px)",
@@ -15620,6 +15746,18 @@ function App() {
 
       {activeSection === "behaviorReview" && canReviewPullouts && (
         <>
+          <HowToUseHelp title="How to use Behavior Review">
+            <HowToSection title="What this page is">
+              Review queue for completed pullouts that need a
+              behavior-team note before they close. One row per
+              pullout; add the outcome note and mark reviewed.
+            </HowToSection>
+            <RoleSection for={["behaviorSpecialist", "dean"]} title="Daily review">
+              Clear this queue at the end of each day. Unreviewed
+              pullouts older than 24h surface a yellow badge in the
+              Behavior Specialist hub so they don't get lost.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               borderTopLeftRadius: "var(--radius-lg, 8px)",
@@ -15912,6 +16050,21 @@ function App() {
               );
               return (
                 <>
+                  <HowToUseHelp title="How to use the Behavior Specialist hub">
+                    <HowToSection title="What this page is">
+                      Your daily landing page. Tiles surface the
+                      queues that need action (verify pullouts,
+                      review behavior, log intervention) and the
+                      reports you'll lean on weekly. Badge counts
+                      show pending items.
+                    </HowToSection>
+                    <RoleSection for="behaviorSpecialist" title="Daily flow">
+                      Top to bottom: clear the verify-pullouts and
+                      behavior-review queues first, then log any
+                      check-ins from your trusted-adult sessions, then
+                      open MTSS Plans for the weekly fidelity check.
+                    </RoleSection>
+                  </HowToUseHelp>
                   {bsTools.length > 0 && (
                     <div
                       className="card no-print"
@@ -16356,26 +16509,62 @@ function App() {
       })()}
 
       {activeSection === "mtssPlans" && canManageMtssPlans && (
-        <MtssPlansAdmin
-          canManage={canManageMtssPlans}
-          onBack={() =>
-            setActiveSection(
-              isMtss ? "mtssCoordinator" : "behaviorSpecialist",
-            )
-          }
-          onOpenReport={(planId, planTitle) => {
-            setMtssReportsPlanId(planId);
-            setMtssReportsPlanTitle(planTitle);
-            setActiveSection("interventionReports");
-          }}
-        />
+        <>
+          <HowToUseHelp title="How to use MTSS Plans">
+            <HowToSection title="What this page is">
+              The list of every active Tier 2 / Tier 3 intervention
+              plan. Filter by tier, owner, or student. Click into a
+              plan to see weekly entries, edit goals, or close it
+              when the student exits.
+            </HowToSection>
+            <RoleSection for={["mtssCoordinator", "behaviorSpecialist", "coreTeam"]} title="Weekly cadence">
+              Open this page first thing Monday — sort by "Last
+              entry" to see whose check-in is overdue. Plans with no
+              entry in 14+ days surface a red badge.
+            </RoleSection>
+          </HowToUseHelp>
+          <MtssPlansAdmin
+            canManage={canManageMtssPlans}
+            onBack={() =>
+              setActiveSection(
+                isMtss ? "mtssCoordinator" : "behaviorSpecialist",
+              )
+            }
+            onOpenReport={(planId, planTitle) => {
+              setMtssReportsPlanId(planId);
+              setMtssReportsPlanTitle(planTitle);
+              setActiveSection("interventionReports");
+            }}
+          />
+        </>
       )}
 
       {activeSection === "safetyPlans" && canEditSafetyPlanClient && (
-        <SafetyPlansAdminPage
-          canManage={canEditSafetyPlanClient}
-          onBack={() => setActiveSection("hallPasses")}
-        />
+        <>
+          <HowToUseHelp title="How to use Safety Plans">
+            <HowToSection title="What this page is">
+              Manage per-student behavioral / physical safety plans.
+              Each plan pulls from a shared library of de-escalation
+              strategies, environmental triggers, and contact
+              protocols. Audit log records every edit.
+            </HowToSection>
+            <RoleSection for={["guidanceCounselor", "coreTeam", "admin"]} title="Editing safety plans">
+              Always include a clear "what staff should do first"
+              section. Inactivate (don't delete) old plans when a
+              student exits — the audit trail is part of the
+              compliance record.
+            </RoleSection>
+            <RoleSection for="teacher" title="What teachers see">
+              Teachers see a read-only summary on the student
+              profile and a shield icon on Teacher Roster. Plans are
+              never visible to parents in the portal.
+            </RoleSection>
+          </HowToUseHelp>
+          <SafetyPlansAdminPage
+            canManage={canEditSafetyPlanClient}
+            onBack={() => setActiveSection("hallPasses")}
+          />
+        </>
       )}
 
       {activeSection === "teacherRoster" && (
@@ -16498,6 +16687,24 @@ function App() {
                   <div style={{ opacity: 0.9, fontSize: "0.9rem", marginTop: 4 }}>
                     Hub for MTSS workflows, communication templates, and student
                     support tooling.
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <HowToUseHelp title="How to use the MTSS Coordinator hub">
+                      <HowToSection title="What this hub is">
+                        One-stop launcher for the MTSS workflows you
+                        own: plan management, intervention reports,
+                        parent-communication templates, and the
+                        school-wide PBIS rubric. Each pill jumps to
+                        the dedicated page.
+                      </HowToSection>
+                      <RoleSection for="mtssCoordinator" title="Weekly cadence">
+                        Monday — open MTSS Plans, sort by "Last
+                        entry," chase any plan whose check-in is
+                        overdue. Wednesday — Intervention Reports for
+                        the team meeting. Friday — review templates
+                        and update any wording the team flagged.
+                      </RoleSection>
+                    </HowToUseHelp>
                   </div>
                 </div>
                 <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
@@ -16640,6 +16847,20 @@ function App() {
                 <code>{"{{pbisPoints}}"}</code>. They are filled in
                 automatically when you send from the Student Activity page.
               </p>
+              <HowToUseHelp title="How to manage Templates">
+                <HowToSection title="Where templates show up">
+                  Anywhere staff sends a parent message from a
+                  student profile — Tier 2 check-in, missed-plan
+                  follow-up, milestone celebration, etc. The merge
+                  tokens are filled at send time from the student's
+                  current activity.
+                </HowToSection>
+                <RoleSection for={["mtssCoordinator", "admin"]} title="Tip">
+                  Keep templates short and direct. Parents engage
+                  more with a single clear ask ("can you help us
+                  with X this week?") than a long status update.
+                </RoleSection>
+              </HowToUseHelp>
 
               <div style={{ marginBottom: "1rem" }}>
                 <button
@@ -16858,6 +17079,20 @@ function App() {
 
       {activeSection === "logIntervention" && (
         <>
+          <HowToUseHelp title="How to use Log Intervention">
+            <HowToSection title="What this page is">
+              The trusted-adult check-in / check-out logger. Pick a
+              student, pick the intervention from the picklist, and
+              the entry is timestamped and added to the student's
+              intervention history.
+            </HowToSection>
+            <RoleSection for={["behaviorSpecialist", "guidanceCounselor", "mtssCoordinator"]} title="Daily use">
+              Log the visit BEFORE the student leaves your office —
+              the timestamp matters for time-out-of-class reporting.
+              If no picklist entry fits, ask MTSS to add one rather
+              than typing free-text.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               borderTopLeftRadius: "var(--radius-lg, 8px)",
@@ -16995,6 +17230,20 @@ function App() {
       {activeSection === "ese" && isEseCoord && (
         <section className="card">
           <h2>ESE Coordinator</h2>
+          <HowToUseHelp title="How to use the ESE Coordinator hub">
+            <HowToSection title="What this page is">
+              Two tabs: Student Assignments lets you assign the
+              accommodations bundle a student receives; Master
+              Accommodations List manages the school-wide vocabulary
+              of accommodations.
+            </HowToSection>
+            <RoleSection for="eseCoordinator" title="Beginning-of-year setup">
+              Sync the master list with the district's IEP/504
+              vocabulary first, then bulk-assign students from their
+              SIS group. Anything you change here is reflected in
+              every teacher's roster within a few seconds.
+            </RoleSection>
+          </HowToUseHelp>
           <div className="no-print" style={{ marginBottom: "1rem" }}>
             <button
               type="button"
@@ -17789,6 +18038,18 @@ function App() {
             PBIS points. Inactive reasons are hidden from teachers but kept for
             historical reports.
           </p>
+          <HowToUseHelp title="How to manage PBIS Reasons">
+            <HowToSection title="Naming guidance">
+              Tie reasons to your school's behavior matrix
+              (Respectful, Responsible, Ready). Short labels read
+              better in the awarding modal and the parent portal.
+            </HowToSection>
+            <RoleSection for={["pbisCoordinator", "admin"]} title="Tip">
+              Inactivate (don't delete) reasons that are no longer
+              awarded — historical entries keep the original label
+              and reports stay accurate.
+            </RoleSection>
+          </HowToUseHelp>
 
           <div
             style={{
@@ -17899,6 +18160,20 @@ function App() {
             to the parent email on file. Each milestone fires at most once per
             student.
           </p>
+          <HowToUseHelp title="How to use Milestone Parent Emails">
+            <HowToSection title="Pick milestones that matter">
+              25 / 100 / 250 is a common pattern — first milestone
+              fires after about a week of solid behavior, the next
+              two slow down so each one feels earned. Avoid stacking
+              milestones too closely.
+            </HowToSection>
+            <RoleSection for={["pbisCoordinator", "admin"]} title="Email content">
+              The default copy is generic but warm. If you want
+              custom wording, edit the template in Settings →
+              Communications. Subject lines that include the
+              student's first name perform best.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               display: "flex",
@@ -18013,6 +18288,20 @@ function App() {
 
       {activeSection === "schoolWidePbis" && (isBehaviorSpec || canAccessMtssHub || isAdmin) && (
         <section>
+          <HowToUseHelp title="How to use School-Wide PBIS">
+            <HowToSection title="What this page is">
+              The all-school PBIS dashboard — totals and trends
+              across grades and demographics. Use to see whether
+              your school's positive-recognition program is
+              reaching every group.
+            </HowToSection>
+            <RoleSection for={["behaviorSpecialist", "mtssCoordinator", "admin"]} title="Tip">
+              Watch the equity tab. A healthy program shows a
+              roughly even points-per-student rate across
+              demographics; large gaps usually trace back to one or
+              two teachers with skewed awarding habits.
+            </RoleSection>
+          </HowToUseHelp>
           <div style={{ marginBottom: "0.75rem" }}>
             <button
               type="button"
@@ -18049,6 +18338,20 @@ function App() {
             classroom intervention. Mark <em>requires note</em> if a written
             explanation should always accompany the entry.
           </p>
+          <HowToUseHelp title="How to manage Classroom Interventions">
+            <HowToSection title="What this list controls">
+              The picklist a teacher sees when logging a Tier 1
+              classroom intervention (proximity, redirect, seat
+              change, etc). Used by Insights → Behavior to roll up
+              what teachers tried before referring.
+            </HowToSection>
+            <RoleSection for={["behaviorSpecialist", "admin"]} title="Tip">
+              Keep this list short (8–12 items). "Requires note"
+              should be reserved for high-impact actions like a
+              parent contact or an admin referral, never for
+              routine moves.
+            </RoleSection>
+          </HowToUseHelp>
 
           <div
             style={{
@@ -18182,6 +18485,21 @@ function App() {
             in a single day. Leave blank to allow unlimited (per-student
             limits below still apply). Range: 1–100.
           </p>
+          <HowToUseHelp title="How to use Hall Pass Management">
+            <HowToSection title="Two layers of caps">
+              The global cap protects the school from any one
+              student over-using the hall. Per-student overrides
+              below cover the kids whose plan calls for more or
+              fewer (e.g., a student with an IEP-listed bathroom
+              accommodation).
+            </HowToSection>
+            <RoleSection for={["behaviorSpecialist", "admin"]} title="Recommended values">
+              Most middle schools sit at 4–6/day; high schools at
+              6–8/day. Setting it too low triggers more denials than
+              it prevents and frustrates teachers — start permissive
+              and tighten only if a student abuses it.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               display: "flex",
@@ -19064,6 +19382,19 @@ function App() {
             Phases 3–5; this page lists what's coming so you have a single
             place to bookmark.
           </p>
+          <HowToUseHelp title="How to use SuperUser Home">
+            <HowToSection title="What lives here">
+              The cross-district control surface — only SuperUsers
+              see this. As Phases 3–5 ship, the placeholder cards
+              fill in with cross-district importers, audit log
+              search, and the role / SSO config.
+            </HowToSection>
+            <RoleSection for="superUser" title="Tip">
+              Use the school-switcher in the header to drop into any
+              school as that school's admin. The previewed identity
+              is logged in the audit trail of any action you take.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               display: "grid",
@@ -19301,6 +19632,18 @@ function App() {
             district will live here. Today this is a roadmap; the imports
             and dashboards land in Phases 3–4.
           </p>
+          <HowToUseHelp title="How to use District Overview">
+            <HowToSection title="What this page is">
+              District Admin landing. Cards here will turn into the
+              district-wide importers, attendance / behavior
+              dashboards, and policy controls as Phases 3–4 ship.
+            </HowToSection>
+            <RoleSection for="districtAdmin" title="Today">
+              Use the school-switcher in the header to drop into a
+              school as its admin. Any school you can act on appears
+              in the dropdown.
+            </RoleSection>
+          </HowToUseHelp>
           <div
             style={{
               display: "grid",
@@ -19445,6 +19788,20 @@ function App() {
             device out immediately — students at that kiosk will see the
             activation screen on their next interaction.
           </p>
+          <HowToUseHelp title="How to use Active Kiosks">
+            <HowToSection title="What this page is">
+              Live list of every device currently in kiosk mode (the
+              wall-mounted check-in stations and shared classroom
+              tablets). Force-deactivate logs the device out
+              immediately and forces a re-activation on next touch.
+            </HowToSection>
+            <RoleSection for={["admin", "coreTeam"]} title="When to force-deactivate">
+              When a kiosk has been left logged in overnight, when
+              someone reports the device is acting strangely, or
+              when relocating a tablet to a new room. Routine
+              maintenance — no audit consequence.
+            </RoleSection>
+          </HowToUseHelp>
           {activeKiosks.length === 0 ? (
             <p style={{ color: "var(--text-subtle)" }}>
               No kiosks are currently active.

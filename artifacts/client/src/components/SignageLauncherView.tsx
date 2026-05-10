@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 // =============================================================================
 // SignageLauncherView — staff-facing landing page that lists the three
@@ -109,6 +110,18 @@ export default function SignageLauncherView({ authUser }: { authUser: AuthUserLi
         Pulse signage screens for hallway TVs and staff devices. Open one in a
         new tab or copy the link to paste into a kiosk browser.
       </p>
+      <HowToUseHelp title="How to use the Signage Launcher">
+        <HowToSection title="What this page is">
+          A list of every signage screen this school has. Each card
+          shows what the screen displays and a one-click "open in new
+          tab" button you'd point a TV browser at.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Casting tip">
+          Bookmark each TV's URL on the device itself. Most signage
+          screens auto-refresh — you only need to refresh manually
+          after a major settings change.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div
         style={{

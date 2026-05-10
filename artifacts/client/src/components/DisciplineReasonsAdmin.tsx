@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface ReasonRow {
   id: number;
@@ -61,6 +62,18 @@ export default function DisciplineReasonsAdmin() {
         Reason dropdown. Inactive reasons are hidden from the dropdown but
         kept on historical logs.
       </p>
+      <HowToUseHelp title="How to manage Discipline Reasons">
+        <HowToSection title="Keep it short and consistent">
+          Short labels are easier to scan in the modal and group
+          cleanly in Insights → Behavior. If you must add a long
+          phrase, abbreviate the rare half ("Hall — verbal conflict").
+        </HowToSection>
+        <RoleSection for={["admin", "dean", "coreTeam"]} title="Editing tips">
+          Inactivate (don't delete) reasons that are no longer used —
+          historical logs keep the original label and reports stay
+          accurate.
+        </RoleSection>
+      </HowToUseHelp>
       <div style={{ display: "flex", gap: 6, marginBottom: "0.75rem" }}>
         <input
           style={{ ...input, flex: 1 }}

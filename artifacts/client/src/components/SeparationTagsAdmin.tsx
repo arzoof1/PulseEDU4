@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface TagRow {
   id: number;
@@ -70,6 +71,18 @@ export default function SeparationTagsAdmin() {
         Suggestions) can group flags by reason. Disabling a tag hides it from
         the teacher dropdown but keeps it readable on historical flags.
       </p>
+      <HowToUseHelp title="How to manage Separation Tags">
+        <HowToSection title="What good labels look like">
+          Short (≤ 24 chars), action-neutral, group-able. "Verbal
+          conflict" and "Family-asked" beat "Verbal conflict in the
+          hallway last fall" — the dashboard rolls them up by tag.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="When to add vs. consolidate">
+          Resist the urge to add a new tag for every situation. If two
+          existing tags would cover it, use both rather than mint a
+          third — fewer choices keeps the teacher dropdown fast.
+        </RoleSection>
+      </HowToUseHelp>
       <div style={{ display: "flex", gap: 6, marginBottom: "0.75rem" }}>
         <input
           style={{ ...inputStyle, flex: 1 }}

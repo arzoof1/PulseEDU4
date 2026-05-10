@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface Row {
   id: number;
@@ -98,6 +99,18 @@ export default function TrustedAdultInterventionsAdmin() {
         checks in or out. These appear in the Log Intervention Check-In/Out
         flow.
       </p>
+      <HowToUseHelp title="How to manage Trusted Adult Interventions">
+        <HowToSection title="What this list controls">
+          The picklist a trusted adult sees when they log a check-in
+          or check-out with their student. Examples: "Snack &amp;
+          breathing reset", "Walk and talk", "Restorative apology".
+        </HowToSection>
+        <RoleSection for={["mtssCoordinator", "behaviorSpecialist", "admin"]} title="Tip">
+          Keep the list short (≤ 8 items). Trusted-adult check-ins
+          should feel quick — long picklists encourage staff to skip
+          the log entirely.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div
         style={{

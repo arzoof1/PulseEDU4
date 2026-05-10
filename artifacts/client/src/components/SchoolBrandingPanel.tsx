@@ -15,6 +15,7 @@
 // card so the admin can see exactly where the colors land before saving.
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 import {
   buildHeaderBackground,
   emitBrandingUpdated,
@@ -562,6 +563,20 @@ export default function SchoolBrandingPanel() {
             Set the header gradient and logo. These show on print headers,
             the parent HeartBEAT snapshot, and the Kiosk masthead.
           </p>
+          <HowToUseHelp title="How to use School Branding">
+            <HowToSection title="Where the brand shows up">
+              Header gradient on every staff-facing page, logo on the
+              parent HeartBEAT snapshot PDF, kiosk masthead, and the
+              top of any printed report (intervention summary, safety
+              plan, parent overall report).
+            </HowToSection>
+            <RoleSection for={["admin", "coreTeam"]} title="Tips">
+              SVG logos render sharpest on the kiosk and PDFs. The
+              live preview on the right shows exactly what parents
+              and the kiosk will see — adjust colors until contrast
+              passes a casual squint test.
+            </RoleSection>
+          </HowToUseHelp>
 
           {/* Display name */}
           <label

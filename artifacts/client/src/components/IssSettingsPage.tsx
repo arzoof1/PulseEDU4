@@ -1,5 +1,6 @@
 import { useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import DisciplineReasonsAdmin from "./DisciplineReasonsAdmin";
 import SchoolClosedDaysAdmin from "./SchoolClosedDaysAdmin";
 
@@ -71,6 +72,22 @@ export default function IssSettingsPage() {
         list of discipline reasons that show up in the Add ISS / OSS Log
         modal.
       </p>
+      <HowToUseHelp title="How to use ISS Settings">
+        <HowToSection title="What this page controls">
+          Three things that shape the ISS / OSS workflow at this school:
+          <ul style={howtoListStyle}>
+            <li><strong>Daily capacity</strong> — soft cap shown in the assignment dialog so admins can stop double-booking the room.</li>
+            <li><strong>Closed days</strong> — calendar skipped during day rollover and greyed out in the calendar view.</li>
+            <li><strong>Reasons</strong> — the dropdown options on the Add ISS / OSS Log modal.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "issTeacher", "dean"]} title="Recommended workflow">
+          Set capacity at the start of each year. Add early-release
+          and inservice days to closed days as soon as the calendar is
+          finalized. Trim reasons down to the ones your team actually
+          uses — long lists slow down the assignment dialog.
+        </RoleSection>
+      </HowToUseHelp>
 
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>Daily ISS capacity</h3>

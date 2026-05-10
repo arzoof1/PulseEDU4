@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // Spotlight — fair, fast, "pull a name from the hat" picker for whole-class
 // engagement. Pulls from the teacher's CURRENT-period roster (so attendance
@@ -524,6 +525,26 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
           <div style={{ fontSize: "0.85rem", opacity: 0.7 }}>
             Fair, random call-on for your current-period class.
           </div>
+          <HowToUseHelp title="How to use Spotlight">
+            <HowToSection title="What it does">
+              Picks a fair, random student from your current-period
+              roster. Excludes anyone already called on recently and
+              anyone you've marked absent for this session — so the
+              wheel doesn't waste a spin on a kid who isn't there.
+            </HowToSection>
+            <HowToSection title="Two animation styles">
+              <ul style={howtoListStyle}>
+                <li><strong>Wheel</strong> — classic spinning prize wheel; one wedge per student.</li>
+                <li><strong>Bottles</strong> — message-in-a-bottle reveal; faster on phones.</li>
+              </ul>
+              Your choice is saved per-device.
+            </HowToSection>
+            <RoleSection for="teacher" title="Pairing with prompts">
+              Each pick can show a prompt card from your school's
+              prompt library. Use this for warm-up questions, PBIS
+              shoutouts, or quick formative checks.
+            </RoleSection>
+          </HowToUseHelp>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", alignItems: "center" }}>
           <div className="spotlight-style-toggle" role="group" aria-label="Animation style">
