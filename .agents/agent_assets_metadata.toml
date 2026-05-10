@@ -174,3 +174,9 @@ id = "883DmHzpe0tFzN2-Ylz4M"
 uri = "file://.local/outputs/PulseEDU-Feature-Catalog.pdf"
 type = "pdf"
 title = "PulseEDU Feature Catalog (PDF)"
+
+[[outputs]]
+id = "RfxWiTl7ZrWrPy5z4Oxxe"
+uri = "file://exports/PulseEDU_Phase1_Roles_and_Access.pdf"
+type = "pdf"
+title = "PulseEDU Phase 1 — User Roles & Access Matrix"
