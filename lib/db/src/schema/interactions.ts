@@ -44,6 +44,11 @@ export const interactionsTable = pgTable(
     caseId: integer("case_id"),
     loggedByStaffId: integer("logged_by_staff_id"),
     loggedByName: text("logged_by_name").notNull().default(""),
+    // The student who *gave* the statement. Required at the UI level
+    // for new entries (a witness statement without an author isn't a
+    // statement); nullable in the DB so legacy demo rows still load.
+    witnessStudentId: text("witness_student_id"),
+    witnessStudentName: text("witness_student_name").notNull().default(""),
     // 'open' | 'resolved' | 'dismissed'. Dismissed = triaged out
     // (no-action, false alarm). Stays in DB for audit trail.
     status: text("status").notNull().default("open"),

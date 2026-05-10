@@ -91,6 +91,11 @@ export default function LogInteractionModal({
   const [search, setSearch] = useState("");
   const [hits, setHits] = useState<StudentHit[]>([]);
   const [searching, setSearching] = useState(false);
+  // Witness author — the student giving the statement. Required.
+  const [witness, setWitness] = useState<StudentHit | null>(null);
+  const [witnessSearch, setWitnessSearch] = useState("");
+  const [witnessHits, setWitnessHits] = useState<StudentHit[]>([]);
+  const [witnessSearching, setWitnessSearching] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [quickEntries, setQuickEntries] = useState<QuickEntry[]>([]);
@@ -161,6 +166,37 @@ export default function LogInteractionModal({
     };
   }, [search]);
 
+  // Mirror of the participant search, scoped to picking the witness
+  // author. Kept separate so the two pickers don't share dropdown state.
+  useEffect(() => {
+    if (witnessSearch.trim().length < 2) {
+      setWitnessHits([]);
+      return;
+    }
+    let alive = true;
+    setWitnessSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await authFetch(
+          `/api/student-finder/search?q=${encodeURIComponent(witnessSearch.trim())}`,
+        );
+        if (!alive || !r.ok) return;
+        const d = (await r.json()) as {
+          students?: StudentHit[];
+          hits?: StudentHit[];
+          results?: StudentHit[];
+        };
+        setWitnessHits(d.students ?? d.hits ?? d.results ?? []);
+      } finally {
+        if (alive) setWitnessSearching(false);
+      }
+    }, 250);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [witnessSearch]);
+
   const addParticipant = (h: StudentHit) => {
     if (participants.some((p) => p.studentId === h.studentId)) return;
     setParticipants((prev) => [
@@ -187,8 +223,16 @@ export default function LogInteractionModal({
 
   const submit = async () => {
     setError(null);
+    if (!witness) {
+      setError("Pick the student giving this statement.");
+      return;
+    }
     if (!summary.trim()) {
       setError("Summary is required.");
+      return;
+    }
+    if (!detail.trim()) {
+      setError("Student statement is required — that's the body of the entry.");
       return;
     }
     setSubmitting(true);
@@ -204,6 +248,7 @@ export default function LogInteractionModal({
           summary,
           detail,
           caseId,
+          witnessStudentId: witness.studentId,
           participants: participants.map((p) => ({
             studentId: p.studentId,
             role: p.role,
@@ -263,6 +308,95 @@ export default function LogInteractionModal({
         </div>
 
         <div className="space-y-4 p-5">
+          {/* Witness author — required. Top of the form so it's the first
+              thing the user fills in: a statement always belongs to a
+              specific student. */}
+          <div>
+            <div
+              className="mb-1 text-[11px] font-semibold uppercase tracking-wider"
+              style={{ color: WL_COLORS.inkSoft }}
+            >
+              Statement from{" "}
+              <span style={{ color: WL_COLORS.alert }}>*</span>
+              <span className="ml-1 font-normal normal-case opacity-70">
+                (the student giving this statement)
+              </span>
+            </div>
+            {witness ? (
+              <div
+                className="flex items-center justify-between rounded-md border px-3 py-2"
+                style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
+              >
+                <div className="text-sm font-semibold" style={{ color: WL_COLORS.ink }}>
+                  {witness.firstName} {witness.lastName}{" "}
+                  <span
+                    className="text-[11px] font-normal"
+                    style={{ color: WL_COLORS.inkSoft }}
+                  >
+                    · Gr {witness.grade ?? "?"} · {witness.studentId}
+                  </span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setWitness(null);
+                    setWitnessSearch("");
+                    setWitnessHits([]);
+                  }}
+                  className="text-[11px] font-semibold"
+                  style={{ color: WL_COLORS.alert }}
+                >
+                  Change
+                </button>
+              </div>
+            ) : (
+              <div className="relative">
+                <input
+                  value={witnessSearch}
+                  onChange={(e) => setWitnessSearch(e.target.value)}
+                  placeholder="Search students by name or ID…"
+                  className="w-full rounded-md border px-2 py-1.5 text-sm"
+                  style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
+                />
+                {witnessHits.length > 0 && (
+                  <div
+                    className="absolute z-10 mt-1 max-h-56 w-full overflow-auto rounded-md border shadow-md"
+                    style={{ borderColor: WL_COLORS.line, background: WL_COLORS.panel }}
+                  >
+                    {witnessHits.map((h) => (
+                      <button
+                        key={h.studentId}
+                        type="button"
+                        onClick={() => {
+                          setWitness(h);
+                          setWitnessSearch("");
+                          setWitnessHits([]);
+                        }}
+                        className="block w-full px-3 py-1.5 text-left text-sm hover:bg-[--hov]"
+                        style={
+                          {
+                            ["--hov" as never]: WL_COLORS.bg,
+                            color: WL_COLORS.ink,
+                          } as React.CSSProperties
+                        }
+                      >
+                        {h.firstName} {h.lastName}{" "}
+                        <span className="text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
+                          · Gr {h.grade ?? "?"} · {h.studentId}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {witnessSearching && witnessSearch.length >= 2 && witnessHits.length === 0 && (
+                  <div className="mt-1 text-[11px]" style={{ color: WL_COLORS.inkSoft }}>
+                    Searching…
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+
           <div>
             <div
               className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider"
@@ -420,13 +554,16 @@ export default function LogInteractionModal({
               className="mb-1 text-[11px] font-semibold uppercase tracking-wider"
               style={{ color: WL_COLORS.inkSoft }}
             >
-              Detail (optional) — tap the mic to dictate
+              Student statement <span style={{ color: WL_COLORS.alert }}>*</span>
+              <span className="ml-1 font-normal normal-case opacity-70">
+                — tap the mic to dictate
+              </span>
             </div>
             <VoiceTextarea
               value={detail}
               onChange={setDetail}
-              rows={3}
-              placeholder="Click here to type, or tap the mic to use voice-to-text…"
+              rows={4}
+              placeholder="Type the student's account in their own words, or tap the mic to dictate…"
               className="w-full rounded-md border px-2 py-1.5 text-sm"
               style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
               brandColor={WL_COLORS.brand}
@@ -460,7 +597,10 @@ export default function LogInteractionModal({
               className="mb-1 text-[11px] font-semibold uppercase tracking-wider"
               style={{ color: WL_COLORS.inkSoft }}
             >
-              Participants
+              Participants{" "}
+              <span className="font-normal normal-case opacity-70">
+                (add as many as needed — search, click, repeat)
+              </span>
             </div>
             <div className="relative">
               <input

@@ -1257,6 +1257,12 @@ export async function ensureWatchlistSchema() {
   await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_reason TEXT NOT NULL DEFAULT ''`);
   await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_by_staff_id INTEGER`);
   await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS dismissed_by_name TEXT NOT NULL DEFAULT ''`);
+  // 3) interactions.witness_student_* — the student who authored the
+  //    statement. Required at the UI level for new entries, nullable
+  //    in the DB so legacy/seed rows without a recorded author keep
+  //    loading.
+  await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS witness_student_id TEXT`);
+  await db.execute(sql`ALTER TABLE interactions ADD COLUMN IF NOT EXISTS witness_student_name TEXT NOT NULL DEFAULT ''`);
 }
 
 // Per-school default quick-entry catalog. Idempotent: only seeds when

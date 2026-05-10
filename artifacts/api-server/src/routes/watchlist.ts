@@ -1845,12 +1845,21 @@ router.post("/watchlist/interactions", async (req: Request, res: Response) => {
   const severity = Math.max(1, Math.min(4, asInt(b["severity"]) ?? 1));
   const caseId = asInt(b["caseId"]);
   const participants = Array.isArray(b["participants"]) ? (b["participants"] as Array<Record<string, unknown>>) : [];
+  const witnessStudentId = clean(b["witnessStudentId"], 60);
   if (!kind) {
     res.status(400).json({ error: "Invalid kind" });
     return;
   }
   if (!summary) {
     res.status(400).json({ error: "summary required" });
+    return;
+  }
+  if (!detail) {
+    res.status(400).json({ error: "Student statement is required." });
+    return;
+  }
+  if (!witnessStudentId) {
+    res.status(400).json({ error: "Pick the student giving this statement." });
     return;
   }
   // Validate caseId belongs to school if provided.
@@ -1864,8 +1873,15 @@ router.post("/watchlist/interactions", async (req: Request, res: Response) => {
       return;
     }
   }
-  // Validate participants: pre-resolve students.
-  const sids = [...new Set(participants.map((p) => clean(p["studentId"], 60)).filter(Boolean))];
+  // Validate participants AND the witness author in one pass.
+  const sids = [
+    ...new Set(
+      [
+        witnessStudentId,
+        ...participants.map((p) => clean(p["studentId"], 60)),
+      ].filter(Boolean),
+    ),
+  ];
   const students = await loadStudents(schoolId, sids);
   for (const sid of sids) {
     if (!students.has(sid)) {
@@ -1873,6 +1889,8 @@ router.post("/watchlist/interactions", async (req: Request, res: Response) => {
       return;
     }
   }
+  const witnessRow = students.get(witnessStudentId)!;
+  const witnessStudentName = `${witnessRow.firstName} ${witnessRow.lastName}`.trim();
   const [row] = await db
     .insert(interactionsTable)
     .values({
@@ -1886,6 +1904,8 @@ router.post("/watchlist/interactions", async (req: Request, res: Response) => {
       caseId: caseId ?? null,
       loggedByStaffId: staff.id,
       loggedByName: staff.displayName,
+      witnessStudentId,
+      witnessStudentName,
     })
     .returning();
 
