@@ -1734,11 +1734,34 @@ router.patch("/watchlist/cases/:id", async (req: Request, res: Response) => {
   if (isCaseStatus(b["status"])) {
     // Closing requires an outcome — refuse the shortcut and direct the
     // caller to /close where outcomeCode is enforced. Reopening from the
-    // PATCH path is also blocked so the audit trail stays in /reopen.
+    // PATCH path is also blocked so the audit trail (with required reason)
+    // stays in /reopen — without this guard, PATCH {status:'open'} on a
+    // closed case would silently un-close it without writing the
+    // 'reopened' audit row or demanding a justification.
     if (b["status"] === "closed") {
       res.status(400).json({
         error:
           "Use POST /watchlist/cases/:id/close to close a case (outcome required).",
+      });
+      return;
+    }
+    const [existing] = await db
+      .select({ status: interactionCasesTable.status })
+      .from(interactionCasesTable)
+      .where(
+        and(
+          eq(interactionCasesTable.id, id),
+          eq(interactionCasesTable.schoolId, schoolId),
+        ),
+      );
+    if (!existing) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+    if (existing.status === "closed") {
+      res.status(400).json({
+        error:
+          "Use POST /watchlist/cases/:id/reopen to reopen a closed case (admin + reason required).",
       });
       return;
     }
