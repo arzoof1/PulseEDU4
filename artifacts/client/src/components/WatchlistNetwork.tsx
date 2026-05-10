@@ -108,6 +108,31 @@ function layout(nodes: NetNode[]): { positioned: Positioned[]; clusters: Map<num
   return { positioned, clusters };
 }
 
+// Single-cluster layout: one big circle filling the viewport so each
+// student sphere is large and easy to read in the zoomed view.
+function layoutZoomed(
+  nodes: NetNode[],
+  clusterId: number,
+): { positioned: Positioned[]; clusters: Map<number, { cx: number; cy: number; r: number; size: number }> } {
+  const W = 1180;
+  const H = 820;
+  const cx = W / 2;
+  const cy = H / 2 + 10;
+  const radius = Math.min(W, H) * 0.36;
+  const positioned: Positioned[] = nodes.map((node, i) => {
+    const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2 - Math.PI / 2;
+    return {
+      ...node,
+      cluster: clusterId,
+      x: cx + Math.cos(angle) * radius * (nodes.length === 1 ? 0 : 1),
+      y: cy + Math.sin(angle) * radius * (nodes.length === 1 ? 0 : 1),
+    };
+  });
+  const clusters = new Map<number, { cx: number; cy: number; r: number; size: number }>();
+  clusters.set(clusterId, { cx, cy, r: radius + 70, size: nodes.length });
+  return { positioned, clusters };
+}
+
 function clusterFill(idx: number): string {
   const tints = [
     "rgba(155, 28, 46, 0.07)",
@@ -136,6 +161,9 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showLog, setShowLog] = useState(false);
+  // null = overview (all clusters); a number = zoom into one cluster
+  // (case id, or -1 for the loose / no-case ring).
+  const [zoomedClusterId, setZoomedClusterId] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -152,12 +180,48 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
     void reload();
   }, [reload]);
 
-  const layoutResult = useMemo(() => (data ? layout(data.nodes) : null), [data]);
+  // When zoomed, restrict to nodes that belong to that cluster and run a
+  // single-cluster layout so the bubbles fill the viewport. Edges are
+  // filtered to those whose endpoints are both in the zoomed cluster so
+  // we don't render dangling lines off-canvas.
+  const zoomedData = useMemo(() => {
+    if (!data || zoomedClusterId === null) return null;
+    const inCluster = data.nodes.filter(
+      (n) => (n.caseIds[0] ?? -1) === zoomedClusterId,
+    );
+    const ids = new Set(inCluster.map((n) => n.studentId));
+    const edges = data.edges.filter((e) => ids.has(e.a) && ids.has(e.b));
+    const cases = data.cases.filter((c) => c.id === zoomedClusterId);
+    return { nodes: inCluster, edges, cases, windowDays: data.windowDays } as Resp;
+  }, [data, zoomedClusterId]);
+
+  const layoutResult = useMemo(() => {
+    if (!data) return null;
+    if (zoomedClusterId !== null && zoomedData) {
+      return layoutZoomed(zoomedData.nodes, zoomedClusterId);
+    }
+    return layout(data.nodes);
+  }, [data, zoomedClusterId, zoomedData]);
+
+  const activeData: Resp | null = zoomedData ?? data;
+
+  const zoomedCase = useMemo(() => {
+    if (zoomedClusterId === null || !data) return null;
+    if (zoomedClusterId < 0) return null;
+    return data.cases.find((c) => c.id === zoomedClusterId) ?? null;
+  }, [zoomedClusterId, data]);
 
   const nodeById = useMemo(() => {
     if (!layoutResult) return new Map<string, Positioned>();
     return new Map(layoutResult.positioned.map((n) => [n.studentId, n] as const));
   }, [layoutResult]);
+
+  // Reload clears zoom + selection so we don't show stale focus state
+  // pointing at nodes that no longer exist after a window change.
+  useEffect(() => {
+    setZoomedClusterId(null);
+    setSelectedId(null);
+  }, [windowDays]);
 
   const selected = selectedId ? nodeById.get(selectedId) ?? null : null;
 
@@ -344,27 +408,81 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
               className="flex items-center justify-between border-b px-4 py-3"
               style={{ borderColor: C.line }}
             >
-              <div className="flex items-center gap-2">
-                <Zap className="h-4 w-4" style={{ color: C.brand }} />
-                <span className="text-sm font-semibold">School-wide interaction graph</span>
-                <span className="text-[11px]" style={{ color: C.inkSoft }}>
-                  · halos = active flags · click case label to open
-                </span>
-              </div>
+              {zoomedClusterId !== null ? (
+                <>
+                  <div className="flex min-w-0 items-center gap-3">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setZoomedClusterId(null);
+                        setSelectedId(null);
+                      }}
+                      className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-semibold"
+                      style={{ borderColor: C.line, color: C.brand, background: C.panel }}
+                    >
+                      <ArrowLeft className="h-3 w-3" /> Back to all cases
+                    </button>
+                    <div className="min-w-0">
+                      <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.inkSoft }}>
+                        {zoomedCase ? `Case #${zoomedCase.caseNumber}` : "Loose / no case"}
+                      </div>
+                      <div className="truncate text-sm font-bold" style={{ color: C.ink }}>
+                        {zoomedCase ? zoomedCase.title : "Students not yet linked to a case"}
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    {zoomedCase && (
+                      <>
+                        <span
+                          className="rounded-full px-2 py-0.5 text-[10px] font-bold"
+                          style={{
+                            background: statusPillStyle(zoomedCase.status).bg,
+                            color: statusPillStyle(zoomedCase.status).fg,
+                          }}
+                        >
+                          {statusPillStyle(zoomedCase.status).label}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => onOpenCase?.(zoomedCase.id)}
+                          className="rounded-md px-2.5 py-1 text-[11px] font-bold"
+                          style={{ background: C.brand, color: "#FFFFFF" }}
+                        >
+                          Open case file
+                        </button>
+                      </>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <Zap className="h-4 w-4" style={{ color: C.brand }} />
+                  <span className="text-sm font-semibold">School-wide interaction graph</span>
+                  <span className="text-[11px]" style={{ color: C.inkSoft }}>
+                    · click any case ring to zoom in · click a node to focus
+                  </span>
+                </div>
+              )}
             </div>
 
-            {!data || data.nodes.length === 0 ? (
+            {!activeData || activeData.nodes.length === 0 ? (
               <div className="p-12 text-center text-sm" style={{ color: C.inkSoft }}>
                 No interactions in this window yet. Log one to start building the network.
               </div>
             ) : (
               <NetworkSVG
-                data={data}
+                data={activeData}
                 positioned={layoutResult!.positioned}
                 clusters={layoutResult!.clusters}
                 selectedId={selectedId}
+                zoomed={zoomedClusterId !== null}
                 onSelectNode={(id) => setSelectedId(id)}
                 onOpenCase={(id) => onOpenCase?.(id)}
+                onZoomCluster={(id) => {
+                  setSelectedId(null);
+                  setZoomedClusterId(id);
+                }}
               />
             )}
 
@@ -641,15 +759,19 @@ function NetworkSVG({
   positioned,
   clusters,
   selectedId,
+  zoomed,
   onSelectNode,
   onOpenCase,
+  onZoomCluster,
 }: {
   data: Resp;
   positioned: Positioned[];
   clusters: Map<number, { cx: number; cy: number; r: number; size: number }>;
   selectedId: string | null;
+  zoomed: boolean;
   onSelectNode: (id: string) => void;
   onOpenCase: (id: number) => void;
+  onZoomCluster: (id: number) => void;
 }) {
   const W = 1180;
   const H = 820;
@@ -753,7 +875,11 @@ function NetworkSVG({
       <rect x={0} y={0} width={W} height={H} fill={C.graphBg} />
       <rect x={0} y={0} width={W} height={H} fill="url(#wl-grid)" />
 
-      {/* Cluster halos + clickable case label */}
+      {/* Cluster halos. In overview mode, the halo body is clickable to
+          zoom into a single case (the title pill still routes to the
+          full case file). In zoomed mode, zoom is disabled (already
+          zoomed) and the title pill is hidden — the surrounding card
+          header carries the case info + Back action. */}
       {clusterIdsSorted.map((cid, idx) => {
         const cl = clusters.get(cid)!;
         const c = cid >= 0 ? caseById.get(cid) : null;
@@ -769,8 +895,12 @@ function NetworkSVG({
               strokeDasharray="4 6"
               strokeWidth={1}
               filter="url(#wl-shadow-soft)"
-            />
-            {c ? (
+              onClick={zoomed ? undefined : () => onZoomCluster(cid)}
+              style={{ cursor: zoomed ? "default" : "zoom-in" }}
+            >
+              {!zoomed && <title>Click to zoom into {label}</title>}
+            </circle>
+            {!zoomed && c ? (
               <g
                 onClick={() => onOpenCase(c.id)}
                 style={{ cursor: "pointer" }}
@@ -797,7 +927,7 @@ function NetworkSVG({
                   {label.length > 32 ? label.slice(0, 30) + "…" : label}
                 </text>
               </g>
-            ) : (
+            ) : !zoomed ? (
               <text
                 x={cl.cx}
                 y={cl.cy - cl.r - 5}
@@ -809,7 +939,7 @@ function NetworkSVG({
               >
                 {label}
               </text>
-            )}
+            ) : null}
           </g>
         );
       })}
