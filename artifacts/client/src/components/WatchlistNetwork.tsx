@@ -230,7 +230,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
               className="inline-flex items-center gap-1 text-[11px] font-semibold"
               style={{ color: C.brand }}
             >
-              <ArrowLeft className="h-3 w-3" /> Back to Watchlist Hub
+              <ArrowLeft className="h-3 w-3" /> Back to Investigations
             </button>
             <div className="mt-2 flex items-center gap-2">
               <div

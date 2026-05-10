@@ -179,7 +179,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
         authFetch(`/api/watchlist/statements`),
       ]);
       if (!r1.ok || !r2.ok || !r3.ok || !r4.ok || !r5.ok || !r6.ok) {
-        throw new Error("Failed to load Watchlist Hub data");
+        throw new Error("Failed to load Incident Investigations data");
       }
       const [d1, d2, d3, d4, d5, d6] = await Promise.all([
         r1.json() as Promise<Summary>,
@@ -361,7 +361,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
               <Shield className="h-3.5 w-3.5" /> Core Team Only
             </div>
             <h1 className="mt-2 text-3xl font-bold tracking-tight">
-              Watchlist Hub
+              Incident Investigations
             </h1>
             <p className="mt-1 max-w-2xl text-sm" style={{ color: C.inkSoft }}>
               Students surfacing across the Interaction Log — the ones showing up{" "}
@@ -1048,7 +1048,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
         </div>
 
         <div className="mt-6 text-center text-[11px]" style={{ color: C.inkSoft }}>
-          Watchlist Hub · {initialsOf("Pulse", "EDU")}
+          Incident Investigations · {initialsOf("Pulse", "EDU")}
         </div>
       </div>
 

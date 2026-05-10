@@ -8984,7 +8984,7 @@ function App() {
                   isMtss) &&
                   renderNavItem({
                     key: "watchlistHub",
-                    label: "Watchlist Hub",
+                    label: "Investigations",
                     icon: IconClipboard,
                   })}
                 {canManageBehaviorLists && !isBehaviorSpec &&
