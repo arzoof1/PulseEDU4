@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeft,
   Calendar,
@@ -7,6 +7,8 @@ import {
   Filter,
   GitBranch,
   Layers,
+  Mic,
+  MicOff,
   Plus,
   Sparkles,
   Users,
@@ -18,6 +20,30 @@ import { formatCaseNumber } from "../lib/caseNumber";
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import { ROLE_META, WL_COLORS as C, statusPillStyle, type Role } from "./watchlist/colors";
+
+// Minimal local types for the Web Speech API. lib.dom.d.ts in our TS
+// version doesn't ship them, and we only touch a tiny surface area, so
+// declaring just what we use is cheaper than pulling in @types/dom-speech-recognition.
+type SpeechRecognitionAlternativeLike = { transcript: string };
+type SpeechRecognitionResultLike = {
+  isFinal: boolean;
+  0?: SpeechRecognitionAlternativeLike;
+  [index: number]: SpeechRecognitionAlternativeLike | undefined;
+};
+type SpeechRecognitionEventLike = {
+  resultIndex: number;
+  results: { length: number; [index: number]: SpeechRecognitionResultLike };
+};
+type SpeechRecognitionLike = {
+  lang: string;
+  continuous: boolean;
+  interimResults: boolean;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onerror: ((event: unknown) => void) | null;
+  onend: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
 import {
   HowToUseHelp,
   HowToSection,
@@ -1499,6 +1525,85 @@ function FootageQuickAddModal({
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [dictating, setDictating] = useState(false);
+  const recognitionRef = useRef<unknown>(null);
+
+  // Web Speech API is webkit-prefixed in Safari/Chrome; absent in Firefox.
+  // We feature-detect on the window object and hide the mic button when
+  // unsupported rather than degrading silently.
+  const speechCtor =
+    typeof window === "undefined"
+      ? null
+      : (window as unknown as {
+          SpeechRecognition?: new () => SpeechRecognitionLike;
+          webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+        }).SpeechRecognition ??
+        (window as unknown as {
+          webkitSpeechRecognition?: new () => SpeechRecognitionLike;
+        }).webkitSpeechRecognition ??
+        null;
+  const speechSupported = !!speechCtor;
+
+  useEffect(() => {
+    return () => {
+      const r = recognitionRef.current as SpeechRecognitionLike | null;
+      if (r) {
+        try {
+          r.stop();
+        } catch {
+          // ignore — recognition may already be stopped
+        }
+      }
+    };
+  }, []);
+
+  function toggleDictation() {
+    if (!speechCtor) return;
+    if (dictating) {
+      const r = recognitionRef.current as SpeechRecognitionLike | null;
+      try {
+        r?.stop();
+      } catch {
+        // ignore
+      }
+      setDictating(false);
+      return;
+    }
+    try {
+      const rec = new speechCtor();
+      rec.lang =
+        (typeof navigator !== "undefined" && navigator.language) || "en-US";
+      rec.continuous = true;
+      rec.interimResults = false;
+      rec.onresult = (event: SpeechRecognitionEventLike) => {
+        let chunk = "";
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          const result = event.results[i];
+          if (result?.isFinal && result[0]) {
+            chunk += result[0].transcript;
+          }
+        }
+        chunk = chunk.trim();
+        if (!chunk) return;
+        setNotes((prev) => {
+          if (!prev) return chunk;
+          const sep = /[.!?\s]$/.test(prev) ? "" : " ";
+          return prev + sep + chunk;
+        });
+      };
+      rec.onerror = () => {
+        setDictating(false);
+      };
+      rec.onend = () => {
+        setDictating(false);
+      };
+      rec.start();
+      recognitionRef.current = rec;
+      setDictating(true);
+    } catch {
+      setDictating(false);
+    }
+  }
 
   async function save() {
     if (!label.trim() || !start) return;
@@ -1628,9 +1733,42 @@ function FootageQuickAddModal({
               maxLength={1000}
             />
           </label>
-          <label className="block">
-            <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
-              Notes (optional)
+          <div className="block">
+            <div className="mb-1 flex items-center justify-between">
+              <div className="text-[11px] font-semibold" style={{ color: C.inkSoft }}>
+                Notes (optional)
+              </div>
+              {speechSupported && (
+                <button
+                  type="button"
+                  onClick={toggleDictation}
+                  className="flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-semibold"
+                  style={{
+                    borderColor: dictating ? C.alert : C.line,
+                    color: dictating ? C.alert : C.inkSoft,
+                    background: dictating ? "#FEF2F2" : C.panel,
+                  }}
+                  aria-pressed={dictating}
+                  aria-label={dictating ? "Stop dictation" : "Start dictation"}
+                  title={
+                    dictating
+                      ? "Stop dictation"
+                      : "Dictate notes (uses your browser's speech recognition)"
+                  }
+                >
+                  {dictating ? (
+                    <>
+                      <MicOff className="h-3 w-3" />
+                      <span>Listening…</span>
+                    </>
+                  ) : (
+                    <>
+                      <Mic className="h-3 w-3" />
+                      <span>Dictate</span>
+                    </>
+                  )}
+                </button>
+              )}
             </div>
             <textarea
               value={notes}
@@ -1640,7 +1778,7 @@ function FootageQuickAddModal({
               style={{ borderColor: C.line, background: C.bg }}
               maxLength={4000}
             />
-          </label>
+          </div>
           <div className="text-[11px]" style={{ color: C.inkSoft }}>
             Tag specific players and rate confidence inside the case file.
           </div>
