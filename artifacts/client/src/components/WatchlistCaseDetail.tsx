@@ -140,6 +140,14 @@ interface Props {
   // Display name of the logged-in admin — used to pre-fill the
   // "Viewed by {name}" reason text on Confirmed video tags.
   viewerName?: string;
+  // Optional deep-link target (e.g. "video-evidence"). When set, we
+  // scroll the matching section into view once `data` has loaded so
+  // the user lands inside the right area instead of the case header.
+  initialAnchor?: string | null;
+  // Tells the parent we've handled the anchor so it can clear its
+  // pending state. Without this a back-and-forth navigation would
+  // re-jump on every mount.
+  onAnchorConsumed?: () => void;
 }
 
 export default function WatchlistCaseDetail({
@@ -147,9 +155,30 @@ export default function WatchlistCaseDetail({
   onBack,
   isAdmin = false,
   viewerName = "",
+  initialAnchor = null,
+  onAnchorConsumed,
 }: Props) {
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const videoEvidenceAnchorRef = useRef<HTMLDivElement | null>(null);
+  // Once `data` is loaded and the section we want to deep-link into is
+  // mounted, scroll it into view. Gated on `data` so the anchor div has
+  // actually rendered. Fires once per mount; the parent clears the
+  // pending anchor in onAnchorConsumed so back-navigation is normal.
+  useEffect(() => {
+    if (!initialAnchor || !data) return;
+    if (initialAnchor === "video-evidence") {
+      const el = videoEvidenceAnchorRef.current;
+      if (el) {
+        el.scrollIntoView({ behavior: "smooth", block: "start" });
+      }
+    }
+    onAnchorConsumed?.();
+    // We intentionally do NOT depend on initialAnchor changing — we
+    // only want to react when `data` flips from null → loaded for the
+    // first mount with this anchor.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data]);
   const [noteText, setNoteText] = useState("");
   const [savingNote, setSavingNote] = useState(false);
   const [showLog, setShowLog] = useState(false);
@@ -843,20 +872,22 @@ export default function WatchlistCaseDetail({
 
             {/* Video evidence (admin-only — Phase 2 of case enhancement suite) */}
             {isAdmin && data && (
-              <VideoEvidencePanel
-                caseId={caseId}
-                casePlayers={data.players.map((p) => ({
-                  studentId: p.studentId,
-                  firstName: p.firstName,
-                  lastName: p.lastName,
-                }))}
-                viewerName={viewerName || "admin"}
-                brandColor={C.brand}
-                panelBg={C.panel}
-                pageBg={C.bg}
-                lineColor={C.line}
-                inkSoft={C.inkSoft}
-              />
+              <div id="video-evidence" ref={videoEvidenceAnchorRef}>
+                <VideoEvidencePanel
+                  caseId={caseId}
+                  casePlayers={data.players.map((p) => ({
+                    studentId: p.studentId,
+                    firstName: p.firstName,
+                    lastName: p.lastName,
+                  }))}
+                  viewerName={viewerName || "admin"}
+                  brandColor={C.brand}
+                  panelBg={C.panel}
+                  pageBg={C.bg}
+                  lineColor={C.line}
+                  inkSoft={C.inkSoft}
+                />
+              </div>
             )}
 
             {/* Notes timeline */}

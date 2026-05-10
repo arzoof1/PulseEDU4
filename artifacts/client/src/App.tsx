@@ -4461,6 +4461,14 @@ function App() {
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
   >(null);
+  // When a deep-link affordance (e.g. the camera chip on WatchlistNetwork)
+  // wants to drop the user inside a specific section of the case file, it
+  // sets this alongside the case id. WatchlistCaseDetail consumes it once
+  // on mount and scrolls. Cleared the next time the case detail unmounts
+  // so a manual return doesn't re-jump.
+  const [pendingCaseAnchor, setPendingCaseAnchor] = useState<string | null>(
+    null,
+  );
   const [selectedSpiderStudentId, setSelectedSpiderStudentId] = useState<
     string | null
   >(null);
@@ -19112,6 +19120,7 @@ function App() {
           onOpenNetwork={() => setActiveSection("watchlistNetwork")}
           onOpenCase={(id) => {
             setSelectedWatchlistCaseId(id);
+            setPendingCaseAnchor(null);
             setActiveSection("watchlistCase");
           }}
           onOpenStudentGraph={(sid) => {
@@ -19127,6 +19136,7 @@ function App() {
           onBack={() => setActiveSection("watchlistHub")}
           onOpenCase={(id) => {
             setSelectedWatchlistCaseId(id);
+            setPendingCaseAnchor(null);
             setActiveSection("watchlistCase");
           }}
         />
@@ -19135,8 +19145,9 @@ function App() {
       {activeSection === "watchlistNetwork" && (
         <WatchlistNetwork
           onBack={() => setActiveSection("watchlistHub")}
-          onOpenCase={(id) => {
+          onOpenCase={(id, anchor) => {
             setSelectedWatchlistCaseId(id);
+            setPendingCaseAnchor(anchor ?? null);
             setActiveSection("watchlistCase");
           }}
           isInvestigator={Boolean(
@@ -19163,6 +19174,8 @@ function App() {
               authUser?.isDean,
           )}
           viewerName={authUser?.displayName ?? ""}
+          initialAnchor={pendingCaseAnchor}
+          onAnchorConsumed={() => setPendingCaseAnchor(null)}
         />
       )}
 

@@ -89,7 +89,7 @@ interface Resp {
 
 interface Props {
   onBack?: () => void;
-  onOpenCase?: (caseId: number) => void;
+  onOpenCase?: (caseId: number, anchor?: string) => void;
   // True when the viewer is in the Case Investigator group (admin
   // tier + Behavior Specialist + MTSS Coordinator + Dean). Gates the
   // "+ Footage" quick-add button on the case-zoom toolbar; non-
@@ -706,22 +706,25 @@ export default function WatchlistNetwork({
                           {statusPillStyle(zoomedCase.status).label}
                         </span>
                         {zoomedCaseClipCount > 0 && (
-                          <span
-                            className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold"
-                            style={{
-                              background: "#FEF2F2",
-                              color: "#9F1D1D",
-                              border: "1px solid #9F1D1D",
-                            }}
+                          <button
+                            type="button"
+                            onClick={() =>
+                              onOpenCase?.(zoomedCase.id, "video-evidence")
+                            }
+                            className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[12px] font-bold hover:bg-red-50"
+                            style={{ color: "#9F1D1D" }}
                             title={
                               isInvestigator
-                                ? `${zoomedCaseClipCount} clip${zoomedCaseClipCount === 1 ? "" : "s"} on file. Tag players inside the case file so they appear on the spheres.`
-                                : `${zoomedCaseClipCount} clip${zoomedCaseClipCount === 1 ? "" : "s"} on file.`
+                                ? `${zoomedCaseClipCount} clip${zoomedCaseClipCount === 1 ? "" : "s"} on file. Click to review and tag players.`
+                                : `${zoomedCaseClipCount} clip${zoomedCaseClipCount === 1 ? "" : "s"} on file. Click to review.`
                             }
+                            aria-label={`Review ${zoomedCaseClipCount} video clip${zoomedCaseClipCount === 1 ? "" : "s"} on this case`}
                           >
-                            <Video className="h-3 w-3" />
-                            {zoomedCaseClipCount}
-                          </span>
+                            <Video className="h-4 w-4" strokeWidth={2.5} />
+                            <span className="tabular-nums">
+                              {zoomedCaseClipCount}
+                            </span>
+                          </button>
                         )}
                         {isInvestigator && (
                           <button
@@ -1550,7 +1553,6 @@ function FootageQuickAddModal({
   const [label, setLabel] = useState("");
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
-  const [url, setUrl] = useState("");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1654,7 +1656,7 @@ function FootageQuickAddModal({
             cameraLabel: label.trim(),
             timestampStart: startIso,
             timestampEnd: endIso,
-            sourceUrl: url.trim(),
+            sourceUrl: "",
             notes: notes.trim(),
           }),
         },
@@ -1748,20 +1750,6 @@ function FootageQuickAddModal({
               />
             </label>
           </div>
-          <label className="block">
-            <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
-              Source URL (optional)
-            </div>
-            <input
-              type="url"
-              value={url}
-              onChange={(e) => setUrl(e.target.value)}
-              placeholder="https://…"
-              className="w-full rounded-md border px-2.5 py-1.5"
-              style={{ borderColor: C.line, background: C.bg }}
-              maxLength={1000}
-            />
-          </label>
           <div className="block">
             <div className="mb-1 flex items-center justify-between">
               <div className="text-[11px] font-semibold" style={{ color: C.inkSoft }}>
