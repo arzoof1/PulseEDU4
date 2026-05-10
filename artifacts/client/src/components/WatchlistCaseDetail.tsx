@@ -130,6 +130,9 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   const [showLog, setShowLog] = useState(false);
   const [showAddPlayer, setShowAddPlayer] = useState(false);
   const [showAttach, setShowAttach] = useState(false);
+  // Split-button menu next to "+ Log new" — reveals the secondary
+  // "Attach existing" action without giving it equal visual weight.
+  const [showLogMenu, setShowLogMenu] = useState(false);
   // Inline severity editor: which incident's chip is currently open. The
   // server PATCH route already accepts severity changes and writes an audit
   // row, so this is a thin client affordance.
@@ -400,30 +403,32 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
               {c.leadStaffName ? ` · Lead: ${c.leadStaffName}` : ""}
             </p>
           </div>
+          {/* Single status control. Four side-by-side buttons made
+              status changes look like four primary actions; a labeled
+              dropdown takes a fraction of the space and reads correctly
+              as a single setting. The primary "+ Log new" lives in the
+              Statements panel below — one place, one action. */}
           <div className="flex flex-wrap items-center gap-2">
-            {(["open", "monitoring", "escalated", "closed"] as const).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => setStatus(s)}
-                className="rounded-md border px-2.5 py-1 text-xs font-semibold capitalize"
-                style={{
-                  borderColor: c.status === s ? C.ink : C.line,
-                  background: c.status === s ? C.ink : "transparent",
-                  color: c.status === s ? "#fff" : C.ink,
-                }}
-              >
-                {s}
-              </button>
-            ))}
-            <button
-              type="button"
-              onClick={() => setShowLog(true)}
-              className="inline-flex items-center gap-1.5 rounded-md px-3 py-2 text-sm font-bold shadow-sm"
-              style={{ background: C.brand, color: "#FFFFFF" }}
+            <label
+              className="text-[11px] font-semibold uppercase tracking-wider"
+              style={{ color: C.inkSoft }}
             >
-              <Plus className="h-4 w-4" /> Log incident in case
-            </button>
+              Status
+            </label>
+            <select
+              value={c.status}
+              onChange={(e) =>
+                setStatus(e.target.value as "open" | "monitoring" | "escalated" | "closed")
+              }
+              className="rounded-md border px-2.5 py-1 text-xs font-semibold capitalize"
+              style={{ borderColor: C.line, background: C.panel, color: C.ink }}
+            >
+              {(["open", "monitoring", "escalated", "closed"] as const).map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -466,24 +471,54 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
             >
               <div className="flex items-baseline justify-between gap-2">
                 <h2 className="text-lg font-bold tracking-tight">Statements on this case</h2>
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() => setShowAttach(true)}
-                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-semibold"
-                    style={{ borderColor: C.line, background: C.panel, color: C.ink }}
-                    title="Pull an unattached statement onto this case"
-                  >
-                    Attach existing
-                  </button>
+                {/* Split button: primary action is "Log new" (the 95%
+                    case); the small caret reveals "Attach existing" for
+                    the rare case where a statement was logged without
+                    a case and needs to be pulled in. */}
+                <div className="relative flex items-center">
                   <button
                     type="button"
                     onClick={() => setShowLog(true)}
-                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-bold text-white"
+                    className="inline-flex items-center gap-1 rounded-l-md px-2 py-1 text-[11px] font-bold text-white"
                     style={{ background: C.brand, color: "#FFFFFF" }}
                   >
                     <Plus className="h-3 w-3" /> Log new
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowLogMenu((v) => !v)}
+                    aria-label="More options"
+                    className="inline-flex items-center rounded-r-md border-l border-white/20 px-1.5 py-1 text-[11px] font-bold text-white"
+                    style={{ background: C.brand }}
+                  >
+                    ▾
+                  </button>
+                  {showLogMenu && (
+                    <>
+                      {/* Invisible backdrop so any outside click closes
+                          the menu without needing a global listener. */}
+                      <div
+                        className="fixed inset-0 z-10"
+                        onClick={() => setShowLogMenu(false)}
+                      />
+                      <div
+                        className="absolute right-0 top-full z-20 mt-1 w-44 rounded-md border py-1 shadow-lg"
+                        style={{ borderColor: C.line, background: C.panel }}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowLogMenu(false);
+                            setShowAttach(true);
+                          }}
+                          className="block w-full px-3 py-1.5 text-left text-[11px] font-semibold"
+                          style={{ color: C.ink }}
+                        >
+                          Attach existing statement…
+                        </button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="mt-3 divide-y" style={{ borderColor: C.line }}>
