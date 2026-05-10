@@ -1148,6 +1148,21 @@ export async function ensureWatchlistSchema() {
   await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_case_notes_case_idx ON interaction_case_notes(school_id, case_id)`);
 
   await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS interaction_case_player_impact (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      impact INTEGER NOT NULL DEFAULT 2,
+      updated_by_staff_id INTEGER,
+      updated_by_name TEXT NOT NULL DEFAULT '',
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_case_player_impact_case_student_idx ON interaction_case_player_impact(school_id, case_id, student_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_case_player_impact_school_idx ON interaction_case_player_impact(school_id)`);
+
+  await db.execute(sql`
     CREATE TABLE IF NOT EXISTS witness_statements (
       id SERIAL PRIMARY KEY,
       school_id INTEGER NOT NULL,

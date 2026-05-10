@@ -38,6 +38,26 @@ interface Player {
   grade: string | null;
   total: number;
   counts: Record<string, number>;
+  caseImpact: number;
+  caseImpactSet: boolean;
+  caseImpactUpdatedBy: string;
+  caseImpactUpdatedAt: string | null;
+}
+
+// Per-(case, student) impact rating labels + colors. This is the
+// editorial "how central is this person to the whole case" axis,
+// distinct from per-incident severity.
+const IMPACT_META: Record<
+  number,
+  { label: string; bg: string; fg: string; hint: string }
+> = {
+  1: { label: "Minor", bg: "#E6F4EA", fg: "#1E6E3A", hint: "Background presence" },
+  2: { label: "Contributing", bg: "#FEF3C7", fg: "#8A5A00", hint: "Active participant" },
+  3: { label: "Significant", bg: "#FFE4D6", fg: "#A1390B", hint: "Repeated central role" },
+  4: { label: "Driver", bg: "#FDD8D8", fg: "#9F1D1D", hint: "Drives the case arc" },
+};
+function impactMeta(n: number) {
+  return IMPACT_META[n] ?? IMPACT_META[2];
 }
 
 interface IncidentParticipant {
@@ -114,6 +134,8 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
   // row, so this is a thin client affordance.
   const [editingSevId, setEditingSevId] = useState<number | null>(null);
   const [savingSevId, setSavingSevId] = useState<number | null>(null);
+  const [editingImpactSid, setEditingImpactSid] = useState<string | null>(null);
+  const [savingImpactSid, setSavingImpactSid] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState(false);
   const [titleDraft, setTitleDraft] = useState("");
   const [expandedPlayer, setExpandedPlayer] = useState<string | null>(null);
@@ -712,12 +734,19 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                         className="rounded-md border"
                         style={{ borderColor: C.line, background: C.bg }}
                       >
-                        <button
-                          type="button"
+                        <div
+                          role="button"
+                          tabIndex={0}
                           onClick={() =>
                             setExpandedPlayer(isOpen ? null : p.studentId)
                           }
-                          className="flex w-full items-center gap-3 p-2 text-left"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === " ") {
+                              e.preventDefault();
+                              setExpandedPlayer(isOpen ? null : p.studentId);
+                            }
+                          }}
+                          className="flex w-full cursor-pointer items-center gap-3 p-2 text-left"
                           aria-expanded={isOpen}
                         >
                           {isOpen ? (
@@ -761,7 +790,135 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                           >
                             {meta.label}
                           </span>
-                        </button>
+                          {(() => {
+                            const im = impactMeta(p.caseImpact);
+                            const isEditingImpact =
+                              editingImpactSid === p.studentId;
+                            const setImpact = async (next: number) => {
+                              if (next === p.caseImpact && p.caseImpactSet) {
+                                setEditingImpactSid(null);
+                                return;
+                              }
+                              setSavingImpactSid(p.studentId);
+                              try {
+                                const r = await authFetch(
+                                  `/api/watchlist/cases/${caseId}/players/${encodeURIComponent(p.studentId)}/impact`,
+                                  {
+                                    method: "PUT",
+                                    headers: {
+                                      "Content-Type": "application/json",
+                                    },
+                                    body: JSON.stringify({ impact: next }),
+                                  },
+                                );
+                                if (r.ok) {
+                                  setEditingImpactSid(null);
+                                  await reload();
+                                }
+                              } finally {
+                                setSavingImpactSid(null);
+                              }
+                            };
+                            return (
+                              <span
+                                className="relative inline-flex"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setEditingImpactSid(
+                                      isEditingImpact ? null : p.studentId,
+                                    );
+                                  }}
+                                  disabled={savingImpactSid === p.studentId}
+                                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-bold disabled:opacity-50"
+                                  style={{
+                                    background: im.bg,
+                                    color: im.fg,
+                                    opacity: p.caseImpactSet ? 1 : 0.7,
+                                  }}
+                                  title={`Case impact: ${im.label} — ${im.hint}. Click to change.`}
+                                >
+                                  {savingImpactSid === p.studentId
+                                    ? "Saving…"
+                                    : im.label}
+                                  <span className="opacity-60">▾</span>
+                                </button>
+                                {isEditingImpact && (
+                                  <div
+                                    className="absolute right-0 top-full z-30 mt-1 flex flex-col rounded-md border shadow-md"
+                                    style={{
+                                      borderColor: C.line,
+                                      background: C.panel,
+                                      minWidth: 200,
+                                    }}
+                                  >
+                                    <div
+                                      className="border-b px-2.5 py-1.5 text-[10px] font-semibold uppercase tracking-wider"
+                                      style={{
+                                        borderColor: C.line,
+                                        color: C.inkSoft,
+                                      }}
+                                    >
+                                      Case impact
+                                    </div>
+                                    {[1, 2, 3, 4].map((lvl) => {
+                                      const opt = impactMeta(lvl);
+                                      const isCurrent =
+                                        lvl === p.caseImpact && p.caseImpactSet;
+                                      return (
+                                        <button
+                                          key={lvl}
+                                          type="button"
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            void setImpact(lvl);
+                                          }}
+                                          className="flex items-center justify-between gap-2 px-2.5 py-1.5 text-left"
+                                          style={{
+                                            background: isCurrent
+                                              ? C.bg
+                                              : "transparent",
+                                          }}
+                                        >
+                                          <span
+                                            className="inline-flex items-center rounded-full px-2 py-0.5 text-[10px] font-bold"
+                                            style={{
+                                              background: opt.bg,
+                                              color: opt.fg,
+                                            }}
+                                          >
+                                            {opt.label}
+                                          </span>
+                                          <span
+                                            className="text-[10px]"
+                                            style={{ color: C.inkSoft }}
+                                          >
+                                            {isCurrent ? "current" : opt.hint}
+                                          </span>
+                                        </button>
+                                      );
+                                    })}
+                                    <div
+                                      className="border-t px-2.5 py-1 text-[10px]"
+                                      style={{
+                                        borderColor: C.line,
+                                        color: C.inkSoft,
+                                      }}
+                                    >
+                                      {p.caseImpactSet && p.caseImpactUpdatedBy
+                                        ? `Last set by ${p.caseImpactUpdatedBy}`
+                                        : "Default until set"}{" "}
+                                      · audit-logged
+                                    </div>
+                                  </div>
+                                )}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         {isOpen && (
                           <div
                             className="border-t px-3 py-3"

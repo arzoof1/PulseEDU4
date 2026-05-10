@@ -45,6 +45,7 @@ import {
   interactionsTable,
   interactionParticipantsTable,
   interactionCasesTable,
+  interactionCasePlayerImpactTable,
   interactionCaseNotesTable,
   witnessStatementsTable,
   interactionAuditLogTable,
@@ -1421,6 +1422,25 @@ router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
   const studentIds = [...new Set(participants.map((p) => p.studentId))];
   const students = await loadStudents(schoolId, studentIds);
 
+  // Per-(case,student) impact ratings — Core-Team editorial axis,
+  // separate from per-incident severity. Default 2 = "Contributing"
+  // when no explicit row exists yet.
+  const impactRows = await db
+    .select()
+    .from(interactionCasePlayerImpactTable)
+    .where(
+      and(
+        eq(interactionCasePlayerImpactTable.schoolId, schoolId),
+        eq(interactionCasePlayerImpactTable.caseId, id),
+      ),
+    );
+  const impactByStudent = new Map(
+    impactRows.map((r) => [
+      r.studentId,
+      { impact: r.impact, updatedByName: r.updatedByName, updatedAt: r.updatedAt },
+    ]),
+  );
+
   const notes = await db
     .select()
     .from(interactionCaseNotesTable)
@@ -1466,6 +1486,7 @@ router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
     .map((a) => {
       const s = students.get(a.studentId);
       if (!s) return null;
+      const imp = impactByStudent.get(a.studentId);
       return {
         studentId: a.studentId,
         firstName: s.firstName,
@@ -1473,6 +1494,10 @@ router.get("/watchlist/cases/:id", async (req: Request, res: Response) => {
         grade: s.grade,
         total: a.total,
         counts: a.counts,
+        caseImpact: imp?.impact ?? 2,
+        caseImpactSet: !!imp,
+        caseImpactUpdatedBy: imp?.updatedByName ?? "",
+        caseImpactUpdatedAt: imp?.updatedAt ?? null,
       };
     })
     .filter(Boolean)
@@ -1655,6 +1680,89 @@ router.post("/watchlist/cases/:id/players", async (req: Request, res: Response) 
   });
   res.json({ ok: true, interaction, player: { studentId, role } });
 });
+
+// PUT /watchlist/cases/:id/players/:studentId/impact
+// Set the per-(case,student) impact rating. 1=Minor, 2=Contributing,
+// 3=Significant, 4=Driver. Audit-logged so changes to the editorial
+// judgement are traceable just like incident severity.
+router.put(
+  "/watchlist/cases/:id/players/:studentId/impact",
+  async (req: Request, res: Response) => {
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    const studentId = String(req.params["studentId"] ?? "").trim();
+    if (!id || !studentId) {
+      res.status(400).json({ error: "Invalid case or student" });
+      return;
+    }
+    const b = (req.body ?? {}) as Record<string, unknown>;
+    const rawImpact = asInt(b["impact"]);
+    if (rawImpact == null) {
+      res.status(400).json({ error: "impact required" });
+      return;
+    }
+    const impact = Math.max(1, Math.min(4, rawImpact));
+
+    const [c] = await db
+      .select()
+      .from(interactionCasesTable)
+      .where(
+        and(
+          eq(interactionCasesTable.id, id),
+          eq(interactionCasesTable.schoolId, schoolId),
+        ),
+      );
+    if (!c) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+
+    const [existing] = await db
+      .select()
+      .from(interactionCasePlayerImpactTable)
+      .where(
+        and(
+          eq(interactionCasePlayerImpactTable.schoolId, schoolId),
+          eq(interactionCasePlayerImpactTable.caseId, id),
+          eq(interactionCasePlayerImpactTable.studentId, studentId),
+        ),
+      );
+    const before = existing?.impact ?? null;
+
+    if (existing) {
+      await db
+        .update(interactionCasePlayerImpactTable)
+        .set({
+          impact,
+          updatedByStaffId: staff.id,
+          updatedByName: staff.displayName,
+          updatedAt: new Date(),
+        })
+        .where(eq(interactionCasePlayerImpactTable.id, existing.id));
+    } else {
+      await db.insert(interactionCasePlayerImpactTable).values({
+        schoolId,
+        caseId: id,
+        studentId,
+        impact,
+        updatedByStaffId: staff.id,
+        updatedByName: staff.displayName,
+      });
+    }
+
+    await audit({
+      schoolId,
+      entityType: "case",
+      entityId: id,
+      action: "player_impact_set",
+      staff,
+      payload: { studentId, before, after: impact },
+    });
+    res.json({ ok: true, studentId, impact });
+  },
+);
 
 // --- interactions ----------------------------------------------------
 

@@ -73,6 +73,7 @@ export * from "./separationReasonTags";
 export * from "./studentSeparations";
 export * from "./interactions";
 export * from "./interactionCases";
+export * from "./interactionCasePlayerImpact";
 export * from "./interactionWitnessStatements";
 export * from "./interactionAuditLog";
 export * from "./interactionAlertDismissals";
