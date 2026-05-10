@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  Pencil,
   Plus,
   Shield,
   StickyNote,
@@ -444,11 +445,19 @@ export default function WatchlistCaseDetail({
               </div>
             ) : (
               <h1
-                className="mt-2 cursor-pointer text-3xl font-bold tracking-tight"
+                className="group mt-2 inline-flex cursor-pointer items-center gap-2 text-3xl font-bold tracking-tight"
                 onClick={() => setEditingTitle(true)}
-                title="Click to edit"
+                title="Click to edit case name"
               >
-                {c.title}
+                <span>{c.title}</span>
+                {/* Pencil affordance — the bare h1 click target was
+                    too easy to miss. Stays visible (not just on hover)
+                    so the editability is discoverable on first view. */}
+                <Pencil
+                  className="h-4 w-4 opacity-50 transition-opacity group-hover:opacity-100"
+                  style={{ color: C.inkSoft }}
+                  aria-label="Edit case name"
+                />
               </h1>
             )}
             <p className="mt-1 text-sm" style={{ color: C.inkSoft }}>
