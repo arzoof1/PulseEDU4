@@ -185,6 +185,61 @@ function layout(nodes: NetNode[]): {
   return { positioned, clusters, anchorIds };
 }
 
+// Full-school web layout. Every student in the school window goes onto
+// one canvas as a single force-directed-style web (no case grouping).
+// We use a deterministic golden-angle phyllotaxis spiral sorted by
+// degree (sum of edge weights touching the node) — this gives the
+// most-connected students the visual focus near the center while the
+// peripherals fan out, without needing a real physics simulation.
+//
+// Performance cap: above 500 nodes we drop students with zero edges
+// from the render so the browser stays responsive. Their case-grid view
+// still shows them.
+function layoutFullWeb(
+  nodes: NetNode[],
+  edges: NetEdge[],
+): { positioned: Positioned[]; rendered: number; suppressed: number } {
+  const W = 1180;
+  const H = 820;
+  const cx = W / 2;
+  const cy = H / 2;
+  const degree = new Map<string, number>();
+  for (const e of edges) {
+    degree.set(e.a, (degree.get(e.a) ?? 0) + e.weight);
+    degree.set(e.b, (degree.get(e.b) ?? 0) + e.weight);
+  }
+  const cap = 500;
+  const filtered =
+    nodes.length > cap ? nodes.filter((n) => (degree.get(n.studentId) ?? 0) > 0) : nodes;
+  const sorted = [...filtered].sort(
+    (a, b) =>
+      (degree.get(b.studentId) ?? 0) - (degree.get(a.studentId) ?? 0) ||
+      b.total - a.total ||
+      a.lastName.localeCompare(b.lastName),
+  );
+  const golden = Math.PI * (3 - Math.sqrt(5));
+  // Spacing tuned so ~250 nodes fill the canvas without spilling out.
+  // sqrt(i)*spacing keeps the spiral evenly dense; clamp to keep the
+  // outer ring inside the viewBox even when there are fewer nodes.
+  const maxR = Math.min(W, H) * 0.46;
+  const spacing = sorted.length > 0 ? Math.min(24, maxR / Math.sqrt(sorted.length)) : 24;
+  const positioned: Positioned[] = sorted.map((n, i) => {
+    const angle = i * golden;
+    const r = Math.sqrt(i + 0.5) * spacing;
+    return {
+      ...n,
+      cluster: -2, // synthetic — full-web has no case clusters
+      x: cx + Math.cos(angle) * r,
+      y: cy + Math.sin(angle) * r,
+    };
+  });
+  return {
+    positioned,
+    rendered: positioned.length,
+    suppressed: nodes.length - positioned.length,
+  };
+}
+
 // Single-cluster layout: the "primary" student (highest total
 // involvements — i.e. the anchor of the case) sits at the center and
 // the rest ring around it filling most of the viewport. Anchor in the
@@ -299,6 +354,12 @@ export default function WatchlistNetwork({
   // null = overview (all clusters); a number = zoom into one cluster
   // (case id, or -1 for the loose / no-case ring).
   const [zoomedClusterId, setZoomedClusterId] = useState<number | null>(null);
+  // Toggles the canvas between the default per-case grid view and a
+  // single zoomed-out force-directed web showing every student node +
+  // every confirmed edge in one unified canvas. Not persisted — resets
+  // to "case-grid" on every visit (intentional: avoids surprising the
+  // next user on a shared workstation).
+  const [viewMode, setViewMode] = useState<"case-grid" | "full-web">("case-grid");
   // Phase 2.1 — per-student rollup of video evidence on the currently
   // zoomed case. Empty map when not zoomed or when the viewer is not
   // an admin (the endpoint 403s for non-admins, which we silently treat
@@ -421,11 +482,26 @@ export default function WatchlistNetwork({
         positioned: z.positioned,
         clusters: z.clusters,
         anchorIds: z.anchorId ? new Set([z.anchorId]) : new Set<string>(),
+        suppressed: 0,
+      };
+    }
+    if (viewMode === "full-web") {
+      const f = layoutFullWeb(data.nodes, data.edges);
+      return {
+        positioned: f.positioned,
+        clusters: new Map<number, { cx: number; cy: number; r: number; size: number }>(),
+        anchorIds: new Set<string>(),
+        suppressed: f.suppressed,
       };
     }
     const o = layout(data.nodes);
-    return { positioned: o.positioned, clusters: o.clusters, anchorIds: o.anchorIds };
-  }, [data, zoomedClusterId, zoomedData]);
+    return {
+      positioned: o.positioned,
+      clusters: o.clusters,
+      anchorIds: o.anchorIds,
+      suppressed: 0,
+    };
+  }, [data, zoomedClusterId, zoomedData, viewMode]);
 
   const activeData: Resp | null = zoomedData ?? data;
 
@@ -825,12 +901,68 @@ export default function WatchlistNetwork({
                   </div>
                 </>
               ) : (
-                <div className="flex items-center gap-2">
+                <div className="flex w-full items-center gap-3">
                   <Zap className="h-4 w-4" style={{ color: C.brand }} />
-                  <span className="text-sm font-semibold">School-wide interaction graph</span>
-                  <span className="text-[11px]" style={{ color: C.inkSoft }}>
-                    · click any case ring to zoom in · click a node to focus
+                  <span className="text-sm font-semibold">
+                    {viewMode === "full-web"
+                      ? "Full school web"
+                      : "School-wide interaction graph"}
                   </span>
+                  <span className="text-[11px]" style={{ color: C.inkSoft }}>
+                    {viewMode === "full-web"
+                      ? "· every confirmed edge in one canvas · hover a node to read its name"
+                      : "· click any case ring to zoom in · click a node to focus"}
+                  </span>
+                  {viewMode === "full-web" && layoutResult && layoutResult.suppressed > 0 && (
+                    <span
+                      className="rounded-full px-2 py-0.5 text-[10px] font-semibold"
+                      style={{ background: "#FBE9D8", color: "#7A4A12" }}
+                      title={`${layoutResult.suppressed} student${layoutResult.suppressed === 1 ? "" : "s"} with no edges in this window were hidden to keep the canvas readable. They still appear in the case-grid view.`}
+                    >
+                      {layoutResult.suppressed} isolated hidden
+                    </span>
+                  )}
+                  <div
+                    className="ml-auto inline-flex overflow-hidden rounded-md border"
+                    style={{ borderColor: C.line }}
+                    role="tablist"
+                    aria-label="Network view mode"
+                  >
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={viewMode === "case-grid"}
+                      onClick={() => {
+                        setViewMode("case-grid");
+                        setSelectedId(null);
+                      }}
+                      className="px-3 py-1 text-[11px] font-bold"
+                      style={{
+                        background: viewMode === "case-grid" ? C.brand : C.panel,
+                        color: viewMode === "case-grid" ? "#FFFFFF" : C.ink,
+                      }}
+                      title="Group nodes by case (default)"
+                    >
+                      Case grid
+                    </button>
+                    <button
+                      type="button"
+                      role="tab"
+                      aria-selected={viewMode === "full-web"}
+                      onClick={() => {
+                        setViewMode("full-web");
+                        setSelectedId(null);
+                      }}
+                      className="px-3 py-1 text-[11px] font-bold"
+                      style={{
+                        background: viewMode === "full-web" ? C.brand : C.panel,
+                        color: viewMode === "full-web" ? "#FFFFFF" : C.ink,
+                      }}
+                      title="One zoomed-out web of every student + every confirmed edge"
+                    >
+                      Full school web
+                    </button>
+                  </div>
                 </div>
               )}
             </div>
@@ -846,6 +978,7 @@ export default function WatchlistNetwork({
                 clusters={layoutResult!.clusters}
                 selectedId={selectedId}
                 zoomed={zoomedClusterId !== null}
+                mode={zoomedClusterId !== null ? "case-grid" : viewMode}
                 anchorIds={layoutResult!.anchorIds}
                 evidenceSummary={evidenceSummary}
                 onSelectNode={(id) => setSelectedId(id)}
@@ -1377,6 +1510,7 @@ function NetworkSVG({
   onSelectNode,
   onOpenCase,
   onZoomCluster,
+  mode,
 }: {
   data: Resp;
   positioned: Positioned[];
@@ -1394,6 +1528,10 @@ function NetworkSVG({
   onSelectNode: (id: string) => void;
   onOpenCase: (id: number) => void;
   onZoomCluster: (id: number) => void;
+  // "case-grid" — default, halos + always-on labels, click-to-zoom rings.
+  // "full-web" — single zoomed-out web; no halos, no zoom rings, labels
+  // appear only on hover or for the selected node.
+  mode?: "case-grid" | "full-web";
 }) {
   const W = 1180;
   const H = 820;
@@ -1401,6 +1539,15 @@ function NetworkSVG({
   const caseById = new Map(data.cases.map((c) => [c.id, c] as const));
   const isSelectedEdge = (e: NetEdge) => e.a === selectedId || e.b === selectedId;
   const clusterIdsSorted = [...clusters.keys()];
+  const isFullWeb = mode === "full-web";
+  const [hoveredId, setHoveredId] = useState<string | null>(null);
+  // Mode/data flips don't always emit an onMouseLeave (the hovered
+  // node's group can unmount mid-hover when we toggle to case-grid).
+  // Clear hover state explicitly so a stale label can't re-appear when
+  // the user toggles back to full-web later.
+  useEffect(() => {
+    setHoveredId(null);
+  }, [mode, positioned]);
 
   return (
     <svg viewBox={`0 0 ${W} ${H}`} className="h-auto w-full">
@@ -1502,7 +1649,7 @@ function NetworkSVG({
           full case file). In zoomed mode, zoom is disabled (already
           zoomed) and the title pill is hidden — the surrounding card
           header carries the case info + Back action. */}
-      {clusterIdsSorted.map((cid, idx) => {
+      {!isFullWeb && clusterIdsSorted.map((cid, idx) => {
         const cl = clusters.get(cid)!;
         const c = cid >= 0 ? caseById.get(cid) : null;
         const label = c ? `Case ${formatCaseNumber(c)} · ${c.title}` : "Loose / no case";
@@ -1641,7 +1788,15 @@ function NetworkSVG({
         const baseR = 12 + Math.min(14, Math.log2(Math.max(1, n.total) + 1) * 4);
         const overviewScale = isAnchor ? 2.0 : 1.0;
         const zoomScale = isAnchor ? 2.2 : 1.35;
-        const r = zoomed ? baseR * zoomScale : baseR * overviewScale;
+        // Full-web packs many more nodes onto the same canvas, so
+        // shrink the spheres so the spiral doesn't overlap and the
+        // edge web stays readable.
+        const fullWebScale = 0.55;
+        const r = isFullWeb
+          ? baseR * fullWebScale
+          : zoomed
+            ? baseR * zoomScale
+            : baseR * overviewScale;
         const meta = ROLE_META[(n.primaryRole as Role) ?? "peripheral"] ?? ROLE_META.peripheral;
         const ringColor =
           n.flag === "always-peripheral"
@@ -1650,10 +1805,20 @@ function NetworkSVG({
               ? C.warn
               : "transparent";
         const isSelected = n.studentId === selectedId;
+        const isHovered = isFullWeb && n.studentId === hoveredId;
+        // Hover-only labels in full-web (every-student canvas would
+        // otherwise drown in overlapping name text). Selected node
+        // always shows a label so the right-rail focus is obvious.
+        const showLabel = !isFullWeb || isSelected || isHovered;
+        // Skip drawing initials on the tiny full-web spheres — they
+        // become illegible smudges. The hover label still shows the name.
+        const showInitials = !isFullWeb || r >= 11;
         return (
           <g
             key={n.studentId}
             onClick={() => onSelectNode(n.studentId)}
+            onMouseEnter={isFullWeb ? () => setHoveredId(n.studentId) : undefined}
+            onMouseLeave={isFullWeb ? () => setHoveredId(null) : undefined}
             style={{ cursor: "pointer" }}
           >
             {ringColor !== "transparent" && (
@@ -1686,28 +1851,40 @@ function NetworkSVG({
               opacity={0.55}
               style={{ pointerEvents: "none" }}
             />
-            <text
-              x={n.x}
-              y={n.y + r * 0.18}
-              fontSize={Math.max(11, r * 0.55)}
-              fontWeight={800}
-              fill={meta.color}
-              textAnchor="middle"
-            >
-              {n.firstName.charAt(0)}
-              {n.lastName.charAt(0)}
-            </text>
-            <text
-              x={n.x}
-              y={n.y + r + Math.max(16, r * 0.34)}
-              fontSize={Math.max(14, r * 0.38)}
-              fontWeight={isSelected || isAnchor ? 700 : 600}
-              fill={C.ink}
-              textAnchor="middle"
-              style={{ paintOrder: "stroke", stroke: C.graphBg, strokeWidth: 3 }}
-            >
-              {n.lastName} · {n.grade ?? "?"}
-            </text>
+            {showInitials && (
+              <text
+                x={n.x}
+                y={n.y + r * 0.18}
+                fontSize={Math.max(11, r * 0.55)}
+                fontWeight={800}
+                fill={meta.color}
+                textAnchor="middle"
+                style={{ pointerEvents: "none" }}
+              >
+                {n.firstName.charAt(0)}
+                {n.lastName.charAt(0)}
+              </text>
+            )}
+            {showLabel && (
+              <text
+                x={n.x}
+                y={n.y + r + Math.max(isFullWeb ? 12 : 16, r * 0.34)}
+                fontSize={isFullWeb ? (isHovered || isSelected ? 13 : 11) : Math.max(14, r * 0.38)}
+                fontWeight={isSelected || isAnchor || isHovered ? 700 : 600}
+                fill={C.ink}
+                textAnchor="middle"
+                style={{
+                  paintOrder: "stroke",
+                  stroke: C.graphBg,
+                  strokeWidth: 3,
+                  pointerEvents: "none",
+                }}
+              >
+                {isFullWeb
+                  ? `${n.firstName} ${n.lastName} · ${n.grade ?? "?"}`
+                  : `${n.lastName} · ${n.grade ?? "?"}`}
+              </text>
+            )}
             {/* Phase 2.1 video-evidence badge. Sits in a fixed corner
                 (upper-right) of every player sphere with ≥1 linked
                 clip so admins can scan "who's actually on tape" at a
