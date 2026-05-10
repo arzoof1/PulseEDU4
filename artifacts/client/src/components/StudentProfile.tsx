@@ -643,7 +643,7 @@ export default function StudentProfile({
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
         <button type="button" onClick={onBack} style={{ marginBottom: "0.5rem" }}>
-          ← Back to Watchlist
+          ← Back to Investigations
         </button>
         <p style={{ color: "var(--text-subtle)" }}>Loading profile…</p>
       </div>
@@ -653,7 +653,7 @@ export default function StudentProfile({
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
         <button type="button" onClick={onBack} style={{ marginBottom: "0.5rem" }}>
-          ← Back to Watchlist
+          ← Back to Investigations
         </button>
         <p style={{ color: "#991b1b" }}>{error ?? "Failed to load."}</p>
       </div>
@@ -686,7 +686,7 @@ export default function StudentProfile({
               cursor: "pointer",
             }}
           >
-            ← Back to Watchlist
+            ← Back to Investigations
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
             <span style={{ color: "#6b7280", fontSize: "0.85rem" }}>Window:</span>
