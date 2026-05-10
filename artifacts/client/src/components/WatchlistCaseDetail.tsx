@@ -127,9 +127,13 @@ interface StudentHit {
 interface Props {
   caseId: number;
   onBack?: () => void;
-  // Phase 2+ admin-only surfaces (video evidence, AI consistency check,
-  // Case Insights). Threaded down from the App.tsx call site so the
-  // detail view never has to fetch /me itself.
+  // Phase 2+ investigator-only surfaces (video evidence, AI consistency
+  // check, Case Insights). Threaded down from the App.tsx call site so
+  // the detail view never has to fetch /me itself. The flag is true
+  // for the Case Investigator group: admin tier + Behavior Specialist
+  // + MTSS Coordinator + Dean. Excludes School Psychologist and
+  // School Counselor by design — they sit outside the discipline
+  // investigation chain.
   isAdmin?: boolean;
   // Display name of the logged-in admin — used to pre-fill the
   // "Viewed by {name}" reason text on Confirmed video tags.

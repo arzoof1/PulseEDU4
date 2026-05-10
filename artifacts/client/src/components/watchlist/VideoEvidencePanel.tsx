@@ -455,9 +455,9 @@ export default function VideoEvidencePanel({
           <span
             className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
             style={{ background: "#FEF3C7", color: "#92400E" }}
-            title="Visible to administrators only"
+            title="Visible to admins, Behavior Specialists, MTSS Coordinators, and Deans"
           >
-            Admin only
+            Investigators only
           </span>
         </div>
         {!showAdd && (

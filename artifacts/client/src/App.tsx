@@ -19149,7 +19149,10 @@ function App() {
           isAdmin={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||
-              authUser?.isDistrictAdmin,
+              authUser?.isDistrictAdmin ||
+              authUser?.isBehaviorSpecialist ||
+              authUser?.isMtssCoordinator ||
+              authUser?.isDean,
           )}
           viewerName={authUser?.displayName ?? ""}
         />

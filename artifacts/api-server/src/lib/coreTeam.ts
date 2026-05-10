@@ -44,6 +44,32 @@ export function isAdminOrSuperUser(staff: {
   );
 }
 
+// "Case Investigator" gate — broader than admin but narrower than
+// Core Team. Admits the admin tier plus the three roles that
+// administration explicitly asked for on the case investigation
+// workflow: Behavior Specialist, MTSS Coordinator, and Dean. They
+// commonly run statement collection and footage review alongside
+// admins. School Counselor and School Psychologist are intentionally
+// excluded — they sit outside the discipline-investigation chain
+// even though they are Core Team for intervention purposes.
+export function isCaseInvestigator(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isDean?: boolean | null;
+}): boolean {
+  return (
+    isAdminOrSuperUser(staff) ||
+    Boolean(
+      staff.isBehaviorSpecialist ||
+        staff.isMtssCoordinator ||
+        staff.isDean,
+    )
+  );
+}
+
 // Safety Plan edit gate. Per spec: Admin, Guidance Counselor, and any
 // Core Team member can create / edit / deactivate a student's safety
 // plan and manage the school-wide item library.

@@ -75,7 +75,11 @@ import {
   syncWitnessStatementMentions,
   updateMentionCaseIdForInteraction,
 } from "../lib/mentions.js";
-import { isCoreTeam, isAdminOrSuperUser } from "../lib/coreTeam.js";
+import {
+  isCoreTeam,
+  isAdminOrSuperUser,
+  isCaseInvestigator,
+} from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -95,8 +99,17 @@ function requireCoreTeamMW() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!isCoreTeam(staff)) {
-      res.status(403).json({ error: "Core Team role required" });
+    // Watchlist surface (cases, witness statements, notes, video
+    // evidence) is open to Core Team *or* Case Investigator roles.
+    // Core Team includes School Psychologist (intervention-side); Case
+    // Investigator adds Dean. The union here lets every role that
+    // historically had watchlist access keep it AND lets a Dean reach
+    // witness-statement creation without granting the rest of the
+    // intervention surface.
+    if (!isCoreTeam(staff) && !isCaseInvestigator(staff)) {
+      res
+        .status(403)
+        .json({ error: "Core Team or Case Investigator role required" });
       return;
     }
     (req as ReqWithStaff).staff = staff;
@@ -2783,16 +2796,20 @@ router.get("/watchlist/cases/:id/mentions", async (req: Request, res: Response) 
 
 // --- video evidence (Phase 2, admin-only) ----------------------------
 //
-// A per-case catalogue of camera footage the admin has identified as
-// relevant. The router-level core-team gate is too permissive for this
-// surface (it includes Behavior Specialist / MTSS / School Psych), so
-// every handler here additionally checks `isAdminOrSuperUser` and 403s
-// otherwise. Teachers and parents must never see this surface.
+// A per-case catalogue of camera footage relevant to an investigation.
+// Access is restricted to the "Case Investigator" group: admin tier
+// plus Behavior Specialist, MTSS Coordinator, and Dean — the people
+// who actually run discipline investigations. The router-level gate
+// also lets in School Psychologist and (via Core Team) other roles
+// who run interventions; those should NOT see footage tooling, so we
+// re-gate every handler here.
 
 function adminGate(req: Request, res: Response): boolean {
   const staff = (req as ReqWithStaff).staff;
-  if (!isAdminOrSuperUser(staff)) {
-    res.status(403).json({ error: "Admin role required" });
+  if (!isCaseInvestigator(staff)) {
+    res
+      .status(403)
+      .json({ error: "Admin, Behavior Specialist, MTSS, or Dean role required" });
     return false;
   }
   return true;
