@@ -180,3 +180,9 @@ id = "RfxWiTl7ZrWrPy5z4Oxxe"
 uri = "file://exports/PulseEDU_Phase1_Roles_and_Access.pdf"
 type = "pdf"
 title = "PulseEDU Phase 1 — User Roles & Access (v2)"
+
+[[outputs]]
+id = "l_nQIoMe-cQ4y5TiBmeYw"
+uri = "file://attached_assets/PulseEDU_Workflow_Guide.pdf"
+type = "pdf"
+title = "PulseEDU Workflow Guide"
