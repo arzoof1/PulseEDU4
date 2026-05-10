@@ -12,6 +12,7 @@ import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import VoiceTextarea from "./watchlist/VoiceTextarea";
 import MentionTextarea from "./watchlist/MentionTextarea";
+import VideoEvidencePanel from "./watchlist/VideoEvidencePanel";
 import {
   ROLE_META,
   WL_COLORS as C,
@@ -126,9 +127,17 @@ interface StudentHit {
 interface Props {
   caseId: number;
   onBack?: () => void;
+  // Phase 2+ admin-only surfaces (video evidence, AI consistency check,
+  // Case Insights). Threaded down from the App.tsx call site so the
+  // detail view never has to fetch /me itself.
+  isAdmin?: boolean;
 }
 
-export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
+export default function WatchlistCaseDetail({
+  caseId,
+  onBack,
+  isAdmin = false,
+}: Props) {
   const [data, setData] = useState<Resp | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [noteText, setNoteText] = useState("");
@@ -821,6 +830,18 @@ export default function WatchlistCaseDetail({ caseId, onBack }: Props) {
                 )}
               </div>
             </div>
+
+            {/* Video evidence (admin-only — Phase 2 of case enhancement suite) */}
+            {isAdmin && (
+              <VideoEvidencePanel
+                caseId={caseId}
+                brandColor={C.brand}
+                panelBg={C.panel}
+                pageBg={C.bg}
+                lineColor={C.line}
+                inkSoft={C.inkSoft}
+              />
+            )}
 
             {/* Notes timeline */}
             <div

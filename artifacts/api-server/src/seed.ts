@@ -1365,6 +1365,36 @@ export async function ensureCaseMentionsSchema() {
   );
 }
 
+// Admin-only video evidence catalogue for a case (Phase 2 of the case
+// enhancement suite). Append-only at the row level (rows can be edited
+// or deleted but the audit log captures the change). Indexes target
+// the two common reads: "all evidence on this case" and "label
+// typeahead within this school".
+export async function ensureCaseVideoEvidenceSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS case_video_evidence (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      case_id INTEGER NOT NULL,
+      camera_label TEXT NOT NULL,
+      timestamp_start TIMESTAMPTZ NOT NULL,
+      timestamp_end TIMESTAMPTZ,
+      source_url TEXT,
+      notes TEXT,
+      logged_by_staff_id INTEGER,
+      logged_by_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_video_evidence_case_idx ON case_video_evidence (school_id, case_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS case_video_evidence_school_label_idx ON case_video_evidence (school_id, camera_label)`,
+  );
+}
+
 export async function ensureTierPresetsSchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier_presets (
@@ -1531,6 +1561,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureTierPresetsSchema();
   await ensureOnboardingChecklistSchema();
   await ensureCaseMentionsSchema();
+  await ensureCaseVideoEvidenceSchema();
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

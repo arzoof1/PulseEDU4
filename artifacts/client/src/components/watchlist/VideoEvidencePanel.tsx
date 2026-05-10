@@ -1,0 +1,538 @@
+import { useEffect, useState } from "react";
+import { Plus, Trash2, Video, Save, X, ExternalLink } from "lucide-react";
+import { authFetch } from "../../lib/authToken";
+
+// Admin-only Phase 2 panel. Lists the video evidence the investigator
+// has identified for this case and lets them add / edit / remove rows.
+// All routes are 403'd for non-admins server-side, but we also gate the
+// render so a teacher who somehow lands here sees nothing rather than
+// an empty-state hint that betrays the surface exists.
+
+interface EvidenceRow {
+  id: number;
+  schoolId: number;
+  caseId: number;
+  cameraLabel: string;
+  timestampStart: string;
+  timestampEnd: string | null;
+  sourceUrl: string | null;
+  notes: string | null;
+  loggedByName: string | null;
+  createdAt: string;
+}
+
+interface Props {
+  caseId: number;
+  brandColor: string;
+  panelBg: string;
+  pageBg: string;
+  lineColor: string;
+  inkSoft: string;
+}
+
+// Convert a JS Date <-> the value a <input type="datetime-local"> wants
+// (no timezone, minute precision). We store TIMESTAMPTZ on the server,
+// but display in local time so the admin sees what the camera clock
+// said.
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const pad = (n: number) => n.toString().padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(
+    d.getDate(),
+  )}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function fromLocalInput(v: string): string {
+  if (!v) return "";
+  // datetime-local has no zone — interpret as local and serialise to ISO.
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? "" : d.toISOString();
+}
+
+export default function VideoEvidencePanel({
+  caseId,
+  brandColor,
+  panelBg,
+  pageBg,
+  lineColor,
+  inkSoft,
+}: Props) {
+  const [rows, setRows] = useState<EvidenceRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [labels, setLabels] = useState<string[]>([]);
+
+  const [showAdd, setShowAdd] = useState(false);
+  const [newLabel, setNewLabel] = useState("");
+  const [newStart, setNewStart] = useState("");
+  const [newEnd, setNewEnd] = useState("");
+  const [newUrl, setNewUrl] = useState("");
+  const [newNotes, setNewNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editLabel, setEditLabel] = useState("");
+  const [editStart, setEditStart] = useState("");
+  const [editEnd, setEditEnd] = useState("");
+  const [editUrl, setEditUrl] = useState("");
+  const [editNotes, setEditNotes] = useState("");
+
+  async function load() {
+    setError(null);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/cases/${caseId}/video-evidence`,
+        { credentials: "include" },
+      );
+      if (r.status === 403) {
+        // Non-admin somehow rendered this panel; fail silent (no leak).
+        setRows([]);
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = (await r.json()) as { evidence: EvidenceRow[] };
+      setRows(data.evidence);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Failed to load");
+      setRows([]);
+    }
+  }
+
+  async function loadLabels() {
+    try {
+      const r = await authFetch(`/api/watchlist/camera-labels`, {
+        credentials: "include",
+      });
+      if (!r.ok) return;
+      const data = (await r.json()) as { labels: string[] };
+      setLabels(data.labels);
+    } catch {
+      /* noop */
+    }
+  }
+
+  useEffect(() => {
+    void load();
+    void loadLabels();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [caseId]);
+
+  function resetAdd() {
+    setNewLabel("");
+    setNewStart("");
+    setNewEnd("");
+    setNewUrl("");
+    setNewNotes("");
+    setShowAdd(false);
+  }
+
+  async function add() {
+    if (!newLabel.trim() || !newStart) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(
+        `/api/watchlist/cases/${caseId}/video-evidence`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cameraLabel: newLabel.trim(),
+            timestampStart: fromLocalInput(newStart),
+            timestampEnd: newEnd ? fromLocalInput(newEnd) : "",
+            sourceUrl: newUrl.trim(),
+            notes: newNotes.trim(),
+          }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      resetAdd();
+      await load();
+      await loadLabels();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  function startEdit(row: EvidenceRow) {
+    setEditingId(row.id);
+    setEditLabel(row.cameraLabel);
+    setEditStart(toLocalInput(row.timestampStart));
+    setEditEnd(toLocalInput(row.timestampEnd));
+    setEditUrl(row.sourceUrl ?? "");
+    setEditNotes(row.notes ?? "");
+  }
+
+  function cancelEdit() {
+    setEditingId(null);
+  }
+
+  async function saveEdit(id: number) {
+    if (!editLabel.trim() || !editStart) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(`/api/watchlist/video-evidence/${id}`, {
+        method: "PATCH",
+        credentials: "include",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cameraLabel: editLabel.trim(),
+          timestampStart: fromLocalInput(editStart),
+          timestampEnd: editEnd ? fromLocalInput(editEnd) : null,
+          sourceUrl: editUrl.trim(),
+          notes: editNotes.trim(),
+        }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      cancelEdit();
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function remove(id: number) {
+    if (
+      !window.confirm(
+        "Remove this video evidence entry? The change will be recorded in the audit log.",
+      )
+    )
+      return;
+    setSaving(true);
+    setError(null);
+    try {
+      const r = await authFetch(`/api/watchlist/video-evidence/${id}`, {
+        method: "DELETE",
+        credentials: "include",
+      });
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      await load();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Delete failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  // Quick chip — when an admin clicks a recently-used label, prefill
+  // the new-row label field.
+  function chooseLabel(l: string) {
+    if (showAdd) setNewLabel(l);
+    else if (editingId != null) setEditLabel(l);
+  }
+
+  const hasRows = rows && rows.length > 0;
+
+  return (
+    <div
+      className="rounded-xl border p-5"
+      style={{ borderColor: lineColor, background: panelBg }}
+    >
+      <div className="flex items-baseline justify-between">
+        <div className="flex items-center gap-2">
+          <Video className="h-4 w-4" style={{ color: brandColor }} />
+          <h2 className="text-lg font-bold tracking-tight">Video evidence</h2>
+          <span
+            className="rounded px-1.5 py-0.5 text-[10px] font-bold uppercase tracking-wide"
+            style={{ background: "#FEF3C7", color: "#92400E" }}
+            title="Visible to administrators only"
+          >
+            Admin only
+          </span>
+        </div>
+        {!showAdd && (
+          <button
+            type="button"
+            onClick={() => setShowAdd(true)}
+            className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-[11px] font-semibold"
+            style={{ background: pageBg, color: brandColor }}
+          >
+            <Plus className="h-3 w-3" /> Add
+          </button>
+        )}
+      </div>
+
+      {error && (
+        <div
+          className="mt-2 rounded-md border px-2 py-1 text-xs"
+          style={{
+            borderColor: "#FCA5A5",
+            background: "#FEF2F2",
+            color: "#991B1B",
+          }}
+        >
+          {error}
+        </div>
+      )}
+
+      {labels.length > 0 && (showAdd || editingId != null) && (
+        <div className="mt-3 flex flex-wrap items-center gap-1">
+          <span className="text-[10px] font-bold uppercase" style={{ color: inkSoft }}>
+            Recent cameras:
+          </span>
+          {labels.slice(0, 12).map((l) => (
+            <button
+              key={l}
+              type="button"
+              onClick={() => chooseLabel(l)}
+              className="rounded-full border px-2 py-0.5 text-[10px] font-semibold"
+              style={{ borderColor: lineColor, color: brandColor, background: pageBg }}
+            >
+              {l}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {showAdd && (
+        <div
+          className="mt-3 rounded-lg border p-3"
+          style={{ borderColor: lineColor, background: pageBg }}
+        >
+          <div className="grid gap-2 md:grid-cols-2">
+            <label className="text-xs font-semibold">
+              Camera label
+              <input
+                type="text"
+                value={newLabel}
+                onChange={(e) => setNewLabel(e.target.value)}
+                placeholder="e.g. Cafeteria North"
+                className="mt-1 w-full rounded-md border px-2 py-1 text-sm font-normal"
+                style={{ borderColor: lineColor, background: panelBg }}
+              />
+            </label>
+            <label className="text-xs font-semibold">
+              Source URL (optional)
+              <input
+                type="url"
+                value={newUrl}
+                onChange={(e) => setNewUrl(e.target.value)}
+                placeholder="Link to clip in your camera system"
+                className="mt-1 w-full rounded-md border px-2 py-1 text-sm font-normal"
+                style={{ borderColor: lineColor, background: panelBg }}
+              />
+            </label>
+            <label className="text-xs font-semibold">
+              Footage start
+              <input
+                type="datetime-local"
+                value={newStart}
+                onChange={(e) => setNewStart(e.target.value)}
+                className="mt-1 w-full rounded-md border px-2 py-1 text-sm font-normal"
+                style={{ borderColor: lineColor, background: panelBg }}
+              />
+            </label>
+            <label className="text-xs font-semibold">
+              Footage end (optional)
+              <input
+                type="datetime-local"
+                value={newEnd}
+                onChange={(e) => setNewEnd(e.target.value)}
+                className="mt-1 w-full rounded-md border px-2 py-1 text-sm font-normal"
+                style={{ borderColor: lineColor, background: panelBg }}
+              />
+            </label>
+          </div>
+          <label className="mt-2 block text-xs font-semibold">
+            Notes (what to look for, who to focus on…)
+            <textarea
+              value={newNotes}
+              onChange={(e) => setNewNotes(e.target.value)}
+              rows={2}
+              className="mt-1 w-full rounded-md border px-2 py-1 text-sm font-normal"
+              style={{ borderColor: lineColor, background: panelBg }}
+            />
+          </label>
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={resetAdd}
+              disabled={saving}
+              className="rounded-md px-3 py-1 text-xs font-semibold"
+              style={{ background: panelBg, color: brandColor, border: `1px solid ${lineColor}` }}
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => void add()}
+              disabled={saving || !newLabel.trim() || !newStart}
+              className="rounded-md px-3 py-1 text-xs font-bold disabled:opacity-50"
+              style={{ background: brandColor, color: "#FFFFFF" }}
+            >
+              {saving ? "Saving…" : "Save evidence"}
+            </button>
+          </div>
+        </div>
+      )}
+
+      <div className="mt-3 space-y-2">
+        {!rows ? (
+          <div className="text-sm" style={{ color: inkSoft }}>
+            Loading…
+          </div>
+        ) : !hasRows ? (
+          <div className="text-sm" style={{ color: inkSoft }}>
+            No video evidence logged yet.
+          </div>
+        ) : (
+          rows.map((r) =>
+            editingId === r.id ? (
+              <div
+                key={r.id}
+                className="rounded-lg border p-3"
+                style={{ borderColor: brandColor, background: pageBg }}
+              >
+                <div className="grid gap-2 md:grid-cols-2">
+                  <input
+                    type="text"
+                    value={editLabel}
+                    onChange={(e) => setEditLabel(e.target.value)}
+                    className="rounded-md border px-2 py-1 text-sm"
+                    style={{ borderColor: lineColor, background: panelBg }}
+                  />
+                  <input
+                    type="url"
+                    value={editUrl}
+                    onChange={(e) => setEditUrl(e.target.value)}
+                    placeholder="Source URL (optional)"
+                    className="rounded-md border px-2 py-1 text-sm"
+                    style={{ borderColor: lineColor, background: panelBg }}
+                  />
+                  <input
+                    type="datetime-local"
+                    value={editStart}
+                    onChange={(e) => setEditStart(e.target.value)}
+                    className="rounded-md border px-2 py-1 text-sm"
+                    style={{ borderColor: lineColor, background: panelBg }}
+                  />
+                  <input
+                    type="datetime-local"
+                    value={editEnd}
+                    onChange={(e) => setEditEnd(e.target.value)}
+                    className="rounded-md border px-2 py-1 text-sm"
+                    style={{ borderColor: lineColor, background: panelBg }}
+                  />
+                </div>
+                <textarea
+                  value={editNotes}
+                  onChange={(e) => setEditNotes(e.target.value)}
+                  rows={2}
+                  className="mt-2 w-full rounded-md border px-2 py-1 text-sm"
+                  style={{ borderColor: lineColor, background: panelBg }}
+                />
+                <div className="mt-2 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={cancelEdit}
+                    disabled={saving}
+                    className="inline-flex items-center gap-1 rounded-md border px-2 py-1 text-xs font-semibold"
+                    style={{ borderColor: lineColor, background: panelBg, color: brandColor }}
+                  >
+                    <X className="h-3 w-3" /> Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void saveEdit(r.id)}
+                    disabled={saving || !editLabel.trim() || !editStart}
+                    className="inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-bold disabled:opacity-50"
+                    style={{ background: brandColor, color: "#FFFFFF" }}
+                  >
+                    <Save className="h-3 w-3" /> Save
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div
+                key={r.id}
+                className="rounded-lg border p-3"
+                style={{ borderColor: lineColor, background: pageBg }}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 text-sm font-bold">
+                      <Video className="h-3.5 w-3.5" style={{ color: brandColor }} />
+                      <span>{r.cameraLabel}</span>
+                    </div>
+                    <div className="mt-1 text-[11px]" style={{ color: inkSoft }}>
+                      {new Date(r.timestampStart).toLocaleString()}
+                      {r.timestampEnd
+                        ? ` → ${new Date(r.timestampEnd).toLocaleString()}`
+                        : " (single frame / open-ended)"}
+                    </div>
+                    {r.sourceUrl && (
+                      <a
+                        href={r.sourceUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="mt-1 inline-flex items-center gap-1 text-[11px] font-semibold underline"
+                        style={{ color: brandColor }}
+                      >
+                        Open in camera system
+                        <ExternalLink className="h-3 w-3" />
+                      </a>
+                    )}
+                    {r.notes && (
+                      <div
+                        className="mt-2 whitespace-pre-wrap text-xs"
+                        style={{ color: inkSoft }}
+                      >
+                        {r.notes}
+                      </div>
+                    )}
+                    <div
+                      className="mt-2 text-[10px]"
+                      style={{ color: inkSoft }}
+                    >
+                      Logged by {r.loggedByName ?? "—"} ·{" "}
+                      {new Date(r.createdAt).toLocaleString()}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1">
+                    <button
+                      type="button"
+                      onClick={() => startEdit(r)}
+                      className="rounded-md px-2 py-1 text-[10px] font-semibold"
+                      style={{
+                        background: panelBg,
+                        color: brandColor,
+                        border: `1px solid ${lineColor}`,
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => void remove(r.id)}
+                      className="inline-flex items-center justify-center gap-1 rounded-md px-2 py-1 text-[10px] font-semibold"
+                      style={{
+                        background: "#FEF2F2",
+                        color: "#991B1B",
+                        border: "1px solid #FCA5A5",
+                      }}
+                    >
+                      <Trash2 className="h-3 w-3" /> Remove
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ),
+          )
+        )}
+      </div>
+    </div>
+  );
+}

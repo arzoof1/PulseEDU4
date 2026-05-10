@@ -80,3 +80,4 @@ export * from "./interactionAlertDismissals";
 export * from "./interactionQuickEntries";
 export * from "./onboardingChecklistState";
 export * from "./caseMentions";
+export * from "./caseVideoEvidence";

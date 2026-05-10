@@ -19146,6 +19146,11 @@ function App() {
         <WatchlistCaseDetail
           caseId={selectedWatchlistCaseId}
           onBack={() => setActiveSection("watchlistHub")}
+          isAdmin={Boolean(
+            authUser?.isAdmin ||
+              authUser?.isSuperUser ||
+              authUser?.isDistrictAdmin,
+          )}
         />
       )}
 

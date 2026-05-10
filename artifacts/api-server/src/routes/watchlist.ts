@@ -49,6 +49,7 @@ import {
   interactionCaseNotesTable,
   witnessStatementsTable,
   caseMentionsTable,
+  caseVideoEvidenceTable,
   interactionAuditLogTable,
   interactionAlertDismissalsTable,
   interactionQuickEntriesTable,
@@ -71,7 +72,7 @@ import {
   syncWitnessStatementMentions,
   updateMentionCaseIdForInteraction,
 } from "../lib/mentions.js";
-import { isCoreTeam } from "../lib/coreTeam.js";
+import { isCoreTeam, isAdminOrSuperUser } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -2776,6 +2777,328 @@ router.get("/watchlist/cases/:id/mentions", async (req: Request, res: Response) 
     .orderBy(asc(caseMentionsTable.createdAt));
   res.json({ mentions: rows });
 });
+
+// --- video evidence (Phase 2, admin-only) ----------------------------
+//
+// A per-case catalogue of camera footage the admin has identified as
+// relevant. The router-level core-team gate is too permissive for this
+// surface (it includes Behavior Specialist / MTSS / School Psych), so
+// every handler here additionally checks `isAdminOrSuperUser` and 403s
+// otherwise. Teachers and parents must never see this surface.
+
+function adminGate(req: Request, res: Response): boolean {
+  const staff = (req as ReqWithStaff).staff;
+  if (!isAdminOrSuperUser(staff)) {
+    res.status(403).json({ error: "Admin role required" });
+    return false;
+  }
+  return true;
+}
+
+// Reject `javascript:` / `data:` and other unsafe URL schemes so that
+// when the chip is rendered in the panel as `<a href={r.sourceUrl}>`
+// a stored payload can't fire script on click. We allow http/https
+// only — anything else (mailto, custom schemes) is rejected as well,
+// because the field is purely "link to the camera system clip".
+function normaliseSourceUrl(raw: string | null): string | null {
+  if (!raw) return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    return null; // unparseable → drop silently
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    return null;
+  }
+  return parsed.toString();
+}
+
+router.get(
+  "/watchlist/cases/:id/video-evidence",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const rows = await db
+      .select()
+      .from(caseVideoEvidenceTable)
+      .where(
+        and(
+          eq(caseVideoEvidenceTable.schoolId, schoolId),
+          eq(caseVideoEvidenceTable.caseId, caseId),
+        ),
+      )
+      .orderBy(asc(caseVideoEvidenceTable.timestampStart));
+    res.json({ evidence: rows });
+  },
+);
+
+router.post(
+  "/watchlist/cases/:id/video-evidence",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const caseId = asInt(req.params["id"]);
+    if (!caseId) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    // Confirm the case actually exists in this school — defends against
+    // a forged caseId from a multi-tenant escalation attempt.
+    const [c] = await db
+      .select({ id: interactionCasesTable.id })
+      .from(interactionCasesTable)
+      .where(
+        and(
+          eq(interactionCasesTable.id, caseId),
+          eq(interactionCasesTable.schoolId, schoolId),
+        ),
+      );
+    if (!c) {
+      res.status(404).json({ error: "Case not found" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    const cameraLabel = clean(b["cameraLabel"], 200);
+    const startRaw =
+      typeof b["timestampStart"] === "string"
+        ? (b["timestampStart"] as string)
+        : "";
+    const endRaw =
+      typeof b["timestampEnd"] === "string"
+        ? (b["timestampEnd"] as string)
+        : "";
+    const sourceUrlRaw = clean(b["sourceUrl"], 1000) || null;
+    if (sourceUrlRaw && !normaliseSourceUrl(sourceUrlRaw)) {
+      res.status(400).json({
+        error: "sourceUrl must be a valid http(s) URL",
+      });
+      return;
+    }
+    const sourceUrl = normaliseSourceUrl(sourceUrlRaw);
+    const notes = clean(b["notes"], 4000) || null;
+    if (!cameraLabel) {
+      res.status(400).json({ error: "cameraLabel required" });
+      return;
+    }
+    const start = startRaw ? new Date(startRaw) : null;
+    const end = endRaw ? new Date(endRaw) : null;
+    if (!start || Number.isNaN(start.getTime())) {
+      res.status(400).json({ error: "timestampStart required (ISO8601)" });
+      return;
+    }
+    if (end && Number.isNaN(end.getTime())) {
+      res.status(400).json({ error: "timestampEnd is invalid" });
+      return;
+    }
+    if (end && end.getTime() < start.getTime()) {
+      res.status(400).json({ error: "timestampEnd must be after start" });
+      return;
+    }
+    const [row] = await db
+      .insert(caseVideoEvidenceTable)
+      .values({
+        schoolId,
+        caseId,
+        cameraLabel,
+        timestampStart: start,
+        timestampEnd: end,
+        sourceUrl,
+        notes,
+        loggedByStaffId: staff.id,
+        loggedByName: staff.displayName,
+      })
+      .returning();
+    await audit({
+      schoolId,
+      entityType: "video_evidence",
+      entityId: row.id,
+      action: "created",
+      staff,
+      payload: { caseId, cameraLabel },
+    });
+    res.json({ evidence: row });
+  },
+);
+
+router.patch(
+  "/watchlist/video-evidence/:id",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const b = req.body as Record<string, unknown>;
+    // Load the existing row first so cross-field validation (end >=
+    // start) runs on the *merged* shape BEFORE we persist anything.
+    // Validating post-update was a data-integrity bug — an invalid
+    // edit would 400 to the client but still be saved.
+    const [existing] = await db
+      .select()
+      .from(caseVideoEvidenceTable)
+      .where(
+        and(
+          eq(caseVideoEvidenceTable.id, id),
+          eq(caseVideoEvidenceTable.schoolId, schoolId),
+        ),
+      );
+    if (!existing) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    const patch: Partial<typeof caseVideoEvidenceTable.$inferInsert> = {
+      updatedAt: new Date(),
+    };
+    let mergedStart = existing.timestampStart;
+    let mergedEnd: Date | null = existing.timestampEnd;
+    if (typeof b["cameraLabel"] === "string") {
+      const v = clean(b["cameraLabel"], 200);
+      if (!v) {
+        res.status(400).json({ error: "cameraLabel cannot be empty" });
+        return;
+      }
+      patch.cameraLabel = v;
+    }
+    if (typeof b["sourceUrl"] === "string") {
+      const raw = clean(b["sourceUrl"], 1000) || null;
+      if (raw && !normaliseSourceUrl(raw)) {
+        res.status(400).json({
+          error: "sourceUrl must be a valid http(s) URL",
+        });
+        return;
+      }
+      patch.sourceUrl = normaliseSourceUrl(raw);
+    }
+    if (typeof b["notes"] === "string") {
+      patch.notes = clean(b["notes"], 4000) || null;
+    }
+    if (typeof b["timestampStart"] === "string" && b["timestampStart"]) {
+      const d = new Date(b["timestampStart"] as string);
+      if (Number.isNaN(d.getTime())) {
+        res.status(400).json({ error: "timestampStart is invalid" });
+        return;
+      }
+      patch.timestampStart = d;
+      mergedStart = d;
+    }
+    if (b["timestampEnd"] !== undefined) {
+      const v = b["timestampEnd"];
+      if (v === null || v === "") {
+        patch.timestampEnd = null;
+        mergedEnd = null;
+      } else if (typeof v === "string") {
+        const d = new Date(v);
+        if (Number.isNaN(d.getTime())) {
+          res.status(400).json({ error: "timestampEnd is invalid" });
+          return;
+        }
+        patch.timestampEnd = d;
+        mergedEnd = d;
+      }
+    }
+    if (mergedEnd && mergedEnd.getTime() < mergedStart.getTime()) {
+      res.status(400).json({ error: "timestampEnd must be after start" });
+      return;
+    }
+    const [row] = await db
+      .update(caseVideoEvidenceTable)
+      .set(patch)
+      .where(
+        and(
+          eq(caseVideoEvidenceTable.id, id),
+          eq(caseVideoEvidenceTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "video_evidence",
+      entityId: id,
+      action: "updated",
+      staff,
+      payload: { caseId: row.caseId, ...patch, updatedAt: undefined },
+    });
+    res.json({ evidence: row });
+  },
+);
+
+router.delete(
+  "/watchlist/video-evidence/:id",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const staff = (req as ReqWithStaff).staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = asInt(req.params["id"]);
+    if (!id) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .delete(caseVideoEvidenceTable)
+      .where(
+        and(
+          eq(caseVideoEvidenceTable.id, id),
+          eq(caseVideoEvidenceTable.schoolId, schoolId),
+        ),
+      )
+      .returning();
+    if (!row) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    await audit({
+      schoolId,
+      entityType: "video_evidence",
+      entityId: id,
+      action: "deleted",
+      staff,
+      payload: { caseId: row.caseId, cameraLabel: row.cameraLabel },
+    });
+    res.json({ ok: true });
+  },
+);
+
+// Distinct camera labels previously used in this school, used by the
+// client typeahead so admins reuse consistent names ("Cafeteria North"
+// vs. "cafeteria-N" vs. "Caf North"). Capped to keep the payload light.
+router.get(
+  "/watchlist/camera-labels",
+  async (req: Request, res: Response) => {
+    if (!adminGate(req, res)) return;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const rows = (
+      await db.execute(sql`
+        SELECT DISTINCT camera_label AS "cameraLabel"
+          FROM case_video_evidence
+         WHERE school_id = ${schoolId}
+         ORDER BY camera_label ASC
+         LIMIT 200
+      `)
+    ).rows as Array<{ cameraLabel: string }>;
+    res.json({ labels: rows.map((r) => r.cameraLabel) });
+  },
+);
 
 // --- quick entries ---------------------------------------------------
 //

@@ -29,6 +29,21 @@ export function isCoreTeam(staff: {
   );
 }
 
+// Strict admin gate used by the admin-only case enhancement suite
+// (mention insights, video evidence, AI consistency check, Case
+// Insights dashboard). Excludes Behavior Specialist / MTSS / School
+// Psych — those are Core Team for *intervention* purposes but should
+// not see investigative video-evidence tooling.
+export function isAdminOrSuperUser(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+}): boolean {
+  return Boolean(
+    staff.isSuperUser || staff.isDistrictAdmin || staff.isAdmin,
+  );
+}
+
 // Safety Plan edit gate. Per spec: Admin, Guidance Counselor, and any
 // Core Team member can create / edit / deactivate a student's safety
 // plan and manage the school-wide item library.
