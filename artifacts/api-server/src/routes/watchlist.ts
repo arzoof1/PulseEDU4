@@ -80,6 +80,7 @@ import {
   isAdminOrSuperUser,
   isCaseInvestigator,
 } from "../lib/coreTeam.js";
+import { schoolYearLabelFor } from "../lib/schoolYear.js";
 
 const router: IRouter = Router();
 
@@ -1078,6 +1079,7 @@ router.get(
       await db.execute(sql`
         SELECT DISTINCT c.id AS "id",
                         c.case_number AS "caseNumber",
+                        c.school_year_label AS "schoolYearLabel",
                         c.title AS "title",
                         c.status AS "status",
                         c.lead_staff_name AS "leadStaffName",
@@ -1094,6 +1096,7 @@ router.get(
     ).rows as Array<{
       id: number;
       caseNumber: number;
+      schoolYearLabel: string;
       title: string;
       status: string;
       leadStaffName: string;
@@ -1352,9 +1355,15 @@ router.post("/watchlist/cases", async (req: Request, res: Response) => {
       .where(and(eq(staffTable.id, leadStaffId), eq(staffTable.schoolId, schoolId)));
     if (s) leadName = s.displayName;
   }
-  // Sequential per-school case_number
+  // Per-(school, schoolYear) case_number. The label is derived from
+  // the open date so cases group cleanly into school years for filing
+  // and reporting; see lib/schoolYear.ts for the label format.
+  const yearLabel = schoolYearLabelFor(new Date());
   const [{ next }] = (await db.execute(sql`
-    SELECT COALESCE(MAX(case_number), 0) + 1 AS "next" FROM interaction_cases WHERE school_id = ${schoolId}
+    SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"
+      FROM interaction_cases
+     WHERE school_id = ${schoolId}
+       AND school_year_label = ${yearLabel}
   `)).rows as { next: number }[];
 
   const [row] = await db
@@ -1362,6 +1371,7 @@ router.post("/watchlist/cases", async (req: Request, res: Response) => {
     .values({
       schoolId,
       caseNumber: next,
+      schoolYearLabel: yearLabel,
       title,
       summary,
       status,
@@ -2369,10 +2379,13 @@ router.post(
         };
       }
 
+      const yearLabel = schoolYearLabelFor(new Date());
       const [{ next }] = (
         await tx.execute(sql`
           SELECT COALESCE(MAX(case_number), 0) + 1 AS "next"
-            FROM interaction_cases WHERE school_id = ${schoolId}
+            FROM interaction_cases
+           WHERE school_id = ${schoolId}
+             AND school_year_label = ${yearLabel}
         `)
       ).rows as { next: number }[];
 
@@ -2381,6 +2394,7 @@ router.post(
         .values({
           schoolId,
           caseNumber: next,
+          schoolYearLabel: yearLabel,
           title,
           summary,
           status,

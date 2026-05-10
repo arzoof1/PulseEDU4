@@ -13,15 +13,20 @@ import {
 // situation across days. Participants are derived from the union of
 // linked interactions; a case can also have its own narrative notes.
 //
-// `caseNumber` is sequential per school (1, 2, 3, ...) so the UI can
-// display "Case #112" the same way teachers already think about it.
-// (Generated server-side at insert time — see watchlist route.)
+// `caseNumber` is sequential per (school, schoolYearLabel) so the UI
+// can display "Case 26-27-0042" — the 42nd case opened in the 2026-27
+// school year. The composite unique index `(school, year, number)`
+// enforces that. Both fields are generated server-side at insert
+// time from `openedAt` (US convention: school year runs July → June).
+// See watchlist route.
 export const interactionCasesTable = pgTable(
   "interaction_cases",
   {
     id: serial("id").primaryKey(),
     schoolId: integer("school_id").notNull(),
     caseNumber: integer("case_number").notNull(),
+    // "26-27", "27-28", … — derived from openedAt at create time.
+    schoolYearLabel: text("school_year_label").notNull(),
     title: text("title").notNull(),
     // 'open' | 'monitoring' | 'escalated' | 'closed'
     status: text("status").notNull().default("open"),
@@ -47,9 +52,13 @@ export const interactionCasesTable = pgTable(
   },
   (t) => ({
     schoolIdx: index("interaction_cases_school_idx").on(t.schoolId),
-    schoolNumberIdx: uniqueIndex(
-      "interaction_cases_school_number_idx",
-    ).on(t.schoolId, t.caseNumber),
+    // Composite unique on (school, year, number). Replaces the old
+    // (school, number) unique — see ensureWatchlistSchema in seed.ts
+    // for the migration that drops the old index and re-sequences
+    // existing rows per year.
+    schoolYearNumberIdx: uniqueIndex(
+      "interaction_cases_school_year_number_idx",
+    ).on(t.schoolId, t.schoolYearLabel, t.caseNumber),
   }),
 );
 export type InteractionCaseRow = typeof interactionCasesTable.$inferSelect;

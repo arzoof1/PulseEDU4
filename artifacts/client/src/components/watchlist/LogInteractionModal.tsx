@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Settings2 } from "lucide-react";
 import { authFetch } from "../../lib/authToken";
+import { formatCaseNumber } from "../../lib/caseNumber";
 import { INTERACTION_KINDS, ROLE_META, WL_COLORS, type Role } from "./colors";
 import VoiceTextarea from "./VoiceTextarea";
 
@@ -14,6 +15,7 @@ interface StudentHit {
 interface CaseLite {
   id: number;
   caseNumber: number;
+  schoolYearLabel?: string;
   title: string;
   status: string;
 }
@@ -586,7 +588,7 @@ export default function LogInteractionModal({
               <option value="">— No case (statement goes to intake)</option>
               {cases.map((c) => (
                 <option key={c.id} value={c.id}>
-                  #{c.caseNumber} · {c.title}
+                  {formatCaseNumber(c)} · {c.title}
                 </option>
               ))}
             </select>

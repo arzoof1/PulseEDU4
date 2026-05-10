@@ -50,6 +50,7 @@ import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
+import { schoolYearLabelFor } from "./lib/schoolYear.js";
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -1132,7 +1133,51 @@ export async function ensureWatchlistSchema() {
     )
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS interaction_cases_school_idx ON interaction_cases(school_id)`);
-  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_cases_school_number_idx ON interaction_cases(school_id, case_number)`);
+  // Per-(school, schoolYear) case-number migration. Old rows had a
+  // global per-school sequence (Case #142). The new format is
+  // "26-27-0042" — derived from opened_at, with the integer part
+  // restarting at 1 each school year (July → June, US convention).
+  // Steps are individually idempotent; the resequencing only fires
+  // when the old unique index is still present, so subsequent boots
+  // do nothing.
+  await db.execute(sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS school_year_label TEXT`);
+  await db.execute(sql`
+    UPDATE interaction_cases
+       SET school_year_label = CASE
+         WHEN EXTRACT(MONTH FROM opened_at) >= 7
+           THEN LPAD((EXTRACT(YEAR FROM opened_at)::INT % 100)::TEXT, 2, '0')
+                || '-'
+                || LPAD(((EXTRACT(YEAR FROM opened_at)::INT + 1) % 100)::TEXT, 2, '0')
+         ELSE LPAD(((EXTRACT(YEAR FROM opened_at)::INT - 1) % 100)::TEXT, 2, '0')
+                || '-'
+                || LPAD((EXTRACT(YEAR FROM opened_at)::INT % 100)::TEXT, 2, '0')
+       END
+     WHERE school_year_label IS NULL OR school_year_label = ''
+  `);
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF EXISTS (
+        SELECT 1 FROM pg_indexes WHERE indexname = 'interaction_cases_school_number_idx'
+      ) THEN
+        DROP INDEX interaction_cases_school_number_idx;
+        WITH ordered AS (
+          SELECT id,
+                 ROW_NUMBER() OVER (
+                   PARTITION BY school_id, school_year_label
+                   ORDER BY opened_at, id
+                 ) AS rn
+          FROM interaction_cases
+        )
+        UPDATE interaction_cases c
+           SET case_number = ordered.rn
+          FROM ordered
+         WHERE c.id = ordered.id AND c.case_number <> ordered.rn;
+      END IF;
+    END $$;
+  `);
+  await db.execute(sql`ALTER TABLE interaction_cases ALTER COLUMN school_year_label SET NOT NULL`);
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS interaction_cases_school_year_number_idx ON interaction_cases (school_id, school_year_label, case_number)`);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS interaction_case_notes (
@@ -3960,6 +4005,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       caseInserts.push({
         schoolId: school.id,
         caseNumber: i + 1,
+        schoolYearLabel: schoolYearLabelFor(new Date()),
         title: WL_CASE_TITLES[i] ?? `Case ${i + 1}`,
         status: i === 0 ? "escalated" : i === numCases - 1 ? "monitoring" : "open",
         leadStaffId: lead.id,

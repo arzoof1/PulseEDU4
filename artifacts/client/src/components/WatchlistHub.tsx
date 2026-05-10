@@ -21,6 +21,7 @@ import {
   Users,
 } from "lucide-react";
 import { authFetch } from "../lib/authToken";
+import { formatCaseNumber } from "../lib/caseNumber";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import NewCaseModal from "./watchlist/NewCaseModal";
 import {
@@ -77,6 +78,7 @@ interface OrbitItem {
 interface CaseRow {
   id: number;
   caseNumber: number;
+  schoolYearLabel?: string;
   title: string;
   status: string;
   leadStaffName: string | null;
@@ -935,7 +937,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                         <div className="flex items-start justify-between gap-2">
                           <div className="min-w-0">
                             <div className="text-[11px] font-semibold" style={{ color: C.inkSoft }}>
-                              Case #{c.caseNumber}
+                              Case {formatCaseNumber(c)}
                             </div>
                             <div className="truncate text-sm font-semibold">{c.title}</div>
                           </div>

@@ -68,6 +68,18 @@ _Populate as you build_
 
 ## Future work
 
+- **School-local timezone for case-number school-year derivation.**
+  Today `schoolYearLabelFor(new Date())` (server) and the seed
+  migration's `EXTRACT(MONTH FROM opened_at)` both use server-local
+  time. Single-TZ deployments are fine, but the moment a cross-TZ
+  tenant is onboarded a case opened late on June 30 in Pacific time
+  will be stamped `26-27` instead of `25-26` (and similarly the year
+  portion at the Dec/Jan boundary). Fix by either (a) adding a
+  per-school IANA timezone column and threading it into the helper +
+  migration, or (b) explicitly forcing one canonical TZ
+  (`AT TIME ZONE 'America/New_York'`) and documenting it. Schedule
+  before onboarding the first non-Eastern school.
+
 - **Refresh Core Team "How this works" / directions copy after the 4-phase
   case enhancement suite ships.** Each new feature (mention tagging,
   video evidence panel, AI consistency check, Case Insights dashboard)

@@ -19139,6 +19139,14 @@ function App() {
             setSelectedWatchlistCaseId(id);
             setActiveSection("watchlistCase");
           }}
+          isInvestigator={Boolean(
+            authUser?.isAdmin ||
+              authUser?.isSuperUser ||
+              authUser?.isDistrictAdmin ||
+              authUser?.isBehaviorSpecialist ||
+              authUser?.isMtssCoordinator ||
+              authUser?.isDean,
+          )}
         />
       )}
 

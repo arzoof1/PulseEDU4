@@ -10,8 +10,11 @@ import {
   Plus,
   Sparkles,
   Users,
+  Video,
+  X,
   Zap,
 } from "lucide-react";
+import { formatCaseNumber } from "../lib/caseNumber";
 import { authFetch } from "../lib/authToken";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import { ROLE_META, WL_COLORS as C, statusPillStyle, type Role } from "./watchlist/colors";
@@ -45,6 +48,7 @@ interface NetEdge {
 interface NetCase {
   id: number;
   caseNumber: number;
+  schoolYearLabel?: string;
   title: string;
   status: string;
   leadStaffName: string | null;
@@ -60,6 +64,12 @@ interface Resp {
 interface Props {
   onBack?: () => void;
   onOpenCase?: (caseId: number) => void;
+  // True when the viewer is in the Case Investigator group (admin
+  // tier + Behavior Specialist + MTSS Coordinator + Dean). Gates the
+  // "+ Footage" quick-add button on the case-zoom toolbar; non-
+  // investigators don't see the button at all and the camera badges
+  // they get stay informational.
+  isInvestigator?: boolean;
 }
 
 interface Positioned extends NetNode {
@@ -218,7 +228,11 @@ function edgeDashed(kinds: string[]): boolean {
   return kinds.every((k) => k === "peripheral_note");
 }
 
-export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
+export default function WatchlistNetwork({
+  onBack,
+  onOpenCase,
+  isInvestigator = false,
+}: Props) {
   const [data, setData] = useState<Resp | null>(null);
   const [windowDays, setWindowDays] = useState(30);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -238,6 +252,11 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
       { count: number; topTier: "confirmed" | "inferred" | "possible"; hasCleared: boolean }
     >
   >(new Map());
+  // Bumped after a successful "+ Footage" quick-add so the rollup
+  // re-fetches and the player-sphere badges update without a page
+  // reload. Cleared when the user zooms out.
+  const [evidenceReloadKey, setEvidenceReloadKey] = useState(0);
+  const [showFootageModal, setShowFootageModal] = useState(false);
 
   const reload = useCallback(async () => {
     setError(null);
@@ -298,7 +317,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [zoomedClusterId]);
+  }, [zoomedClusterId, evidenceReloadKey]);
 
   // When zoomed, restrict to nodes that belong to that cluster and run a
   // single-cluster layout so the bubbles fill the viewport. Edges are
@@ -630,7 +649,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
                     </button>
                     <div className="min-w-0">
                       <div className="text-[11px] font-semibold uppercase tracking-wider" style={{ color: C.inkSoft }}>
-                        {zoomedCase ? `Case #${zoomedCase.caseNumber}` : "Loose / no case"}
+                        {zoomedCase ? `Case ${formatCaseNumber(zoomedCase)}` : "Loose / no case"}
                       </div>
                       <div className="truncate text-sm font-bold" style={{ color: C.ink }}>
                         {zoomedCase ? zoomedCase.title : "Students not yet linked to a case"}
@@ -649,6 +668,21 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
                         >
                           {statusPillStyle(zoomedCase.status).label}
                         </span>
+                        {isInvestigator && (
+                          <button
+                            type="button"
+                            onClick={() => setShowFootageModal(true)}
+                            className="inline-flex items-center gap-1 rounded-md border px-2.5 py-1 text-[11px] font-semibold"
+                            style={{
+                              borderColor: C.line,
+                              color: C.brand,
+                              background: C.panel,
+                            }}
+                            title="Log a video clip on this case"
+                          >
+                            <Video className="h-3 w-3" /> + Footage
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() => onOpenCase?.(zoomedCase.id)}
@@ -935,7 +969,7 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
                         >
                           <div className="min-w-0">
                             <div className="text-[11px]" style={{ color: C.inkSoft }}>
-                              Case #{c.caseNumber}
+                              Case {formatCaseNumber(c)}
                             </div>
                             <div className="truncate text-sm font-semibold">{c.title}</div>
                           </div>
@@ -957,6 +991,22 @@ export default function WatchlistNetwork({ onBack, onOpenCase }: Props) {
 
       {showLog && (
         <LogInteractionModal onClose={() => setShowLog(false)} onCreated={() => void reload()} />
+      )}
+
+      {showFootageModal && zoomedClusterId !== null && zoomedClusterId >= 0 && (
+        <FootageQuickAddModal
+          caseId={zoomedClusterId}
+          caseLabel={
+            zoomedCase
+              ? `Case ${formatCaseNumber(zoomedCase)} · ${zoomedCase.title}`
+              : "Selected case"
+          }
+          onClose={() => setShowFootageModal(false)}
+          onCreated={() => {
+            setShowFootageModal(false);
+            setEvidenceReloadKey((k) => k + 1);
+          }}
+        />
       )}
     </div>
   );
@@ -1101,7 +1151,7 @@ function NetworkSVG({
       {clusterIdsSorted.map((cid, idx) => {
         const cl = clusters.get(cid)!;
         const c = cid >= 0 ? caseById.get(cid) : null;
-        const label = c ? `Case #${c.caseNumber} · ${c.title}` : "Loose / no case";
+        const label = c ? `Case ${formatCaseNumber(c)} · ${c.title}` : "Loose / no case";
         return (
           <g key={cid}>
             <circle
@@ -1421,5 +1471,212 @@ function NetworkSVG({
         );
       })}
     </svg>
+  );
+}
+
+// Quick "+ Footage" modal anchored to the case-zoom toolbar. Mirrors
+// the add-clip form in VideoEvidencePanel (camera label, start/end,
+// source URL, notes) so admins can register the *existence* of a
+// clip without leaving the network view. Player tagging + confidence
+// rating still happens inside the full case file — this surface
+// intentionally only logs that the clip exists, then the badges on
+// the player spheres update via evidenceReloadKey.
+function FootageQuickAddModal({
+  caseId,
+  caseLabel,
+  onClose,
+  onCreated,
+}: {
+  caseId: number;
+  caseLabel: string;
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [label, setLabel] = useState("");
+  const [start, setStart] = useState("");
+  const [end, setEnd] = useState("");
+  const [url, setUrl] = useState("");
+  const [notes, setNotes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function save() {
+    if (!label.trim() || !start) return;
+    setSaving(true);
+    setError(null);
+    try {
+      // The server expects ISO8601; <input type="datetime-local"> gives
+      // us a naive local string, which the Date constructor reads as
+      // local time. Re-emit as ISO so the timestamp survives the trip.
+      const startIso = new Date(start).toISOString();
+      const endIso = end ? new Date(end).toISOString() : "";
+      const r = await authFetch(
+        `/api/watchlist/cases/${caseId}/video-evidence`,
+        {
+          method: "POST",
+          credentials: "include",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            cameraLabel: label.trim(),
+            timestampStart: startIso,
+            timestampEnd: endIso,
+            sourceUrl: url.trim(),
+            notes: notes.trim(),
+          }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      onCreated();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center p-4"
+      style={{ background: "rgba(15, 23, 42, 0.55)" }}
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-xl border shadow-2xl"
+        style={{ borderColor: C.line, background: C.panel }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div
+          className="flex items-start justify-between border-b px-4 py-3"
+          style={{ borderColor: C.line }}
+        >
+          <div className="min-w-0">
+            <div
+              className="flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wider"
+              style={{ color: C.inkSoft }}
+            >
+              <Video className="h-3.5 w-3.5" /> Log video evidence
+            </div>
+            <div className="truncate text-sm font-bold" style={{ color: C.ink }}>
+              {caseLabel}
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded p-1 hover:bg-black/5"
+            aria-label="Close"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="space-y-3 px-4 py-3 text-sm">
+          <label className="block">
+            <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
+              Camera / location <span style={{ color: C.alert }}>*</span>
+            </div>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="e.g. Hallway B-Wing"
+              className="w-full rounded-md border px-2.5 py-1.5"
+              style={{ borderColor: C.line, background: C.bg }}
+              maxLength={200}
+            />
+          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="block">
+              <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
+                Start <span style={{ color: C.alert }}>*</span>
+              </div>
+              <input
+                type="datetime-local"
+                value={start}
+                onChange={(e) => setStart(e.target.value)}
+                className="w-full rounded-md border px-2.5 py-1.5"
+                style={{ borderColor: C.line, background: C.bg }}
+              />
+            </label>
+            <label className="block">
+              <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
+                End (optional)
+              </div>
+              <input
+                type="datetime-local"
+                value={end}
+                onChange={(e) => setEnd(e.target.value)}
+                className="w-full rounded-md border px-2.5 py-1.5"
+                style={{ borderColor: C.line, background: C.bg }}
+              />
+            </label>
+          </div>
+          <label className="block">
+            <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
+              Source URL (optional)
+            </div>
+            <input
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://…"
+              className="w-full rounded-md border px-2.5 py-1.5"
+              style={{ borderColor: C.line, background: C.bg }}
+              maxLength={1000}
+            />
+          </label>
+          <label className="block">
+            <div className="mb-1 text-[11px] font-semibold" style={{ color: C.inkSoft }}>
+              Notes (optional)
+            </div>
+            <textarea
+              value={notes}
+              onChange={(e) => setNotes(e.target.value)}
+              rows={3}
+              className="w-full rounded-md border px-2.5 py-1.5"
+              style={{ borderColor: C.line, background: C.bg }}
+              maxLength={4000}
+            />
+          </label>
+          <div className="text-[11px]" style={{ color: C.inkSoft }}>
+            Tag specific players and rate confidence inside the case file.
+          </div>
+          {error && (
+            <div
+              className="rounded-md border px-2.5 py-1.5 text-[12px]"
+              style={{ borderColor: C.alert, color: C.alert, background: "#FEF2F2" }}
+            >
+              {error}
+            </div>
+          )}
+        </div>
+
+        <div
+          className="flex items-center justify-end gap-2 border-t px-4 py-3"
+          style={{ borderColor: C.line, background: C.bg }}
+        >
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border px-3 py-1.5 text-[12px] font-semibold"
+            style={{ borderColor: C.line, color: C.ink, background: C.panel }}
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => void save()}
+            disabled={saving || !label.trim() || !start}
+            className="rounded-md px-3 py-1.5 text-[12px] font-bold disabled:opacity-50"
+            style={{ background: C.brand, color: "#FFFFFF" }}
+          >
+            {saving ? "Saving…" : "Log clip"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

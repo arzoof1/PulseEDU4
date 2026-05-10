@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeft, Search, X, ChevronRight, Users } from "lucide-react";
 import { authFetch } from "../lib/authToken";
+import { formatCaseNumber } from "../lib/caseNumber";
 import {
   ROLE_META,
   WL_COLORS as C,
@@ -65,6 +66,7 @@ interface EgoNote {
 interface EgoCase {
   id: number;
   caseNumber: number;
+  schoolYearLabel?: string;
   title: string;
   status: string;
   leadStaffName: string | null;
@@ -736,7 +738,7 @@ export default function WatchlistStudentGraph({
                       onMouseEnter={() => setSelectedCaseId(c.id)}
                     >
                       <title>
-                        Open Case #{c.caseNumber} — {c.title}
+                        Open Case {formatCaseNumber(c)} — {c.title}
                       </title>
                       <Sphere
                         cx={c.x}
@@ -790,7 +792,7 @@ export default function WatchlistStudentGraph({
                         }}
                       >
                         <title>
-                          Read {p.firstName} {p.lastName}'s incidents on Case #{c.caseNumber}
+                          Read {p.firstName} {p.lastName}'s incidents on Case {formatCaseNumber(c)}
                         </title>
                         <Sphere
                           cx={p.x}
@@ -890,7 +892,7 @@ export default function WatchlistStudentGraph({
                     className="text-[11px] font-semibold uppercase tracking-wider"
                     style={{ color: C.inkSoft }}
                   >
-                    Peek · Case #{peekCase.caseNumber}
+                    Peek · Case {formatCaseNumber(peekCase)}
                   </div>
                   <div className="mt-0.5 flex items-center gap-2">
                     <span className="text-base font-bold">
@@ -1083,7 +1085,7 @@ export default function WatchlistStudentGraph({
                     role: (peekPlayer.primaryRole as Role) ?? "direct",
                   },
                 ]}
-                titleOverride={`Log incident · Case #${peekCase.caseNumber}`}
+                titleOverride={`Log incident · Case ${formatCaseNumber(peekCase)}`}
               />
             )}
           </div>
@@ -1113,7 +1115,7 @@ function CasePanel({
             className="text-[11px] font-semibold uppercase tracking-wider"
             style={{ color: C.inkSoft }}
           >
-            Case #{caseRow.caseNumber}
+            Case {formatCaseNumber(caseRow)}
           </div>
           <div className="mt-0.5 text-base font-bold">{caseRow.title}</div>
           {caseRow.leadStaffName && (

@@ -9,6 +9,7 @@ import {
   Users,
 } from "lucide-react";
 import { authFetch } from "../lib/authToken";
+import { formatCaseNumber } from "../lib/caseNumber";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
 import VoiceTextarea from "./watchlist/VoiceTextarea";
 import MentionTextarea from "./watchlist/MentionTextarea";
@@ -29,6 +30,7 @@ import {
 interface CaseRow {
   id: number;
   caseNumber: number;
+  schoolYearLabel?: string;
   title: string;
   summary: string | null;
   status: string;
@@ -360,7 +362,7 @@ export default function WatchlistCaseDetail({
                 className="inline-flex items-center gap-2 rounded-full border px-2.5 py-0.5 text-[11px] font-semibold uppercase tracking-wider"
                 style={{ borderColor: C.line, background: C.panel, color: C.brand }}
               >
-                <Shield className="h-3.5 w-3.5" /> Case #{c.caseNumber}
+                <Shield className="h-3.5 w-3.5" /> Case {formatCaseNumber(c)}
               </div>
               <span
                 className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
