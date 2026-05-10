@@ -804,8 +804,13 @@ export default function VideoEvidencePanel({
                             <div className="mt-1 flex justify-end">
                               <DictateButton
                                 onAppend={(chunk) =>
+                                  // Prepend the dictated text in front
+                                  // of the auto-attached "— Viewed by
+                                  // {name}" suffix so the admin's own
+                                  // observation comes first and the
+                                  // attribution stays at the tail.
                                   setEditLinkReason((prev) =>
-                                    appendDictated(prev, chunk),
+                                    appendDictated(chunk, prev),
                                   )
                                 }
                                 borderColor={lineColor}
@@ -946,8 +951,13 @@ export default function VideoEvidencePanel({
                           <div className="mt-1 flex justify-end">
                             <DictateButton
                               onAppend={(chunk) =>
+                                // Prepend dictated text in front of the
+                                // auto-attached "— Viewed by {name}"
+                                // suffix so the admin's observation
+                                // comes first and the attribution
+                                // stays at the tail.
                                 setTagReason((prev) =>
-                                  appendDictated(prev, chunk),
+                                  appendDictated(chunk, prev),
                                 )
                               }
                               borderColor={lineColor}
