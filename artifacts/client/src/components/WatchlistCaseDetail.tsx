@@ -154,6 +154,11 @@ interface Props {
   // Network" vs "Back to Investigations") and lets us optionally
   // surface a secondary jump button.
   backLabel?: string;
+  // Forwarded to the Investigation Ring's right rail. Opens the
+  // global Student Finder modal pre-populated with `q` so investigators
+  // can jump from a witness/mentioned sphere to today's schedule + live
+  // location without leaving the case.
+  onOpenStudentFinder?: (q: string) => void;
   // Strict admin/superuser/district-admin gate — used for the Reopen
   // case button. Server-side `/cases/:id/reopen` rejects anyone outside
   // this set, so we hide the button to match. The wider `isAdmin` prop
@@ -178,6 +183,7 @@ export default function WatchlistCaseDetail({
   onBack,
   isAdmin = false,
   backLabel = "Back to Investigations",
+  onOpenStudentFinder,
   canReopenCase = false,
   viewerName = "",
   initialAnchor = null,
@@ -744,6 +750,7 @@ export default function WatchlistCaseDetail({
             onRequestStatement={(studentId, incidentId) =>
               void requestStatement(incidentId, studentId, "")
             }
+            onOpenStudentFinder={onOpenStudentFinder}
           />
         )}
 

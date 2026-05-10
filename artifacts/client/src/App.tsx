@@ -4335,7 +4335,17 @@ function App() {
   const [cameFromOnboarding, setCameFromOnboarding] = useState(false);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
-  const [showStudentFinder, setShowStudentFinder] = useState(false);
+  // Student Finder state. `null` = closed; string = open with that
+  // initial query (empty string = open with blank field, the default
+  // top-bar entry point). Carrying the initial query lets deep-links
+  // from the network views' right panel pre-populate the search.
+  const [studentFinderQuery, setStudentFinderQuery] = useState<string | null>(
+    null,
+  );
+  const showStudentFinder = studentFinderQuery !== null;
+  const setShowStudentFinder = (open: boolean) =>
+    setStudentFinderQuery(open ? "" : null);
+  const openStudentFinderWith = (q: string) => setStudentFinderQuery(q);
   const [changePwCurrent, setChangePwCurrent] = useState("");
   const [changePwNew, setChangePwNew] = useState("");
   const [changePwBusy, setChangePwBusy] = useState(false);
@@ -8710,7 +8720,10 @@ function App() {
       </header>
 
       {showStudentFinder && (
-        <StudentFinderModal onClose={() => setShowStudentFinder(false)} />
+        <StudentFinderModal
+          onClose={() => setStudentFinderQuery(null)}
+          initialQuery={studentFinderQuery ?? ""}
+        />
       )}
 
       {showChangePw && (
@@ -19161,6 +19174,7 @@ function App() {
             setCaseOpenOrigin("watchlistNetwork");
             setActiveSection("watchlistCase");
           }}
+          onOpenStudentFinder={openStudentFinderWith}
           isInvestigator={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||
@@ -19183,6 +19197,7 @@ function App() {
                 ? "Back to Student Graph"
                 : "Back to Investigations"
           }
+          onOpenStudentFinder={openStudentFinderWith}
           isAdmin={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||

@@ -84,6 +84,12 @@ interface StudentStatement {
 interface Props {
   onBack?: () => void;
   onOpenCase?: (caseId: number, anchor?: string) => void;
+  // Opens the global Student Finder modal pre-populated with `q`.
+  // Used by the right-rail "Open in Student Finder" affordance so a
+  // user investigating from the network view can jump to today's
+  // schedule / live location for the focused student without losing
+  // their place on the network surface.
+  onOpenStudentFinder?: (q: string) => void;
   // True when the viewer is in the Case Investigator group (admin
   // tier + Behavior Specialist + MTSS Coordinator + Dean). Gates the
   // "+ Footage" quick-add button on the case-zoom toolbar; non-
@@ -251,6 +257,7 @@ function edgeDashed(kinds: string[]): boolean {
 export default function WatchlistNetwork({
   onBack,
   onOpenCase,
+  onOpenStudentFinder,
   isInvestigator = false,
 }: Props) {
   const [data, setData] = useState<Resp | null>(null);
@@ -868,6 +875,25 @@ export default function WatchlistNetwork({
                     </div>
                   </div>
                 </div>
+                {onOpenStudentFinder && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenStudentFinder(
+                        `${selected.firstName} ${selected.lastName}`,
+                      )
+                    }
+                    className="mt-3 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[11px] font-bold"
+                    style={{
+                      borderColor: C.line,
+                      background: C.panel,
+                      color: C.brand,
+                    }}
+                    title="Look up this student in the Student Finder (today's schedule + live location). Opens with the name pre-filled."
+                  >
+                    🔎 Open in Student Finder
+                  </button>
+                )}
                 {selected.flag && (
                   <div
                     className="mt-3 flex items-center gap-1.5 rounded-md px-2.5 py-2 text-[12px] font-semibold"

@@ -87,8 +87,18 @@ function fmtTime(hhmm: string | null): string {
   return `${h12}:${String(m).padStart(2, "0")}${period}`;
 }
 
-export function StudentFinderModal({ onClose }: { onClose: () => void }) {
-  const [query, setQuery] = useState("");
+export function StudentFinderModal({
+  onClose,
+  initialQuery = "",
+}: {
+  onClose: () => void;
+  // When provided, the search field opens pre-populated with this string
+  // and the typeahead fires immediately. Used by deep-links from the
+  // network views' right panel ("Open in Student Finder") so a user
+  // jumping from a sphere to the finder doesn't have to retype the name.
+  initialQuery?: string;
+}) {
+  const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);

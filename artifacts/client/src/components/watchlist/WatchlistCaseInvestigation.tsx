@@ -82,6 +82,11 @@ interface Props {
   caseId: number;
   incidents: Array<{ id: number; summary: string; occurredAt: string }>;
   onRequestStatement?: (studentId: string, incidentId: number) => void;
+  // Opens the global Student Finder modal pre-populated with `q`.
+  // Wired from App.tsx through WatchlistCaseDetail. Surfaces as the
+  // "Open in Student Finder" button on the right-rail when a witness
+  // or mentioned-only sphere is selected.
+  onOpenStudentFinder?: (q: string) => void;
 }
 
 const W = 760;
@@ -102,6 +107,7 @@ export default function WatchlistCaseInvestigation({
   caseId,
   incidents,
   onRequestStatement,
+  onOpenStudentFinder,
 }: Props) {
   const [incidentId, setIncidentId] = useState<number | null>(
     incidents[0]?.id ?? null,
@@ -535,6 +541,23 @@ export default function WatchlistCaseInvestigation({
                     ? ` · ${new Date(selectedStatement.completedAt).toLocaleDateString()}`
                     : ""}
                 </div>
+                {onOpenStudentFinder && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenStudentFinder(selectedStatement.displayName)
+                    }
+                    className="mt-2 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-bold"
+                    style={{
+                      borderColor: C.line,
+                      background: C.panel,
+                      color: C.brand,
+                    }}
+                    title="Look up this student in the Student Finder (today's schedule + live location). Opens with the name pre-filled."
+                  >
+                    🔎 Open in Student Finder
+                  </button>
+                )}
                 <pre
                   className="mt-3 whitespace-pre-wrap text-xs"
                   style={{ color: C.ink, fontFamily: "inherit" }}
@@ -554,6 +577,25 @@ export default function WatchlistCaseInvestigation({
                   Named in {selectedMentioned.mentionedInStatementIds.length}{" "}
                   statement(s) but hasn't given one.
                 </div>
+                {onOpenStudentFinder && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      onOpenStudentFinder(
+                        `${selectedMentioned.firstName} ${selectedMentioned.lastName}`,
+                      )
+                    }
+                    className="mt-2 mr-2 inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-[11px] font-bold"
+                    style={{
+                      borderColor: C.line,
+                      background: C.panel,
+                      color: C.brand,
+                    }}
+                    title="Look up this student in the Student Finder (today's schedule + live location). Opens with the name pre-filled."
+                  >
+                    🔎 Open in Student Finder
+                  </button>
+                )}
                 {onRequestStatement && incidentId && (
                   <button
                     type="button"
