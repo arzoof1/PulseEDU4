@@ -547,12 +547,14 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
               anyone you've marked absent for this session — so the
               wheel doesn't waste a spin on a kid who isn't there.
             </HowToSection>
-            <HowToSection title="Two animation styles">
+            <HowToSection title="Four animation styles">
               <ul style={howtoListStyle}>
-                <li><strong>Wheel</strong> — classic spinning prize wheel; one wedge per student.</li>
-                <li><strong>Bottles</strong> — message-in-a-bottle reveal; faster on phones.</li>
+                <li><strong>🎡 Wheel</strong> — classic spinning prize wheel; one wedge per student.</li>
+                <li><strong>🥤 Bottles</strong> — water-bottle flip reveal; faster on phones.</li>
+                <li><strong>🎰 Reel</strong> — slot-machine reel; names whiz past before settling under the pointer.</li>
+                <li><strong>🔦 Spotlight</strong> — a roving spotlight sweeps the roster and lands on the winner.</li>
               </ul>
-              Your choice is saved per-device.
+              Switch styles any time — the picker resets so the next pick starts fresh. Your choice is saved per-device.
             </HowToSection>
             <RoleSection for="teacher" title="Pairing with prompts">
               Each pick can show a prompt card from your school's
