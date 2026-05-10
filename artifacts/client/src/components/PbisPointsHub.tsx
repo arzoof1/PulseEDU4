@@ -117,6 +117,17 @@ export default function PbisPointsHub() {
     null,
   );
   const [activePeriod, setActivePeriod] = useState<number | "all">("all");
+  // Current bell-period (computed from school's default bell schedule by
+  // matching today's clock-time to a window). Used as the default value of
+  // `activePeriod` so a teacher landing on the page sees only the class
+  // they're teaching right now. The "All" option remains available.
+  const [currentBellPeriod, setCurrentBellPeriod] = useState<number | null>(
+    null,
+  );
+  // True once we've applied the bell-period default for the current
+  // teacher selection. Reset whenever the teacher changes so an admin
+  // switching teachers gets the same "land on current period" behavior.
+  const appliedBellDefaultRef = useRef(false);
   const [awardingFor, setAwardingFor] = useState<Student | null>(null);
   // Bulk selection — set of studentIds checked across all sections.
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
@@ -255,10 +266,77 @@ export default function PbisPointsHub() {
   }, [sections, selectedTeacherId]);
 
   // Reset the period filter when switching teachers so we don't leave the
-  // user filtered to a period the new teacher doesn't have.
+  // user filtered to a period the new teacher doesn't have. The
+  // bell-default effect below will then re-apply the current period if it
+  // exists in the new teacher's schedule.
   useEffect(() => {
     setActivePeriod("all");
+    appliedBellDefaultRef.current = false;
   }, [selectedTeacherId]);
+
+  // Fetch the school's active bell schedule once and compute the period
+  // currently in session. Mirrors the pattern used in App.tsx (Class Log)
+  // and SpotlightPanel so behavior stays consistent across the app.
+  useEffect(() => {
+    let cancelled = false;
+    authFetch("/api/bell-schedules/active", { credentials: "include" })
+      .then((r) => (r.ok ? r.json() : { periods: [] }))
+      .then(
+        (data: {
+          periods?: {
+            periodNumber: number;
+            startTime: string;
+            endTime: string;
+          }[];
+        }) => {
+          if (cancelled) return;
+          const ps = Array.isArray(data?.periods) ? data.periods : [];
+          if (ps.length === 0) {
+            setCurrentBellPeriod(null);
+            return;
+          }
+          const now = new Date();
+          const hh = String(now.getHours()).padStart(2, "0");
+          const mm = String(now.getMinutes()).padStart(2, "0");
+          const clock = `${hh}:${mm}`;
+          let live: number | null = null;
+          for (const p of ps) {
+            if (clock >= p.startTime && clock <= p.endTime) {
+              live = p.periodNumber;
+              break;
+            }
+          }
+          setCurrentBellPeriod(live);
+        },
+      )
+      .catch(() => {
+        if (cancelled) return;
+        setCurrentBellPeriod(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Once sections are loaded and we know the current bell period, default
+  // the period filter to it (if it exists in the visible roster). Run only
+  // once per teacher selection so a teacher who manually picks "All" or a
+  // different period isn't forced back to the live period on every render.
+  useEffect(() => {
+    if (appliedBellDefaultRef.current) return;
+    if (currentBellPeriod == null) return;
+    if (sections.length === 0) return;
+    const periodsForVisibleTeacher = new Set<number>();
+    for (const s of sections) {
+      if (selectedTeacherId == null || s.teacherStaffId === selectedTeacherId) {
+        periodsForVisibleTeacher.add(s.period);
+      }
+    }
+    if (periodsForVisibleTeacher.has(currentBellPeriod)) {
+      setActivePeriod(currentBellPeriod);
+    }
+    appliedBellDefaultRef.current = true;
+  }, [sections, selectedTeacherId, currentBellPeriod]);
 
   // ---- Save the current note text as a personal note template. Scoped to
   // 'teacher' so it lands in the staffer's own template list rather than the
