@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 type InviteStatus =
   | "not_sent"
@@ -310,6 +311,27 @@ export default function ParentAccess() {
             Invite parents to the HeartBEAT Snapshot portal. Each parent gets an
             email link to set their own password.
           </p>
+          <HowToUseHelp title="How to use Parent Access">
+            <HowToSection title="What this page is">
+              The roster of parent accounts for this school plus their
+              linked students. Use "Invite parent" to create an account,
+              then link one or more students to it.
+            </HowToSection>
+            <HowToSection title="What parents see in the portal">
+              <ul style={howtoListStyle}>
+                <li>HeartBEAT pillars (PBIS, hall passes, tardies, accommodations, staff notes).</li>
+                <li>One row per linked student with a sibling switcher.</li>
+                <li>PDF export of the current snapshot.</li>
+              </ul>
+              Use "Section visibility" to hide categories your school is
+              not ready to expose to families yet.
+            </HowToSection>
+            <RoleSection for={["admin", "coreTeam"]} title="Daily admin tasks">
+              Resend an invite if the email expired (links are good for
+              7 days). "Revoke access" disables sign-in but keeps the
+              account so audit data is preserved.
+            </RoleSection>
+          </HowToUseHelp>
         </div>
         <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
           <button

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 type BoolKey = string;
 
@@ -337,6 +338,24 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             Toggle any cell to grant or revoke that page for that user. Click a
             role label to apply its preset bundle.
           </p>
+          <HowToUseHelp title="How to use Staff &amp; Roles">
+            <HowToSection title="What this page is">
+              The permissions matrix for every staff member at this
+              school. Rows are people, columns are pages/features,
+              and a green check means that person can access it.
+            </HowToSection>
+            <HowToSection title="Two ways to grant access">
+              <ul style={howtoListStyle}>
+                <li><strong>Cell click</strong> — toggles a single page for one person. Use for one-off exceptions (e.g., "give the librarian access to the display playlist").</li>
+                <li><strong>Role label click</strong> — applies that role's preset bundle (e.g., "Counselor" turns on guidance + safety-plan editor + parent-access).</li>
+              </ul>
+            </HowToSection>
+            <RoleSection for={["admin", "districtAdmin", "superUser"]} title="Adding new staff">
+              Use "+ Add Staff" to invite by email. New users land
+              with no permissions — apply a role preset, then refine
+              individual cells. Removing the last admin is blocked.
+            </RoleSection>
+          </HowToUseHelp>
         </div>
         <div style={{ display: "flex", gap: 8 }}>
           <input

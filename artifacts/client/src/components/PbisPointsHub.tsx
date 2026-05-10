@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // =============================================================================
 // PBIS Points Hub
@@ -391,6 +392,35 @@ export default function PbisPointsHub() {
       </div>
 
       <TabBar tab={tab} onChange={setTab} />
+
+      <HowToUseHelp title="How to use PBIS Points">
+        <HowToSection title="What this hub is">
+          One page for awarding points, browsing the rewards catalogs,
+          and (if you have permission) editing the rubric and store
+          inventory. Use the tab bar above to switch between awarding,
+          recent activity, the Classroom Store, and the School Store.
+        </HowToSection>
+        <RoleSection for="teacher" title="Awarding points (teachers)">
+          <ul style={howtoListStyle}>
+            <li>Pick a student from your roster, choose a category, set the magnitude (positive or negative), add an optional note, and submit.</li>
+            <li>Your classroom store is private to you — kids can spend the points you've awarded on rewards you set.</li>
+            <li>The School Store is read-only for teachers; you can browse what's available but only PBIS coordinators / admins edit inventory.</li>
+          </ul>
+        </RoleSection>
+        <RoleSection for={["admin", "pbisCoordinator"]} title="Admin / PBIS coordinator tools">
+          <ul style={howtoListStyle}>
+            <li>School Store: add items, set point cost, upload a thumbnail, mark in/out of stock. All schools see only their own catalog.</li>
+            <li>Categories &amp; reasons: edit the picklists teachers use when awarding. Renaming preserves history.</li>
+            <li>Milestone emails: configure the auto-emails that fire when a student crosses point thresholds.</li>
+          </ul>
+        </RoleSection>
+        <RoleSection for="coreTeam" title="Core Team monitoring">
+          Keep an eye on the positive-to-negative ratio in the Behavior
+          dashboard. Anything below 4:1 in a class signals a Tier 1
+          conversation with the teacher; the named-student lists in
+          recent activity tell you who to talk about first.
+        </RoleSection>
+      </HowToUseHelp>
 
       {loading ? (
         <div style={{ padding: "2rem", textAlign: "center", color: "#64748b" }}>

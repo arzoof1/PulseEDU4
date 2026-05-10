@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 export type InterventionHistoryRow = {
   source: "tier2" | "tier3" | "legacy" | "checkInOut";
@@ -314,6 +315,35 @@ export default function MyInterventionsPage({
           ← Back
         </button>
       )}
+      <HowToUseHelp title="How to use My Interventions">
+        <HowToSection title="What this page is">
+          Every intervention you've personally logged — Tier 2 weekly
+          check-ins, Tier 3 day-of-week scoring, legacy Trusted-Adult
+          touches, and Quick Check-ins — in one filterable list. The
+          server only returns rows where you are the listed staff
+          member, so your view never includes someone else's work.
+        </HowToSection>
+        <HowToSection title="Filtering and printing">
+          <ul style={howtoListStyle}>
+            <li>Use the date presets (Today / 7d / 15d / 30d / Custom) to narrow the window.</li>
+            <li>Type a student name or ID to pin to one kid.</li>
+            <li>Tier filter limits to T2, T3, or legacy entries.</li>
+            <li>Print produces a parent/admin-friendly PDF with the visible rows only.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for="teacher" title="Why this matters for teachers">
+          When admin or Core Team asks "what have you tried with this
+          student?", this page is the answer. Filter to the kid, set the
+          window to "this year," print, hand it over.
+        </RoleSection>
+        <RoleSection for={["admin", "coreTeam"]} title="If you're checking on a teacher">
+          You're seeing your own log here, not theirs. To see someone
+          else's interventions, open MTSS Reports and filter by staff
+          member, or open the student profile and read the unified
+          intervention history.
+        </RoleSection>
+      </HowToUseHelp>
+
       <section className="card">
         <div
           style={{

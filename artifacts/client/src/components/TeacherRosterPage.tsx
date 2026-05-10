@@ -16,6 +16,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface TeacherOpt {
   id: number;
@@ -1237,6 +1238,35 @@ export default function TeacherRosterPage({
           )}
         </div>
       </div>
+
+      <HowToUseHelp title="How to use Teacher Roster">
+        <HowToSection title="What this page is">
+          One row per student in your class with FAST scores, program
+          flags (ESE / 504 / ELL / CT-ELA / CT-Math), MTSS tier, and a
+          safety-plan indicator. Use the period chip row to focus on a
+          single block, and the visibility toggles to hide columns you
+          don't need today.
+        </HowToSection>
+        <HowToSection title="What the columns mean">
+          <ul style={howtoListStyle}>
+            <li><strong>LG / BQ</strong> — Learning Gains and Bottom Quartile flags from the latest FAST window.</li>
+            <li><strong>PM1 / PM2 / PM3</strong> — FAST Progress Monitoring scores.</li>
+            <li><strong>Programs</strong> — service flags driving accommodations.</li>
+            <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for="teacher" title="Daily use for teachers">
+          Click any student to open their full profile. The shield icon
+          means they have an active safety plan — read it before the
+          first contact of the day. The amber row banner is an ISS
+          reminder you need to acknowledge.
+        </RoleSection>
+        <RoleSection for="coreTeam" title="Core Team — viewing other teachers">
+          Use the "Teacher" dropdown above to switch into any teacher's
+          roster. Useful for SST meetings or before walking into a
+          classroom observation.
+        </RoleSection>
+      </HowToUseHelp>
 
       {/* Period selector — chip row */}
       <div

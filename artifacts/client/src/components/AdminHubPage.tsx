@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
 import AddDisciplineLogModal from "./AddDisciplineLogModal";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface RecentRow {
   kind: "iss" | "oss";
@@ -106,6 +107,34 @@ export default function AdminHubPage() {
           opted in to share.
         </p>
       </div>
+
+      <HowToUseHelp title="How to use the Admin Hub">
+        <HowToSection title="What this hub is">
+          The single place administrators log out-of-class consequences
+          (ISS, OSS) and confirm yesterday's assignments were served. The
+          recent feed below is your audit log; the acknowledgement panel
+          shows whether teachers marked the kid present this morning.
+        </HowToSection>
+        <HowToSection title="Logging an assignment">
+          <ul style={howtoListStyle}>
+            <li><strong>Add ISS log</strong> — pick the student, the date range (one or many days), the reason, and any notes. The system creates a per-day attendance row that the ISS room teacher will check off as the student shows up.</li>
+            <li><strong>Add OSS log</strong> — same flow, but the kid is marked absent from school. Parents see this in the Parent Portal if your school has opted in.</li>
+            <li><strong>Cancel</strong> — undoes a future-dated assignment. Past served days are immutable; cancellation only trims the tail.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Daily routine for admins">
+          <ul style={howtoListStyle}>
+            <li>Morning: scan the acknowledgement card. Yellow rows = teacher hasn't checked off the kid yet — call the room.</li>
+            <li>Mid-day: log new assignments as they happen so the ISS teacher's roster stays accurate.</li>
+            <li>End of day: review the recent feed. Anything wrong? Cancel future days; reason/notes stay editable on past assignments.</li>
+          </ul>
+        </RoleSection>
+        <RoleSection for="teacher" title="What teachers see">
+          You don't log here — instead you'll see soft reminders at the
+          top of your roster ("Jamal is in ISS today, period 3 onward").
+          Acknowledge by clicking the banner. That tells admin you saw it.
+        </RoleSection>
+      </HowToUseHelp>
 
       {error && (
         <div

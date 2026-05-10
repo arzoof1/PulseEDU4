@@ -1,5 +1,14 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import Login from "./Login";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  RoleProvider,
+  rolesFromAuthUser,
+  howtoListStyle,
+  HelpToggleButton,
+} from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
 import WatchlistHub from "./components/WatchlistHub";
 import WatchlistNetwork from "./components/WatchlistNetwork";
@@ -8372,6 +8381,7 @@ function App() {
   }
 
   return (
+    <RoleProvider value={rolesFromAuthUser(authUser)}>
     <div className="app-shell">
       {authUser?.impersonatorStaffId && authUser?.impersonatorDisplayName && (
         <div
@@ -8565,6 +8575,10 @@ function App() {
               <option value="mine">My Records Only</option>
             </select>
           </label>
+          {/* Global help toggle. Default ON; persists in localStorage so
+              once a user dismisses the in-page "How to use" shells they
+              stay hidden across reloads until re-enabled here. */}
+          <HelpToggleButton />
           <span className="user-pill">
             <span className="avatar">{userInitials || "?"}</span>
             <span style={{ padding: "0 0.5rem", whiteSpace: "nowrap" }}>
@@ -20344,6 +20358,7 @@ function App() {
       />
       </main>
     </div>
+    </RoleProvider>
   );
 }
 

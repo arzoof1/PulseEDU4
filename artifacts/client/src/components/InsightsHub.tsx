@@ -1,4 +1,5 @@
 import { useState, type CSSProperties } from "react";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // InsightsHub — Phase 2 launcher for the eduCLIMBER-style whole-child
 // platform. Today the only "live" tiles are Plans and Interventions
@@ -192,6 +193,37 @@ export default function InsightsHub({ tiles, onNavigate }: Props) {
         Whole-child platform. Plans and Interventions work today. The six
         domain dashboards and Early Warning ship in Phase 4.
       </p>
+
+      <HowToUseHelp title="How to use Insights">
+        <HowToSection title="What this hub is">
+          One launcher for every analytic surface in PulseEDU — Academics,
+          Behavior, Attendance, SEB/SEL, Equity, Engagement, Early Warning —
+          plus the action surfaces (Plans, Interventions) that turn the
+          numbers into next steps. Tiles in the <strong>Domains</strong>
+          row open dashboards. Tiles in <strong>Actions</strong> open work
+          queues. Tiles in <strong>Monitoring</strong> are watch lists.
+        </HowToSection>
+        <HowToSection title="How to navigate">
+          <ul style={howtoListStyle}>
+            <li>Click any "open" tile to jump straight to that dashboard.</li>
+            <li>Tiles tagged "Phase 4" or "Soon" are previews — click to expand the description in place.</li>
+            <li>Use the in-page filter bars (grade, window, demographic) on each dashboard to slice the same data different ways.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for="teacher" title="What teachers see here">
+          Your view is filtered to your roster. Plans and Interventions
+          show only the kids you're directly responsible for; the domain
+          dashboards still show school-wide aggregates so you can see
+          where your room fits in the bigger picture.
+        </RoleSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Admin / Core Team workflows">
+          <ul style={howtoListStyle}>
+            <li>Use Equity + Early Warning weekly to spot trends before they become referrals.</li>
+            <li>Drill from any dashboard into a student profile to see the same numbers in context.</li>
+            <li>Plans + Interventions surface kids who need a Tier 2/3 touch this week.</li>
+          </ul>
+        </RoleSection>
+      </HowToUseHelp>
 
       {GROUP_ORDER.map((groupId) => {
         const items = grouped[groupId];

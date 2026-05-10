@@ -8,6 +8,7 @@
 // also stays in sync.
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface Tier2Row {
   studentId: string;
@@ -98,6 +99,27 @@ export default function InterventionsTodayPage({
           ← Back
         </button>
       </div>
+
+      <HowToUseHelp title="How to use this week's interventions">
+        <HowToSection title="What this page is">
+          Your to-do list for the current Mon–Fri week. Each row is one
+          (student, tier) combination you still owe a log on — Tier 2
+          weekly check-ins and Tier 3 day-of-week scoring. Logging here
+          marks the row complete and clears the bell badge.
+        </HowToSection>
+        <HowToSection title="How to log">
+          <ul style={howtoListStyle}>
+            <li>Click <strong>Log now</strong> next to any row to open the matching form.</li>
+            <li>Tier 2 needs one entry per week per student; Tier 3 needs one per day per student.</li>
+            <li>The page refreshes itself after each log so the count goes down in real time.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for="teacher" title="If a row looks wrong">
+          Talk to your MTSS Coordinator — they're the ones who assigned
+          you the plan. Don't ignore the row; if a student transferred
+          out, ask the coordinator to close the plan so it stops nagging.
+        </RoleSection>
+      </HowToUseHelp>
 
       {loading && <div style={{ color: "#64748b" }}>Loading…</div>}
       {err && (

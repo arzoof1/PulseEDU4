@@ -1,4 +1,5 @@
 import type { CSSProperties } from "react";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 export type SettingsTileId =
   | "notifications"
@@ -183,6 +184,31 @@ export default function SettingsHub({ tiles, onSelect }: Props) {
       <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
         Choose an area to configure.
       </p>
+      <HowToUseHelp title="How to use Settings">
+        <HowToSection title="What this hub is">
+          Every per-school configuration tile in one launcher: bell
+          schedules, signage kiosks, branding, parent portal sections,
+          ISS rules, intervention strategies, and more. Tiles you don't
+          have permission to open are hidden, so the visible set is
+          your toolbox.
+        </HowToSection>
+        <HowToSection title="Tips before you change something">
+          <ul style={howtoListStyle}>
+            <li>Most settings are scoped to your school only — changes don't bleed to other schools in the district.</li>
+            <li>Test parent-facing changes (sections, branding) by opening the Parent Portal in a private window after saving.</li>
+            <li>Bell schedules drive the Hall Pass Queue's period reset — set a default before enabling the queue.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "superUser"]} title="Admin-only tiles">
+          Tenancy, allowlist, staff defaults, and data imports are
+          here. Tenancy is the place to add or rename schools (SuperUser
+          only); allowlist controls who can sign in.
+        </RoleSection>
+        <RoleSection for="districtAdmin" title="District-wide settings">
+          District Admins see every school's settings side-by-side from
+          the District Overview, not from this per-school launcher.
+        </RoleSection>
+      </HowToUseHelp>
       {orderedGroups.map((g) => {
         const list = buckets.get(g);
         if (!list || list.length === 0) return null;

@@ -7,6 +7,7 @@
 // 403 if the caller can't see this student. We surface that gracefully.
 
 import { useEffect, useState } from "react";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import {
   Radar,
   RadarChart,
@@ -731,6 +732,41 @@ export default function StudentProfile({
           </div>
         </div>
       </div>
+
+      <HowToUseHelp title="How to use the Student Profile">
+        <HowToSection title="What this page is">
+          The whole-child view of one student. Header shows identity,
+          grade, demographics, and current MTSS tier. Below that are
+          five pillar cards (Academics, Behavior, Flow, Supports,
+          Family) and a risk callout rail with the actionable signals.
+        </HowToSection>
+        <HowToSection title="Reading the pillars">
+          <ul style={howtoListStyle}>
+            <li><strong>Academics</strong> — FAST trend, course grades, gap-to-proficiency.</li>
+            <li><strong>Behavior</strong> — PBIS positives/negatives ratio, recent referrals.</li>
+            <li><strong>Flow</strong> — attendance, hall passes, tardies, ISS/OSS history.</li>
+            <li><strong>Supports</strong> — active interventions, plans, trusted adults.</li>
+            <li><strong>Family</strong> — communication log + emergency contacts (read-only).</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for="teacher" title="What teachers can do here">
+          You see this profile for any student on your roster. Use the
+          intervention history below the pillars when building parent
+          conferences — it's the canonical "everything we've tried"
+          record.
+        </RoleSection>
+        <RoleSection for={["admin", "coreTeam", "guidanceCounselor"]} title="Admin / Core Team / Guidance">
+          You can edit demographics inline (gender, ELL/ESE/504/CT
+          flags) — saves PATCH only the changed fields. The Safety
+          Plan button (when present) opens the editor; only Guidance
+          Counselor / Admin / Core Team can save changes there.
+        </RoleSection>
+        <RoleSection for="admin" title="Print &amp; export">
+          The Print Overall Report button (top right) produces a
+          parent-friendly PDF of every pillar at the current window.
+          Useful for IEP / 504 / SST meetings.
+        </RoleSection>
+      </HowToUseHelp>
 
       {/* Header card */}
       <div className="card" style={{ marginBottom: 0 }}>

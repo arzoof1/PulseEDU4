@@ -15,6 +15,7 @@
 
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface PlaylistRow {
   id: number;
@@ -721,6 +722,34 @@ function PlaylistEditor({
           Open public URL ↗
         </a>
       </div>
+
+      <HowToUseHelp title="How to use the Playlist Editor">
+        <HowToSection title="What this page is">
+          Per-playlist editor for what plays on a TV. Items rotate in
+          order; each item has its own duration. Audio plays beside
+          (not over) visual items. Open the public URL on a Chromecast,
+          Fire TV, or any modern browser to start displaying.
+        </HowToSection>
+        <HowToSection title="Item types">
+          <ul style={howtoListStyle}>
+            <li><strong>Image</strong> — JPEG/PNG/GIF/WebP. Honors per-item duration.</li>
+            <li><strong>Video</strong> — MP4/WebM. Plays through then advances.</li>
+            <li><strong>Audio</strong> — Background music; loops independently.</li>
+            <li><strong>PDF</strong> — Renders one page at a time.</li>
+            <li><strong>Schedule / PBIS / Hall Passes / Heartbeat</strong> — built-in live cards.</li>
+          </ul>
+        </HowToSection>
+        <HowToSection title="Scheduling &amp; targeting">
+          Use the Visibility window per item to make it auto-show
+          during a date range. Set a Default playlist on the parent
+          page so a new TV has something to play out of the box.
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Admin tips">
+          The "Open public URL" link is the cast target — bookmark
+          it on every TV. Re-ordering is drag and drop; changes go
+          live within ~30 seconds without a TV reboot.
+        </RoleSection>
+      </HowToUseHelp>
 
       {/* Settings card + preview side-by-side */}
       <div

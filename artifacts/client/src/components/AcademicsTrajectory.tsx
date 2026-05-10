@@ -14,6 +14,7 @@
 // /insights/academics).
 
 import { useEffect, useMemo, useState } from "react";
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import {
   ArrowLeft,
   ArrowRight,
@@ -530,6 +531,26 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
             FAST PM1 → PM3 by journey type — click any archetype to see
             actionable sub-groups and the students inside them.
           </p>
+          <HowToUseHelp title="How to use Academic Trajectories">
+            <HowToSection title="What this page is">
+              A grouping of every progress-monitored student into one
+              of six journeys (Soaring, Climbing, Plateauing, Sliding,
+              Stuck-Low, New Data). Sub-groups inside each card surface
+              the kids you can act on this week.
+            </HowToSection>
+            <HowToSection title="How to read the chart">
+              <ul style={howtoListStyle}>
+                <li>Each line is one student PM1 → PM2 → PM3.</li>
+                <li>The grade-band thresholds are the dashed grid.</li>
+                <li>Click an archetype card to filter the chart and the student list.</li>
+              </ul>
+            </HowToSection>
+            <RoleSection for={["coreTeam", "admin"]} title="What to do with it">
+              The "Sliding" and "Stuck-Low" buckets are the SST referral
+              shortlist. Click into a student to see the full profile
+              and start an MTSS plan from there.
+            </RoleSection>
+          </HowToUseHelp>
         </div>
         <div
           style={{

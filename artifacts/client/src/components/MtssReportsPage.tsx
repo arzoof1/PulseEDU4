@@ -1,3 +1,4 @@
+import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 // MTSS Reports — trends + charts page for the Core Team.
 //
 // Two modes, same component:
@@ -348,6 +349,31 @@ export default function MtssReportsPage({
               : "MTSS Reports"}
           </h1>
         </div>
+        <HowToUseHelp title="How to use MTSS Reports">
+          <HowToSection title="What this page is">
+            Trend lines and completion charts across every Tier 2 and
+            Tier 3 plan in your school (or, if you opened it from a
+            single plan, that plan only). Use the filters in the header
+            to narrow by tier, staff member, strategy, or date window.
+          </HowToSection>
+          <HowToSection title="What the charts mean">
+            <ul style={howtoListStyle}>
+              <li><strong>Weekly trend</strong> — Tier 2 % completion (rows logged ÷ rows due) and Tier 3 % avg score (mean of day-of-week scores).</li>
+              <li><strong>By strategy</strong> — which intervention categories are getting used and which are stalled.</li>
+              <li><strong>By staff</strong> — who is keeping up with their assigned check-ins.</li>
+            </ul>
+          </HowToSection>
+          <RoleSection for={["mtssCoordinator", "coreTeam"]} title="MTSS Coordinator workflow">
+            Review weekly. If a staff member's completion drops below
+            60%, open the per-plan view to see which kids are missing
+            entries and reach out before the cycle ends.
+          </RoleSection>
+          <RoleSection for="admin" title="What admins see here">
+            School-wide MTSS health in one chart. Use the print button
+            to export for board / district reporting; the layout is
+            already tuned for letter paper.
+          </RoleSection>
+        </HowToUseHelp>
         <button
           type="button"
           onClick={() => window.print()}
