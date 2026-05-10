@@ -9,6 +9,11 @@ import {
   type Role,
 } from "./watchlist/colors";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
+import {
+  HowToUseHelp,
+  HowToSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface SearchHit {
   studentId: string;
@@ -372,6 +377,91 @@ export default function WatchlistStudentGraph({
               case sphere to drill into the incidents and notes; click a
               connected student to re-center the web on them.
             </p>
+
+            <HowToUseHelp title="How to use Student Spider">
+              <HowToSection title="What this is">
+                A search-driven view of one student's investigation
+                footprint. The student you pick sits in the center; every
+                case they appear in (any role) orbits around them, and the
+                other students tied to those cases hang off each case
+                sphere. It's the fastest way to answer "what is this kid
+                actually involved in?" without hunting through case files
+                one at a time.
+              </HowToSection>
+              <HowToSection title="Finding a student">
+                <ul style={howtoListStyle}>
+                  <li>
+                    Type a name or student ID in the search box. Only
+                    students with at least one investigation footprint
+                    appear in the dropdown — if a name doesn't show up,
+                    that student isn't on any interaction.
+                  </li>
+                  <li>
+                    Pick a result to center the spider on them. The web
+                    redraws around the new student.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Reading the web">
+                <ul style={howtoListStyle}>
+                  <li>
+                    The <strong>large sphere in the middle</strong> is the
+                    student you searched for.
+                  </li>
+                  <li>
+                    Each <strong>case ring</strong> around them is a case
+                    they're tied to. The case title sits at the top of the
+                    ring; severity, status, and the case lead are shown in
+                    the side panel.
+                  </li>
+                  <li>
+                    The smaller spheres on each ring are the{" "}
+                    <strong>other students</strong> in that case. Their
+                    color reflects the role they played most often
+                    (Direct, Target, Witness, Peripheral, etc.).
+                  </li>
+                  <li>
+                    Edge thickness shows how many incidents two students
+                    co-appear in. Dashed edges mark statement-only
+                    relationships (no shared incident yet).
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="Drilling in">
+                <ul style={howtoListStyle}>
+                  <li>
+                    Click a <strong>case sphere</strong> to open the case
+                    details on the right — incidents in chronological
+                    order, notes, players, and statement status.
+                  </li>
+                  <li>
+                    Click a <strong>peripheral student</strong> sphere on
+                    a case ring to peek at their role and the specific
+                    incidents in that case where they appeared. Close the
+                    peek to return to the same web.
+                  </li>
+                  <li>
+                    Inside the peek, "<strong>Re-center spider on this
+                    student</strong>" jumps the whole view to that
+                    student's web — useful for following a chain ("who
+                    else is around this kid?").
+                  </li>
+                  <li>
+                    Use <strong>Open case file</strong> in the side panel
+                    to leave the spider and go to the full Case Detail
+                    page.
+                  </li>
+                </ul>
+              </HowToSection>
+              <HowToSection title="When to use this vs. Network view">
+                Use the Network view to see <em>all</em> active cases for
+                the school at a glance. Use the Spider when you already
+                have a name in mind and want to understand that one
+                student's connections — including kids on the loose ring
+                they share incidents with but aren't formally on a case
+                with yet.
+              </HowToSection>
+            </HowToUseHelp>
           </div>
         </div>
 
