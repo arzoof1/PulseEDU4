@@ -19176,6 +19176,13 @@ function App() {
         <WatchlistCaseDetail
           caseId={selectedWatchlistCaseId}
           onBack={() => setActiveSection(caseOpenOrigin)}
+          backLabel={
+            caseOpenOrigin === "watchlistNetwork"
+              ? "Back to Schoolwide Behavior Network"
+              : caseOpenOrigin === "watchlistStudentGraph"
+                ? "Back to Student Graph"
+                : "Back to Investigations"
+          }
           isAdmin={Boolean(
             authUser?.isAdmin ||
               authUser?.isSuperUser ||

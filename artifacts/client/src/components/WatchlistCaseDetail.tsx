@@ -149,6 +149,11 @@ interface Props {
   // School Counselor by design — they sit outside the discipline
   // investigation chain.
   isAdmin?: boolean;
+  // Where the user came from. Drives the "Back" button label so it
+  // names the actual destination ("Back to Schoolwide Behavior
+  // Network" vs "Back to Investigations") and lets us optionally
+  // surface a secondary jump button.
+  backLabel?: string;
   // Strict admin/superuser/district-admin gate — used for the Reopen
   // case button. Server-side `/cases/:id/reopen` rejects anyone outside
   // this set, so we hide the button to match. The wider `isAdmin` prop
@@ -172,6 +177,7 @@ export default function WatchlistCaseDetail({
   caseId,
   onBack,
   isAdmin = false,
+  backLabel = "Back to Investigations",
   canReopenCase = false,
   viewerName = "",
   initialAnchor = null,
@@ -441,7 +447,7 @@ export default function WatchlistCaseDetail({
               className="inline-flex items-center gap-1 text-[11px] font-semibold"
               style={{ color: C.brand }}
             >
-              <ArrowLeft className="h-3 w-3" /> Back to Investigations
+              <ArrowLeft className="h-3 w-3" /> {backLabel}
             </button>
             <div className="mt-2 flex flex-wrap items-center gap-2">
               <div
