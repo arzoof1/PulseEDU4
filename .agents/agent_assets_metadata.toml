@@ -186,3 +186,9 @@ id = "l_nQIoMe-cQ4y5TiBmeYw"
 uri = "file://attached_assets/PulseEDU_Workflow_Guide.pdf"
 type = "pdf"
 title = "PulseEDU Workflow Guide (v2)"
+
+[[outputs]]
+id = "9s91rGVr0KW4qGhiD-Kip"
+uri = "file://attached_assets/PulseEDU_Teacher_User_Guide.pdf"
+type = "pdf"
+title = "PulseEDU Teacher User Guide"
