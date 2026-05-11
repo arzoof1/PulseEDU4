@@ -1810,7 +1810,13 @@ function NetworkSVG({
         // row above. Cap at ~42 chars instead of 30.
         const PILL_W = 320;
         const PILL_H = 28;
-        const PILL_Y = cl.cy - cl.r - 22;
+        // Keep the pill inside the SVG (H=820). For top-row rings the
+        // ideal "above the ring" spot can fall above y=0 once you add
+        // the cluster halo padding, which clipped the pill against the
+        // SVG top edge. Clamp so we never render above 8px from the
+        // top — in that case the pill sits just inside the ring halo
+        // instead, still readable, never cropped.
+        const PILL_Y = Math.max(8, cl.cy - cl.r - 22);
         const MAX_LABEL = 42;
         const display =
           label.length > MAX_LABEL ? label.slice(0, MAX_LABEL - 1) + "…" : label;
