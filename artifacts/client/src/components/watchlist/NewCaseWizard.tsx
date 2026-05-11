@@ -353,7 +353,7 @@ export default function NewCaseWizard({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-2xl rounded-xl border shadow-xl"
+        className="w-full max-w-4xl rounded-xl border shadow-xl"
         style={{ background: C.panel, borderColor: C.line }}
         onClick={(e) => e.stopPropagation()}
       >
