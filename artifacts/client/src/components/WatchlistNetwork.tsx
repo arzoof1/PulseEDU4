@@ -2184,7 +2184,7 @@ function NetworkSVG({
             {n.caseIds.length > 1 && r >= 14 && (
               <g style={{ pointerEvents: "none" }}>
                 <title>
-                  Cross-case player — on {n.caseIds.length} cases
+                  Active on {n.caseIds.length} cases at once
                 </title>
                 <circle
                   cx={n.x - r * 0.78}
