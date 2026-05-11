@@ -26,10 +26,20 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
 type StaffRow = typeof staffTable.$inferSelect;
+
+// Core Team members (Admin / SuperUser / Behavior Specialist / MTSS /
+// School Psych) and the broader scheduling team can file pairings on
+// any teacher's roster after spotting cross-class behavior trends. The
+// flag is still stamped with their own staff id as `reporter_staff_id`,
+// so attribution and audit history reflect who actually made the call.
+function canFlagAnySection(staff: StaffRow): boolean {
+  return isCoreTeam(staff) || isSchedulingTeam(staff);
+}
 
 async function loadStaff(req: Request): Promise<StaffRow | null> {
   const id = req.staffId;
@@ -235,13 +245,37 @@ router.get(
       res.status(400).json({ error: "period is required" });
       return;
     }
+    // Default to the caller's own section. Core Team / scheduling team
+    // may pass an explicit teacherId to look up another teacher's
+    // section (used by the roster's per-row Suggest-Separation icon
+    // when an admin is viewing someone else's roster).
+    const teacherIdParam = req.query.teacherId;
+    let lookupTeacherId = staff.id;
+    if (
+      teacherIdParam !== undefined &&
+      teacherIdParam !== null &&
+      String(teacherIdParam).trim() !== ""
+    ) {
+      const tid = Number(teacherIdParam);
+      if (!Number.isInteger(tid) || tid < 1) {
+        res.status(400).json({ error: "Invalid teacherId" });
+        return;
+      }
+      if (tid !== staff.id && !canFlagAnySection(staff)) {
+        res
+          .status(403)
+          .json({ error: "Only Core Team can look up another teacher's section" });
+        return;
+      }
+      lookupTeacherId = tid;
+    }
     const [section] = await db
       .select()
       .from(classSectionsTable)
       .where(
         and(
           eq(classSectionsTable.schoolId, schoolId),
-          eq(classSectionsTable.teacherStaffId, staff.id),
+          eq(classSectionsTable.teacherStaffId, lookupTeacherId),
           eq(classSectionsTable.period, period),
         ),
       );
@@ -341,23 +375,42 @@ router.get("/separations/my", requireSignedIn(), async (req, res) => {
     res.status(400).json({ error: "classSectionId is required" });
     return;
   }
-  const owned = await loadOwnedSection(schoolId, staff.id, sectionId);
+  let owned = await loadOwnedSection(schoolId, staff.id, sectionId);
+  // Core Team / scheduling team may see (and post against) sections
+  // they don't personally teach. They get the FULL list of flags on
+  // that section, not just their own — otherwise they'd duplicate
+  // pairs the section's teacher already flagged.
+  const isAdminViewer = !owned && canFlagAnySection(staff);
+  if (!owned && isAdminViewer) {
+    const [s] = await db
+      .select()
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.id, sectionId),
+          eq(classSectionsTable.schoolId, schoolId),
+        ),
+      );
+    owned = s ?? null;
+  }
   if (!owned) {
     res.status(404).json({ error: "Section not found" });
     return;
   }
   const year = currentSchoolYear();
-  const rows = await db
-    .select()
-    .from(studentSeparationsTable)
-    .where(
-      and(
+  const where = isAdminViewer
+    ? and(
+        eq(studentSeparationsTable.schoolId, schoolId),
+        eq(studentSeparationsTable.classSectionId, sectionId),
+        eq(studentSeparationsTable.schoolYear, year),
+      )
+    : and(
         eq(studentSeparationsTable.schoolId, schoolId),
         eq(studentSeparationsTable.classSectionId, sectionId),
         eq(studentSeparationsTable.reporterStaffId, staff.id),
         eq(studentSeparationsTable.schoolYear, year),
-      ),
-    );
+      );
+  const rows = await db.select().from(studentSeparationsTable).where(where);
   res.json({ schoolYear: year, separations: rows });
 });
 
@@ -384,7 +437,22 @@ router.post("/separations", requireSignedIn(), async (req, res) => {
       .json({ error: "Two distinct studentIds are required" });
     return;
   }
-  const owned = await loadOwnedSection(schoolId, staff.id, secId);
+  let owned = await loadOwnedSection(schoolId, staff.id, secId);
+  if (!owned && canFlagAnySection(staff)) {
+    // Core Team / scheduling team can post a flag against any section
+    // in the school. Reporter is still the logged-in staff member, so
+    // attribution and audit reflect who actually made the call.
+    const [s] = await db
+      .select()
+      .from(classSectionsTable)
+      .where(
+        and(
+          eq(classSectionsTable.id, secId),
+          eq(classSectionsTable.schoolId, schoolId),
+        ),
+      );
+    owned = s ?? null;
+  }
   if (!owned) {
     res.status(403).json({ error: "You do not teach that section" });
     return;

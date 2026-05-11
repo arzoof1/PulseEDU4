@@ -1100,10 +1100,16 @@ export default function TeacherRosterPage({
   // ----- Separation Suggestions (per-period) -----
   // The roster only knows the period number, but the Suggest-Separation
   // modal needs the class_section_id. Resolve it once per (teacher,
-  // period) via a tiny lookup, then pull this teacher's existing flags
-  // for that section so we can show a "🚫 N" pill on each row that's
-  // already in a flagged pair.
+  // period) via a tiny lookup, then pull this section's existing flags
+  // so we can show a "🚫 N" pill on each row that's already in a
+  // flagged pair.
+  //
+  // Visibility: own roster always; Core Team viewers also get the icon
+  // when sitting on another teacher's roster so they can file pairs
+  // they've spotted from cross-class trends. Server stamps the flag
+  // with the logged-in user's staff id either way.
   const isOwnRoster = teacherId === defaultTeacherId;
+  const canFlagSeparations = isOwnRoster || isCoreTeam;
   const [sepSectionId, setSepSectionId] = useState<number | null>(null);
   type SepRow = {
     id: number;
@@ -1122,9 +1128,10 @@ export default function TeacherRosterPage({
   useEffect(() => {
     setSepSectionId(null);
     setSepRows([]);
-    if (!isOwnRoster || period == null) return;
+    if (!canFlagSeparations || period == null || teacherId == null) return;
     let cancelled = false;
-    authFetch(`/api/separations/section-for-period?period=${period}`)
+    const tidQs = isOwnRoster ? "" : `&teacherId=${teacherId}`;
+    authFetch(`/api/separations/section-for-period?period=${period}${tidQs}`)
       .then(async (r) => (r.ok ? r.json() : null))
       .then((j: { id: number } | null) => {
         if (cancelled || !j) return;
@@ -1136,7 +1143,7 @@ export default function TeacherRosterPage({
     return () => {
       cancelled = true;
     };
-  }, [isOwnRoster, period]);
+  }, [canFlagSeparations, isOwnRoster, period, teacherId]);
 
   useEffect(() => {
     if (sepSectionId == null) {
