@@ -1994,6 +1994,51 @@ function NetworkSVG({
                 strokeWidth={2.5}
               />
             )}
+            {/* Cross-case signal — dashed amber outline on any player
+                who is currently rostered on 2+ cases. Drawn just
+                outside the role/flag ring so both can coexist. The
+                edges already cross between rings; this badge calls
+                out the *node itself* so investigators can spot the
+                shared player without tracing every line. */}
+            {n.caseIds.length > 1 && (
+              <>
+                <title>
+                  Cross-case player — on {n.caseIds.length} cases
+                </title>
+                <circle
+                  cx={n.x}
+                  cy={n.y}
+                  r={r + (ringColor !== "transparent" ? 9 : 5)}
+                  fill="none"
+                  stroke={C.warn}
+                  strokeWidth={2}
+                  strokeDasharray="4 3"
+                  style={{ pointerEvents: "none" }}
+                />
+                {r >= 14 && (
+                  <g style={{ pointerEvents: "none" }}>
+                    <circle
+                      cx={n.x - r * 0.75}
+                      cy={n.y - r * 0.75}
+                      r={Math.max(7, r * 0.32)}
+                      fill={C.warn}
+                      stroke="#FFFFFF"
+                      strokeWidth={1.4}
+                    />
+                    <text
+                      x={n.x - r * 0.75}
+                      y={n.y - r * 0.75 + Math.max(7, r * 0.32) * 0.36}
+                      fontSize={Math.max(9, r * 0.36)}
+                      fontWeight={800}
+                      fill="#FFFFFF"
+                      textAnchor="middle"
+                    >
+                      {n.caseIds.length}
+                    </text>
+                  </g>
+                )}
+              </>
+            )}
             <circle
               cx={n.x}
               cy={n.y}
