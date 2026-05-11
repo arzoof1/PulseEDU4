@@ -23,7 +23,7 @@ import {
 import { authFetch } from "../lib/authToken";
 import { formatCaseNumber } from "../lib/caseNumber";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
-import NewCaseModal from "./watchlist/NewCaseModal";
+import NewCaseWizard from "./watchlist/NewCaseWizard";
 import {
   HowToUseHelp,
   HowToSection,
@@ -1368,7 +1368,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
         />
       )}
       {showNewCase && (
-        <NewCaseModal
+        <NewCaseWizard
           onClose={() => setShowNewCase(false)}
           onCreated={(caseId) => {
             setShowNewCase(false);
