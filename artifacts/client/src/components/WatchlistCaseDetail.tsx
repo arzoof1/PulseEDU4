@@ -813,10 +813,11 @@ export default function WatchlistCaseDetail({
                     type="button"
                     onClick={() => setShowLogMenu((v) => !v)}
                     aria-label="More options"
+                    title="More options"
                     className="inline-flex items-center rounded-r-md border-l border-white/20 px-1.5 py-1 text-[11px] font-bold text-white"
                     style={{ background: C.brand }}
                   >
-                    ▾
+                    <ChevronDown className="h-3.5 w-3.5" />
                   </button>
                   {showLogMenu && (
                     <>
