@@ -136,6 +136,31 @@ export default function NewCaseWizard({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // School locations — sourced from Settings → Locations (the same list
+  // configured during onboarding). Falls back to free text if empty so
+  // the wizard never blocks on missing config.
+  const [locations, setLocations] = useState<Array<{ id: number; name: string; active: boolean }>>([]);
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const r = await authFetch("/api/locations");
+        if (!r.ok) return;
+        const rows = (await r.json()) as Array<{
+          id: number;
+          name: string;
+          active: boolean;
+        }>;
+        if (alive) setLocations(rows.filter((l) => l.active));
+      } catch {
+        /* non-fatal — field stays free-text */
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   // Student search
   useEffect(() => {
     if (search.trim().length < 2) {
@@ -635,19 +660,54 @@ export default function NewCaseWizard({
                   </div>
                 </div>
                 <label className="block text-sm">
-                  <div
-                    className="mb-1 text-[11px] font-semibold uppercase tracking-wider"
-                    style={{ color: C.inkSoft }}
-                  >
-                    Where (optional)
+                  <div className="mb-1 flex items-center justify-between">
+                    <span
+                      className="text-[11px] font-semibold uppercase tracking-wider"
+                      style={{ color: C.inkSoft }}
+                    >
+                      Where (optional)
+                    </span>
+                    <span
+                      className="text-[11px]"
+                      style={{ color: C.inkSoft }}
+                      title="Add, rename, or retire rooms from Settings → Locations"
+                    >
+                      Manage in <span className="font-semibold" style={{ color: C.brand }}>Settings → Locations</span>
+                    </span>
                   </div>
-                  <input
-                    value={incLocation}
-                    onChange={(e) => setIncLocation(e.target.value)}
-                    placeholder="e.g. Hallway B / Cafeteria"
-                    className="w-full rounded-md border px-2 py-1.5 text-sm"
-                    style={{ borderColor: C.line, background: C.panel }}
-                  />
+                  {locations.length > 0 ? (
+                    <>
+                      <input
+                        list="wizard-locations"
+                        value={incLocation}
+                        onChange={(e) => setIncLocation(e.target.value)}
+                        placeholder="Pick a room or type a place…"
+                        className="w-full rounded-md border px-2 py-1.5 text-sm"
+                        style={{ borderColor: C.line, background: C.panel }}
+                      />
+                      <datalist id="wizard-locations">
+                        {locations.map((l) => (
+                          <option key={l.id} value={l.name} />
+                        ))}
+                      </datalist>
+                      <div
+                        className="mt-1 text-[10px]"
+                        style={{ color: C.inkSoft }}
+                      >
+                        {locations.length} room
+                        {locations.length === 1 ? "" : "s"} configured · free
+                        text allowed for one-offs
+                      </div>
+                    </>
+                  ) : (
+                    <input
+                      value={incLocation}
+                      onChange={(e) => setIncLocation(e.target.value)}
+                      placeholder="e.g. Hallway B / Cafeteria"
+                      className="w-full rounded-md border px-2 py-1.5 text-sm"
+                      style={{ borderColor: C.line, background: C.panel }}
+                    />
+                  )}
                 </label>
                 <label className="block text-sm">
                   <div
