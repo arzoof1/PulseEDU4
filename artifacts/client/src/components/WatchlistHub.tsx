@@ -30,6 +30,7 @@ import {
   howtoListStyle,
 } from "./HowToUseHelp";
 import PromoteToCaseModal from "./watchlist/PromoteToCaseModal";
+import AttachLooseToCaseModal from "./watchlist/AttachLooseToCaseModal";
 import StatementDetailsModal from "./watchlist/StatementDetailsModal";
 import {
   WL_COLORS as C,
@@ -175,6 +176,7 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
   const [showLog, setShowLog] = useState(false);
   const [showNewCase, setShowNewCase] = useState(false);
   const [promoteStmt, setPromoteStmt] = useState<InteractionRow | null>(null);
+  const [attachStmt, setAttachStmt] = useState<InteractionRow | null>(null);
   // ID of the statement whose full-detail modal is open. The modal is a
   // pure overlay — closing returns the user to the same intake position
   // they were on (no nav, no scroll reset, no reload).
@@ -1255,6 +1257,16 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
                             </button>
                             <button
                               type="button"
+                              onClick={() => setAttachStmt(i)}
+                              disabled={busyStmtId === i.id}
+                              className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
+                              style={{ borderColor: C.brand, color: C.brand, background: C.panel }}
+                              title="Add this statement to a case that already exists."
+                            >
+                              Attach to case…
+                            </button>
+                            <button
+                              type="button"
                               onClick={() => void dismissStmt(i)}
                               disabled={busyStmtId === i.id}
                               className="rounded-md border px-2 py-1 text-[11px] font-semibold disabled:opacity-50"
@@ -1400,6 +1412,22 @@ export default function WatchlistHub({ onOpenNetwork, onOpenCase, onOpenStudentG
           onClose={() => setPromoteStmt(null)}
           onPromoted={(caseId) => {
             setPromoteStmt(null);
+            void reload();
+            onOpenCase?.(caseId);
+          }}
+        />
+      )}
+      {attachStmt && (
+        <AttachLooseToCaseModal
+          statement={{
+            id: attachStmt.id,
+            summary: attachStmt.summary,
+            kind: attachStmt.kind,
+            occurredAt: attachStmt.occurredAt,
+          }}
+          onClose={() => setAttachStmt(null)}
+          onAttached={(caseId) => {
+            setAttachStmt(null);
             void reload();
             onOpenCase?.(caseId);
           }}
