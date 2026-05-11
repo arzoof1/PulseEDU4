@@ -143,9 +143,10 @@ function layout(nodes: NetNode[]): {
     const cy = cellH * r + cellH / 2;
     const arr = buckets.get(cid)!;
     const n = arr.length;
-    // Wider ring (was 0.32) so the bigger case spheres still have
-    // breathing room and the cell looks fuller.
-    const radius = Math.min(cellW, cellH) * 0.40;
+    // Ring radius. Sized to leave a gap above each ring for the
+    // case-name pill (which we render at cy - r - 22) so the pill
+    // doesn't collide with the bottom student labels of the row above.
+    const radius = Math.min(cellW, cellH) * 0.36;
     if (n === 0) {
       clusters.set(cid, { cx, cy, r: radius + 30, size: 0 });
       return;
@@ -368,6 +369,15 @@ export default function WatchlistNetwork({
   // to "case-grid" on every visit (intentional: avoids surprising the
   // next user on a shared workstation).
   const [viewMode, setViewMode] = useState<"case-grid" | "full-web">("case-grid");
+  // Status filter for the case-grid view. Mirrors the Active-cases
+  // panel: by default we show working cases (open + monitoring +
+  // escalated) and hide closed; the user can flip to "All open" or
+  // "Include closed" if they're investigating something historical.
+  // "active" is the inclusive default — it matches what the right-rail
+  // Active cases list shows, so the count of rings on the canvas
+  // never disagrees with the count in the panel.
+  type StatusPick = "active" | "open-only" | "all";
+  const [statusPick, setStatusPick] = useState<StatusPick>("active");
   // Phase 2.1 — per-student rollup of video evidence on the currently
   // zoomed case. Empty map when not zoomed or when the viewer is not
   // an admin (the endpoint 403s for non-admins, which we silently treat
@@ -471,16 +481,71 @@ export default function WatchlistNetwork({
   // single-cluster layout so the bubbles fill the viewport. Edges are
   // filtered to those whose endpoints are both in the zoomed cluster so
   // we don't render dangling lines off-canvas.
+  // Apply the status filter chips to derive the data we actually
+  // render in case-grid view. We rebuild a Resp here so every downstream
+  // memo (layout, stats, the right-rail Active cases list, ring caption
+  // lookup, zoomedData) reads from the same source of truth and they
+  // can never disagree about how many cases are on screen. Loose nodes
+  // (caseIds.length === 0) always pass through — the loose ring is its
+  // own bucket and is not a "case". Nodes whose only case is filtered
+  // out are removed (otherwise they'd silently fall into the loose
+  // ring, which would be misleading).
+  // Declared before zoomedData so the zoom memo can read from it.
+  const gridData = useMemo<Resp | null>(() => {
+    if (!data) return null;
+    const passes = (s: string): boolean => {
+      if (statusPick === "all") return true;
+      if (statusPick === "open-only") return s === "open";
+      // "active" — the default; matches the right-rail panel
+      return s !== "closed";
+    };
+    const visibleCaseIds = new Set(
+      data.cases.filter((c) => passes(c.status)).map((c) => c.id),
+    );
+    const cases = data.cases.filter((c) => visibleCaseIds.has(c.id));
+    // Rewrite each node's caseIds so layout()'s caseIds[0] cluster
+    // keying picks a *visible* primary case. Without this, a node
+    // whose first case ID was filtered out would either fall into the
+    // wrong cluster or be mis-keyed to a cid the renderer can't
+    // resolve (causing it to read as loose). Nodes with no remaining
+    // visible case become true loose nodes (caseIds = []).
+    const nodes = data.nodes
+      .filter((n) => {
+        if (n.caseIds.length === 0) return true;
+        return n.caseIds.some((id) => visibleCaseIds.has(id));
+      })
+      .map((n) =>
+        n.caseIds.length === 0
+          ? n
+          : { ...n, caseIds: n.caseIds.filter((id) => visibleCaseIds.has(id)) },
+      );
+    const nodeIdSet = new Set(nodes.map((n) => n.studentId));
+    const edges = data.edges.filter(
+      (e) =>
+        nodeIdSet.has(e.a) &&
+        nodeIdSet.has(e.b) &&
+        (e.caseIds.length === 0 ||
+          e.caseIds.some((id) => visibleCaseIds.has(id))),
+    );
+    return { nodes, edges, cases, windowDays: data.windowDays };
+  }, [data, statusPick]);
+
   const zoomedData = useMemo(() => {
     if (!data || zoomedClusterId === null) return null;
-    const inCluster = data.nodes.filter(
+    // Use the same source as the overview render so cluster membership
+    // is consistent under the status filter. In case-grid, gridData
+    // has each node's caseIds rewritten to only contain visible cases,
+    // so caseIds[0] correctly identifies the ring the node was placed
+    // in. Falling back to raw data keeps full-web zoom behavior intact.
+    const src = viewMode === "case-grid" ? (gridData ?? data) : data;
+    const inCluster = src.nodes.filter(
       (n) => (n.caseIds[0] ?? -1) === zoomedClusterId,
     );
     const ids = new Set(inCluster.map((n) => n.studentId));
-    const edges = data.edges.filter((e) => ids.has(e.a) && ids.has(e.b));
-    const cases = data.cases.filter((c) => c.id === zoomedClusterId);
-    return { nodes: inCluster, edges, cases, windowDays: data.windowDays } as Resp;
-  }, [data, zoomedClusterId]);
+    const edges = src.edges.filter((e) => ids.has(e.a) && ids.has(e.b));
+    const cases = src.cases.filter((c) => c.id === zoomedClusterId);
+    return { nodes: inCluster, edges, cases, windowDays: src.windowDays } as Resp;
+  }, [data, gridData, viewMode, zoomedClusterId]);
 
   const layoutResult = useMemo(() => {
     if (!data) return null;
@@ -504,7 +569,7 @@ export default function WatchlistNetwork({
         nodeScale: f.nodeScale,
       };
     }
-    const o = layout(data.nodes);
+    const o = layout((gridData ?? data).nodes);
     return {
       positioned: o.positioned,
       clusters: o.clusters,
@@ -512,9 +577,17 @@ export default function WatchlistNetwork({
       suppressed: 0,
       nodeScale: 1,
     };
-  }, [data, zoomedClusterId, zoomedData, viewMode]);
+  }, [data, gridData, zoomedClusterId, zoomedData, viewMode]);
 
-  const activeData: Resp | null = zoomedData ?? data;
+  // Source of truth for the canvas. Zoomed-into-case wins (its own
+  // single-cluster bundle). Otherwise: case-grid uses the status-
+  // filtered grid so ring count == right-rail count; full-web is a
+  // single force-directed web of *every* student/edge regardless of
+  // case status — filtering rings would silently drop nodes from the
+  // web view, which is the wrong mental model. So full-web stays on
+  // raw `data`.
+  const activeData: Resp | null =
+    zoomedData ?? (viewMode === "case-grid" ? (gridData ?? data) : data);
 
   const zoomedCase = useMemo(() => {
     if (zoomedClusterId === null || !data) return null;
@@ -533,6 +606,18 @@ export default function WatchlistNetwork({
     setZoomedClusterId(null);
     setSelectedId(null);
   }, [windowDays]);
+
+  // If the user flips the status filter to one that excludes the
+  // currently-zoomed case, drop the zoom so we don't render a phantom
+  // ring whose case isn't in the filtered set.
+  useEffect(() => {
+    if (zoomedClusterId === null || zoomedClusterId < 0 || !gridData) return;
+    const stillVisible = gridData.cases.some((c) => c.id === zoomedClusterId);
+    if (!stillVisible) {
+      setZoomedClusterId(null);
+      setSelectedId(null);
+    }
+  }, [gridData, zoomedClusterId]);
 
   // Pull this student's witness statements when they're picked. Reset
   // expanded set so a previously-opened statement doesn't carry over to
@@ -581,23 +666,27 @@ export default function WatchlistNetwork({
   }, [data, selectedId]);
 
   const stats = useMemo(() => {
-    if (!data) return null;
-    const flagged = data.nodes.filter((n) => n.flag !== null).length;
-    const crossCluster = data.edges.filter((e) => {
-      const a = data.nodes.find((n) => n.studentId === e.a);
-      const b = data.nodes.find((n) => n.studentId === e.b);
+    // Mirror activeData's source choice so the stat strip matches the
+    // canvas: full-web counts everything; case-grid counts only
+    // what's actually rendered after the status filter.
+    const src = viewMode === "case-grid" ? (gridData ?? data) : data;
+    if (!src) return null;
+    const flagged = src.nodes.filter((n) => n.flag !== null).length;
+    const crossCluster = src.edges.filter((e) => {
+      const a = src.nodes.find((n) => n.studentId === e.a);
+      const b = src.nodes.find((n) => n.studentId === e.b);
       if (!a || !b) return false;
       const ac = a.caseIds[0] ?? -1;
       const bc = b.caseIds[0] ?? -1;
       return ac !== bc;
     }).length;
     return {
-      students: data.nodes.length,
-      edges: data.edges.length,
+      students: src.nodes.length,
+      edges: src.edges.length,
       flagged,
       crossCluster,
     };
-  }, [data]);
+  }, [data, gridData, viewMode]);
 
   const checkInSelected = async () => {
     if (!selected) return;
@@ -770,6 +859,40 @@ export default function WatchlistNetwork({
               {w === 90 ? "Term" : `${w}d`}
             </button>
           ))}
+          <span
+            className="ml-3 text-[11px] font-semibold uppercase tracking-wider"
+            style={{ color: C.inkSoft }}
+          >
+            Cases
+          </span>
+          {(
+            [
+              { v: "active", label: "Active" },
+              { v: "open-only", label: "Open only" },
+              { v: "all", label: "Include closed" },
+            ] as const
+          ).map((opt) => (
+            <button
+              key={opt.v}
+              type="button"
+              onClick={() => setStatusPick(opt.v)}
+              className="rounded-md px-2.5 py-1 text-xs font-semibold"
+              title={
+                opt.v === "active"
+                  ? "Open + Monitoring + Escalated (matches the right-rail Active cases panel)"
+                  : opt.v === "open-only"
+                    ? "Open status only — hides Monitoring and Escalated"
+                    : "Show every case in this window, including Closed"
+              }
+              style={{
+                background: opt.v === statusPick ? C.ink : "transparent",
+                color: opt.v === statusPick ? "#fff" : C.ink,
+                border: `1px solid ${opt.v === statusPick ? C.ink : C.line}`,
+              }}
+            >
+              {opt.label}
+            </button>
+          ))}
         </div>
 
         {error && (
@@ -785,7 +908,7 @@ export default function WatchlistNetwork({
         {stats && (
           <div className="mt-4 grid grid-cols-2 gap-4 md:grid-cols-4">
             {[
-              { label: "Students in network", value: stats.students, sub: `across ${data?.cases.length ?? 0} cases`, icon: Users, tone: C.ink },
+              { label: "Students in network", value: stats.students, sub: `across ${(viewMode === "case-grid" ? (gridData ?? data) : data)?.cases.length ?? 0} cases`, icon: Users, tone: C.ink },
               { label: "Connections", value: stats.edges, sub: `${stats.crossCluster} cross-case`, icon: GitBranch, tone: C.brand },
               { label: "Active flags", value: stats.flagged, sub: "halos visible on graph", icon: Sparkles, tone: C.alert },
               { label: "Loose participants", value: data?.nodes.filter((n) => n.caseIds.length === 0).length ?? 0, sub: "not linked to a case", icon: Layers, tone: C.warn },
@@ -1446,12 +1569,17 @@ export default function WatchlistNetwork({
                   className="text-[11px] font-semibold uppercase tracking-wider"
                   style={{ color: C.inkSoft }}
                 >
-                  Active cases
+                  {statusPick === "all"
+                    ? "Cases (incl. closed)"
+                    : statusPick === "open-only"
+                      ? "Open cases"
+                      : "Active cases"}
                 </div>
                 <div className="mt-2 flex flex-col gap-1.5">
-                  {data.cases
-                    .filter((c) => c.status !== "closed")
-                    .map((c) => {
+                  {/* Use the same filtered set as the canvas so the
+                      panel and the rings can never disagree on count
+                      under any chip selection. */}
+                  {(gridData ?? data).cases.map((c) => {
                       const sp = statusPillStyle(c.status);
                       return (
                         <button
@@ -1669,7 +1797,29 @@ function NetworkSVG({
       {!isFullWeb && clusterIdsSorted.map((cid, idx) => {
         const cl = clusters.get(cid)!;
         const c = cid >= 0 ? caseById.get(cid) : null;
-        const label = c ? `Case ${formatCaseNumber(c)} · ${c.title}` : "Loose / no case";
+        // Distinct visual treatment for the loose / no-case ring so it
+        // can never be mistaken for a 4th case (this used to read as a
+        // case ring with a missing label, which was a real source of
+        // confusion).
+        const isLoose = !c;
+        const label = c
+          ? `Case ${formatCaseNumber(c)} · ${c.title}`
+          : `Loose statements · ${cl.size} student${cl.size === 1 ? "" : "s"} · no case yet`;
+        // Bigger, higher-contrast pill — readable from across the room
+        // and far less likely to collide with student name labels of the
+        // row above. Cap at ~42 chars instead of 30.
+        const PILL_W = 320;
+        const PILL_H = 28;
+        const PILL_Y = cl.cy - cl.r - 22;
+        const MAX_LABEL = 42;
+        const display =
+          label.length > MAX_LABEL ? label.slice(0, MAX_LABEL - 1) + "…" : label;
+        // Loose ring uses an amber fill with dark text; case rings use
+        // the brand color with white text. Both clearly distinguishable
+        // at a glance.
+        const pillFill = isLoose ? C.warn : C.brand;
+        const pillStroke = isLoose ? C.warn : C.brand;
+        const pillText = isLoose ? C.ink : "#FFFFFF";
         return (
           <g key={cid}>
             <circle
@@ -1686,45 +1836,35 @@ function NetworkSVG({
             >
               {!zoomed && <title>Click to zoom into {label}</title>}
             </circle>
-            {!zoomed && c ? (
+            {!zoomed ? (
               <g
-                onClick={() => onOpenCase(c.id)}
-                style={{ cursor: "pointer" }}
+                onClick={c ? () => onOpenCase(c.id) : undefined}
+                style={{ cursor: c ? "pointer" : "default" }}
               >
                 <rect
-                  x={cl.cx - 110}
-                  y={cl.cy - cl.r - 18}
-                  width={220}
-                  height={20}
-                  rx={10}
-                  fill={C.panel}
-                  stroke={C.brand}
+                  x={cl.cx - PILL_W / 2}
+                  y={PILL_Y}
+                  width={PILL_W}
+                  height={PILL_H}
+                  rx={14}
+                  fill={pillFill}
+                  stroke={pillStroke}
                   strokeWidth={1}
+                  filter="url(#wl-shadow-soft)"
                 />
                 <text
                   x={cl.cx}
-                  y={cl.cy - cl.r - 5}
-                  fontSize={11}
+                  y={PILL_Y + PILL_H / 2 + 4}
+                  fontSize={13}
                   fontWeight={700}
-                  fill={C.brand}
+                  fill={pillText}
                   textAnchor="middle"
-                  style={{ letterSpacing: 0.4 }}
+                  style={{ letterSpacing: 0.3 }}
                 >
-                  {label.length > 32 ? label.slice(0, 30) + "…" : label}
+                  {display}
                 </text>
+                {c ? <title>Open Case {formatCaseNumber(c)}</title> : null}
               </g>
-            ) : !zoomed ? (
-              <text
-                x={cl.cx}
-                y={cl.cy - cl.r - 5}
-                fontSize={11}
-                fontWeight={700}
-                fill={C.inkSoft}
-                textAnchor="middle"
-                style={{ letterSpacing: 0.6, textTransform: "uppercase" }}
-              >
-                {label}
-              </text>
             ) : null}
           </g>
         );
