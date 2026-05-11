@@ -42,6 +42,10 @@ export default function VoiceTextarea({
   brandColor = "#7A1F2B",
   disabled,
 }: Props) {
+  // Tiny note-style fields (rows<=2) get the original icon-only round
+  // mic so they don't lose horizontal real estate to a labeled pill.
+  // Anything taller renders the discoverable "Dictate" pill.
+  const compact = rows <= 2;
   const [supported, setSupported] = useState(false);
   const [listening, setListening] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -117,16 +121,27 @@ export default function VoiceTextarea({
         placeholder={placeholder}
         disabled={disabled}
         className={className}
-        style={{ ...style, paddingRight: supported ? 36 : undefined }}
+        style={{
+          ...style,
+          paddingRight: supported ? (compact ? 36 : 110) : undefined,
+        }}
       />
       {supported && (
         <button
           type="button"
           onClick={listening ? stop : start}
           disabled={disabled}
-          title={listening ? "Stop dictation" : "Dictate (voice to text)"}
+          title={
+            listening
+              ? "Stop dictation"
+              : "Dictate (voice to text). Tap, then speak — your words appear in the box."
+          }
           aria-label={listening ? "Stop dictation" : "Start dictation"}
-          className="wl-mic-btn absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-colors disabled:opacity-50"
+          className={
+            compact
+              ? "wl-mic-btn absolute right-2 top-2 inline-flex h-7 w-7 items-center justify-center rounded-full border shadow-sm transition-colors disabled:opacity-50"
+              : "wl-mic-btn absolute right-2 top-2 inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors disabled:opacity-50"
+          }
           style={{
             background: listening ? brandColor : "#FFFFFF",
             color: listening ? "#FFFFFF" : brandColor,
@@ -135,9 +150,15 @@ export default function VoiceTextarea({
           }}
         >
           {listening ? (
-            <MicOff className="h-3.5 w-3.5" />
+            <>
+              <MicOff className="h-3.5 w-3.5" />
+              {!compact && <span>Stop</span>}
+            </>
           ) : (
-            <Mic className="h-3.5 w-3.5" />
+            <>
+              <Mic className="h-3.5 w-3.5" />
+              {!compact && <span>Dictate</span>}
+            </>
           )}
         </button>
       )}

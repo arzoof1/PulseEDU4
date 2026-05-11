@@ -726,16 +726,22 @@ export default function NewCaseWizard({
                 </label>
                 <div>
                   <div
-                    className="mb-1 text-[11px] font-semibold uppercase tracking-wider"
+                    className="mb-1 flex items-center justify-between text-[11px] font-semibold uppercase tracking-wider"
                     style={{ color: C.inkSoft }}
                   >
-                    Detail (optional)
+                    <span>Detail (optional)</span>
+                    <span className="font-normal normal-case opacity-70">
+                      tap <strong>Dictate</strong> to speak instead of type
+                    </span>
                   </div>
                   <VoiceTextarea
                     value={incDetail}
                     onChange={setIncDetail}
-                    placeholder="Anything else that belongs in the case file."
-                    rows={4}
+                    placeholder="Anything else that belongs in the case file — what led up to it, who else saw it, what's already been tried, anything an admin reading this case in three weeks would want to know."
+                    rows={8}
+                    className="w-full rounded-md border px-2 py-1.5 text-sm"
+                    style={{ borderColor: C.line, background: C.panel }}
+                    brandColor={C.brand}
                   />
                 </div>
               </fieldset>

@@ -3,7 +3,7 @@ import { Settings2 } from "lucide-react";
 import { authFetch } from "../../lib/authToken";
 import { formatCaseNumber } from "../../lib/caseNumber";
 import { INTERACTION_KINDS, ROLE_META, WL_COLORS, type Role } from "./colors";
-import VoiceTextarea from "./VoiceTextarea";
+import MentionTextarea from "./MentionTextarea";
 
 interface StudentHit {
   studentId: string;
@@ -558,14 +558,14 @@ export default function LogInteractionModal({
             >
               Student statement <span style={{ color: WL_COLORS.alert }}>*</span>
               <span className="ml-1 font-normal normal-case opacity-70">
-                — tap the mic to dictate
+                — tap <strong>Dictate</strong> to speak, or type <strong>@</strong> (or use <strong>+ Tag student</strong>) to tag another student mentioned by name
               </span>
             </div>
-            <VoiceTextarea
+            <MentionTextarea
               value={detail}
               onChange={setDetail}
-              rows={4}
-              placeholder="Type the student's account in their own words, or tap the mic to dictate…"
+              rows={6}
+              placeholder="Type the student's account in their own words. Tap Dictate to speak it instead. When they name another student, type @ to tag that student so the case automatically links them."
               className="w-full rounded-md border px-2 py-1.5 text-sm"
               style={{ borderColor: WL_COLORS.line, background: WL_COLORS.bg }}
               brandColor={WL_COLORS.brand}
