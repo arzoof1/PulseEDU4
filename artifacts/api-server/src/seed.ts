@@ -1538,8 +1538,13 @@ export async function ensureCaseVideoEvidencePlayersSchema() {
 
 // Per-school registry of named security cameras. See
 // lib/db/src/schema/cameraRegistry.ts for the soft-delete + audit
-// rationale. The case-insensitive uniqueness constraint is added in
-// raw SQL because drizzle-zod doesn't currently emit `lower(name)`.
+// rationale. Exact-match uniqueness is declared in the schema
+// (case_camera_registry_school_name_uidx); case-insensitive
+// duplicate detection is enforced in the POST/PATCH routes because
+// expression-based unique indexes don't round-trip cleanly through
+// the deploy migration tooling (it mis-emits the opclass on the
+// lower(name) expression). App-level guard is sufficient — these
+// writes are admin-only and infrequent.
 export async function ensureCameraRegistrySchema() {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS case_camera_registry (
@@ -1555,10 +1560,15 @@ export async function ensureCameraRegistrySchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS case_camera_registry_school_active_idx ON case_camera_registry (school_id, active)`,
   );
-  // Case-insensitive uniqueness — admins type "Cafeteria North" or
-  // "cafeteria north" and we want both rejected as duplicates.
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS case_camera_registry_school_name_lower_uidx ON case_camera_registry (school_id, lower(name))`,
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS case_camera_registry_school_name_uidx ON case_camera_registry (school_id, name)`,
+  );
+  // Drop the legacy expression-based index if a previous boot of the
+  // dev DB created it. Production deploys never had this index (the
+  // migration that would have created it was the one that failed),
+  // so this is a dev-DB-only cleanup.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS case_camera_registry_school_name_lower_uidx`,
   );
 }
 

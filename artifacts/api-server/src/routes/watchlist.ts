@@ -4310,6 +4310,24 @@ router.post(
       res.status(400).json({ error: "name required" });
       return;
     }
+    // Case-insensitive duplicate check. Schema-level uniqueness on
+    // (school_id, name) is exact-match only; we explicitly want
+    // "Cafeteria North" and "cafeteria north" to collide, so we
+    // check by lower(name) before insert.
+    const [dupe] = await db
+      .select({ id: cameraRegistryTable.id })
+      .from(cameraRegistryTable)
+      .where(
+        and(
+          eq(cameraRegistryTable.schoolId, schoolId),
+          sql`lower(${cameraRegistryTable.name}) = lower(${name})`,
+        ),
+      )
+      .limit(1);
+    if (dupe) {
+      res.status(409).json({ error: "A camera with that name already exists" });
+      return;
+    }
     try {
       const [row] = await db
         .insert(cameraRegistryTable)
@@ -4372,6 +4390,27 @@ router.patch(
       if (!v) {
         res.status(400).json({ error: "name cannot be empty" });
         return;
+      }
+      // Case-insensitive collision guard against OTHER cameras in
+      // the school. Renaming a camera to its own current name (or
+      // a different case of it) is allowed.
+      if (v.toLowerCase() !== before.name.toLowerCase()) {
+        const [dupe] = await db
+          .select({ id: cameraRegistryTable.id })
+          .from(cameraRegistryTable)
+          .where(
+            and(
+              eq(cameraRegistryTable.schoolId, schoolId),
+              sql`lower(${cameraRegistryTable.name}) = lower(${v})`,
+            ),
+          )
+          .limit(1);
+        if (dupe) {
+          res
+            .status(409)
+            .json({ error: "A camera with that name already exists" });
+          return;
+        }
       }
       patch.name = v;
     }
