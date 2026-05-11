@@ -1825,7 +1825,7 @@ function NetworkSVG({
         // at a glance.
         const pillFill = isLoose ? C.warn : C.brand;
         const pillStroke = isLoose ? C.warn : C.brand;
-        const pillText = isLoose ? C.ink : "#FFFFFF";
+        const pillText = "#FFFFFF";
         return (
           <g key={cid}>
             <circle
