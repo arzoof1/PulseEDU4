@@ -1263,6 +1263,23 @@ export default function TeacherRosterPage({
             <li><strong>PM1 / PM2 / PM3</strong> — FAST Progress Monitoring scores.</li>
             <li><strong>Programs</strong> — service flags driving accommodations.</li>
             <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects.</li>
+            <li>
+              <strong>🔗 chain</strong> next to a name — opens the
+              "Suggest separation" dialog so you can flag students who
+              should be kept apart this period. Once a student is in one
+              or more flagged pairs, the icon turns into a red{" "}
+              <strong>🚫 N</strong> pill (N = number of pairings) — click
+              it to view or edit the existing suggestions. Suggestions
+              are scoped to the period you're viewing and are visible to
+              the next teacher who has the same students.
+            </li>
+            <li>
+              <strong>R</strong> in a black circle — student has been
+              retained at one or more grade levels. Hover for the list
+              (e.g. "Retained: Grade 3, Grade 5"). Admins, Behavior
+              Specialists, MTSS Coordinators, and Counselors can
+              mark/unmark from the Student Profile.
+            </li>
           </ul>
         </HowToSection>
         <RoleSection for="teacher" title="Daily use for teachers">
@@ -1385,6 +1402,54 @@ export default function TeacherRosterPage({
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
           <InvisibleEyeIcon tier={3} windowDays={data?.invisibleDays ?? null} />
           + active MTSS Tier 3
+        </span>
+        <span
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Click on the row to suggest a separation pairing for this period; the icon turns red with a count once one or more pairs are flagged."
+        >
+          <span aria-hidden="true">🔗</span>
+          suggest separation /
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 2,
+              padding: "1px 6px",
+              borderRadius: 999,
+              border: "1px solid #fca5a5",
+              background: "#fef2f2",
+              color: "#b91c1c",
+              fontWeight: 700,
+            }}
+          >
+            🚫 N
+          </span>
+          already flagged this period (click to edit)
+        </span>
+        <span
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          title="Student has been retained at one or more grade levels. Hover the badge on a row for the list."
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              justifyContent: "center",
+              width: 18,
+              height: 18,
+              borderRadius: "50%",
+              background: "#0f172a",
+              color: "white",
+              fontSize: 11,
+              fontWeight: 800,
+              lineHeight: 1,
+            }}
+          >
+            R
+          </span>
+          retained (hover for grade levels)
         </span>
       </div>
 
