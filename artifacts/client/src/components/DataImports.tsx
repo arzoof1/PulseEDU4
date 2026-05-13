@@ -1943,6 +1943,29 @@ export default function DataImports({
                         >
                           Download sample
                         </a>
+                        {/* "Download current data" pulls every existing
+                            row of this kind for the school (or district,
+                            for assessments in district scope) so the
+                            user can edit real records and re-upload —
+                            full round-trip with the same headers the
+                            importer expects. */}
+                        <a
+                          href={`/api/data-imports/export?kind=${encodeURIComponent(
+                            kind,
+                          )}&scope=${encodeURIComponent(effectiveScope)}`}
+                          style={{
+                            padding: "0.35rem 0.7rem",
+                            border: "1px solid var(--border, #2a3447)",
+                            borderRadius: 6,
+                            textDecoration: "none",
+                            color: "inherit",
+                            fontSize: 13,
+                            whiteSpace: "nowrap",
+                            background: "var(--surface-soft, transparent)",
+                          }}
+                        >
+                          Download current data
+                        </a>
                       </div>
                     );
                   })()}

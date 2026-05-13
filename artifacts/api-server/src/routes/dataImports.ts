@@ -993,6 +993,281 @@ router.get("/data-imports/jobs", requireImporter(), async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /api/data-imports/export?kind=...&scope=school|district
+//   Returns the school's CURRENT data for the requested kind as a CSV
+//   the user can edit and re-upload. Column order matches the sample
+//   CSVs served from /samples/, so a download → edit → upload round
+//   trip uses the same headers the importer expects.
+//
+//   kind ∈ rosters | behavior | fast_scores | fast_prior_year | assessments
+//
+//   District scope is only honored for kinds that the importer itself
+//   supports at district level (assessments today). Anything else
+//   force-clamps to school scope.
+//
+//   Empty schools get a header-only CSV (still valid). Filenames
+//   include kind + ISO date so re-downloads don't overwrite each other
+//   in the user's Downloads folder.
+// ---------------------------------------------------------------------------
+router.get("/data-imports/export", requireImporter(), async (req, res) => {
+  const staff = (req as Request & { staff: StaffRow }).staff;
+  const kindRaw = typeof req.query.kind === "string" ? req.query.kind : "";
+  const SUPPORTED = new Set([
+    "rosters",
+    "behavior",
+    "fast_scores",
+    "fast_prior_year",
+    "assessments",
+  ]);
+  if (!SUPPORTED.has(kindRaw)) {
+    res.status(400).json({ error: "Unknown kind" });
+    return;
+  }
+  const scope =
+    req.query.scope === "district" && kindRaw === "assessments"
+      ? "district"
+      : "school";
+
+  let scopeStudentIds: Set<string> | null = null;
+  let schoolIds: number[] = [];
+  if (scope === "district") {
+    if (!canActAsDistrict(staff)) {
+      res.status(403).json({ error: "District access required" });
+      return;
+    }
+    const districtId = await requireActorDistrict(staff, res);
+    if (districtId == null) return;
+    const ds = await db
+      .select({ id: schoolsTable.id })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.districtId, districtId));
+    schoolIds = ds.map((s) => s.id);
+    if (schoolIds.length === 0) {
+      sendCsv(res, kindRaw, []);
+      return;
+    }
+  } else {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    schoolIds = [schoolId];
+  }
+  void scopeStudentIds;
+
+  // Build (header, rows) per kind. Rows are arrays of strings/numbers
+  // in the same order as the headers; Papa.unparse handles quoting and
+  // newlines.
+  let headers: string[] = [];
+  let rows: (string | number | null)[][] = [];
+
+  if (kindRaw === "rosters") {
+    const list = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+        parentName: studentsTable.parentName,
+        parentEmail: studentsTable.parentEmail,
+        parentPhone: studentsTable.parentPhone,
+        gender: studentsTable.gender,
+        ell: studentsTable.ell,
+        ese: studentsTable.ese,
+        is504: studentsTable.is504,
+      })
+      .from(studentsTable)
+      .where(inArray(studentsTable.schoolId, schoolIds))
+      .orderBy(studentsTable.lastName, studentsTable.firstName);
+    headers = [
+      "student_id",
+      "first_name",
+      "last_name",
+      "grade",
+      "parent_name",
+      "parent_email",
+      "parent_phone",
+      "gender",
+      "ell",
+      "ese",
+      "is_504",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      r.firstName,
+      r.lastName,
+      // Grade 0 in the DB = Kindergarten; export as "K" so the round
+      // trip preserves what staff actually expects to see.
+      r.grade === 0 ? "K" : r.grade,
+      r.parentName ?? "",
+      r.parentEmail ?? "",
+      r.parentPhone ?? "",
+      r.gender ?? "",
+      r.ell ? "Y" : "N",
+      r.ese ? "Y" : "N",
+      r.is504 ? "Y" : "N",
+    ]);
+  } else if (kindRaw === "behavior") {
+    const list = await db
+      .select({
+        studentId: supportNotesTable.studentId,
+        noteType: supportNotesTable.noteType,
+        noteText: supportNotesTable.noteText,
+        staffName: supportNotesTable.staffName,
+        createdAt: supportNotesTable.createdAt,
+      })
+      .from(supportNotesTable)
+      .where(inArray(supportNotesTable.schoolId, schoolIds))
+      .orderBy(desc(supportNotesTable.createdAt));
+    headers = [
+      "student_id",
+      "note_type",
+      "note_text",
+      "staff_name",
+      "created_at",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      r.noteType ?? "",
+      r.noteText ?? "",
+      r.staffName ?? "",
+      // createdAt is stored as text (legacy) — pass through verbatim.
+      r.createdAt ?? "",
+    ]);
+  } else if (kindRaw === "fast_scores") {
+    const list = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        pm1: studentFastScoresTable.pm1,
+        pm2: studentFastScoresTable.pm2,
+        pm3: studentFastScoresTable.pm3,
+        priorYearScore: studentFastScoresTable.priorYearScore,
+        priorYearBq: studentFastScoresTable.priorYearBq,
+      })
+      .from(studentFastScoresTable)
+      .where(inArray(studentFastScoresTable.schoolId, schoolIds))
+      .orderBy(
+        studentFastScoresTable.studentId,
+        studentFastScoresTable.subject,
+      );
+    headers = [
+      "student_id",
+      "subject",
+      "pm1",
+      "pm2",
+      "pm3",
+      "prior_year_score",
+      "prior_year_bq",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      // Export the user-friendly label (ELA/Math) — the importer
+      // accepts both that and the lowercase code on re-upload.
+      r.subject === "ela" ? "ELA" : "Math",
+      r.pm1 ?? "",
+      r.pm2 ?? "",
+      r.pm3 ?? "",
+      r.priorYearScore ?? "",
+      r.priorYearBq ? "Y" : "N",
+    ]);
+  } else if (kindRaw === "fast_prior_year") {
+    const list = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        subject: studentFastScoresTable.subject,
+        priorYearScore: studentFastScoresTable.priorYearScore,
+        priorYearBq: studentFastScoresTable.priorYearBq,
+      })
+      .from(studentFastScoresTable)
+      .where(inArray(studentFastScoresTable.schoolId, schoolIds))
+      .orderBy(
+        studentFastScoresTable.studentId,
+        studentFastScoresTable.subject,
+      );
+    headers = ["student_id", "subject", "prior_year_score", "prior_year_bq"];
+    rows = list
+      // Only include rows that actually have a prior-year score; this
+      // is the prior-year-only export, so empty rows are noise.
+      .filter((r) => r.priorYearScore != null)
+      .map((r) => [
+        r.studentId,
+        r.subject === "ela" ? "ELA" : "Math",
+        r.priorYearScore ?? "",
+        r.priorYearBq ? "Y" : "N",
+      ]);
+  } else if (kindRaw === "assessments") {
+    const list = await db
+      .select({
+        studentId: assessmentsTable.studentId,
+        assessmentName: assessmentsTable.assessmentName,
+        score: assessmentsTable.score,
+        scoreLevel: assessmentsTable.scoreLevel,
+        administeredAt: assessmentsTable.administeredAt,
+        source: assessmentsTable.source,
+        schoolId: assessmentsTable.schoolId,
+      })
+      .from(assessmentsTable)
+      .where(inArray(assessmentsTable.schoolId, schoolIds))
+      .orderBy(desc(assessmentsTable.administeredAt));
+    // Build a school_code map so district exports can round-trip
+    // back through the district importer (which routes by school_code).
+    const codeMap = new Map<number, string>();
+    if (scope === "district") {
+      const ss = await db
+        .select({
+          id: schoolsTable.id,
+          code: schoolsTable.stateSchoolCode,
+        })
+        .from(schoolsTable)
+        .where(inArray(schoolsTable.id, schoolIds));
+      for (const s of ss) codeMap.set(s.id, s.code ?? "");
+    }
+    headers = [
+      "student_id",
+      "assessment_name",
+      "score",
+      "score_level",
+      "administered_at",
+      "source",
+      "school_code",
+    ];
+    rows = list.map((r) => [
+      r.studentId,
+      r.assessmentName,
+      r.score ?? "",
+      r.scoreLevel ?? "",
+      // ISO date (YYYY-MM-DD) — easier to edit in Excel than full ISO.
+      r.administeredAt instanceof Date
+        ? r.administeredAt.toISOString().slice(0, 10)
+        : String(r.administeredAt ?? "").slice(0, 10),
+      r.source ?? "",
+      scope === "district" ? codeMap.get(r.schoolId) ?? "" : "",
+    ]);
+  }
+
+  sendCsv(res, kindRaw, [headers, ...rows]);
+});
+
+// CSV writer used by the export endpoint above. Pulled out so each
+// kind branch stays focused on its query shape.
+function sendCsv(
+  res: Response,
+  kind: string,
+  rowsWithHeader: (string | number | null)[][],
+): void {
+  const csv = Papa.unparse(rowsWithHeader, { quotes: true });
+  const stamp = new Date().toISOString().slice(0, 10);
+  const filename = `pulseedu-${kind.replace(/_/g, "-")}-${stamp}.csv`;
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${filename}"`,
+  );
+  // Prepend BOM so Excel opens it as UTF-8 instead of Latin-1, which
+  // would mangle accented names on the roster export.
+  res.send("\uFEFF" + csv);
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/data-imports/jobs/:id/rollback
 //   Deletes the rows this job inserted (assessments today; future
 //   importers will need to add their own delete branch). Wrapped in a
