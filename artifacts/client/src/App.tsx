@@ -4543,6 +4543,7 @@ function App() {
     pbisColdPeriodMultiple: number;
     finderShowAbsentBanner: boolean;
     staffDirectoryShowCellPhone: boolean;
+    manualRosterUploadEnabled: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -4596,6 +4597,7 @@ function App() {
     pbisColdPeriodMultiple: 5,
     finderShowAbsentBanner: false,
     staffDirectoryShowCellPhone: false,
+    manualRosterUploadEnabled: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -6228,6 +6230,10 @@ function App() {
             typeof data.staffDirectoryShowCellPhone === "boolean"
               ? data.staffDirectoryShowCellPhone
               : false,
+          manualRosterUploadEnabled:
+            typeof data.manualRosterUploadEnabled === "boolean"
+              ? data.manualRosterUploadEnabled
+              : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -6330,6 +6336,10 @@ function App() {
         staffDirectoryShowCellPhone:
           typeof data.staffDirectoryShowCellPhone === "boolean"
             ? data.staffDirectoryShowCellPhone
+            : false,
+        manualRosterUploadEnabled:
+          typeof data.manualRosterUploadEnabled === "boolean"
+            ? data.manualRosterUploadEnabled
             : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
@@ -20618,6 +20628,49 @@ function App() {
                   banner can mis-locate a student who is actually on
                   campus. The green "current period" highlight and the
                   active hall pass banner work either way.
+                </span>
+              </span>
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.5rem",
+                padding: "0.6rem 0.75rem",
+                border: "1px solid var(--border-subtle, #e2e8f0)",
+                borderRadius: 6,
+                background: "var(--surface-subtle, #f8fafc)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={schoolSettings.manualRosterUploadEnabled}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    manualRosterUploadEnabled: e.target.checked,
+                  })
+                }
+                style={{ marginTop: "0.2rem" }}
+              />
+              <span style={{ display: "grid", gap: "0.15rem" }}>
+                <span style={{ fontWeight: 600 }}>
+                  Allow manual Roster CSV uploads (Data &amp; Integrations)
+                </span>
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.85rem",
+                    fontWeight: "normal",
+                  }}
+                >
+                  Off by default. Most schools sync their roster from
+                  Classlink or Clever (OneRoster) — turning this on makes
+                  the Roster card available in the Data Importer wizard.
+                  Manual uploads UPSERT (new students are added, existing
+                  students get changed columns updated, blank CSV cells
+                  preserve current values), and every commit is fully
+                  reversible from the History tab.
                 </span>
               </span>
             </label>

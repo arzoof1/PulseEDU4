@@ -71,6 +71,18 @@ export const schoolSettingsTable = pgTable(
   staffDirectoryShowCellPhone: boolean("staff_directory_show_cell_phone")
     .notNull()
     .default(false),
+  // Data Importer — manual roster upload toggle. Default OFF because the
+  // expected source of truth for most schools is a Classlink / Clever
+  // OneRoster sync. When false, the Roster card in the Data Importer
+  // wizard is disabled and the server's roster commit endpoint refuses
+  // the upload (defense-in-depth so a stale tab can't bypass the UI).
+  // When true, the wizard exposes the Roster importer, which inserts
+  // new students AND updates existing ones (with COALESCE so blank CSV
+  // cells preserve current values). Updates are snapshotted into
+  // student_import_snapshots so rollback is fully reversible.
+  manualRosterUploadEnabled: boolean("manual_roster_upload_enabled")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //

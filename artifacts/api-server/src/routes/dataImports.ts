@@ -31,8 +31,10 @@ import {
   studentsTable,
   supportNotesTable,
   studentFastScoresTable,
+  studentImportSnapshotsTable,
+  schoolSettingsTable,
 } from "@workspace/db";
-import { eq, and, or, desc, sql, isNull } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
 import {
   requireSchool,
   canImportSchoolData,
@@ -1047,20 +1049,12 @@ router.post(
         .json({ error: `Cannot roll back a ${job.status} job` });
       return;
     }
-    // FAST scores import is an upsert with no per-job audit trail
-    // (the table has no `import_job_id` column), so there is nothing
-    // we can safely undo. Rather than silently flipping the job to
-    // `rolled_back` while the rows stay changed — which gives the
-    // operator false confidence the data was reverted — we refuse
-    // the rollback up front. This must stay in sync with
-    // FAST_SCORES_CONFIG.rollback() (also a no-op).
-    if (job.kind === "fast_scores" || job.kind === "fast_prior_year") {
-      res.status(409).json({
-        error:
-          "FAST score imports cannot be rolled back. Re-upload a corrected CSV to update the affected rows.",
-      });
-      return;
-    }
+    // FAST score and FAST prior-year imports now carry an
+    // `import_job_id` on every row written by the upsert path. Their
+    // KindConfig.rollback() implementations DELETE WHERE
+    // import_job_id = :id AND school_id = :id (defense-in-depth). Rows
+    // written before this column existed have NULL import_job_id and
+    // therefore survive any rollback — that's the desired behavior.
     const deleted = await db.transaction(async (tx) => {
       let count = 0;
       // Multi-kind kinds (rosters, behavior) live in the registry. They
@@ -1371,52 +1365,200 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
   },
   async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
-    // Use returning() so we can count how many actually survived the
-    // unique-constraint conflict check. Drizzle's onConflictDoNothing
-    // skips dupes silently; the returned array tells us the truth.
-    const inserted = await tx
-      .insert(studentsTable)
-      .values(
-        parsed.map((p) => {
-          const row: Record<string, unknown> = {
-            schoolId,
-            studentId: p.studentId,
-            firstName: p.firstName,
-            lastName: p.lastName,
-            grade: p.grade,
-            parentName: p.parentName,
-            parentEmail: p.parentEmail,
-            parentPhone: p.parentPhone,
-            importJobId: jobId,
-            gender: p.gender,
-          };
-          // Only include flag columns when the importer actually saw a
-          // value; otherwise let the column default fire so we don't
-          // overwrite future-set MTSS values via INSERT (insert is moot
-          // here because of onConflictDoNothing, but the principle
-          // holds for the parsed-row shape).
-          if (p.ell !== undefined) row.ell = p.ell;
-          if (p.ese !== undefined) row.ese = p.ese;
-          if (p.is504 !== undefined) row.is504 = p.is504;
-          return row as typeof studentsTable.$inferInsert;
-        }),
-      )
-      .onConflictDoNothing({ target: studentsTable.studentId })
-      .returning({ id: studentsTable.id });
-    return inserted.length;
-  },
-  async rollback(tx, jobId, schoolId) {
-    // Defense in depth: AND on schoolId so a malformed job can't nuke
-    // another school's roster.
-    const r = await tx
-      .delete(studentsTable)
+    // Roster commits are now upsert-with-snapshot: brand-new students
+    // are INSERTed; existing students are UPDATEd with a COALESCE-style
+    // SET that preserves any field the CSV did not mention. Before
+    // each existing-student update we snapshot the prior column values
+    // into student_import_snapshots so rollback can restore them
+    // verbatim. Brand-new inserts get a wasInsert=true snapshot row
+    // (priorJson empty) so rollback can DELETE them by student_id.
+    //
+    // Per-row processing inside the transaction. The volume here is
+    // bounded by the importer's chunk size (a few hundred rows), so
+    // the round-trip cost is acceptable in exchange for clean semantics
+    // and correct snapshots.
+
+    // Pre-fetch existing rows for every student_id in this chunk, in a
+    // single query. We need their prior values for the snapshot.
+    const studentIds = parsed.map((p) => p.studentId);
+    const existing = await tx
+      .select()
+      .from(studentsTable)
       .where(
         and(
-          eq(studentsTable.importJobId, jobId),
           eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, studentIds),
         ),
       );
-    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
+    const existingByStudentId = new Map(
+      existing.map((s) => [s.studentId, s]),
+    );
+
+    let touched = 0;
+    for (const p of parsed) {
+      const prior = existingByStudentId.get(p.studentId);
+      if (!prior) {
+        // Brand-new student — INSERT and snapshot as wasInsert=true.
+        const insertRow: Record<string, unknown> = {
+          schoolId,
+          studentId: p.studentId,
+          firstName: p.firstName,
+          lastName: p.lastName,
+          grade: p.grade,
+          parentName: p.parentName,
+          parentEmail: p.parentEmail,
+          parentPhone: p.parentPhone,
+          importJobId: jobId,
+          gender: p.gender,
+        };
+        if (p.ell !== undefined) insertRow.ell = p.ell;
+        if (p.ese !== undefined) insertRow.ese = p.ese;
+        if (p.is504 !== undefined) insertRow.is504 = p.is504;
+        // Race: another concurrent commit may have inserted this
+        // student_id between our SELECT and INSERT. onConflictDoNothing
+        // turns that race into a no-op rather than a hard failure;
+        // when it skips we simply don't snapshot.
+        const ins = await tx
+          .insert(studentsTable)
+          .values(insertRow as typeof studentsTable.$inferInsert)
+          .onConflictDoNothing({ target: studentsTable.studentId })
+          .returning({ id: studentsTable.id });
+        if (ins.length > 0) {
+          await tx.insert(studentImportSnapshotsTable).values({
+            importJobId: jobId,
+            schoolId,
+            studentId: p.studentId,
+            wasInsert: true,
+            priorJson: {},
+          });
+          touched += 1;
+        }
+        continue;
+      }
+      // Existing student — only update the columns the CSV actually
+      // provided AND only when the value is changing. Skip the snapshot
+      // entirely if the row is a no-op (every CSV field already matches
+      // the DB). This keeps the snapshot table from growing on
+      // re-uploads of an unchanged file.
+      const updates: Record<string, unknown> = {};
+      const priorSnapshot: Record<string, unknown> = {};
+      const maybe = (
+        key: keyof typeof prior,
+        next: string | number | boolean | null | undefined,
+      ): void => {
+        if (next === undefined) return; // CSV column unmapped → leave alone
+        if (prior[key] === next) return; // no change
+        updates[key as string] = next;
+        priorSnapshot[key as string] = prior[key];
+      };
+      maybe("firstName", p.firstName);
+      maybe("lastName", p.lastName);
+      maybe("grade", p.grade);
+      // Optional columns: when the CSV omits them parseRow returns
+      // null (string optional()) — null DOES overwrite to clear the
+      // field, which matches the CSV-author's intent. To preserve a
+      // field, leave the column out of the mapping entirely.
+      maybe("parentName", p.parentName);
+      maybe("parentEmail", p.parentEmail);
+      maybe("parentPhone", p.parentPhone);
+      maybe("gender", p.gender);
+      if (p.ell !== undefined) maybe("ell", p.ell);
+      if (p.ese !== undefined) maybe("ese", p.ese);
+      if (p.is504 !== undefined) maybe("is504", p.is504);
+      if (Object.keys(updates).length === 0) continue;
+      // Tag the row's importJobId too so the History tab can show
+      // "last touched by" without joining the snapshot table.
+      updates.importJobId = jobId;
+      await tx
+        .update(studentsTable)
+        .set(updates as Partial<typeof studentsTable.$inferInsert>)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.studentId, p.studentId),
+          ),
+        );
+      await tx.insert(studentImportSnapshotsTable).values({
+        importJobId: jobId,
+        schoolId,
+        studentId: p.studentId,
+        wasInsert: false,
+        priorJson: priorSnapshot,
+      });
+      touched += 1;
+    }
+    return touched;
+  },
+  async rollback(tx, jobId, schoolId) {
+    // Two-phase rollback driven entirely by the snapshot table:
+    //   1. wasInsert=true rows → DELETE the student (the row didn't
+    //      exist before this job). Restricted to students whose
+    //      importJobId still matches — if the student was later
+    //      touched by a different job we leave them in place because
+    //      a hard delete would lose newer data.
+    //   2. wasInsert=false rows → restore each snapshotted column
+    //      back onto the live student row.
+    // After both phases run we delete the snapshots themselves so a
+    // re-rollback (shouldn't happen, but) is a no-op.
+    const snapshots = await tx
+      .select()
+      .from(studentImportSnapshotsTable)
+      .where(
+        and(
+          eq(studentImportSnapshotsTable.importJobId, jobId),
+          eq(studentImportSnapshotsTable.schoolId, schoolId),
+        ),
+      );
+    let count = 0;
+    for (const snap of snapshots) {
+      if (snap.wasInsert) {
+        const r = await tx
+          .delete(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              eq(studentsTable.studentId, snap.studentId),
+              eq(studentsTable.importJobId, jobId),
+            ),
+          );
+        count += (r as unknown as { rowCount?: number }).rowCount ?? 0;
+        continue;
+      }
+      // Restore prior columns. The snapshot only contains the columns
+      // that were actually changed, so the SET payload is naturally
+      // narrow — we won't accidentally overwrite a field the importer
+      // never touched.
+      //
+      // OWNERSHIP GUARD: only restore when the row's importJobId still
+      // matches this job. If a later job (Job B) has since touched the
+      // same student, importJobId == B != jobId, the UPDATE skips it,
+      // and Job B's newer values stay intact. Without this guard,
+      // rolling back an old import would silently clobber whatever
+      // changed afterward — exactly the kind of "undo deletes data"
+      // surprise rollback is supposed to prevent.
+      const restore = snap.priorJson as Record<string, unknown>;
+      if (Object.keys(restore).length === 0) continue;
+      const r = await tx
+        .update(studentsTable)
+        .set(restore as Partial<typeof studentsTable.$inferInsert>)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.studentId, snap.studentId),
+            eq(studentsTable.importJobId, jobId),
+          ),
+        );
+      count += (r as unknown as { rowCount?: number }).rowCount ?? 0;
+    }
+    await tx
+      .delete(studentImportSnapshotsTable)
+      .where(
+        and(
+          eq(studentImportSnapshotsTable.importJobId, jobId),
+          eq(studentImportSnapshotsTable.schoolId, schoolId),
+        ),
+      );
+    return count;
   },
 };
 
@@ -1711,11 +1853,19 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
       },
     };
   },
-  async insertChunk(tx, parsed, schoolId, _jobId) {
+  async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
     // Upsert against (school_id, student_id, subject). Numeric PMs and
     // prior_year_score use COALESCE so a partial CSV (PM1-only mid-year)
     // doesn't clobber later PMs back to null.
+    //
+    // Every row — insert OR conflict-update — gets stamped with the
+    // current jobId via `import_job_id`. Rollback DELETES rows whose
+    // import_job_id matches, so the most recent import "owns" each
+    // row. (Older job ids are overwritten; rolling back an older job
+    // after a newer one already touched its rows is a no-op for those
+    // rows, which matches what the operator wants — the newest data
+    // is the source of truth.)
     //
     // The BQ flag is trickier: it is NOT NULL in the schema, so we
     // can't pass null through INSERT. Instead we partition rows on
@@ -1742,6 +1892,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             pm3: p.pm3,
             priorYearScore: p.priorYearScore,
             priorYearBq: p.priorYearBq as boolean,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1757,6 +1908,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             pm3: sql`COALESCE(EXCLUDED.pm3, ${studentFastScoresTable.pm3})`,
             priorYearScore: sql`COALESCE(EXCLUDED.prior_year_score, ${studentFastScoresTable.priorYearScore})`,
             priorYearBq: sql`EXCLUDED.prior_year_bq`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
@@ -1776,6 +1928,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             // NOT NULL on a brand-new row only; on conflict the SET
             // clause below preserves the existing value instead.
             priorYearBq: false,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1792,23 +1945,27 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             priorYearScore: sql`COALESCE(EXCLUDED.prior_year_score, ${studentFastScoresTable.priorYearScore})`,
             // No BQ column in CSV → preserve existing DB value.
             priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
     }
-    // Silence unused-param lint — jobId is part of the KindConfig
-    // contract but FAST scores doesn't track it (no column).
-    void _jobId;
     return parsed.length;
   },
-  async rollback(_tx, _jobId, _schoolId) {
-    // FAST scores are upserts — there is no per-job audit trail, so
-    // rollback is intentionally a no-op. The UI should warn the
-    // importer that FAST imports are not undoable before they commit.
-    void _tx;
-    void _jobId;
-    void _schoolId;
-    return 0;
+  async rollback(tx, jobId, schoolId) {
+    // Delete every FAST row this job last wrote. Older rows whose
+    // import_job_id was overwritten by a subsequent commit stay put,
+    // which is the correct semantics: rolling back commit #5 cannot
+    // undo data that commit #6 has since rewritten.
+    const r = await tx
+      .delete(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.importJobId, jobId),
+          eq(studentFastScoresTable.schoolId, schoolId),
+        ),
+      );
+    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
   },
 };
 
@@ -1918,13 +2075,15 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
       value: { studentId, subject, priorYearScore, priorYearBq },
     };
   },
-  async insertChunk(tx, parsed, schoolId, _jobId) {
+  async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
     // Upsert against (school_id, student_id, subject). The SET clause
     // ONLY touches prior-year columns — PM1/PM2/PM3 are intentionally
     // not in `set` so they remain whatever value the row already had.
     // Same withBq / withoutBq partition as FAST_SCORES_CONFIG so a
     // CSV without a BQ column can't wipe an existing true BQ flag.
+    // import_job_id is overwritten on conflict, same ownership model
+    // as FAST_SCORES_CONFIG: most recent import owns the row.
     const withBq = parsed.filter((p) => p.priorYearBq !== null);
     const withoutBq = parsed.filter((p) => p.priorYearBq === null);
     const now = new Date();
@@ -1938,6 +2097,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             subject: p.subject,
             priorYearScore: p.priorYearScore,
             priorYearBq: p.priorYearBq as boolean,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1950,6 +2110,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
           set: {
             priorYearScore: sql`EXCLUDED.prior_year_score`,
             priorYearBq: sql`EXCLUDED.prior_year_bq`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
@@ -1966,6 +2127,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             // NOT NULL — only used for brand-new rows. On conflict the
             // SET clause below preserves the existing value.
             priorYearBq: false,
+            importJobId: jobId,
             updatedAt: now,
           })),
         )
@@ -1978,21 +2140,24 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
           set: {
             priorYearScore: sql`EXCLUDED.prior_year_score`,
             priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+            importJobId: sql`EXCLUDED.import_job_id`,
             updatedAt: now,
           },
         });
     }
-    void _jobId;
     return parsed.length;
   },
-  async rollback(_tx, _jobId, _schoolId) {
-    // Same rationale as FAST_SCORES_CONFIG: upsert + no per-job audit
-    // trail = nothing to safely undo. Rollback handler returns 409
-    // before reaching here for fast_prior_year jobs.
-    void _tx;
-    void _jobId;
-    void _schoolId;
-    return 0;
+  async rollback(tx, jobId, schoolId) {
+    // Same model as FAST_SCORES_CONFIG.rollback().
+    const r = await tx
+      .delete(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.importJobId, jobId),
+          eq(studentFastScoresTable.schoolId, schoolId),
+        ),
+      );
+    return (r as unknown as { rowCount?: number }).rowCount ?? 0;
   },
 };
 
@@ -2176,14 +2341,43 @@ function makeCommitHandler(kind: string, config: KindConfig) {
   };
 }
 
+// Roster importer is opt-in per school (school_settings
+// .manual_roster_upload_enabled, default FALSE) because the expected
+// source of truth for most schools is a Classlink / Clever OneRoster
+// sync. The toggle is enforced server-side on BOTH preview and commit
+// — the wizard greys out the Roster card client-side, but a stale tab
+// or scripted client must not be able to bypass it.
+function requireManualRosterUploadEnabled() {
+  return async (req: Request, res: Response, next: NextFunction) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const [row] = await db
+      .select({
+        enabled: schoolSettingsTable.manualRosterUploadEnabled,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    if (!row || !row.enabled) {
+      res.status(403).json({
+        error:
+          "Manual roster uploads are disabled for this school. Most schools sync rosters from Classlink or Clever (OneRoster). An administrator can enable manual uploads in School Settings → Data & Integrations.",
+      });
+      return;
+    }
+    next();
+  };
+}
+
 router.post(
   "/data-imports/rosters/preview",
   requireImporter(),
+  requireManualRosterUploadEnabled(),
   makePreviewHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(
   "/data-imports/rosters/commit",
   requireImporter(),
+  requireManualRosterUploadEnabled(),
   makeCommitHandler("rosters", ROSTERS_CONFIG),
 );
 router.post(

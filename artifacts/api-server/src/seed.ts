@@ -4704,6 +4704,54 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// ensureDataImporterRollbackSchema
+//
+// Three additive changes that unlock universal rollback for the Data
+// Importer:
+//   1. student_fast_scores.import_job_id (column add) — lets the FAST
+//      importer tag every upserted row with the job that wrote it, so
+//      rollback can DELETE WHERE import_job_id = :id.
+//   2. student_import_snapshots (table create) — per-row "before"
+//      snapshot for the roster importer's update path. Roster updates
+//      capture prior column values here; rollback restores them.
+//   3. school_settings.manual_roster_upload_enabled (column add) — the
+//      per-school toggle that gates the Roster card in the wizard.
+//      Default FALSE because most schools sync rosters from Classlink /
+//      Clever (OneRoster) and a manual upload would conflict.
+//
+// All three follow the project convention of additive ALTER TABLE …
+// IF NOT EXISTS / CREATE TABLE … IF NOT EXISTS at boot, sidestepping
+// drizzle-kit's interactive rename prompt.
+// -----------------------------------------------------------------------------
+export async function ensureDataImporterRollbackSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS import_job_id INTEGER`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_import_snapshots (
+      id SERIAL PRIMARY KEY,
+      import_job_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      was_insert BOOLEAN NOT NULL,
+      prior_json JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_import_snapshots_job_idx
+      ON student_import_snapshots (import_job_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_import_snapshots_school_idx
+      ON student_import_snapshots (school_id)
+  `);
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS manual_roster_upload_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
+// -----------------------------------------------------------------------------
 // ensureStudentRetentionsSchema / seedStudentRetentionsIfEmpty
 //
 // Roster "R-in-a-circle" indicator. ~5% of each school's students get a

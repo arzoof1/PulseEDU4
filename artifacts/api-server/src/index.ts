@@ -22,6 +22,7 @@ import {
   seedWatchlistQuickEntriesIfEmpty,
   ensureStudentRetentionsSchema,
   seedStudentRetentionsIfEmpty,
+  ensureDataImporterRollbackSchema,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -122,6 +123,10 @@ async function runSeed(): Promise<void> {
   // students per teacher's roster. Idempotent per school.
   await ensureStudentRetentionsSchema();
   await seedStudentRetentionsIfEmpty();
+  // Data Importer rollback infrastructure: FAST import_job_id column,
+  // student_import_snapshots table, and the per-school
+  // manual_roster_upload_enabled toggle. Idempotent — safe on every boot.
+  await ensureDataImporterRollbackSchema();
 }
 
 // In production we MUST open the port within the platform's health-check

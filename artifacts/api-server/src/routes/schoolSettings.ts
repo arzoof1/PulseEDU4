@@ -116,6 +116,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     issCapacityBehavior,
     finderShowAbsentBanner,
     staffDirectoryShowCellPhone,
+    manualRosterUploadEnabled,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -399,6 +400,15 @@ router.put("/school-settings", async (req, res): Promise<void> => {
   }
   // Staff Directory cell-phone visibility toggle. School-wide policy —
   // any settings-manager can flip it. Boolean only.
+  if (manualRosterUploadEnabled !== undefined) {
+    if (typeof manualRosterUploadEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "manualRosterUploadEnabled must be a boolean" });
+      return;
+    }
+    updates.manualRosterUploadEnabled = manualRosterUploadEnabled;
+  }
   if (staffDirectoryShowCellPhone !== undefined) {
     if (typeof staffDirectoryShowCellPhone !== "boolean") {
       res

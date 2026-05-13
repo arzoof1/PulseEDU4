@@ -47,6 +47,7 @@ export * from "./schoolStoreItems";
 export * from "./studentMtssPlans";
 export * from "./studentTrustedAdults";
 export * from "./imports";
+export * from "./studentImportSnapshots";
 export * from "./assessments";
 export * from "./schoolBranding";
 export * from "./studentFastScores";

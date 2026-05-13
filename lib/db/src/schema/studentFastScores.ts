@@ -40,6 +40,11 @@ export const studentFastScoresTable = pgTable(
     // derive priorYearBq (Bottom Quartile) — the BQ pill on the roster.
     priorYearScore: integer("prior_year_score"),
     priorYearBq: boolean("prior_year_bq").notNull().default(false),
+    // Last importer job that wrote this row (insert OR upsert). Tagged on
+    // every commit so the History tab can offer a real "Undo" — rollback
+    // deletes rows whose importJobId matches the job. NULL on legacy /
+    // seeded / hand-edited rows so they survive any rollback.
+    importJobId: integer("import_job_id"),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),
