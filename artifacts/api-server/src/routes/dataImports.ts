@@ -34,7 +34,7 @@ import {
   studentImportSnapshotsTable,
   schoolSettingsTable,
 } from "@workspace/db";
-import { eq, and, or, desc, sql, isNull, inArray } from "drizzle-orm";
+import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike } from "drizzle-orm";
 import {
   requireSchool,
   canImportSchoolData,
@@ -1028,7 +1028,72 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       ? "district"
       : "school";
 
-  let scopeStudentIds: Set<string> | null = null;
+  // ---- Optional row filters (kind-specific). All read off req.query
+  // and silently ignored if the kind doesn't support them.
+  // grades: comma-separated ints, e.g. "0,6,7" (0 = K). Used by every
+  //   kind that can be joined back to studentsTable.
+  // from / to: YYYY-MM-DD inclusive, used by behavior + assessments.
+  // subject: "ela" | "math" — FAST only.
+  // noteType: substring match (case-insensitive) — behavior only.
+  // assessmentName: substring match (case-insensitive) — assessments only.
+  // columns: comma-separated header names to keep in the output;
+  //   omitted = include all. Required-by-importer columns are always
+  //   re-injected at the end so the round-trip stays valid even if the
+  //   user un-checks them in the UI.
+  const parseGrades = (raw: unknown): number[] | null => {
+    if (typeof raw !== "string" || !raw.trim()) return null;
+    const out: number[] = [];
+    for (const tok of raw.split(",")) {
+      const t = tok.trim();
+      if (!t) continue;
+      // Accept both "K" and "0" as kindergarten.
+      if (t.toUpperCase() === "K") {
+        out.push(0);
+        continue;
+      }
+      const n = Number(t);
+      if (Number.isFinite(n) && n >= 0 && n <= 13) out.push(Math.floor(n));
+    }
+    return out.length > 0 ? Array.from(new Set(out)) : null;
+  };
+  const grades = parseGrades(req.query.grades);
+  const fromYmd =
+    typeof req.query.from === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.from)
+      ? req.query.from
+      : null;
+  const toYmd =
+    typeof req.query.to === "string" && /^\d{4}-\d{2}-\d{2}$/.test(req.query.to)
+      ? req.query.to
+      : null;
+  const subjectFilter =
+    req.query.subject === "ela" || req.query.subject === "math"
+      ? (req.query.subject as "ela" | "math")
+      : null;
+  // Escape LIKE/ILIKE wildcards so a user typing "%" doesn't bypass
+  // substring matching and dump every row in their school. Backslash
+  // first, then the two SQL wildcards. Postgres uses backslash as the
+  // default LIKE escape char.
+  const escapeLike = (s: string): string =>
+    s.replace(/\\/g, "\\\\").replace(/%/g, "\\%").replace(/_/g, "\\_");
+  const noteTypeFilter =
+    typeof req.query.noteType === "string" && req.query.noteType.trim()
+      ? escapeLike(req.query.noteType.trim().toLowerCase())
+      : null;
+  const assessmentNameFilter =
+    typeof req.query.assessmentName === "string" &&
+    req.query.assessmentName.trim()
+      ? escapeLike(req.query.assessmentName.trim().toLowerCase())
+      : null;
+  const columnsFilter =
+    typeof req.query.columns === "string" && req.query.columns.trim()
+      ? new Set(
+          req.query.columns
+            .split(",")
+            .map((c) => c.trim())
+            .filter(Boolean),
+        )
+      : null;
+
   let schoolIds: number[] = [];
   if (scope === "district") {
     if (!canActAsDistrict(staff)) {
@@ -1051,8 +1116,6 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     if (!schoolId) return;
     schoolIds = [schoolId];
   }
-  void scopeStudentIds;
-
   // Build (header, rows) per kind. Rows are arrays of strings/numbers
   // in the same order as the headers; Papa.unparse handles quoting and
   // newlines.
@@ -1060,6 +1123,13 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   let rows: (string | number | null)[][] = [];
 
   if (kindRaw === "rosters") {
+    // Roster filter: grade only.
+    const rosterWhere = grades
+      ? and(
+          inArray(studentsTable.schoolId, schoolIds),
+          inArray(studentsTable.grade, grades),
+        )!
+      : inArray(studentsTable.schoolId, schoolIds);
     const list = await db
       .select({
         studentId: studentsTable.studentId,
@@ -1075,7 +1145,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         is504: studentsTable.is504,
       })
       .from(studentsTable)
-      .where(inArray(studentsTable.schoolId, schoolIds))
+      .where(rosterWhere)
       .orderBy(studentsTable.lastName, studentsTable.firstName);
     headers = [
       "student_id",
@@ -1106,6 +1176,29 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       r.is504 ? "Y" : "N",
     ]);
   } else if (kindRaw === "behavior") {
+    // Build a grade-filter subselect once; reused below for FAST +
+    // assessments. Returns the set of student_ids in the selected
+    // schools that match the requested grades.
+    const gradeSubselect = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const conds = [inArray(supportNotesTable.schoolId, schoolIds)];
+    if (gradeSubselect)
+      conds.push(inArray(supportNotesTable.studentId, gradeSubselect));
+    if (fromYmd)
+      conds.push(gte(supportNotesTable.createdAt, fromYmd));
+    if (toYmd)
+      conds.push(lte(supportNotesTable.createdAt, `${toYmd}T23:59:59`));
+    if (noteTypeFilter)
+      conds.push(ilike(supportNotesTable.noteType, `%${noteTypeFilter}%`));
     const list = await db
       .select({
         studentId: supportNotesTable.studentId,
@@ -1115,7 +1208,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         createdAt: supportNotesTable.createdAt,
       })
       .from(supportNotesTable)
-      .where(inArray(supportNotesTable.schoolId, schoolIds))
+      .where(and(...conds)!)
       .orderBy(desc(supportNotesTable.createdAt));
     headers = [
       "student_id",
@@ -1133,6 +1226,22 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       r.createdAt ?? "",
     ]);
   } else if (kindRaw === "fast_scores") {
+    const fsGradeSub = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const fsConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
+    if (fsGradeSub)
+      fsConds.push(inArray(studentFastScoresTable.studentId, fsGradeSub));
+    if (subjectFilter)
+      fsConds.push(eq(studentFastScoresTable.subject, subjectFilter));
     const list = await db
       .select({
         studentId: studentFastScoresTable.studentId,
@@ -1144,7 +1253,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         priorYearBq: studentFastScoresTable.priorYearBq,
       })
       .from(studentFastScoresTable)
-      .where(inArray(studentFastScoresTable.schoolId, schoolIds))
+      .where(and(...fsConds)!)
       .orderBy(
         studentFastScoresTable.studentId,
         studentFastScoresTable.subject,
@@ -1170,6 +1279,22 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       r.priorYearBq ? "Y" : "N",
     ]);
   } else if (kindRaw === "fast_prior_year") {
+    const fpyGradeSub = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const fpyConds = [inArray(studentFastScoresTable.schoolId, schoolIds)];
+    if (fpyGradeSub)
+      fpyConds.push(inArray(studentFastScoresTable.studentId, fpyGradeSub));
+    if (subjectFilter)
+      fpyConds.push(eq(studentFastScoresTable.subject, subjectFilter));
     const list = await db
       .select({
         studentId: studentFastScoresTable.studentId,
@@ -1178,7 +1303,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         priorYearBq: studentFastScoresTable.priorYearBq,
       })
       .from(studentFastScoresTable)
-      .where(inArray(studentFastScoresTable.schoolId, schoolIds))
+      .where(and(...fpyConds)!)
       .orderBy(
         studentFastScoresTable.studentId,
         studentFastScoresTable.subject,
@@ -1195,6 +1320,30 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         r.priorYearBq ? "Y" : "N",
       ]);
   } else if (kindRaw === "assessments") {
+    const aGradeSub = grades
+      ? db
+          .select({ sid: studentsTable.studentId })
+          .from(studentsTable)
+          .where(
+            and(
+              inArray(studentsTable.schoolId, schoolIds),
+              inArray(studentsTable.grade, grades),
+            )!,
+          )
+      : null;
+    const aConds = [inArray(assessmentsTable.schoolId, schoolIds)];
+    if (aGradeSub)
+      aConds.push(inArray(assessmentsTable.studentId, aGradeSub));
+    if (fromYmd)
+      aConds.push(gte(assessmentsTable.administeredAt, new Date(fromYmd)));
+    if (toYmd)
+      aConds.push(
+        lte(assessmentsTable.administeredAt, new Date(`${toYmd}T23:59:59`)),
+      );
+    if (assessmentNameFilter)
+      aConds.push(
+        ilike(assessmentsTable.assessmentName, `%${assessmentNameFilter}%`),
+      );
     const list = await db
       .select({
         studentId: assessmentsTable.studentId,
@@ -1206,7 +1355,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         schoolId: assessmentsTable.schoolId,
       })
       .from(assessmentsTable)
-      .where(inArray(assessmentsTable.schoolId, schoolIds))
+      .where(and(...aConds)!)
       .orderBy(desc(assessmentsTable.administeredAt));
     // Build a school_code map so district exports can round-trip
     // back through the district importer (which routes by school_code).
@@ -1244,6 +1393,29 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
     ]);
   }
 
+  // Column projection. We always force-keep the importer's required
+  // columns even if the user un-checks them in the UI — otherwise the
+  // CSV can't round-trip back through the importer. The required set
+  // is intentionally hard-coded here (not pulled from the importer
+  // config) because the export endpoint owns its own header order.
+  if (columnsFilter && headers.length > 0) {
+    const REQUIRED: Record<string, string[]> = {
+      rosters: ["student_id", "first_name", "last_name", "grade"],
+      behavior: ["student_id", "note_text"],
+      fast_scores: ["student_id", "subject"],
+      fast_prior_year: ["student_id", "subject", "prior_year_score"],
+      assessments: ["student_id", "assessment_name", "administered_at"],
+    };
+    for (const r of REQUIRED[kindRaw] ?? []) columnsFilter.add(r);
+    const keepIdx: number[] = [];
+    headers.forEach((h, i) => {
+      if (columnsFilter!.has(h)) keepIdx.push(i);
+    });
+    if (keepIdx.length > 0 && keepIdx.length < headers.length) {
+      headers = keepIdx.map((i) => headers[i]!);
+      rows = rows.map((r) => keepIdx.map((i) => r[i] ?? ""));
+    }
+  }
   sendCsv(res, kindRaw, [headers, ...rows]);
 });
 
