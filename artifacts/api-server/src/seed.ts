@@ -4444,6 +4444,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       daysAgo: number;
       caseId: number | null;
       summary: string;
+      detail?: string;
       withWitnessFor?: { studentId: string }[];
     }) {
       const log = pick(rng, loggerPool);
@@ -4456,7 +4457,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
         severity: opts.severity,
         location: pick(rng, WL_LOCATIONS),
         summary: opts.summary,
-        detail: "",
+        detail: opts.detail ?? "",
         caseId: opts.caseId,
         loggedByStaffId: log.id,
         loggedByName: log.displayName,
@@ -4560,6 +4561,86 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
     // data now stays focused on the case-anchored incidents above. If
     // a future demo needs loose behavior data again, re-add a small
     // (e.g. 5–10 incident) cap rather than per-student counts.
+
+    // ---- "Spotlight" anchors. See seedWatchlistSpotlightsIfMissing()
+    // below for the rationale; this in-line block runs on the fresh
+    // seed path so brand-new schools land with the spotlight cluster
+    // already present. The standalone function handles backfill for
+    // schools that were seeded before this change. Both paths use
+    // the same `detail = 'spotlight-seed'` marker so they don't
+    // double up.
+    if (high.length >= 2 && insertedCases.length > 0) {
+      const spotlightCount = Math.min(3, high.length);
+      const spotlights = high.slice(0, spotlightCount);
+      // Roughly +12, +9, +6 extra incidents — produces a clear size
+      // hierarchy on the network view rather than three identical
+      // big spheres.
+      const EXTRA_PER_SPOTLIGHT = [12, 9, 6];
+      // Mate pool = everyone in the picked watchlist except the
+      // spotlight kid themselves. Heavy on med/low so the spotlight
+      // doesn't drag every other high anchor up to the same size.
+      const matePoolBase = [...med, ...low];
+      for (let s = 0; s < spotlights.length; s++) {
+        const star = spotlights[s];
+        const extras = EXTRA_PER_SPOTLIGHT[s] ?? 6;
+        // The star usually appears on one of the existing cases
+        // (so the spotlight kid is a recognizable case anchor in
+        // the case detail view), but ~30% of incidents are loose
+        // so the network shows a healthy mix of case-attached and
+        // floating activity around them.
+        const homeCase =
+          insertedCases[s % insertedCases.length] ?? insertedCases[0];
+        for (let i = 0; i < extras; i++) {
+          const attachToCase = rng() > 0.3;
+          // 1–2 mates per spotlight incident; rotate so different
+          // peers light up around the star instead of one sidekick
+          // hogging all the edges.
+          const mateCount = 1 + (i % 2);
+          const mates: { studentId: string; role: string }[] = [];
+          const seenMates = new Set<string>([star.studentId]);
+          let guard = 0;
+          while (mates.length < mateCount && guard < 12) {
+            guard++;
+            const cand = pick(rng, matePoolBase);
+            if (!cand || seenMates.has(cand.studentId)) continue;
+            seenMates.add(cand.studentId);
+            mates.push({
+              studentId: cand.studentId,
+              role: pick(rng, [...WL_ROLES_LOW]),
+            });
+          }
+          // Severity skewed toward 2–4 (the everyday range); leave
+          // the 5s for the case-anchored spine above.
+          const sev = 2 + Math.floor(rng() * 3);
+          pushIncident({
+            anchor: { studentId: star.studentId },
+            anchorRole: pick(rng, [...WL_ROLES_HIGH]),
+            coStudents: mates,
+            severity: sev,
+            kind: pick(
+              rng,
+              [...WL_KINDS].filter((k) => k !== "peripheral_note"),
+            ),
+            // Spread across days 1..25 so they all land inside the
+            // default 30-day network window.
+            daysAgo: 1 + Math.floor(rng() * 24),
+            caseId: attachToCase ? homeCase.id : null,
+            summary: `${star.firstName} ${star.lastName.charAt(0)}. — ${pick(
+              rng,
+              [
+                "repeat hallway disruption",
+                "verbal altercation in cafeteria",
+                "ongoing peer conflict; staff redirected",
+                "minor physical contact during transition",
+                "off-task behavior escalating to refusal",
+              ],
+            )}.`,
+            detail: "spotlight-seed",
+          });
+        }
+      }
+    }
+
     void high;
     void med;
     void low;
@@ -4936,6 +5017,241 @@ export async function seedStudentRetentionsIfEmpty(): Promise<void> {
         teachers: studentsByTeacher.size,
       },
       "[seed] student retentions seeded",
+    );
+  }
+}
+
+// seedWatchlistSpotlightsIfMissing: backfill for already-seeded schools.
+//
+// The base watchlist seed gives every "high concern" student roughly the
+// same handful of incidents, so the Schoolwide Behavior Network's Full
+// School Web ends up as a wall of equal-sized spheres. The intent of
+// that view was to surface 2–3 students whose involvement clearly
+// dominates — the kids you'd notice from across the room. This pass
+// adds extra incidents to the top 3 most-active anchors per school so
+// their spheres become visibly larger than the rest.
+//
+// Idempotent via a marker on `interactions.detail = 'spotlight-seed'`.
+// Skips any school that already has a spotlight row, so it's safe to
+// run on every boot. Newly seeded schools get spotlights from the
+// inline block inside seedWatchlistIfEmpty (same marker), so there's
+// no double-up.
+export async function seedWatchlistSpotlightsIfMissing(): Promise<void> {
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    // Skip if already spotlighted.
+    const [{ c: alreadyHas }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c
+            FROM interactions
+            WHERE school_id = ${school.id}
+              AND detail = 'spotlight-seed'
+            LIMIT 1`,
+      )
+    ).rows as { c: number }[];
+    if (alreadyHas > 0) continue;
+
+    // Need a base seed to backfill against. Pick the top 3 students by
+    // existing case-attached participant count — those are the ones
+    // already cast as case anchors, so making them stand out matches
+    // the demo's existing narrative.
+    const topRows = (
+      await db.execute(sql`
+        SELECT p.student_id AS "studentId", COUNT(*)::int AS c
+        FROM interaction_participants p
+        JOIN interactions i ON i.id = p.interaction_id AND i.school_id = p.school_id
+        WHERE p.school_id = ${school.id}
+          AND i.case_id IS NOT NULL
+          AND p.role IN ('target', 'instigator', 'direct')
+        GROUP BY p.student_id
+        ORDER BY c DESC
+        LIMIT 3
+      `)
+    ).rows as { studentId: string; c: number }[];
+    if (topRows.length < 2) continue;
+
+    // Mate pool: any other student who's already touched a case
+    // interaction in this school. Keeps the spotlight cluster
+    // connected to the existing graph instead of drifting off.
+    const mateRows = (
+      await db.execute(sql`
+        SELECT DISTINCT p.student_id AS "studentId"
+        FROM interaction_participants p
+        JOIN interactions i ON i.id = p.interaction_id AND i.school_id = p.school_id
+        WHERE p.school_id = ${school.id}
+          AND i.case_id IS NOT NULL
+      `)
+    ).rows as { studentId: string }[];
+    const spotlightIds = new Set(topRows.map((r) => r.studentId));
+    const matePool = mateRows
+      .map((r) => r.studentId)
+      .filter((id) => !spotlightIds.has(id));
+    if (matePool.length === 0) continue;
+
+    // Reuse the existing demo cases as "home" cases for ~70% of the
+    // extras; the remaining 30% are loose so the Loose / no case
+    // cluster gets some movement around the spotlight kid too.
+    const caseRows = (
+      await db.execute(sql`
+        SELECT id FROM interaction_cases
+        WHERE school_id = ${school.id}
+        ORDER BY id ASC
+        LIMIT 12
+      `)
+    ).rows as { id: number }[];
+    if (caseRows.length === 0) continue;
+
+    // Pick a logger the same way the base seed does (any admin /
+    // counselor / behavior staff). Falls back to any staff row.
+    const staffRows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+        isMtssCoordinator: staffTable.isMtssCoordinator,
+        isCounselor: staffTable.isCounselor,
+        isAdmin: staffTable.isAdmin,
+        isDean: staffTable.isDean,
+      })
+      .from(staffTable)
+      .where(eq(staffTable.schoolId, school.id));
+    if (staffRows.length === 0) continue;
+    const loggerPool = staffRows.filter(
+      (s) =>
+        s.isBehaviorSpecialist ||
+        s.isMtssCoordinator ||
+        s.isCounselor ||
+        s.isDean ||
+        s.isAdmin,
+    );
+    const loggers = loggerPool.length > 0 ? loggerPool : staffRows;
+
+    // Pull the spotlight students' display names so the summary text
+    // reads naturally on the case timeline.
+    const studentNameRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    const nameById = new Map(
+      studentNameRows.map((s) => [s.studentId, s] as const),
+    );
+
+    const rng = makeRng(0x2900a1 + school.id * 1297);
+    // Same hierarchy as the inline path: +12 / +9 / +6 extras.
+    const EXTRAS = [12, 9, 6];
+
+    type IncidentInsert = typeof interactionsTable.$inferInsert;
+    type ParticipantInsert = typeof interactionParticipantsTable.$inferInsert;
+    const incidents: IncidentInsert[] = [];
+    const stagedParticipants: {
+      idx: number;
+      row: Omit<ParticipantInsert, "interactionId">;
+    }[] = [];
+
+    for (let s = 0; s < topRows.length; s++) {
+      const star = topRows[s];
+      const starName = nameById.get(star.studentId);
+      if (!starName) continue;
+      const extras = EXTRAS[s] ?? 6;
+      const homeCase = caseRows[s % caseRows.length];
+      for (let i = 0; i < extras; i++) {
+        const log = pick(rng, loggers);
+        const attachToCase = rng() > 0.3;
+        const sev = 2 + Math.floor(rng() * 3);
+        const idx = incidents.length;
+        incidents.push({
+          schoolId: school.id,
+          occurredDate: ymdDaysAgo(1 + Math.floor(rng() * 24)),
+          kind: pick(
+            rng,
+            [...WL_KINDS].filter((k) => k !== "peripheral_note"),
+          ),
+          severity: sev,
+          location: pick(rng, [...WL_LOCATIONS]),
+          summary: `${starName.firstName} ${starName.lastName.charAt(
+            0,
+          )}. — ${pick(rng, [
+            "repeat hallway disruption",
+            "verbal altercation in cafeteria",
+            "ongoing peer conflict; staff redirected",
+            "minor physical contact during transition",
+            "off-task behavior escalating to refusal",
+          ])}.`,
+          detail: "spotlight-seed",
+          caseId: attachToCase ? homeCase.id : null,
+          loggedByStaffId: log.id,
+          loggedByName: log.displayName,
+          status: "open",
+        });
+        stagedParticipants.push({
+          idx,
+          row: {
+            schoolId: school.id,
+            studentId: star.studentId,
+            role: pick(rng, [...WL_ROLES_HIGH]),
+            notes: "",
+          },
+        });
+        // 1–2 mates per incident, no duplicates within an incident.
+        const mateCount = 1 + (i % 2);
+        const seen = new Set<string>([star.studentId]);
+        let guard = 0;
+        let added = 0;
+        while (added < mateCount && guard < 12) {
+          guard++;
+          const mid = pick(rng, matePool);
+          if (!mid || seen.has(mid)) continue;
+          seen.add(mid);
+          stagedParticipants.push({
+            idx,
+            row: {
+              schoolId: school.id,
+              studentId: mid,
+              role: pick(rng, [...WL_ROLES_LOW]),
+              notes: "",
+            },
+          });
+          added++;
+        }
+      }
+    }
+
+    if (incidents.length === 0) continue;
+    const inserted = await chunkedInsertReturning<{ id: number }>(
+      interactionsTable,
+      incidents,
+      500,
+    );
+    const participantRows: ParticipantInsert[] = stagedParticipants.map((p) => ({
+      ...p.row,
+      interactionId: inserted[p.idx].id,
+    }));
+    // Dedupe in case a mate landed twice via the random guard.
+    const seenKey = new Set<string>();
+    const deduped: ParticipantInsert[] = [];
+    for (const r of participantRows) {
+      const k = `${r.interactionId}:${r.studentId}`;
+      if (seenKey.has(k)) continue;
+      seenKey.add(k);
+      deduped.push(r);
+    }
+    for (let i = 0; i < deduped.length; i += 500) {
+      await db
+        .insert(interactionParticipantsTable)
+        .values(deduped.slice(i, i + 500));
+    }
+
+    logger.info(
+      {
+        schoolId: school.id,
+        spotlightCount: topRows.length,
+        incidentsAdded: incidents.length,
+      },
+      "[seed] watchlist spotlights backfilled",
     );
   }
 }

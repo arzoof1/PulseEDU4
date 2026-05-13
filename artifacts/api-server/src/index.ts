@@ -19,6 +19,7 @@ import {
   seedSafetyPlansIfEmpty,
   ensureWatchlistSchema,
   seedWatchlistIfEmpty,
+  seedWatchlistSpotlightsIfMissing,
   seedWatchlistQuickEntriesIfEmpty,
   ensureStudentRetentionsSchema,
   seedStudentRetentionsIfEmpty,
@@ -113,6 +114,11 @@ async function runSeed(): Promise<void> {
   // Watchlist demo data: 20% of each school's roster gets activity, with a
   // ~3%-of-20% high-concern slice anchoring 3–4 cases. Idempotent per school.
   await seedWatchlistIfEmpty();
+  // Backfill: pile extra incidents on the top 3 case anchors per school
+  // so the Schoolwide Behavior Network's Full School Web shows a clear
+  // "these kids stand out" hierarchy instead of a wall of equal-sized
+  // spheres. Idempotent via interactions.detail = 'spotlight-seed'.
+  await seedWatchlistSpotlightsIfMissing();
   // Per-school default catalog of quick-entry templates (Hallway shove,
   // Cafeteria verbal, etc.) for the Log Interaction modal. Idempotent:
   // skipped per-school when any quick entry already exists, so Core
