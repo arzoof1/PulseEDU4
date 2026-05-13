@@ -81,6 +81,7 @@ import SettingsHub, {
   type SettingsTileId,
 } from "./components/SettingsHub";
 import DataImports from "./components/DataImports";
+import DataManagementHub from "./components/DataManagementHub";
 import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
@@ -19474,11 +19475,11 @@ function App() {
             // re-checks via canImportSchoolData; this is just visibility.
             if (isAdmin || isDistrictAdmin || isSuperUser) {
               tiles.push({
-                id: "data-imports",
-                icon: "📥",
-                title: "Data Imports",
+                id: "data-management",
+                icon: "🗂️",
+                title: "Data Management",
                 subtitle:
-                  "Upload assessment CSVs (FAST, iReady, MAP, …) with auto-mapping, preview, and one-click rollback.",
+                  "Import CSVs (FAST, iReady, MAP, rosters, behavior) and export your school's current data with filters and column picker.",
                 group: "admin-tenancy",
               });
             }
@@ -19572,8 +19573,8 @@ function App() {
         <SchoolPlansAdminPage />
       )}
 
-      {activeSection === "settings" && canManageSettings && settingsTile === "data-imports" && (
-        <DataImports canActAsDistrict={canActAsDistrict} />
+      {activeSection === "settings" && canManageSettings && settingsTile === "data-management" && (
+        <DataManagementHub canActAsDistrict={canActAsDistrict} />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "parent-portal-sections" && (isAdmin || isSuperUser) && (

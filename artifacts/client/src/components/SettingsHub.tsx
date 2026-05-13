@@ -16,7 +16,7 @@ export type SettingsTileId =
   | "tenancy"
   | "logo-generator"
   | "school-plans"
-  | "data-imports"
+  | "data-management"
   | "parent-portal-sections"
   | "school-wide-expectations"
   | "intervention-strategies"
