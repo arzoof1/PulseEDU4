@@ -1877,9 +1877,75 @@ export default function DataImports({
               )}
 
               {/* Step 1 — Upload CSV. Drop zone if no file yet, filename
-                  pill + cancel if a file is already loaded. */}
+                  pill + cancel if a file is already loaded. A small
+                  "Download sample CSV" link sits above the drop zone so
+                  a first-time user can grab a known-good template,
+                  replace the single seeded row with their real data,
+                  and re-upload. */}
               {step === 1 && (
                 <div>
+                  {(() => {
+                    const SAMPLES: Record<Kind, { file: string; label: string }> = {
+                      assessments: {
+                        file: "pulseedu-assessments-sample.csv",
+                        label: "Sample assessments CSV",
+                      },
+                      rosters: {
+                        file: "pulseedu-roster-sample.csv",
+                        label: "Sample roster CSV",
+                      },
+                      behavior: {
+                        file: "pulseedu-behavior-sample.csv",
+                        label: "Sample behavior notes CSV",
+                      },
+                      fast_scores: {
+                        file: "pulseedu-fast-sample.csv",
+                        label: "Sample FAST scores CSV",
+                      },
+                      fast_prior_year: {
+                        file: "pulseedu-fast-prior-year-sample.csv",
+                        label: "Sample FAST prior-year CSV",
+                      },
+                    };
+                    const sample = SAMPLES[kind];
+                    return (
+                      <div
+                        style={{
+                          marginBottom: "0.75rem",
+                          padding: "0.6rem 0.8rem",
+                          border: "1px dashed var(--border, #2a3447)",
+                          borderRadius: 8,
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "0.6rem",
+                          fontSize: 13,
+                          color: "var(--text-subtle)",
+                        }}
+                      >
+                        <span style={{ fontSize: 16 }}>📄</span>
+                        <div style={{ flex: 1 }}>
+                          New here? Download the {sample.label}, replace
+                          the example row with your own data, save, and
+                          drop it back in below.
+                        </div>
+                        <a
+                          href={`${import.meta.env.BASE_URL}samples/${sample.file}`}
+                          download={sample.file}
+                          style={{
+                            padding: "0.35rem 0.7rem",
+                            border: "1px solid var(--border, #2a3447)",
+                            borderRadius: 6,
+                            textDecoration: "none",
+                            color: "inherit",
+                            fontSize: 13,
+                            whiteSpace: "nowrap",
+                          }}
+                        >
+                          Download sample
+                        </a>
+                      </div>
+                    );
+                  })()}
                   {preview ? (
                     <div
                       style={{
