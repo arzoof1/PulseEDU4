@@ -32,6 +32,7 @@ import {
   studentAccommodationsTable,
   schoolAccommodationsTable,
   safetyPlansTable,
+  studentRetentionsTable,
   issAttendanceDayTable,
   ossLogDaysTable,
   issAcknowledgementsTable,
@@ -304,6 +305,7 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     issToday,
     ossToday,
     issAcksToday,
+    retentions,
   ] = await Promise.all([
     db
       .select()
@@ -440,7 +442,29 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
           inArray(issAcknowledgementsTable.studentId, studentIds),
         ),
       ),
+    // Retention indicator (R-in-circle on the roster). One row per
+    // (student, repeated grade); a kid retained twice has two rows.
+    db
+      .select({
+        studentId: studentRetentionsTable.studentId,
+        gradeLevel: studentRetentionsTable.gradeLevel,
+      })
+      .from(studentRetentionsTable)
+      .where(
+        and(
+          eq(studentRetentionsTable.schoolId, schoolId),
+          inArray(studentRetentionsTable.studentId, studentIds),
+        ),
+      ),
   ]);
+
+  const retentionsByStudent = new Map<string, number[]>();
+  for (const r of retentions) {
+    const list = retentionsByStudent.get(r.studentId) ?? [];
+    list.push(r.gradeLevel);
+    retentionsByStudent.set(r.studentId, list);
+  }
+  for (const [, list] of retentionsByStudent) list.sort((a, b) => a - b);
 
   const issByStudent = new Map<string, { source: string; adminLogId: number | null }>();
   for (const r of issToday) {
@@ -541,6 +565,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       issToday: issByStudent.get(stu.studentId) ?? null,
       ossToday: ossSet.has(stu.studentId),
       issAcks: ackByStudent.get(stu.studentId) ?? [],
+      // Grades the student was retained in (ascending). Empty array
+      // when the student has no retention rows. The roster renders an
+      // R-in-a-circle pill after the chain icon when this is non-empty.
+      retainedGrades: retentionsByStudent.get(stu.studentId) ?? [],
       // Active safety plan summary (or null). The roster pill / hover
       // popover use this directly — no extra round-trip needed.
       safetyPlan: (() => {

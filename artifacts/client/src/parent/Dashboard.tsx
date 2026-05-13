@@ -42,6 +42,9 @@ interface Snapshot {
     firstName: string;
     lastName: string;
     grade: number;
+    // Grades the student was retained in (ascending). Empty when none.
+    // Drives the small "R" indicator next to the grade label.
+    retainedGrades: number[];
   };
   sectionsAvailable: Record<string, boolean>;
   pbis: {
@@ -380,8 +383,25 @@ export default function Dashboard({ me }: { me: ParentMe }) {
                   </h1>
                 )}
               </div>
-              <p className="text-slate-500 font-medium">
-                {gradeLabel(activeStudent.grade)} · ID {activeStudent.studentId}
+              <p className="text-slate-500 font-medium flex items-center gap-2">
+                <span>
+                  {gradeLabel(activeStudent.grade)} · ID {activeStudent.studentId}
+                </span>
+                {snapshot?.student.retainedGrades &&
+                  snapshot.student.retainedGrades.length > 0 && (
+                    <span
+                      title={`Retained: ${snapshot.student.retainedGrades
+                        .map((g: number) => `Grade ${g}`)
+                        .join(", ")}`}
+                      aria-label={`Retained at ${snapshot.student.retainedGrades
+                        .map((g: number) => `Grade ${g}`)
+                        .join(", ")}`}
+                      className="inline-flex items-center justify-center rounded-full bg-slate-900 text-white text-[11px] font-extrabold leading-none cursor-help"
+                      style={{ width: 18, height: 18 }}
+                    >
+                      R
+                    </span>
+                  )}
               </p>
             </div>
           </div>

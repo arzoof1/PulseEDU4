@@ -48,6 +48,7 @@ import {
   cameraRegistryTable,
   caseOutcomeTypesTable,
   DEFAULT_CASE_OUTCOMES,
+  studentRetentionsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
@@ -4698,6 +4699,195 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
         notes: noteRows.length,
       },
       "[seed] watchlist seeded",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ensureStudentRetentionsSchema / seedStudentRetentionsIfEmpty
+//
+// Roster "R-in-a-circle" indicator. ~5% of each school's students get a
+// retention record at a grade between 1 and 8. Then a per-teacher pass
+// adds extra retentions until every teacher with a roster has at least
+// 2 retained students. The 5% is a floor — the per-teacher rule may push
+// it higher in small schools.
+//
+// Per-school skip: if the school already has any retention rows, the
+// whole school is skipped so reseeds don't double up.
+// -----------------------------------------------------------------------------
+export async function ensureStudentRetentionsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_retentions (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      grade_level INTEGER NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER,
+      created_by_name TEXT
+    )
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS student_retentions_unique
+      ON student_retentions (school_id, student_id, grade_level)
+  `);
+}
+
+export async function seedStudentRetentionsIfEmpty(): Promise<void> {
+  await ensureStudentRetentionsSchema();
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [{ c }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM student_retentions WHERE school_id = ${school.id}`,
+      )
+    ).rows as { c: number }[];
+    if (c > 0) continue;
+
+    const allStudents = await db
+      .select({
+        studentId: studentsTable.studentId,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, school.id));
+    if (allStudents.length === 0) continue;
+
+    // Roster (studentId -> teacherStaffId[]). One row per (student, section).
+    const rosterRows = await db
+      .select({
+        studentId: sectionRosterTable.studentId,
+        teacherStaffId: classSectionsTable.teacherStaffId,
+      })
+      .from(sectionRosterTable)
+      .innerJoin(
+        classSectionsTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .where(eq(sectionRosterTable.schoolId, school.id));
+
+    const teachersByStudent = new Map<string, Set<number>>();
+    const studentsByTeacher = new Map<number, string[]>();
+    for (const r of rosterRows) {
+      let s = teachersByStudent.get(r.studentId);
+      if (!s) {
+        s = new Set<number>();
+        teachersByStudent.set(r.studentId, s);
+      }
+      s.add(r.teacherStaffId);
+      const list = studentsByTeacher.get(r.teacherStaffId) ?? [];
+      list.push(r.studentId);
+      studentsByTeacher.set(r.teacherStaffId, list);
+    }
+
+    const rng = makeRng(0xfedcba + school.id * 7541);
+    const studentInfo = new Map<string, number>(
+      allStudents.map((s) => [s.studentId, s.grade]),
+    );
+    const chosen = new Set<string>();
+    const retainedGrades = new Map<string, number[]>();
+    const retainedCountByTeacher = new Map<number, number>();
+
+    function pickRetentionGrade(currentGrade: number): number {
+      // Prefer retention grades < currentGrade so the data is plausible
+      // (you can't have repeated 5th if you're currently in 3rd). Cap at
+      // 8 per the spec. If the student is too young, fall back to 1.
+      const maxG = Math.min(8, Math.max(1, currentGrade - 1));
+      if (maxG <= 1) return 1;
+      return 1 + Math.floor(rng() * maxG);
+    }
+
+    function addRetention(studentId: string): boolean {
+      if (chosen.has(studentId)) return false;
+      const grade = studentInfo.get(studentId);
+      if (grade === undefined) return false;
+      const rGrade = pickRetentionGrade(grade);
+      chosen.add(studentId);
+      retainedGrades.set(studentId, [rGrade]);
+      const teachers = teachersByStudent.get(studentId);
+      if (teachers) {
+        for (const tid of teachers) {
+          retainedCountByTeacher.set(
+            tid,
+            (retainedCountByTeacher.get(tid) ?? 0) + 1,
+          );
+        }
+      }
+      return true;
+    }
+
+    // Step 1: ~5% baseline, random.
+    const targetCount = Math.max(1, Math.round(allStudents.length * 0.05));
+    const shuffled = [...allStudents]
+      .map((s) => ({ s, k: rng() }))
+      .sort((a, b) => a.k - b.k)
+      .map((x) => x.s);
+    for (const s of shuffled) {
+      if (chosen.size >= targetCount) break;
+      addRetention(s.studentId);
+    }
+
+    // Step 2: per-teacher minimum of 2. Iterate teachers; for any teacher
+    // with < 2 retained students, retain additional kids from their
+    // roster until the count hits 2 (or the roster is exhausted).
+    for (const [teacherId, roster] of studentsByTeacher) {
+      let cnt = retainedCountByTeacher.get(teacherId) ?? 0;
+      if (cnt >= 2) continue;
+      // Shuffle this teacher's roster for variety.
+      const r = [...roster].map((sid) => ({ sid, k: rng() }))
+        .sort((a, b) => a.k - b.k)
+        .map((x) => x.sid);
+      for (const sid of r) {
+        if (cnt >= 2) break;
+        if (addRetention(sid)) {
+          cnt = retainedCountByTeacher.get(teacherId) ?? cnt;
+        }
+      }
+    }
+
+    // Step 3: ~10% of retained students get a SECOND retention (different
+    // grade) so the hover popover sometimes shows multi-grade history.
+    for (const sid of [...chosen]) {
+      if (rng() >= 0.1) continue;
+      const grade = studentInfo.get(sid);
+      if (grade === undefined) continue;
+      const list = retainedGrades.get(sid) ?? [];
+      const existing = new Set(list);
+      // Try a few times to find a different valid grade.
+      for (let attempt = 0; attempt < 5; attempt++) {
+        const g = pickRetentionGrade(grade);
+        if (!existing.has(g)) {
+          list.push(g);
+          retainedGrades.set(sid, list);
+          break;
+        }
+      }
+    }
+
+    if (chosen.size === 0) continue;
+
+    type RetentionInsert = typeof studentRetentionsTable.$inferInsert;
+    const inserts: RetentionInsert[] = [];
+    for (const [sid, grades] of retainedGrades) {
+      for (const g of grades) {
+        inserts.push({
+          schoolId: school.id,
+          studentId: sid,
+          gradeLevel: g,
+          createdByName: "Demo Seed",
+        });
+      }
+    }
+    await db.insert(studentRetentionsTable).values(inserts);
+    logger.info(
+      {
+        schoolId: school.id,
+        students: chosen.size,
+        rows: inserts.length,
+        teachers: studentsByTeacher.size,
+      },
+      "[seed] student retentions seeded",
     );
   }
 }

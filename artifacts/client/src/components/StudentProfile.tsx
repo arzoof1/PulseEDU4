@@ -37,6 +37,10 @@ interface ProfilePayload {
     mtssTier: number;
     activeMtssPlanCount: number;
     visibilityPath: "core" | "roster" | "trusted_adult";
+    // Grades the student was retained in (ascending). Empty when none.
+    // Drives the "Retained: Grade N" Chip in the header and the
+    // mark/unmark control in the demographics editor.
+    retainedGrades: number[];
   };
   window: { from: string; to: string; label: string; days: number | null };
   pillars: {
@@ -497,6 +501,161 @@ interface Props {
   canPrintOverallReport?: boolean;
 }
 
+// Mark/unmark grade-level retentions for a single student. Lives inside
+// the demographics editor so it shares the same admin/Core-Team gate.
+// Existing retentions render as black "R Grade N" chips with an "x"
+// to remove. The picker on the right marks a new grade. Server is
+// idempotent on (student, grade), so a re-mark is a safe no-op.
+function RetentionManager({
+  studentId,
+  retainedGrades,
+  onChange,
+}: {
+  studentId: string;
+  retainedGrades: number[];
+  onChange: (next: number[]) => void;
+}) {
+  const [pickGrade, setPickGrade] = useState<number>(1);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string>("");
+
+  async function add() {
+    if (busy) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/retentions`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ gradeLevel: pickGrade }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        setErr(j.error ?? `HTTP ${r.status}`);
+        return;
+      }
+      // Merge locally — server is idempotent so no double-rows.
+      const set = new Set(retainedGrades);
+      set.add(pickGrade);
+      onChange([...set].sort((a, b) => a - b));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function remove(grade: number) {
+    if (busy) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/retentions/${grade}`,
+        { method: "DELETE" },
+      );
+      if (!r.ok && r.status !== 204) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        setErr(j.error ?? `HTTP ${r.status}`);
+        return;
+      }
+      onChange(retainedGrades.filter((g) => g !== grade));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "0.4rem",
+        paddingTop: "0.4rem",
+        borderTop: "1px dashed #cbd5e1",
+      }}
+    >
+      <span style={{ fontSize: "0.8rem", color: "#475569", fontWeight: 600 }}>
+        Retention:
+      </span>
+      {retainedGrades.length === 0 && (
+        <span style={{ fontSize: "0.8rem", color: "#94a3b8" }}>
+          (none recorded)
+        </span>
+      )}
+      {retainedGrades.map((g) => (
+        <span
+          key={g}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 4,
+            padding: "2px 8px",
+            borderRadius: 999,
+            background: "#0f172a",
+            color: "white",
+            fontSize: 12,
+            fontWeight: 700,
+          }}
+        >
+          R · Grade {g}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => remove(g)}
+            title={`Remove Grade ${g} retention`}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "white",
+              cursor: "pointer",
+              fontSize: 12,
+              padding: 0,
+              lineHeight: 1,
+            }}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <span style={{ marginLeft: "auto", display: "inline-flex", gap: 4, alignItems: "center" }}>
+        <select
+          value={pickGrade}
+          onChange={(e) => setPickGrade(Number(e.target.value))}
+          disabled={busy}
+          style={{ fontSize: "0.8rem", padding: "0.15rem 0.35rem" }}
+        >
+          {[1, 2, 3, 4, 5, 6, 7, 8].map((g) => (
+            <option key={g} value={g}>
+              Grade {g}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={add}
+          style={{
+            fontSize: "0.8rem",
+            padding: "0.2rem 0.55rem",
+            border: "1px solid #cbd5e1",
+            background: "#f8fafc",
+            borderRadius: 6,
+            cursor: "pointer",
+          }}
+        >
+          + Mark retained
+        </button>
+      </span>
+      {err && (
+        <span style={{ fontSize: "0.75rem", color: "#b91c1c" }}>{err}</span>
+      )}
+    </div>
+  );
+}
+
 export default function StudentProfile({
   studentId,
   onBack,
@@ -786,6 +945,35 @@ export default function StudentProfile({
               {header.flags.is504 && <Chip label="504" sev="info" />}
               {header.flags.ctEla && <Chip label="CT ELA" sev="info" />}
               {header.flags.ctMath && <Chip label="CT Math" sev="info" />}
+              {header.retainedGrades && header.retainedGrades.length > 0 && (
+                <span
+                  title={`Retained: ${header.retainedGrades
+                    .map((g) => `Grade ${g}`)
+                    .join(", ")}`}
+                  aria-label={`Retained at ${header.retainedGrades
+                    .map((g) => `Grade ${g}`)
+                    .join(", ")}`}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    width: 20,
+                    height: 20,
+                    borderRadius: "50%",
+                    background: "#0f172a",
+                    color: "white",
+                    fontSize: 12,
+                    fontWeight: 800,
+                    lineHeight: 1,
+                    marginLeft: 4,
+                    marginRight: 2,
+                    cursor: "help",
+                    verticalAlign: "middle",
+                  }}
+                >
+                  R
+                </span>
+              )}
               {header.mtssTier === 1 ? (
                 <Chip label="Tier 1 (no plan)" sev="info" />
               ) : (
@@ -877,6 +1065,30 @@ export default function StudentProfile({
                 </button>
               )}
             </div>
+            {/* Retention manager — gated on canEditSafetyPlan, which
+                covers Admin / Behavior Specialist / MTSS Coordinator /
+                Guidance Counselor / School Psych. Lives outside the
+                demographics editor so a Counselor (who lacks
+                canManage / canManageMtssPlans) can still mark/unmark
+                retentions without needing the demographics editor. */}
+            {canEditSafetyPlan && (
+              <div style={{ marginTop: "0.6rem" }}>
+                <RetentionManager
+                  studentId={studentId}
+                  retainedGrades={data?.header.retainedGrades ?? []}
+                  onChange={(next) => {
+                    setData((prev) =>
+                      prev
+                        ? {
+                            ...prev,
+                            header: { ...prev.header, retainedGrades: next },
+                          }
+                        : prev,
+                    );
+                  }}
+                />
+              </div>
+            )}
             {canManage && editing && (
               <div
                 style={{

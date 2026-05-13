@@ -20,6 +20,8 @@ import {
   ensureWatchlistSchema,
   seedWatchlistIfEmpty,
   seedWatchlistQuickEntriesIfEmpty,
+  ensureStudentRetentionsSchema,
+  seedStudentRetentionsIfEmpty,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -115,6 +117,11 @@ async function runSeed(): Promise<void> {
   // skipped per-school when any quick entry already exists, so Core
   // Team customizations are preserved across reboots.
   await seedWatchlistQuickEntriesIfEmpty();
+  // Student retention indicator (roster + profile + parent portal). 5%
+  // baseline per school, then per-teacher pass to guarantee >= 2 retained
+  // students per teacher's roster. Idempotent per school.
+  await ensureStudentRetentionsSchema();
+  await seedStudentRetentionsIfEmpty();
 }
 
 // In production we MUST open the port within the platform's health-check

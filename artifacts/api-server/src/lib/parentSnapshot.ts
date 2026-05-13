@@ -24,6 +24,7 @@ import {
   studentMtssPlansTable,
   ossLogsTable,
   ossLogDaysTable,
+  studentRetentionsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 
@@ -47,6 +48,9 @@ export interface ParentSnapshot {
     firstName: string;
     lastName: string;
     grade: number;
+    // Grades the student was retained in, ascending. Empty when none.
+    // Drives the "R" indicator on the parent portal student card.
+    retainedGrades: number[];
   };
   sectionsAvailable: {
     recognition: boolean;
@@ -188,6 +192,21 @@ export async function buildParentSnapshot(
     .where(eq(studentsTable.id, studentId));
   if (!student)
     return { ok: false, status: 404, error: "Student not found" };
+
+  // Retention indicator (R-in-circle on the parent portal student card).
+  // Cheap query — at most a handful of rows per student.
+  const retentionRows = await db
+    .select({ gradeLevel: studentRetentionsTable.gradeLevel })
+    .from(studentRetentionsTable)
+    .where(
+      and(
+        eq(studentRetentionsTable.schoolId, student.schoolId),
+        eq(studentRetentionsTable.studentId, student.studentId),
+      ),
+    );
+  const retainedGradesForStudent = retentionRows
+    .map((r) => r.gradeLevel)
+    .sort((a, b) => a - b);
 
   const [parent] = await db
     .select({ displayName: parentsTable.displayName, email: parentsTable.email })
@@ -511,6 +530,7 @@ export async function buildParentSnapshot(
         firstName: student.firstName,
         lastName: student.lastName,
         grade: student.grade,
+        retainedGrades: retainedGradesForStudent,
       },
       sectionsAvailable,
       pbis: {

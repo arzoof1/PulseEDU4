@@ -90,6 +90,9 @@ interface RosterRow {
   issToday: { source: string; adminLogId: number | null } | null;
   ossToday: boolean;
   issAcks: Array<{ period: number; method: string }>;
+  // Grades the student was retained in (ascending). Empty when none.
+  // Drives the small black "R" pill rendered after the chain icon.
+  retainedGrades: number[];
 }
 
 interface RosterResponse {
@@ -1750,6 +1753,32 @@ export default function TeacherRosterPage({
                           </button>
                         );
                       })()}
+                      {row.retainedGrades && row.retainedGrades.length > 0 && (
+                        <span
+                          title={`Retained: ${row.retainedGrades
+                            .map((g) => `Grade ${g}`)
+                            .join(", ")}`}
+                          aria-label={`Retained at ${row.retainedGrades
+                            .map((g) => `Grade ${g}`)
+                            .join(", ")}`}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            width: 18,
+                            height: 18,
+                            borderRadius: "50%",
+                            background: "#0f172a",
+                            color: "white",
+                            fontSize: 11,
+                            fontWeight: 800,
+                            lineHeight: 1,
+                            cursor: "help",
+                          }}
+                        >
+                          R
+                        </span>
+                      )}
                       {row.issToday && (
                         <span
                           title="On In-School Suspension today"

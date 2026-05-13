@@ -7,6 +7,7 @@ export * from "./supportNotes";
 export * from "./accommodationLogs";
 export * from "./recordEdits";
 export * from "./students";
+export * from "./studentRetentions";
 export * from "./classSections";
 export * from "./sectionRoster";
 export * from "./schoolSettings";

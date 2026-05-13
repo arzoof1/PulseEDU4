@@ -43,6 +43,7 @@ import {
   interventionEntriesTable,
   parentStudentsTable,
   studentSeparationsTable,
+  studentRetentionsTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -226,6 +227,7 @@ function topRisk(flags: RiskFlag[]): RiskFlag | null {
 // GET /api/insights/students/:studentId/profile
 // ---------------------------------------------------------------------------
 
+// (retention indicator data is loaded per request below — not at module scope.)
 router.get("/insights/students/:studentId/profile", async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (schoolId == null) return;
@@ -281,6 +283,21 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
     res.status(404).json({ error: "Student not found in this school" });
     return;
   }
+
+  // Retention indicator (R-in-circle on the Student Profile header).
+  // Cheap query — at most a couple of rows per student.
+  const retentionRows = await db
+    .select({ gradeLevel: studentRetentionsTable.gradeLevel })
+    .from(studentRetentionsTable)
+    .where(
+      and(
+        eq(studentRetentionsTable.schoolId, schoolId),
+        eq(studentRetentionsTable.studentId, studentId),
+      ),
+    );
+  const retainedGradesList = retentionRows
+    .map((r) => r.gradeLevel)
+    .sort((a, b) => a - b);
 
   // ----- Pillar: Academics -----------------------------------------------
   const fastScores = await db
@@ -983,6 +1000,9 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       mtssTier,
       activeMtssPlanCount: activeMtssPlans.length,
       visibilityPath,
+      // Grades the student was retained in (ascending). Drives the R
+      // indicator on the Student Profile header.
+      retainedGrades: retainedGradesList,
     },
     window: {
       from: window.from.toISOString(),
