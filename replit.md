@@ -68,6 +68,32 @@ _Populate as you build_
 
 ## Future work
 
+- **🚩 PRE-DEPLOYMENT BLOCKER — FAST scale-score coverage gaps.**
+  Before going public, the cut-score table in
+  `artifacts/api-server/src/lib/fastCutScores.ts` and the seed/import
+  data must cover every grade a real tenant will roster.
+  - **Add Algebra 1 EOC and Geometry EOC scale charts** (FL DOE FAST
+    Table 8 continuation). Today these subjects render "n/a" for every
+    HS Math student; without them, a 9th/10th grader taking Algebra 1
+    or Geometry has no PM pills and no LG bucket. Wire the new charts
+    into the `MATH` record and update `hasChart()` accordingly.
+  - **Decide and implement 3rd-grade bucket behavior.** Today 3rd
+    graders are deliberately suppressed (no prior-grade chart). For a
+    K–5 tenant this means the entire 3rd-grade roster shows "—" in the
+    LG column. Either (a) document this as intended and add a tooltip
+    explaining "Bucket starts in 4th grade" or (b) fall back to placing
+    PM3 on the **current** (3rd) grade chart and computing the bucket
+    from there, accepting that the gap will be optimistic since no
+    grade-jump is involved.
+  - **Verify scale-score data coverage at onboarding.** Today only
+    grades 6–10 ELA and 6–8 Math have student PM1/PM2/PM3 in the seed.
+    Any tenant rostering grades 3–5 needs FAST data uploaded for those
+    grades; if missing, pills + bucket silently render blank rather
+    than warning the admin. Add an onboarding check (or Settings
+    telemetry tile) that flags "FAST scores missing for grades X, Y,
+    Z" so admins know to import before showing the roster to teachers.
+
+
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
   Phase 3 shipped the runtime feature (header pill, side panel,
   per-row dot, dismiss-with-justification, "What the AI saw"
