@@ -38,7 +38,15 @@ export function usePolling<T>(
     const ctrl = new AbortController();
     inFlight.current = ctrl;
     try {
-      const res = await fetch(url, { signal: ctrl.signal });
+      // credentials: "include" so session-mode embeds (e.g. the in-app
+       // Houses Rankings page that drops ?schoolId= and relies on the
+       // signed-in staff cookie for req.schoolId) actually send the
+       // session cookie. Public TV/kiosk usage with ?schoolId=N is
+       // unaffected because the route falls back to the query param.
+      const res = await fetch(url, {
+        signal: ctrl.signal,
+        credentials: "include",
+      });
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`);
       }
