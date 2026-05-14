@@ -178,3 +178,20 @@ _Populate as you build_
 - [Orval documentation](https://orval.dev/): For OpenAPI-based API code generation.
 - [Recharts documentation](https://recharts.org/en-US/guide/GettingStarted): For charting components used in dashboards.
 - [pdfkit documentation](http://pdfkit.org/docs/getting_started.html): For server-side PDF generation.
+## Tomorrow's first task
+
+- **Verify Spotlight 1500-point governor.** First job is to confirm the
+  hidden runaway-leader cap is working end-to-end:
+  - Once the leading house crosses 1500 points (or however the
+    `RUNAWAY_LEADER_THRESHOLD` is currently set), `/api/spotlight/pick`
+    should stop returning that house's students until the runner-up
+    catches up.
+  - Other houses should continue to be picked normally (per-house
+    rotation per session still in effect).
+  - `/api/spotlight/award` should re-enforce the cap server-side even
+    if a stale client posts a capped house.
+  - Audit-note on award rows should still read
+    `chosen=X, awarded=Y` so the governor is observable in the DB.
+  - Check `artifacts/api-server/src/routes/spotlight.ts` (helpers
+    `computeHouseTotalsForCap`, `detectCappedHouseId`,
+    `pickAwardedPoints`) and the `servedHouseIds[]` filter path.
