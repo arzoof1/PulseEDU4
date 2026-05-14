@@ -36,6 +36,7 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     capStaffRoles: row.capStaffRoles,
     capManageRoles: row.capManageRoles,
     capManageDisplays: row.capManageDisplays,
+    capCarRiderMonitor: row.capCarRiderMonitor,
     defaultRoom: row.defaultRoom,
   };
 }

@@ -4,6 +4,7 @@ import Kiosk from "./Kiosk";
 import KioskViewer from "./KioskViewer";
 import ParentApp from "./parent/ParentApp";
 import SignageApp from "./signage/SignageApp";
+import PickupApp from "./pickup/PickupApp";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -14,11 +15,13 @@ const isKioskViewer = path.includes("/kiosk-view");
 const isKiosk = !isKioskViewer && path.includes("/kiosk");
 const isParent = path.includes("/parent");
 const isSignage = path.includes("/signage");
+const isPickup = path.includes("/pickup");
 
 createRoot(document.getElementById("root")!).render(
   isSignage ? <SignageApp />
     : isKioskViewer ? <KioskViewer />
     : isKiosk ? <Kiosk />
     : isParent ? <ParentApp />
+    : isPickup ? <PickupApp />
     : <App />,
 );

@@ -81,6 +81,7 @@ import hallPassQueueRouter from "./hallPassQueue";
 import spotlightRouter from "./spotlight";
 import watchlistRouter from "./watchlist";
 import onboardingRouter from "./onboarding";
+import pickupRouter from "./pickup";
 
 const router: IRouter = Router();
 
@@ -166,5 +167,6 @@ router.use(hallPassQueueRouter);
 router.use(spotlightRouter);
 router.use(watchlistRouter);
 router.use(onboardingRouter);
+router.use(pickupRouter);
 
 export default router;

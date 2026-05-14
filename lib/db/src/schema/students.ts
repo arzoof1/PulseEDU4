@@ -40,6 +40,12 @@ export const studentsTable = pgTable("students", {
   // imports without these columns remain valid.
   race: text("race"),
   ethnicity: text("ethnicity"),
+  // ----- Dismissal mode (Parent Pick-Up Module) ---------------------------
+  // How this student leaves at end-of-day. Drives which dismissal flow
+  // they appear in (curb queue, walker gate, bus list) and the
+  // end-of-day "still on campus" reconciliation tile.
+  // Values: 'car_rider' | 'walker' | 'bus' | 'aftercare' | 'parent_pickup_only'
+  dismissalMode: text("dismissal_mode").notNull().default("car_rider"),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

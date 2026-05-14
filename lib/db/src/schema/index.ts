@@ -38,6 +38,8 @@ export * from "./studentHallPassLimits";
 export * from "./districtIntegrations";
 export * from "./customRoles";
 export * from "./bellSchedules";
+export * from "./pickupAuthorizations";
+export * from "./pickupQueueEvents";
 export * from "./issRoster";
 export * from "./issAttendanceDay";
 export * from "./studentAttendanceDay";

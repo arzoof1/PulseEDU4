@@ -5329,3 +5329,66 @@ export async function seedWatchlistSpotlightsIfMissing(): Promise<void> {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// ensurePickupSchema — Parent Pick-Up Module
+//
+// Adds the dismissal_mode column to students, the cap_car_rider_monitor
+// flag to staff, the show_pickup_queue toggle to display_playlists, and
+// creates the two new tables (student_pickup_authorizations + the
+// pickup_queue_events audit log). All ALTERs are IF NOT EXISTS so re-runs
+// are no-ops; the partial unique index on (school_id, pickup_number)
+// WHERE active is created explicitly because Drizzle's type-level helper
+// can't model partial indexes.
+// ---------------------------------------------------------------------------
+export async function ensurePickupSchema(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE students
+      ADD COLUMN IF NOT EXISTS dismissal_mode TEXT NOT NULL DEFAULT 'car_rider'
+  `);
+  await db.execute(sql`
+    ALTER TABLE staff
+      ADD COLUMN IF NOT EXISTS cap_car_rider_monitor BOOLEAN NOT NULL DEFAULT false
+  `);
+  await db.execute(sql`
+    ALTER TABLE display_playlists
+      ADD COLUMN IF NOT EXISTS show_pickup_queue BOOLEAN NOT NULL DEFAULT false
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_pickup_authorizations (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      parent_id INTEGER,
+      guardian_label TEXT NOT NULL,
+      pickup_number TEXT NOT NULL,
+      restricted_from BOOLEAN NOT NULL DEFAULT false,
+      active BOOLEAN NOT NULL DEFAULT true,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deactivated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_number_per_school ON student_pickup_authorizations(school_id, pickup_number)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_student ON student_pickup_authorizations(student_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_auth_by_parent ON student_pickup_authorizations(parent_id)`);
+  // Partial unique: only the ACTIVE rows must have a unique number per
+  // school. Retired numbers can be reused for a new tag without conflict.
+  await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS pickup_auth_active_number_unique ON student_pickup_authorizations(school_id, pickup_number) WHERE active`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS pickup_queue_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      pickup_authorization_id INTEGER,
+      actor_staff_id INTEGER NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      note TEXT,
+      occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_events_by_school_date ON pickup_queue_events(school_id, occurred_at)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_events_by_student ON pickup_queue_events(student_id)`);
+}

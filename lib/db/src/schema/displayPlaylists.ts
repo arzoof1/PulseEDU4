@@ -38,6 +38,13 @@ export const displayPlaylistsTable = pgTable("display_playlists", {
   // at the existing /signage/heartbeat page (no server-side data fetch
   // is needed — the heartbeat page polls for itself).
   showHeartbeat: boolean("show_heartbeat").notNull().default(false),
+  // Parent Pick-Up Module — when true, the cycler injects a synthetic
+  // "Pickup queue" slide each loop showing students currently in the
+  // dismissal queue. For owner-staff playlists (a teacher's classroom
+  // TV), the slide filters to that teacher's roster only. For
+  // school-level playlists (commons / cafeteria TV), it shows the full
+  // queue. Polled every 15s during the dismissal window.
+  showPickupQueue: boolean("show_pickup_queue").notNull().default(false),
   // Manual on/off kill switch independent of `scheduleEnabled`. When
   // false the public cycler returns an "off-air" payload (no items,
   // active=false) so any TV pointed at /display/<id> shows the Off-air

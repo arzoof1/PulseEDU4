@@ -113,6 +113,14 @@ export const staffTable = pgTable("staff", {
   capManageDisplays: boolean("cap_manage_displays")
     .notNull()
     .default(false),
+  // Parent Pick-Up Module — grants access to the curb keypad and the
+  // walker gate page. Granted by admins to paraprofessionals or
+  // front-office assistants who run the dismissal line. Admins have
+  // implicit access (route gates check admin OR this flag) so admins
+  // don't need this flag set.
+  capCarRiderMonitor: boolean("cap_car_rider_monitor")
+    .notNull()
+    .default(false),
 
   // Optional home/default classroom for this staff member. Stored as
   // free text (the location name) so historical records remain intact if
