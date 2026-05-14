@@ -192,20 +192,30 @@ _Populate as you build_
 - [Orval documentation](https://orval.dev/): For OpenAPI-based API code generation.
 - [Recharts documentation](https://recharts.org/en-US/guide/GettingStarted): For charting components used in dashboards.
 - [pdfkit documentation](http://pdfkit.org/docs/getting_started.html): For server-side PDF generation.
-## Tomorrow's first task
+## Spotlight governor (v2 — shipped)
 
-- **Verify Spotlight 1500-point governor.** First job is to confirm the
-  hidden runaway-leader cap is working end-to-end:
-  - Once the leading house crosses 1500 points (or however the
-    `RUNAWAY_LEADER_THRESHOLD` is currently set), `/api/spotlight/pick`
-    should stop returning that house's students until the runner-up
-    catches up.
-  - Other houses should continue to be picked normally (per-house
-    rotation per session still in effect).
-  - `/api/spotlight/award` should re-enforce the cap server-side even
-    if a stale client posts a capped house.
-  - Audit-note on award rows should still read
-    `chosen=X, awarded=Y` so the governor is observable in the DB.
-  - Check `artifacts/api-server/src/routes/spotlight.ts` (helpers
-    `computeHouseTotalsForCap`, `detectCappedHouseId`,
-    `pickAwardedPoints`) and the `servedHouseIds[]` filter path.
+Replaces the old binary "capped house" cap. The point pool is now
+quartile-tiered by house standing and only activates when the leader
+is >`RUNAWAY_LEADER_THRESHOLD` (1500) points ahead of #2:
+
+- Healthy race (gap ≤ 1500): every house draws from `{1..10}`.
+- Rebalancer active (gap > 1500): per-rank pools
+  - top quartile  → `{1, 2, 3}`
+  - upper-middle  → `{2, 4, 6}`
+  - lower-middle  → `{4, 6, 8}`
+  - bottom quart. → `{6, 8, 10}`
+
+Quartile boundaries (`<0.25 / <0.5 / <0.75 / else`) work for any
+house count — 2/3/4/5+ all map cleanly with no gaps.
+
+Key invariant: **the value the teacher sees IS the value the DB
+stores.** No silent downgrade, no `chosen=X, awarded=Y` audit note.
+`/spotlight/pick` bakes the pool-correct value into the reveal;
+`/spotlight/award` re-validates it and returns 409 ("re-spin") if
+standings shifted in the meantime. Strict integer 1..10 validation
+on `points` — no abs/floor coercion of tampered input.
+
+Helpers live in `artifacts/api-server/src/routes/spotlight.ts`:
+`isRebalancerActive`, `poolForHouse`, `pickFromPool`,
+`computeHouseTotalsForCap`. Per-house rotation per session
+(`servedHouseIds[]` filter) still in effect.
