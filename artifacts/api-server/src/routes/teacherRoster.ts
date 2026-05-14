@@ -120,7 +120,13 @@ function buildSubjectBlock(
       pm1Placement: null,
       pm2Placement: null,
       pm3Placement: null,
-      bucket: { targetScore: null, gap: null, color: null },
+      bucket: {
+        targetScore: null,
+        gap: null,
+        color: null,
+        currentSubLevel: null,
+        nextStopLabel: null,
+      },
       priorYearScore: null,
       priorYearBq: false,
       noChart,
@@ -135,7 +141,13 @@ function buildSubjectBlock(
   const bucket =
     row.pm3 != null
       ? bucketFor(row.pm3, subject, grade)
-      : { targetScore: null, gap: null, color: null };
+      : {
+          targetScore: null,
+          gap: null,
+          color: null,
+          currentSubLevel: null,
+          nextStopLabel: null,
+        };
   return {
     pm1: row.pm1,
     pm2: row.pm2,

@@ -24,9 +24,13 @@
 //
 // Bucket target:
 //   - Always computed against the student's CURRENT-grade chart.
-//   - Target = the MIN of the next level above their PM3 placement.
+//   - Target = the MIN of the NEXT SUB-BAND on the climb path:
+//       Low1 → Mid1 → High1 → Low2 → High2 → L3 → L4 → L5.
+//     Sub-bands give smaller, more achievable increments than whole
+//     levels.
 //   - Gap   = target − pm3Score.
-//   - Color: green ≤ 0, orange 1–5, red > 5.
+//   - Color reflects the student's CURRENT level (per FAST palette):
+//       L1 red, L2 orange, L3 green, L4 blue, L5 purple.
 
 export type SubLevel =
   | "1.1" // Level 1 Low
@@ -43,13 +47,24 @@ export interface Placement {
   subLevel: SubLevel;
 }
 
+export type BucketColor = "red" | "orange" | "green" | "blue" | "purple";
+
 export interface BucketInfo {
   // The min score on the current-grade chart that lands the student in
-  // the next level up. null when no next level exists (already at L5).
+  // the next SUB-BAND on the climb path. null when no next stop exists
+  // (already at L5) or no chart is available.
   targetScore: number | null;
-  // pm3 - target. Negative = at/above next level. null when target null.
+  // pm3 - target. Negative = at/above next stop. null when target null.
   gap: number | null;
-  color: "green" | "orange" | "red" | null;
+  // Color of the student's CURRENT level (per FAST palette), not the
+  // gap size. null when no placement.
+  color: BucketColor | null;
+  // The student's current sub-level (e.g. "1.2", "2.2", "3"). null when
+  // no placement.
+  currentSubLevel: SubLevel | null;
+  // Human-readable label of the next stop on the path (e.g. "Mid 1",
+  // "High 2", "Level 3"). null when already at L5 / no chart.
+  nextStopLabel: string | null;
 }
 
 // Per-grade chart. We only need the Level 3/4/5 mins and the L1/L2 sub
@@ -273,41 +288,80 @@ export function placePm3(
   return placeOnChart(score, subject, currentGrade);
 }
 
+// The climb path: each sub-band's next stop. Used to compute the
+// bucket target one INCREMENT at a time rather than jumping a whole
+// integer level.
+const NEXT_STOP: Record<SubLevel, SubLevel | null> = {
+  "1.1": "1.2",
+  "1.2": "1.3",
+  "1.3": "2.1",
+  "2.1": "2.2",
+  "2.2": "3",
+  "3": "4",
+  "4": "5",
+  "5": null,
+};
+
+const SUB_LEVEL_LABEL: Record<SubLevel, string> = {
+  "1.1": "Low 1",
+  "1.2": "Mid 1",
+  "1.3": "High 1",
+  "2.1": "Low 2",
+  "2.2": "High 2",
+  "3": "Level 3",
+  "4": "Level 4",
+  "5": "Level 5",
+};
+
+// Min score for a given sub-band on a chart.
+function subLevelMin(c: FastChart, sub: SubLevel): number | null {
+  switch (sub) {
+    case "1.1":
+      return c.L1Low[0];
+    case "1.2":
+      return c.L1Mid[0];
+    case "1.3":
+      return c.L1High[0];
+    case "2.1":
+      return c.L2Low[0];
+    case "2.2":
+      return c.L2High[0];
+    case "3":
+      return c.L3[0];
+    case "4":
+      return c.L4[0];
+    case "5":
+      return c.L5[0];
+  }
+}
+
 // Compute the bucket target on the CURRENT-grade chart given the PM3
-// placement level. Returns null when:
+// placement sub-level. Returns null when:
 //   - no current-grade chart exists (Algebra/Geometry, etc.)
-//   - the student is already at L5 (no next level)
+//   - the student is already at L5 (no next stop)
 //   - currentGrade === 3 (per spec: hide bucket for grade 3)
 export function bucketTarget(
   subject: Subject,
   currentGrade: number,
-  placedLevel: 1 | 2 | 3 | 4 | 5,
-): number | null {
+  placedSubLevel: SubLevel,
+): { score: number; nextStop: SubLevel } | null {
   if (currentGrade === 3) return null;
   const c = chartFor(subject, currentGrade);
   if (!c) return null;
-  switch (placedLevel) {
-    case 1:
-      return c.L2Low[0];
-    case 2:
-      return c.L3[0];
-    case 3:
-      return c.L4[0];
-    case 4:
-      return c.L5[0];
-    case 5:
-      return null; // already at top
-  }
+  const next = NEXT_STOP[placedSubLevel];
+  if (next === null) return null;
+  const score = subLevelMin(c, next);
+  if (score === null) return null;
+  return { score, nextStop: next };
 }
 
-export function bucketColor(
-  gap: number | null,
-): "green" | "orange" | "red" | null {
-  if (gap === null) return null;
-  if (gap <= 0) return "green";
-  if (gap <= 5) return "orange";
-  return "red";
-}
+const LEVEL_COLOR: Record<1 | 2 | 3 | 4 | 5, BucketColor> = {
+  1: "red",
+  2: "orange",
+  3: "green",
+  4: "blue",
+  5: "purple",
+};
 
 // One-shot bucket computation for a PM3 score.
 export function bucketFor(
@@ -317,12 +371,29 @@ export function bucketFor(
 ): BucketInfo {
   const placement = placePm3(pm3Score, subject, currentGrade);
   if (!placement) {
-    return { targetScore: null, gap: null, color: null };
+    return {
+      targetScore: null,
+      gap: null,
+      color: null,
+      currentSubLevel: null,
+      nextStopLabel: null,
+    };
   }
-  const target = bucketTarget(subject, currentGrade, placement.level);
+  const target = bucketTarget(subject, currentGrade, placement.subLevel);
   if (target === null) {
-    return { targetScore: null, gap: null, color: null };
+    return {
+      targetScore: null,
+      gap: null,
+      color: LEVEL_COLOR[placement.level],
+      currentSubLevel: placement.subLevel,
+      nextStopLabel: null,
+    };
   }
-  const gap = target - pm3Score;
-  return { targetScore: target, gap, color: bucketColor(gap) };
+  return {
+    targetScore: target.score,
+    gap: target.score - pm3Score,
+    color: LEVEL_COLOR[placement.level],
+    currentSubLevel: placement.subLevel,
+    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
+  };
 }

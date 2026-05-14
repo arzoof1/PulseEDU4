@@ -28,10 +28,14 @@ interface Placement {
   subLevel: string;
 }
 
+type BucketColor = "red" | "orange" | "green" | "blue" | "purple";
+
 interface Bucket {
   targetScore: number | null;
   gap: number | null;
-  color: "green" | "orange" | "red" | null;
+  color: BucketColor | null;
+  currentSubLevel: string | null;
+  nextStopLabel: string | null;
 }
 
 interface SubjectBlock {
@@ -289,25 +293,25 @@ const LEVEL_FG: Record<1 | 2 | 3 | 4 | 5, string> = {
   5: "#fff",
 };
 
-const BUCKET_COLOR: Record<"green" | "orange" | "red", string> = {
-  green: "#16a34a",
-  orange: "#f59e0b",
-  red: "#dc2626",
-};
-
-// Pastel fill + dark text/stroke for the bucket icon. The earlier
-// solid-color fill with white text didn't have enough contrast for the
-// gap number to be readable at any size, so the icon now uses a tinted
-// pail with the matching dark color for the stroke and number.
-const BUCKET_FILL: Record<"green" | "orange" | "red", string> = {
-  green: "#dcfce7",
-  orange: "#fef3c7",
+// Pastel fill + dark text/stroke for the bucket icon, keyed to the
+// student's CURRENT FAST level (per the FAST palette: L1 red, L2
+// orange, L3 green, L4 blue, L5 purple). The earlier solid-color fill
+// with white text didn't have enough contrast for the gap number to be
+// readable at any size, so the icon uses a tinted pail with a matching
+// dark stroke/number.
+const BUCKET_FILL: Record<BucketColor, string> = {
   red: "#fee2e2",
+  orange: "#fef3c7",
+  green: "#dcfce7",
+  blue: "#dbeafe",
+  purple: "#ede9fe",
 };
-const BUCKET_INK: Record<"green" | "orange" | "red", string> = {
-  green: "#14532d",
-  orange: "#78350f",
+const BUCKET_INK: Record<BucketColor, string> = {
   red: "#7f1d1d",
+  orange: "#78350f",
+  green: "#14532d",
+  blue: "#1e3a8a",
+  purple: "#4c1d95",
 };
 
 // Click-to-flip pill. Default face shows the FAST sub-level; clicking
@@ -387,15 +391,21 @@ function ScorePill({
 // original) so the gap number is comfortably legible.
 const BUCKET_PX = 44;
 function BucketIcon({ bucket }: { bucket: Bucket }) {
-  if (bucket.targetScore == null || bucket.color == null) return null;
+  if (bucket.color == null) return null;
+  // L5 (top of chart) has no next stop, but we still want a colored
+  // pail so the achievement is visible. Show a checkmark.
+  const atTop = bucket.targetScore == null && bucket.currentSubLevel === "5";
+  if (bucket.targetScore == null && !atTop) return null;
   const gap = bucket.gap ?? 0;
-  const label =
-    gap <= 0
-      ? `At/above target (target ${bucket.targetScore})`
-      : `${gap} pt${gap === 1 ? "" : "s"} to next level (target ${bucket.targetScore})`;
+  const stop = bucket.nextStopLabel ?? "next level";
+  const label = atTop
+    ? "At top of chart (Level 5)"
+    : gap <= 0
+      ? `At/above ${stop} (target ${bucket.targetScore})`
+      : `${gap} pt${gap === 1 ? "" : "s"} to ${stop} (target ${bucket.targetScore})`;
   const fill = BUCKET_FILL[bucket.color];
   const ink = BUCKET_INK[bucket.color];
-  const overlay = gap <= 0 ? "✓" : String(Math.abs(gap));
+  const overlay = atTop || gap <= 0 ? "✓" : String(Math.abs(gap));
   return (
     <span
       title={label}
@@ -1350,20 +1360,28 @@ export default function TeacherRosterPage({
         }}
       >
         <span>Pills: PM3 / PM1 / PM2 (sub-level on current chart; PM3 on prior-grade chart)</span>
-        <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
-          LG (learning-gain bucket) =
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
+          LG bucket = pts to next sub-level (Low1 → Mid1 → High1 → Low2 → High2 → L3 → L4 → L5). Color = current FAST level:
           <BucketIcon
-            bucket={{ targetScore: 0, gap: 0, color: "green" }}
+            bucket={{ targetScore: 0, gap: 4, color: "red", currentSubLevel: "1.2", nextStopLabel: "High 1" }}
           />
-          at/above
+          L1
           <BucketIcon
-            bucket={{ targetScore: 0, gap: 3, color: "orange" }}
+            bucket={{ targetScore: 0, gap: 3, color: "orange", currentSubLevel: "2.1", nextStopLabel: "High 2" }}
           />
-          1–5
+          L2
           <BucketIcon
-            bucket={{ targetScore: 0, gap: 9, color: "red" }}
+            bucket={{ targetScore: 0, gap: 5, color: "green", currentSubLevel: "3", nextStopLabel: "Level 4" }}
           />
-          &gt; 5 pts to next level
+          L3
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 6, color: "blue", currentSubLevel: "4", nextStopLabel: "Level 5" }}
+          />
+          L4
+          <BucketIcon
+            bucket={{ targetScore: 0, gap: 0, color: "purple", currentSubLevel: "5", nextStopLabel: null }}
+          />
+          L5
         </span>
         <span>BQ = Bottom Quartile (prior-year final scale score)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
