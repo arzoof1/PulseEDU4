@@ -11,6 +11,7 @@ import {
   seedIreadyAndSciIfEmpty,
   seedEngagementEventsIfEmpty,
   seedPbisCatalogIfEmpty,
+  ensureSpotlightPbisReason,
   seedSeparationReasonTagsIfEmpty,
   seedPbisEntriesIfEmpty,
   seedStudentDemographicsIfEmpty,
@@ -87,6 +88,10 @@ async function runSeed(): Promise<void> {
   // data so the new Behavior dashboard renders on first launch. Catalog
   // seed runs first because the entries seed reads pbis_reasons live.
   await seedPbisCatalogIfEmpty();
+  // Make sure every school has the "Class Participation (Spotlight)" reason
+  // so the Spotlight Correct! flow has a stable reason row to file under.
+  // Idempotent skip-if-exists per school.
+  await ensureSpotlightPbisReason();
   await seedSeparationReasonTagsIfEmpty();
   await seedPbisEntriesIfEmpty();
   // Demographic flags (ELL/ESE/504/gender) for the SEB/SEL + Equity

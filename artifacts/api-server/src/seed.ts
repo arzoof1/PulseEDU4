@@ -279,11 +279,15 @@ export async function seedTenancy() {
 // rename targets). Safe to re-run on every boot.
 // -----------------------------------------------------------------------------
 const HOUSE_DEFAULTS = [
-  { name: "Falcon",  color: "#3b82f6", motto: "Sharp eyes. Steady wings." },
-  { name: "Phoenix", color: "#ef4444", motto: "Rise every day."           },
-  { name: "Stag",    color: "#10b981", motto: "Stand tall. Stand together." },
-  { name: "Wolf",    color: "#8b5cf6", motto: "One pack."                  },
+  { name: "Falcon",  color: "#3b82f6", motto: "Sharp eyes. Steady wings.",   iconKey: "Bird"   },
+  { name: "Phoenix", color: "#ef4444", motto: "Rise every day.",             iconKey: "Flame"  },
+  { name: "Stag",    color: "#10b981", motto: "Stand tall. Stand together.", iconKey: "Crown"  },
+  { name: "Wolf",    color: "#8b5cf6", motto: "One pack.",                   iconKey: "Shield" },
 ];
+
+// Round-robin pool used to backfill iconKey for any pre-existing houses
+// (created before this column existed) that admins haven't customised.
+const HOUSE_ICON_POOL = ["Crown", "Shield", "Flame", "Star", "Bird", "Sparkles"];
 
 export async function ensureHousesSchema() {
   await db.execute(sql`
@@ -301,6 +305,12 @@ export async function ensureHousesSchema() {
   );
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS houses_school_name_unique ON houses (school_id, name)`,
+  );
+  // Additive evolution: icon_key was added after the initial schema. ALTER
+  // TABLE ... IF NOT EXISTS keeps re-runs cheap and avoids drizzle-kit's
+  // interactive rename prompt (per the project gotchas note).
+  await db.execute(
+    sql`ALTER TABLE houses ADD COLUMN IF NOT EXISTS icon_key TEXT`,
   );
   // students.house_id is added separately because it's an ALTER on an
   // existing table. IF NOT EXISTS keeps re-runs harmless.
@@ -328,6 +338,7 @@ export async function seedHousesIfEmpty() {
             name: h.name,
             color: h.color,
             motto: h.motto,
+            iconKey: h.iconKey,
             createdAt: new Date().toISOString(),
           })),
         )
@@ -337,6 +348,30 @@ export async function seedHousesIfEmpty() {
         { schoolId: school.id, count: created.length },
         "[seed] houses seeded",
       );
+    } else {
+      // Backfill iconKey for pre-existing houses created before this column
+      // existed. Round-robin from the icon pool, ordered by id so the same
+      // house always gets the same icon across re-runs.
+      const missing = houseRows.filter((h) => !h.iconKey);
+      if (missing.length > 0) {
+        const ordered = [...missing].sort((a, b) => a.id - b.id);
+        for (let i = 0; i < ordered.length; i++) {
+          const iconKey = HOUSE_ICON_POOL[i % HOUSE_ICON_POOL.length];
+          await db
+            .update(housesTable)
+            .set({ iconKey })
+            .where(eq(housesTable.id, ordered[i].id));
+        }
+        logger.info(
+          { schoolId: school.id, backfilled: ordered.length },
+          "[seed] houses iconKey backfilled",
+        );
+        // Refresh local copy so downstream logic sees the iconKey if it cares.
+        houseRows = await db
+          .select()
+          .from(housesTable)
+          .where(eq(housesTable.schoolId, school.id));
+      }
     }
 
     // 2. Round-robin assign students that don't yet have a house.
@@ -3011,6 +3046,45 @@ export async function seedPbisCatalogIfEmpty() {
     logger.info(
       { schoolId: school.id, count: inserts.length },
       "[seed] pbis_reasons starter catalog seeded",
+    );
+  }
+}
+
+// -----------------------------------------------------------------------------
+// ensureSpotlightPbisReason: idempotently makes sure every school has a
+// "Class Participation (Spotlight)" reason in pbis_reasons. Spotlight's
+// "Correct!" flow files awards under this reason so admins can see in
+// reports how many points came from Spotlight vs Hall Pass vs other
+// channels. Runs at boot AFTER the catalog seed, so even hand-curated
+// schools get this row added without disturbing their existing reasons.
+// -----------------------------------------------------------------------------
+export const SPOTLIGHT_PBIS_REASON_NAME = "Class Participation (Spotlight)";
+
+export async function ensureSpotlightPbisReason() {
+  const schools = await db.select().from(schoolsTable);
+  for (const school of schools) {
+    const [existing] = await db
+      .select({ id: pbisReasonsTable.id })
+      .from(pbisReasonsTable)
+      .where(
+        and(
+          eq(pbisReasonsTable.schoolId, school.id),
+          eq(pbisReasonsTable.name, SPOTLIGHT_PBIS_REASON_NAME),
+        ),
+      );
+    if (existing) continue;
+    await db.insert(pbisReasonsTable).values({
+      schoolId: school.id,
+      name: SPOTLIGHT_PBIS_REASON_NAME,
+      category: "Effort",
+      defaultPoints: 5,
+      polarity: "positive",
+      sortOrder: 100,
+      ownerScope: "school",
+    });
+    logger.info(
+      { schoolId: school.id },
+      "[seed] spotlight pbis reason ensured",
     );
   }
 }

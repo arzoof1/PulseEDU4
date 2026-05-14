@@ -12,9 +12,14 @@ import {
   spotlightHistoryTable,
   staffTable,
   studentsTable,
+  housesTable,
+  pbisEntriesTable,
+  pbisReasonsTable,
+  schoolSettingsTable,
 } from "@workspace/db";
-import { and, eq, asc, desc, inArray, sql } from "drizzle-orm";
+import { and, eq, asc, desc, inArray, sql, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { SPOTLIGHT_PBIS_REASON_NAME } from "../seed.js";
 
 const router: IRouter = Router();
 
@@ -335,11 +340,14 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
   const pickedId = pool[idx];
 
   // Resolve the picked student's name (and verify they're in this school).
+  // Pull houseId at the same time so we can enrich the response with the
+  // student's house — Spotlight's "Correct!" reveal renders a house badge.
   const [student] = await db
     .select({
       studentId: studentsTable.studentId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
+      houseId: studentsTable.houseId,
     })
     .from(studentsTable)
     .where(
@@ -351,6 +359,33 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
   if (!student) {
     res.status(404).json({ error: `Student ${pickedId} not found` });
     return;
+  }
+
+  // Enrich with the student's house — null is fine (UI hides the badge).
+  // Scoped by schoolId on top of the FK to defend against any future
+  // cross-school house leak.
+  let house: {
+    id: number;
+    name: string;
+    color: string;
+    iconKey: string | null;
+  } | null = null;
+  if (student.houseId !== null) {
+    const [hRow] = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+        color: housesTable.color,
+        iconKey: housesTable.iconKey,
+      })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.id, student.houseId),
+          eq(housesTable.schoolId, schoolId),
+        ),
+      );
+    if (hRow) house = hRow;
   }
 
   // Record the pick so it's excluded next time.
@@ -382,9 +417,198 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
       studentId: student.studentId,
       firstName: student.firstName,
       lastName: student.lastName,
+      house,
     },
     prompt,
     poolSize: pool.length,
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Award endpoint — Spotlight "Correct!" flow
+// ---------------------------------------------------------------------------
+//
+// Body: { studentIds: string[], points: number }
+//
+// Files a positive PBIS entry against each student under the seeded
+// "Class Participation (Spotlight)" reason. House totals are computed by
+// summing each student's awards (see /api/houses), so points credit the
+// student's house automatically.
+//
+// Returns the freshly-computed house totals so the client can animate the
+// bars without a separate /api/houses round-trip. Multi-student calls are
+// supported (1..50 ids per request).
+router.post("/spotlight/award", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const body = req.body ?? {};
+  const rawIds = Array.isArray(body.studentIds) ? body.studentIds : [];
+  const points = Number(body.points);
+  if (!Number.isFinite(points) || points <= 0 || points > 100) {
+    res
+      .status(400)
+      .json({ error: "points must be a positive number ≤ 100" });
+    return;
+  }
+
+  const seen = new Set<string>();
+  const ids: string[] = [];
+  for (const raw of rawIds) {
+    if (typeof raw !== "string") continue;
+    const id = raw.trim();
+    if (!id || seen.has(id.toUpperCase())) continue;
+    seen.add(id.toUpperCase());
+    ids.push(id);
+  }
+  if (ids.length === 0) {
+    res.status(400).json({ error: "studentIds (non-empty array) required" });
+    return;
+  }
+  if (ids.length > 50) {
+    res
+      .status(400)
+      .json({ error: "Spotlight awards are capped at 50 students per call" });
+    return;
+  }
+
+  // Cross-school safety: every id must live in this school's roster, and
+  // we want the houseId in the same query so we can return updated house
+  // totals without a second pass.
+  const owned = await db
+    .select({
+      studentId: studentsTable.studentId,
+      houseId: studentsTable.houseId,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        inArray(studentsTable.studentId, ids),
+      ),
+    );
+  if (owned.length !== ids.length) {
+    res
+      .status(403)
+      .json({ error: "Some students are not in your school" });
+    return;
+  }
+
+  // Resolve the seeded reason row. ensureSpotlightPbisReason runs at boot
+  // so this should always exist; if it doesn't (admin manually deleted it)
+  // we recreate it here so the award doesn't 500.
+  let [reasonRow] = await db
+    .select()
+    .from(pbisReasonsTable)
+    .where(
+      and(
+        eq(pbisReasonsTable.schoolId, schoolId),
+        eq(pbisReasonsTable.name, SPOTLIGHT_PBIS_REASON_NAME),
+      ),
+    );
+  if (!reasonRow) {
+    [reasonRow] = await db
+      .insert(pbisReasonsTable)
+      .values({
+        schoolId,
+        name: SPOTLIGHT_PBIS_REASON_NAME,
+        category: "Effort",
+        defaultPoints: 5,
+        polarity: "positive",
+        sortOrder: 100,
+        ownerScope: "school",
+      })
+      .returning();
+  }
+
+  const staffName = staff.displayName || "Staff";
+
+  const storedPoints = Math.abs(Math.floor(points));
+  const nowIso = new Date().toISOString();
+
+  // Confirm school's negative-affects-total policy is irrelevant for us
+  // (we're always positive) — but still respect any hard cap by clamping
+  // to defaultPoints' sign convention (positive). Voiding/audit columns
+  // use defaults from the table.
+  void schoolSettingsTable;
+
+  // Wrap the inserts in a single transaction so a partial failure
+  // (DB blip, constraint error on one row) doesn't leave half the
+  // class with points and the other half without — the client otherwise
+  // sees an error and re-tries, which would double-award the lucky half.
+  const created: string[] = await db.transaction(async (tx) => {
+    const ok: string[] = [];
+    for (const o of owned) {
+      await tx.insert(pbisEntriesTable).values({
+        schoolId,
+        studentId: o.studentId,
+        reason: SPOTLIGHT_PBIS_REASON_NAME,
+        points: storedPoints,
+        polarity: "positive",
+        staffName,
+        staffId: staff.id,
+        note: "Awarded via Spotlight",
+        createdAt: nowIso,
+      });
+      ok.push(o.studentId);
+    }
+    return ok;
+  });
+
+  // Recompute updated house totals (same shape as /api/houses) so the
+  // client can animate without a follow-up request. We compute totals
+  // for ALL houses in the school, not just the affected ones, because
+  // the leaderboard ordering depends on every house's total.
+  const houses = await db
+    .select()
+    .from(housesTable)
+    .where(eq(housesTable.schoolId, schoolId));
+
+  const totals = await Promise.all(
+    houses.map(async (h) => {
+      const memberRows = await db
+        .select({ studentId: studentsTable.studentId })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.houseId, h.id),
+          ),
+        );
+      const memberIds = memberRows.map((m) => m.studentId);
+      let totalPoints = 0;
+      if (memberIds.length > 0) {
+        const [agg] = await db
+          .select({
+            points: sql<number>`COALESCE(SUM(${pbisEntriesTable.points}), 0)::int`,
+          })
+          .from(pbisEntriesTable)
+          .where(
+            and(
+              eq(pbisEntriesTable.schoolId, schoolId),
+              inArray(pbisEntriesTable.studentId, memberIds),
+              isNull(pbisEntriesTable.voidedAt),
+            ),
+          );
+        totalPoints = agg?.points ?? 0;
+      }
+      return {
+        id: h.id,
+        name: h.name,
+        color: h.color,
+        iconKey: h.iconKey,
+        memberCount: memberIds.length,
+        totalPoints,
+      };
+    }),
+  );
+
+  res.json({
+    awarded: created.length,
+    pointsEach: storedPoints,
+    houses: totals,
   });
 });
 

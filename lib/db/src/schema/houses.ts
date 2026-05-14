@@ -13,6 +13,11 @@ export const housesTable = pgTable("houses", {
   color: text("color").notNull(),
   // Short rallying line shown under the house name on signage. Optional.
   motto: text("motto"),
+  // Lucide icon name (e.g. "Crown", "Shield", "Flame"). Optional — when
+  // null the UI falls back to a colored circle with the house's first
+  // letter. Kept as a free string rather than a Drizzle enum so admins
+  // can pick any Lucide icon without a schema migration.
+  iconKey: text("icon_key"),
   createdAt: text("created_at").notNull(),
 });
 
