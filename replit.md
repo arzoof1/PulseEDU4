@@ -162,19 +162,132 @@ _Populate as you build_
   - **Required "reason for edit"**: every edit/trim/delete prompts the user for a short justification ("why are you changing this?") that is stored on the audit row. This is the column auditors will read first to understand whether a change was a typo correction, a legitimate behavior update, or something that needs follow-up. Should be required (non-empty, min ~5 chars), not optional.
   - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
 
-- **Parent Pick-Up Module — placeholder, full spec from user pending.**
-  Build directly after the items above. User will walk through the
-  exact workflow in a follow-up session. Known scope at a high level:
-  - A parent pick-up flow (front-office workflow — likely sign-out,
-    designated-adult verification, and a record of who released the
-    student to whom).
-  - A tracking system for **AST time** (after-school time) with a
-    **pre-approval requirement** — i.e. the student or parent has to
-    request AST in advance, an admin/teacher approves, and pick-up
-    can't be processed until that approval is on file.
-  - Do NOT start until user has shared the workflow details — the
-    pre-approval gating logic is non-obvious and getting it wrong
-    creates parent-facing friction.
+- **Parent Pick-Up Module — spec confirmed, ready to build.**
+  AST time is **not** part of this work — see separate AST entry below.
+  Build order: schema + curb keypad MVP → classroom signage tile →
+  walker gate flow → QR tags → photo verification (depends on Student
+  Photos work below).
+
+  **Schema additions**
+  - `students.dismissal_mode` enum: `car_rider | walker | bus |
+    aftercare | parent_pickup_only`. Importable from roster CSV,
+    editable per student.
+  - New `student_pickup_authorizations` table:
+    `(id, school_id, student_id, parent_id, pickup_number,
+    label, restricted_from BOOL DEFAULT false, active, created_at)`.
+    `pickup_number` unique per `(school_id, active=true)` so each
+    parent gets a distinct hanger/sticker even across siblings.
+  - New `pickup_queue_events` audit table:
+    `(id, school_id, student_id, actor_staff_id, action enum
+    [added | released_to_walk | in_car | walker_released |
+    auto_cleared | restricted_attempt], pickup_authorization_id,
+    occurred_at, note)`.
+  - New `staff.is_car_rider_monitor` boolean (separate from Core
+    Team — admins can grant it to a paraprofessional or front-office
+    assistant via the Staff Roles matrix).
+
+  **Curb workflow (the keypad page)**
+  - Phone-first responsive layout, large numeric keypad. Route
+    `/pickup/curb`, gated to admin OR `is_car_rider_monitor`.
+  - Type number → confirmation card shows student photo + name +
+    grade + teacher + sibling list. Tap "Add to line" adds the keyed
+    student AND every sibling that the same parent is authorized
+    for. Siblings the typed parent is NOT authorized for are NOT
+    added — silently — so a custody-restricted sibling never appears
+    in the queue from the wrong parent's number.
+  - `restricted_from = true` on the entered authorization → red
+    banner "Parent not authorized for this student" + write a
+    `restricted_attempt` audit row. Front office can override only
+    with a typed justification (>= 5 chars), recorded on the audit row.
+  - QR scan button on the same page (use `@zxing/browser`) is the
+    rain-day fast path. QR encodes a signed, school-salted token →
+    same lookup pipeline as keyed entry. Manual fallback always
+    available.
+
+  **Classroom signage tile**
+  - New `showPickupQueue BOOL` toggle on `display_playlists`,
+    parallel to `showActiveHallPasses`. Synthetic slide
+    `PickupQueueSignage` filters the live queue to students on the
+    owning teacher's roster, ordered by arrival time, with a position
+    badge. Polls every 15s during the dismissal window (cheaper than
+    hall passes' 30s because dismissal is a tighter time box).
+  - Teacher action: per-row "Released to walk out" button moves
+    student from `in_queue` → `walking_out`. Curb staff sees this
+    state highlighted on the curb page so they know who to expect.
+  - One school-wide commons display (admin opt-in, separate
+    playlist) shows the full queue for kids waiting their turn.
+
+  **Walker gate**
+  - Separate `/pickup/walkers` route, gated to admin OR
+    `is_car_rider_monitor`. Lists every student with
+    `dismissal_mode = walker`, alphabetical, photo + name, big
+    "Released" button per student (tap → `walker_released` audit
+    row).
+  - Bell-schedule gating: walker release stays disabled until the
+    bus-dismissal window closes. Admin sets the windows via existing
+    bell-schedule overrides ("Bus dismissal: 2:50–3:00, Walker
+    release: 3:00").
+
+  **Pickup numbers — sibling + split-family rules (CONFIRMED)**
+  - Each student has a unique number, but multiple authorizations
+    per student are supported (Mom-of-A+B, Dad-of-A+B+stepchild-C).
+  - Typing any one parent's number triggers notifications for every
+    sibling THAT parent is authorized to pick up — not the
+    student's full sibling list. This handles split-custody
+    cleanly: Mom triggers her two kids; Dad triggers his three;
+    stepchild's teacher never sees Mom on the screen.
+  - Hanger/sticker print pipeline: admin "Print pickup tags" page
+    batch-renders one PDF tag per `student_pickup_authorizations`
+    row (so a household with three authorized adults gets three
+    distinct tags, and a parent of two siblings gets two tags —
+    one per kid — both keyed to that parent).
+
+  **End-of-day reconciliation**
+  - "Still on campus" tile listing every student with no release
+    event by the configured cutoff (default 3:30, school-overridable).
+    Grouped by dismissal mode so the front office can call the right
+    list of parents.
+
+  **Open question to revisit at build time**
+  - Whether "added to line" should ping the teacher via in-app
+    notification + audible chime on the classroom signage screen,
+    or stay silent and rely on the visual queue update. Lean
+    visual-only — schools with 30 cars/min in the queue would have
+    chimes overlapping nonstop.
+
+- **Student Photos — prerequisite for walker verification, also useful
+  app-wide.** New work item, separate from the pickup module but
+  required before the walker gate's photo-verification UX is real
+  (today the walker page would render placeholders).
+  - **Storage**: re-use existing object storage routes
+    (`/api/storage/*`), bound to school via `bindObjectToSchool`.
+    New `students.photo_object_key TEXT NULLABLE` column. ACL:
+    school-scoped, staff-only read, no parent-portal exposure (a
+    parent should not see other students' photos).
+  - **Two ingestion paths**:
+    1. **Bulk yearbook upload** — admin page that accepts a ZIP of
+       photos named by `student_id` (most yearbook companies export
+       this format), or a CSV mapping filename → student_id for
+       legacy exports. Preview + commit + rollback, mirroring the
+       existing data importer pattern.
+    2. **Staff snapshot** — per-student "Take photo" button on the
+       student profile page that opens the device camera (use
+       `getUserMedia`, no library), crops to a square, uploads.
+       Useful for new mid-year transfers before the next yearbook
+       cycle.
+  - **Surface in**: student profile page (primary), PBIS Hub student
+    cards, teacher roster row avatars, Spotlight reveal card,
+    pickup curb confirmation card, walker gate row, safety plan
+    student picker.
+  - **Fallback**: when `photo_object_key` is null, render the
+    existing initials-bubble component already used elsewhere — no
+    broken-image icons.
+  - **Privacy/consent**: add a `students.photo_consent BOOL DEFAULT
+    true` column with an admin-side toggle. When false, all
+    rendering paths show initials regardless of whether a photo is
+    on file. Photo data stays on disk (don't delete on consent
+    revocation — schools sometimes flip it back) but is gated at
+    render time. Document this in the school-settings privacy page.
 
 ## Gotchas
 
