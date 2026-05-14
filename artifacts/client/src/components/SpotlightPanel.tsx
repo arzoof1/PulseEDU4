@@ -662,11 +662,13 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     if (awarding) return;
     setAwarding(true);
     setAwardError(null);
-    // The point value was chosen by the server at pick time and is
-    // already on the reveal card. The server re-validates it on /award
-    // and may silently downgrade it if the recipient's house is the
-    // hidden runaway leader — the UI just shows whatever the server
-    // ultimately wrote (via the returned house totals).
+    // The point value was chosen by the server at /pick from the pool
+    // that fits this student's house standing. We echo it back on
+    // /award; the server re-validates against the current pool. If
+    // standings shifted between pick and award (a 409), the displayed
+    // value would no longer match what the server is willing to store —
+    // we surface that explicitly so the teacher re-spins instead of
+    // silently mutating the value.
     const awardedPoints = spin.pick.awardedPoints;
     try {
       const studentIds = [spin.pick.pick.studentId];
@@ -678,7 +680,13 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        setAwardError(body.error ?? `Award failed (${res.status})`);
+        if (res.status === 409) {
+          setAwardError(
+            "House standings just changed — please re-spin to get a fresh pick.",
+          );
+        } else {
+          setAwardError(body.error ?? `Award failed (${res.status})`);
+        }
         return;
       }
       const updated = (body.houses ?? []) as HouseTotal[];

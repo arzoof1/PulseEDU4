@@ -15,7 +15,6 @@ import {
   housesTable,
   pbisEntriesTable,
   pbisReasonsTable,
-  schoolSettingsTable,
 } from "@workspace/db";
 import { and, eq, asc, desc, inArray, sql, isNull } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -82,23 +81,33 @@ function isAdmin(staff: typeof staffTable.$inferSelect): boolean {
 // Hidden runaway-leader governor (server-side, invisible to all clients)
 // ---------------------------------------------------------------------------
 //
-// When the leading house's all-time total is more than this many points
-// above the runner-up, Spotlight silently caps any award to that house
-// to a small random value (CAP_POINT_CHOICES). Surrounding UI never
-// reveals the cap exists — teachers see the actual (capped) +N grow
-// the bar and assume they got a "small" question. The PBIS entry note
-// records both the chosen and awarded values so admins can audit later.
+// Tiered "rubber-band" governor.
+// ---------------------------------------------------------------------------
+// When the leading house is more than RUNAWAY_LEADER_THRESHOLD points
+// ahead of the runner-up, Spotlight switches from the open 1..10 pool
+// to per-rank pools that quietly help trailing houses catch up:
+//   - top quartile  → {1, 2, 3}   (small adds for the leader)
+//   - upper-middle  → {2, 4, 6}
+//   - lower-middle  → {4, 6, 8}
+//   - bottom quart. → {6, 8, 10}  (max catch-up for the laggards)
+// The point value the teacher SEES is the point value that hits the DB —
+// no phantom "chosen vs awarded" mismatch. Students just appear to get
+// "harder" or "easier" questions depending on their house's standing.
 //
-// Comparison is leader-vs-runner-up (only the single top house can be
-// capped at any moment). Threshold gentle enough that healthy
-// competition still gets full-value swings.
+// Threshold uses leader-vs-#2 so the rebalancer turns OFF as soon as
+// the race is close again, instead of getting stuck because the
+// last-place house is permanently far behind.
 const RUNAWAY_LEADER_THRESHOLD = 1500;
 
-// Server picks the awarded point value at /spotlight/pick time so the
-// teacher never chooses (and therefore never notices the cap). Full set
-// for everyone except the runaway leader; reduced set for the leader.
-const SPOTLIGHT_POINT_CHOICES = [1, 3, 5, 10] as const;
-const SPOTLIGHT_CAPPED_POINT_CHOICES = [1, 2, 3] as const;
+// Open pool used when the race is healthy (gap ≤ threshold).
+const SPOTLIGHT_OPEN_POOL = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+// Rebalanced pools by quartile rank — index 0 = top, 3 = bottom.
+const SPOTLIGHT_TIERED_POOLS: ReadonlyArray<readonly number[]> = [
+  [1, 2, 3],
+  [2, 4, 6],
+  [4, 6, 8],
+  [6, 8, 10],
+];
 
 interface HouseTotalRow {
   id: number;
@@ -148,26 +157,52 @@ async function computeHouseTotalsForCap(
   );
 }
 
-// Returns the house id that's currently >RUNAWAY_LEADER_THRESHOLD ahead
-// of the runner-up, or null if no house has run away with it. Only ever
-// returns a single house — by definition only the top can be capped.
-function detectCappedHouseId(totals: HouseTotalRow[]): number | null {
-  if (totals.length < 2) return null;
+// True iff the leader is currently >RUNAWAY_LEADER_THRESHOLD points
+// ahead of the runner-up. When true, /pick + /award switch from the
+// open 1..10 pool to the per-rank tiered pools.
+function isRebalancerActive(totals: HouseTotalRow[]): boolean {
+  if (totals.length < 2) return false;
   const sorted = [...totals].sort((a, b) => b.totalPoints - a.totalPoints);
-  const leader = sorted[0];
-  const runnerUp = sorted[1];
-  if (leader.totalPoints - runnerUp.totalPoints > RUNAWAY_LEADER_THRESHOLD) {
-    return leader.id;
-  }
-  return null;
+  return (
+    sorted[0].totalPoints - sorted[1].totalPoints > RUNAWAY_LEADER_THRESHOLD
+  );
 }
 
-function pickAwardedPoints(isCapped: boolean): number {
-  const set = isCapped
-    ? SPOTLIGHT_CAPPED_POINT_CHOICES
-    : SPOTLIGHT_POINT_CHOICES;
-  return set[randomInt(0, set.length)];
+// Maps a house id to its tiered pool given the field's standings.
+// Quartile-based so this works for any house count (3-house schools
+// collapse to {top, lower-mid, bottom}; 5+ house schools double-up
+// neighbouring ranks into the same quartile bucket — no gaps either way).
+// Returns the OPEN pool when the rebalancer is inactive.
+function poolForHouse(
+  houseId: number,
+  totals: HouseTotalRow[],
+): readonly number[] {
+  if (!isRebalancerActive(totals)) return SPOTLIGHT_OPEN_POOL;
+  const sorted = [...totals].sort((a, b) => b.totalPoints - a.totalPoints);
+  const rank = sorted.findIndex((t) => t.id === houseId);
+  if (rank < 0) return SPOTLIGHT_OPEN_POOL; // unknown house — fail-open
+  const denom = Math.max(1, sorted.length - 1);
+  const percentile = rank / denom; // 0 = leader, 1 = last
+  let bucket: number;
+  if (percentile < 0.25) bucket = 0;
+  else if (percentile < 0.5) bucket = 1;
+  else if (percentile < 0.75) bucket = 2;
+  else bucket = 3;
+  return SPOTLIGHT_TIERED_POOLS[bucket];
 }
+
+function pickFromPool(pool: readonly number[]): number {
+  return pool[randomInt(0, pool.length)];
+}
+
+// Exported for the verification script — keeps the test surface tiny.
+export const __spotlightGovernorTestables = {
+  isRebalancerActive,
+  poolForHouse,
+  RUNAWAY_LEADER_THRESHOLD,
+  SPOTLIGHT_OPEN_POOL,
+  SPOTLIGHT_TIERED_POOLS,
+};
 
 // ---------------------------------------------------------------------------
 // Prompt management
@@ -530,17 +565,19 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
   }
 
   // ---- Auto-pick the awarded point value (server-side governor) -------
-  // The teacher no longer chooses 1/3/5/10. We pick it here so it's
-  // baked into the reveal — and so the runaway-leader cap can be
-  // applied invisibly. If the picked student belongs to the currently
-  // capped house, we draw from {1,2,3} instead of {1,3,5,10}. The
-  // teacher just sees a small number and assumes it was a small
-  // question; no UI ever surfaces the cap.
+  // The teacher no longer chooses a number — we pick it here from the
+  // pool that fits the picked student's house standing. When the race
+  // is healthy, every house draws from the open 1..10 pool; when the
+  // leader is >RUNAWAY_LEADER_THRESHOLD ahead of #2, we switch to
+  // per-rank pools (top quartile gets {1,2,3}; bottom quartile gets
+  // {6,8,10}). The number we pick here is exactly what gets stored on
+  // the PBIS row at /award time — no phantom mismatch.
   const totalsForCap = await computeHouseTotalsForCap(schoolId);
-  const cappedHouseId = detectCappedHouseId(totalsForCap);
-  const isPickedHouseCapped =
-    student.houseId !== null && cappedHouseId === student.houseId;
-  const awardedPoints = pickAwardedPoints(isPickedHouseCapped);
+  const pointPool =
+    student.houseId !== null
+      ? poolForHouse(student.houseId, totalsForCap)
+      : SPOTLIGHT_OPEN_POOL;
+  const awardedPoints = pickFromPool(pointPool);
 
   // Record the pick so it's excluded next time.
   await db.insert(spotlightHistoryTable).values({
@@ -602,12 +639,21 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
   const body = req.body ?? {};
   const rawIds = Array.isArray(body.studentIds) ? body.studentIds : [];
   const points = Number(body.points);
-  if (!Number.isFinite(points) || points <= 0 || points > 100) {
-    res
-      .status(400)
-      .json({ error: "points must be a positive number ≤ 100" });
+  // Strict: must be a positive integer in the legal Spotlight range.
+  // We do NOT silently floor/abs — coercing tampered input to a "valid"
+  // value re-creates the displayed-vs-stored mismatch this redesign
+  // exists to eliminate.
+  if (
+    !Number.isInteger(points) ||
+    points < SPOTLIGHT_OPEN_POOL[0] ||
+    points > SPOTLIGHT_OPEN_POOL[SPOTLIGHT_OPEN_POOL.length - 1]
+  ) {
+    res.status(400).json({
+      error: `points must be an integer between ${SPOTLIGHT_OPEN_POOL[0]} and ${SPOTLIGHT_OPEN_POOL[SPOTLIGHT_OPEN_POOL.length - 1]}`,
+    });
     return;
   }
+  const chosenPoints = points;
 
   const seen = new Set<string>();
   const ids: string[] = [];
@@ -679,58 +725,47 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
   }
 
   const staffName = staff.displayName || "Staff";
-
-  const chosenPoints = Math.abs(Math.floor(points));
   const nowIso = new Date().toISOString();
 
-  // Confirm school's negative-affects-total policy is irrelevant for us
-  // (we're always positive) — but still respect any hard cap by clamping
-  // to defaultPoints' sign convention (positive). Voiding/audit columns
-  // use defaults from the table.
-  void schoolSettingsTable;
-
   // ---- Server-side governor re-enforcement ----------------------------
-  // /pick already picked the awarded value with the cap in mind, but we
-  // re-check here so a tampered or stale client (e.g. one that submits
-  // a hand-edited points value, or one whose pick happened just before
-  // the leader crossed the threshold) cannot bypass the cap. If the
-  // student's house is currently capped and the requested value is
-  // above the cap ceiling, we silently re-roll into the capped set.
+  // /pick handed the client a pool-correct value baked into the reveal,
+  // and the client just echoes it back. We re-validate here so a stale
+  // or tampered client (hand-edited body, or one whose pick happened
+  // just before the leader crossed the threshold) can't slip a value
+  // outside the legit pool through. Unlike the old design we DO NOT
+  // silently downgrade — the displayed value must equal the awarded
+  // value, so we reject mismatches and let the client re-pick.
   const totalsForCap = await computeHouseTotalsForCap(schoolId);
-  const cappedHouseId = detectCappedHouseId(totalsForCap);
-  const CAP_CEILING =
-    SPOTLIGHT_CAPPED_POINT_CHOICES[SPOTLIGHT_CAPPED_POINT_CHOICES.length - 1];
+  for (const o of owned) {
+    const studentPool =
+      o.houseId !== null
+        ? poolForHouse(o.houseId, totalsForCap)
+        : SPOTLIGHT_OPEN_POOL;
+    if (!studentPool.includes(chosenPoints)) {
+      res.status(409).json({
+        error:
+          "Point value is no longer valid for this student's house — please re-spin.",
+      });
+      return;
+    }
+  }
 
   // Wrap the inserts in a single transaction so a partial failure
   // (DB blip, constraint error on one row) doesn't leave half the
   // class with points and the other half without — the client otherwise
   // sees an error and re-tries, which would double-award the lucky half.
-  // Each row's `points` is computed per-student because in a multi-pick
-  // batch some kids may belong to the capped house and others not.
   const created: string[] = await db.transaction(async (tx) => {
     const ok: string[] = [];
     for (const o of owned) {
-      const isCappedRecipient =
-        cappedHouseId !== null &&
-        o.houseId !== null &&
-        o.houseId === cappedHouseId;
-      let storedPoints = chosenPoints;
-      let note = "Awarded via Spotlight";
-      if (isCappedRecipient && chosenPoints > CAP_CEILING) {
-        storedPoints = pickAwardedPoints(true);
-        // Audit-only — never surfaced in any UI. Lets an admin see
-        // "this 10-point reveal was silently downgraded to 2" later.
-        note = `Awarded via Spotlight (chosen=${chosenPoints}, awarded=${storedPoints})`;
-      }
       await tx.insert(pbisEntriesTable).values({
         schoolId,
         studentId: o.studentId,
         reason: SPOTLIGHT_PBIS_REASON_NAME,
-        points: storedPoints,
+        points: chosenPoints,
         polarity: "positive",
         staffName,
         staffId: staff.id,
-        note,
+        note: "Awarded via Spotlight",
         createdAt: nowIso,
       });
       ok.push(o.studentId);
@@ -788,10 +823,8 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
 
   res.json({
     awarded: created.length,
-    // Echo back the value the client requested. The actual stored value
-    // may differ per-student under the hidden runaway-leader cap, but
-    // that's intentionally not surfaced — clients only need the new
-    // house totals to animate the leaderboard.
+    // The displayed value IS the stored value — server validates
+    // pool membership above and rejects mismatches with 409.
     pointsEach: chosenPoints,
     houses: totals,
   });
@@ -819,7 +852,5 @@ router.get("/spotlight/prompt", requireStaff, async (req, res) => {
   res.json({ prompt: { id: p.id, text: p.text } });
 });
 
-// Silence unused-import warning if the file evolves.
-void inArray;
 
 export default router;
