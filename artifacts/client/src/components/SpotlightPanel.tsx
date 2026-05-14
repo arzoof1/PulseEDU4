@@ -1670,6 +1670,10 @@ function ResultCard({
         >
           New prompt
         </button>
+        {/* "They're absent — re-pick" button hidden by user request.
+            The handler (onAbsentAndRepick / markAbsentAndRepick) is left
+            wired up so we can resurface this affordance trivially later
+            without re-plumbing state. To restore: uncomment below.
         <button
           type="button"
           onClick={onAbsentAndRepick}
@@ -1677,6 +1681,7 @@ function ResultCard({
         >
           They're absent — re-pick
         </button>
+        */}
         <button
           type="button"
           onClick={onDone}
