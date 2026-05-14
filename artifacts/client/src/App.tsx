@@ -44,6 +44,7 @@ import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
+import HouseRankingsMini from "./components/HouseRankingsMini";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
@@ -8953,6 +8954,11 @@ function App() {
                 label: "PBIS Points",
                 icon: IconStar,
               })}
+            {/* House Rankings — passive at-a-glance leaderboard sitting
+                directly under PBIS Points so teachers always see where
+                their house stands during class transitions. Hidden if
+                the school has no houses configured. */}
+            {effectiveFeatures.Pbis && <HouseRankingsMini />}
             {effectiveFeatures.Accommodations &&
               renderNavItem({
                 key: "accommodations",
