@@ -44,7 +44,11 @@ import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
 import PbisHomePanel from "./components/PbisHomePanel";
 import PbisNeedsAttention from "./components/PbisNeedsAttention";
-import HouseRankingsMini from "./components/HouseRankingsMini";
+// HouseRankingsMini was the inline mini-leaderboard variant. Replaced
+// by a "House Rankings" nav item that opens the full signage view in
+// the main content pane (sidebar stays visible). The component file is
+// kept for possible future reuse but is no longer imported.
+import HousesSignage from "./signage/HousesSignage";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
@@ -4469,6 +4473,7 @@ function App() {
     | "watchlistStudentGraph"
     | "separationSuggestions"
     | "spotlight"
+    | "houseRankings"
     | "issReporting"
     | "schoolWidePbis"
     | "engagementDashboard"
@@ -8954,11 +8959,16 @@ function App() {
                 label: "PBIS Points",
                 icon: IconStar,
               })}
-            {/* House Rankings — passive at-a-glance leaderboard sitting
-                directly under PBIS Points so teachers always see where
-                their house stands during class transitions. Hidden if
-                the school has no houses configured. */}
-            {effectiveFeatures.Pbis && <HouseRankingsMini />}
+            {/* House Rankings — opens the same big "House Standings"
+                screen used on digital signage TVs in the main content
+                pane. Sidebar stays visible so teachers can flip back to
+                another tool quickly. */}
+            {effectiveFeatures.Pbis &&
+              renderNavItem({
+                key: "houseRankings",
+                label: "House Rankings",
+                icon: IconStar,
+              })}
             {effectiveFeatures.Accommodations &&
               renderNavItem({
                 key: "accommodations",
@@ -14621,6 +14631,13 @@ function App() {
       </>)}
 
       {activeSection === "pbis" && <PbisPointsHub />}
+
+      {activeSection === "houseRankings" && (
+        // Reuse the signage HousesSignage screen verbatim — when given
+        // schoolId="session" it drops the URL query param and trusts the
+        // logged-in session, which is what we want for in-app embedding.
+        <HousesSignage schoolId="session" />
+      )}
 
       {/* Read-only School Store catalog — sidebar entry visible to every
           signed-in staffer. Always renders with canEdit=false so even

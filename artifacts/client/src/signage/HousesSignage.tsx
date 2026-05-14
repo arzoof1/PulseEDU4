@@ -157,20 +157,42 @@ function FeaturedPopup({
   );
 }
 
-export default function HousesSignage() {
-  const schoolId = schoolIdFromUrl();
-  const validSchool = Number.isFinite(schoolId) && schoolId > 0;
+// `schoolId` prop:
+//  - omitted (default): legacy TV/kiosk behavior — read schoolId from the
+//    URL query string. The screen runs unauthenticated so the explicit
+//    schoolId is required.
+//  - "session": in-app authenticated render. Drop schoolId from the URL
+//    and let the API fall back to the logged-in user's school. This is
+//    how the in-app "House Rankings" nav item embeds the same screen.
+interface HousesSignageProps {
+  schoolId?: number | "session";
+}
 
-  const houses = usePolling<HousesPayload>(
-    validSchool ? `/api/houses?schoolId=${schoolId}&windowDays=7` : null,
-    30_000,
-  );
+export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageProps = {}) {
+  const urlSchoolId = schoolIdFromUrl();
+  const sessionMode = schoolIdProp === "session";
+  const schoolId =
+    typeof schoolIdProp === "number" ? schoolIdProp : urlSchoolId;
+  const validSchool = sessionMode || (Number.isFinite(schoolId) && schoolId > 0);
+
+  // Build the API URL with schoolId omitted in session mode so the server
+  // falls back to req.schoolId from the cookie session — avoids leaking
+  // the current schoolId into a query param the user could tamper with.
+  const housesUrl = validSchool
+    ? sessionMode
+      ? `/api/houses?windowDays=7`
+      : `/api/houses?schoolId=${schoolId}&windowDays=7`
+    : null;
+  const eventsUrl = validSchool
+    ? sessionMode
+      ? `/api/pulse/events?windowMinutes=120&limit=24`
+      : `/api/pulse/events?schoolId=${schoolId}&windowMinutes=120&limit=24`
+    : null;
+
+  const houses = usePolling<HousesPayload>(housesUrl, 30_000);
   // Polled separately from /houses so the action feed and featured-popup
   // queue refresh independently of the leaderboard math.
-  const events = usePolling<EventsPayload>(
-    validSchool ? `/api/pulse/events?schoolId=${schoolId}&windowMinutes=120&limit=24` : null,
-    30_000,
-  );
+  const events = usePolling<EventsPayload>(eventsUrl, 30_000);
 
   if (!validSchool) {
     return <ScreenError message="No schoolId in the URL." />;
