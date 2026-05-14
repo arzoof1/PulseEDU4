@@ -79,6 +79,97 @@ function isAdmin(staff: typeof staffTable.$inferSelect): boolean {
 }
 
 // ---------------------------------------------------------------------------
+// Hidden runaway-leader governor (server-side, invisible to all clients)
+// ---------------------------------------------------------------------------
+//
+// When the leading house's all-time total is more than this many points
+// above the runner-up, Spotlight silently caps any award to that house
+// to a small random value (CAP_POINT_CHOICES). Surrounding UI never
+// reveals the cap exists — teachers see the actual (capped) +N grow
+// the bar and assume they got a "small" question. The PBIS entry note
+// records both the chosen and awarded values so admins can audit later.
+//
+// Comparison is leader-vs-runner-up (only the single top house can be
+// capped at any moment). Threshold gentle enough that healthy
+// competition still gets full-value swings.
+const RUNAWAY_LEADER_THRESHOLD = 1500;
+
+// Server picks the awarded point value at /spotlight/pick time so the
+// teacher never chooses (and therefore never notices the cap). Full set
+// for everyone except the runaway leader; reduced set for the leader.
+const SPOTLIGHT_POINT_CHOICES = [1, 3, 5, 10] as const;
+const SPOTLIGHT_CAPPED_POINT_CHOICES = [1, 2, 3] as const;
+
+interface HouseTotalRow {
+  id: number;
+  totalPoints: number;
+}
+
+// Compute every house's all-time positive PBIS total in this school.
+// Used by /pick (to detect the capped house) and /award (to re-enforce
+// the cap at write time so a tampered client can't bypass it).
+async function computeHouseTotalsForCap(
+  schoolId: number,
+): Promise<HouseTotalRow[]> {
+  const houses = await db
+    .select({ id: housesTable.id })
+    .from(housesTable)
+    .where(eq(housesTable.schoolId, schoolId));
+  return Promise.all(
+    houses.map(async (h) => {
+      const memberRows = await db
+        .select({ studentId: studentsTable.studentId })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            eq(studentsTable.houseId, h.id),
+          ),
+        );
+      const memberIds = memberRows.map((m) => m.studentId);
+      let totalPoints = 0;
+      if (memberIds.length > 0) {
+        const [agg] = await db
+          .select({
+            points: sql<number>`COALESCE(SUM(${pbisEntriesTable.points}), 0)::int`,
+          })
+          .from(pbisEntriesTable)
+          .where(
+            and(
+              eq(pbisEntriesTable.schoolId, schoolId),
+              inArray(pbisEntriesTable.studentId, memberIds),
+              isNull(pbisEntriesTable.voidedAt),
+            ),
+          );
+        totalPoints = agg?.points ?? 0;
+      }
+      return { id: h.id, totalPoints };
+    }),
+  );
+}
+
+// Returns the house id that's currently >RUNAWAY_LEADER_THRESHOLD ahead
+// of the runner-up, or null if no house has run away with it. Only ever
+// returns a single house — by definition only the top can be capped.
+function detectCappedHouseId(totals: HouseTotalRow[]): number | null {
+  if (totals.length < 2) return null;
+  const sorted = [...totals].sort((a, b) => b.totalPoints - a.totalPoints);
+  const leader = sorted[0];
+  const runnerUp = sorted[1];
+  if (leader.totalPoints - runnerUp.totalPoints > RUNAWAY_LEADER_THRESHOLD) {
+    return leader.id;
+  }
+  return null;
+}
+
+function pickAwardedPoints(isCapped: boolean): number {
+  const set = isCapped
+    ? SPOTLIGHT_CAPPED_POINT_CHOICES
+    : SPOTLIGHT_POINT_CHOICES;
+  return set[randomInt(0, set.length)];
+}
+
+// ---------------------------------------------------------------------------
 // Prompt management
 // ---------------------------------------------------------------------------
 
@@ -263,6 +354,23 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
       )
     : new Set<string>();
 
+  // Per-session per-house rotation: client tracks which houses have
+  // already been served a question this Spotlight session (since panel
+  // open / last reset). We prefer to pick from a student whose house
+  // has NOT been served yet, so a teacher who runs 4 questions on a
+  // 4-house school sees one question per house. Fallback: if filtering
+  // empties the pool, ignore the rotation filter rather than refusing.
+  // Students with no house assigned (houseId=null) are always eligible
+  // and never count against the rotation.
+  const servedHouseIds = new Set<number>(
+    Array.isArray(body.servedHouseIds)
+      ? body.servedHouseIds.filter(
+          (n: unknown): n is number =>
+            typeof n === "number" && Number.isFinite(n),
+        )
+      : [],
+  );
+
   if (candidates.length === 0) {
     res.status(400).json({
       error:
@@ -335,9 +443,42 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
     return;
   }
 
-  // crypto.randomInt is uniform across [0, pool.length).
-  const idx = randomInt(0, pool.length);
-  const pickedId = pool[idx];
+  // ---- Per-house rotation filter --------------------------------------
+  // Resolve houseId for every student in the current pool so we can
+  // (a) prefer unserved-house students, and (b) decide on the awarded
+  // points value once the winner is picked. Single query, scoped to
+  // school for tenant isolation.
+  const poolStudentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      houseId: studentsTable.houseId,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        inArray(studentsTable.studentId, pool),
+      ),
+    );
+  const houseByStudent = new Map<string, number | null>(
+    poolStudentRows.map((r) => [r.studentId.toUpperCase(), r.houseId]),
+  );
+  // A student is "rotation-eligible" if their house hasn't been served
+  // this session OR they have no house at all (no-house students never
+  // block the cycle and never advance it).
+  const rotationPool = pool.filter((s: string) => {
+    const hid = houseByStudent.get(s);
+    if (hid === null || hid === undefined) return true;
+    return !servedHouseIds.has(hid);
+  });
+  // Use the rotation-filtered pool when it's non-empty; otherwise fall
+  // back to the full pool so we never tell the teacher "no one to pick"
+  // just because every remaining student is in an already-served house.
+  const finalPool = rotationPool.length > 0 ? rotationPool : pool;
+
+  // crypto.randomInt is uniform across [0, finalPool.length).
+  const idx = randomInt(0, finalPool.length);
+  const pickedId = finalPool[idx];
 
   // Resolve the picked student's name (and verify they're in this school).
   // Pull houseId at the same time so we can enrich the response with the
@@ -388,6 +529,19 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
     if (hRow) house = hRow;
   }
 
+  // ---- Auto-pick the awarded point value (server-side governor) -------
+  // The teacher no longer chooses 1/3/5/10. We pick it here so it's
+  // baked into the reveal — and so the runaway-leader cap can be
+  // applied invisibly. If the picked student belongs to the currently
+  // capped house, we draw from {1,2,3} instead of {1,3,5,10}. The
+  // teacher just sees a small number and assumes it was a small
+  // question; no UI ever surfaces the cap.
+  const totalsForCap = await computeHouseTotalsForCap(schoolId);
+  const cappedHouseId = detectCappedHouseId(totalsForCap);
+  const isPickedHouseCapped =
+    student.houseId !== null && cappedHouseId === student.houseId;
+  const awardedPoints = pickAwardedPoints(isPickedHouseCapped);
+
   // Record the pick so it's excluded next time.
   await db.insert(spotlightHistoryTable).values({
     schoolId,
@@ -421,6 +575,7 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
     },
     prompt,
     poolSize: pool.length,
+    awardedPoints,
   });
 });
 
@@ -525,7 +680,7 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
 
   const staffName = staff.displayName || "Staff";
 
-  const storedPoints = Math.abs(Math.floor(points));
+  const chosenPoints = Math.abs(Math.floor(points));
   const nowIso = new Date().toISOString();
 
   // Confirm school's negative-affects-total policy is irrelevant for us
@@ -534,13 +689,39 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
   // use defaults from the table.
   void schoolSettingsTable;
 
+  // ---- Server-side governor re-enforcement ----------------------------
+  // /pick already picked the awarded value with the cap in mind, but we
+  // re-check here so a tampered or stale client (e.g. one that submits
+  // a hand-edited points value, or one whose pick happened just before
+  // the leader crossed the threshold) cannot bypass the cap. If the
+  // student's house is currently capped and the requested value is
+  // above the cap ceiling, we silently re-roll into the capped set.
+  const totalsForCap = await computeHouseTotalsForCap(schoolId);
+  const cappedHouseId = detectCappedHouseId(totalsForCap);
+  const CAP_CEILING =
+    SPOTLIGHT_CAPPED_POINT_CHOICES[SPOTLIGHT_CAPPED_POINT_CHOICES.length - 1];
+
   // Wrap the inserts in a single transaction so a partial failure
   // (DB blip, constraint error on one row) doesn't leave half the
   // class with points and the other half without — the client otherwise
   // sees an error and re-tries, which would double-award the lucky half.
+  // Each row's `points` is computed per-student because in a multi-pick
+  // batch some kids may belong to the capped house and others not.
   const created: string[] = await db.transaction(async (tx) => {
     const ok: string[] = [];
     for (const o of owned) {
+      const isCappedRecipient =
+        cappedHouseId !== null &&
+        o.houseId !== null &&
+        o.houseId === cappedHouseId;
+      let storedPoints = chosenPoints;
+      let note = "Awarded via Spotlight";
+      if (isCappedRecipient && chosenPoints > CAP_CEILING) {
+        storedPoints = pickAwardedPoints(true);
+        // Audit-only — never surfaced in any UI. Lets an admin see
+        // "this 10-point reveal was silently downgraded to 2" later.
+        note = `Awarded via Spotlight (chosen=${chosenPoints}, awarded=${storedPoints})`;
+      }
       await tx.insert(pbisEntriesTable).values({
         schoolId,
         studentId: o.studentId,
@@ -549,7 +730,7 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
         polarity: "positive",
         staffName,
         staffId: staff.id,
-        note: "Awarded via Spotlight",
+        note,
         createdAt: nowIso,
       });
       ok.push(o.studentId);
@@ -607,7 +788,11 @@ router.post("/spotlight/award", requireStaff, async (req, res) => {
 
   res.json({
     awarded: created.length,
-    pointsEach: storedPoints,
+    // Echo back the value the client requested. The actual stored value
+    // may differ per-student under the hidden runaway-leader cap, but
+    // that's intentionally not surfaced — clients only need the new
+    // house totals to animate the leaderboard.
+    pointsEach: chosenPoints,
     houses: totals,
   });
 });

@@ -52,6 +52,11 @@ interface PickResult {
   };
   prompt: { id: number; text: string } | null;
   poolSize: number;
+  // Server picks the awarded point value at pick time so the teacher
+  // never chooses (this lets a hidden runaway-leader cap downgrade
+  // a value silently). Always present from the API; defaulted on the
+  // client only as a paranoid fallback if an old server is in flight.
+  awardedPoints: number;
 }
 
 // Mini house leaderboard row returned by /api/spotlight/award (and the
@@ -65,11 +70,10 @@ interface HouseTotal {
   totalPoints: number;
 }
 
-// Point-value chips. 10 is the "big swing" award for nailing a hard
-// question; 1 is the participation pat. We keep the list small so the
-// teacher's eye doesn't have to scan a long row mid-class.
-const POINT_CHOICES = [1, 3, 5, 10] as const;
-type PointChoice = (typeof POINT_CHOICES)[number];
+// Point-value selection used to be a teacher-facing chip row. It is
+// now picked server-side at /spotlight/pick time and arrives baked
+// into the PickResult, so the chip UI is gone — the auto-selected
+// value is shown as a badge on the reveal card instead.
 
 type AnimStyle = "wheel" | "bottles" | "reel" | "spotlight";
 const STYLE_STORAGE_KEY = "pulseedu.spotlight.style";
@@ -193,11 +197,26 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
   const [fireworksKey, setFireworksKey] = useState<number | null>(null);
   const [fireworksColor, setFireworksColor] = useState<string>("#fbbf24");
 
-  // Teacher's chosen point value for the next Correct. Sticky across picks
-  // — most teachers settle into one weight per warm-up. 5 is the default.
-  const [pointChoice, setPointChoice] = useState<PointChoice>(5);
   const [awarding, setAwarding] = useState(false);
   const [awardError, setAwardError] = useState<string | null>(null);
+
+  // Per-session per-house rotation: tracks which houses have been
+  // credited a Correct! since the panel was opened (or last reset).
+  // Sent to /spotlight/pick so the server prefers students whose
+  // house hasn't been served yet, giving each house a turn before
+  // any house gets a second turn. Resets when all houses have been
+  // served (full cycle) or when the user hits Done.
+  //
+  // The ref mirror exists because awardCorrect's auto-advance
+  // setTimeout fires `pick()` ~2.2s later, and `pick()` would
+  // otherwise close over a stale `servedHouseIds` from before the
+  // award updated it — letting the same house get picked twice in
+  // a row through the auto-advance path.
+  const [servedHouseIds, setServedHouseIds] = useState<number[]>([]);
+  const servedHouseIdsRef = useRef<number[]>([]);
+  useEffect(() => {
+    servedHouseIdsRef.current = servedHouseIds;
+  }, [servedHouseIds]);
 
   const [animStyle, setAnimStyle] = useState<AnimStyle>(() => {
     if (typeof window === "undefined") return "wheel";
@@ -470,6 +489,12 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         body: JSON.stringify({
           candidateStudentIds: effectiveCandidates,
           skipStudentIds: effectiveSkip,
+          // Per-house rotation hint. Server prefers students whose
+          // house isn't in this list; falls back gracefully if the
+          // filter would empty the pool. Read from the ref so the
+          // auto-advance timer in awardCorrect sees the freshly-
+          // updated served-house set rather than the stale closure.
+          servedHouseIds: servedHouseIdsRef.current,
         }),
       });
       const body = await res.json().catch(() => ({}));
@@ -585,6 +610,8 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     }
     setSpin({ kind: "idle" });
     setAwardError(null);
+    // End-of-session also ends the per-house rotation cycle.
+    setServedHouseIds([]);
   }
 
   // Keep the ref synced so the auto-advance closure inside awardCorrect
@@ -635,13 +662,19 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
     if (awarding) return;
     setAwarding(true);
     setAwardError(null);
+    // The point value was chosen by the server at pick time and is
+    // already on the reveal card. The server re-validates it on /award
+    // and may silently downgrade it if the recipient's house is the
+    // hidden runaway leader — the UI just shows whatever the server
+    // ultimately wrote (via the returned house totals).
+    const awardedPoints = spin.pick.awardedPoints;
     try {
       const studentIds = [spin.pick.pick.studentId];
       const res = await authFetch("/api/spotlight/award", {
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ studentIds, points: pointChoice }),
+        body: JSON.stringify({ studentIds, points: awardedPoints }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -653,7 +686,22 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
       setShowHouseBars(true);
       const houseId = spin.pick.pick.house?.id ?? null;
       const color = spin.pick.pick.house?.color ?? "#fbbf24";
-      setLastAward({ houseId, points: pointChoice, nonce: Date.now() });
+      setLastAward({ houseId, points: awardedPoints, nonce: Date.now() });
+      // Advance the per-session house rotation. Add this house to the
+      // served set; if every house has now had a turn, reset to start
+      // a fresh cycle. House=null students don't participate in the
+      // rotation at all (they're always eligible on the server side).
+      if (houseId !== null) {
+        setServedHouseIds((prev) => {
+          if (prev.includes(houseId)) return prev;
+          const next = [...prev, houseId];
+          const totalHouses = updated.length || houseTotals.length;
+          if (totalHouses > 0 && next.length >= totalHouses) {
+            return [];
+          }
+          return next;
+        });
+      }
       if (fireworksEnabled) {
         setFireworksColor(color);
         setFireworksKey(Date.now());
@@ -919,8 +967,6 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         {spin.kind === "result" ? (
           <ResultCard
             pick={spin.pick}
-            pointChoice={pointChoice}
-            onPointChoice={setPointChoice}
             onCorrect={() => void awardCorrect()}
             awarding={awarding}
             awardError={awardError}
@@ -1498,8 +1544,6 @@ function SpotlightSweep({
 
 interface ResultCardProps {
   pick: PickResult;
-  pointChoice: PointChoice;
-  onPointChoice: (n: PointChoice) => void;
   onCorrect: () => void;
   awarding: boolean;
   awardError: string | null;
@@ -1511,8 +1555,6 @@ interface ResultCardProps {
 
 function ResultCard({
   pick,
-  pointChoice,
-  onPointChoice,
   onCorrect,
   awarding,
   awardError,
@@ -1550,11 +1592,14 @@ function ResultCard({
         <div className="spotlight-result-prompt">{pick.prompt.text}</div>
       )}
 
-      {/* Point-value chips: small, sticky, easy to scan. */}
+      {/* Auto-selected point value badge. The server picks the value
+          at /spotlight/pick time so the teacher can't game the cap;
+          we just reveal it here. Blue pill with a soft white halo
+          (box-shadow) to make it pop without screaming for attention. */}
       <div
         style={{
           display: "flex",
-          gap: "0.4rem",
+          gap: "0.5rem",
           alignItems: "center",
           justifyContent: "center",
           marginTop: "0.85rem",
@@ -1562,31 +1607,24 @@ function ResultCard({
         }}
       >
         <span style={{ fontSize: "0.85rem", opacity: 0.75 }}>Worth</span>
-        {POINT_CHOICES.map((n) => {
-          const active = n === pointChoice;
-          return (
-            <button
-              key={n}
-              type="button"
-              onClick={() => onPointChoice(n)}
-              disabled={awarding}
-              style={{
-                background: active ? "#1d4ed8" : "#fff",
-                color: active ? "#fff" : "#1e293b",
-                border: active ? "1px solid #1d4ed8" : "1px solid #cbd5e1",
-                borderRadius: 999,
-                padding: "0.3rem 0.75rem",
-                fontWeight: 600,
-                fontSize: "0.9rem",
-                minWidth: 44,
-                cursor: awarding ? "not-allowed" : "pointer",
-              }}
-              aria-pressed={active}
-            >
-              {n} pt{n === 1 ? "" : "s"}
-            </button>
-          );
-        })}
+        <div
+          style={{
+            background: "#1d4ed8",
+            color: "#fff",
+            border: "1px solid #1d4ed8",
+            borderRadius: 999,
+            padding: "0.35rem 0.95rem",
+            fontWeight: 700,
+            fontSize: "1rem",
+            minWidth: 56,
+            textAlign: "center",
+            boxShadow:
+              "0 0 0 2px rgba(255,255,255,0.85), 0 0 14px 4px rgba(255,255,255,0.55)",
+          }}
+          aria-label={`Worth ${pick.awardedPoints} point${pick.awardedPoints === 1 ? "" : "s"}`}
+        >
+          {pick.awardedPoints} pt{pick.awardedPoints === 1 ? "" : "s"}
+        </div>
       </div>
 
       {/* Correct / Skip — the two big "decide now" buttons. */}
@@ -1619,7 +1657,7 @@ function ResultCard({
         >
           {awarding
             ? "Awarding…"
-            : `✅ Correct! +${pointChoice} pt${pointChoice === 1 ? "" : "s"}`}
+            : `✅ Correct! +${pick.awardedPoints} pt${pick.awardedPoints === 1 ? "" : "s"}`}
         </button>
         <button
           type="button"
