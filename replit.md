@@ -162,6 +162,20 @@ _Populate as you build_
   - **Required "reason for edit"**: every edit/trim/delete prompts the user for a short justification ("why are you changing this?") that is stored on the audit row. This is the column auditors will read first to understand whether a change was a typo correction, a legitimate behavior update, or something that needs follow-up. Should be required (non-empty, min ~5 chars), not optional.
   - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
 
+- **Parent Pick-Up Module — placeholder, full spec from user pending.**
+  Build directly after the items above. User will walk through the
+  exact workflow in a follow-up session. Known scope at a high level:
+  - A parent pick-up flow (front-office workflow — likely sign-out,
+    designated-adult verification, and a record of who released the
+    student to whom).
+  - A tracking system for **AST time** (after-school time) with a
+    **pre-approval requirement** — i.e. the student or parent has to
+    request AST in advance, an admin/teacher approves, and pick-up
+    can't be processed until that approval is on file.
+  - Do NOT start until user has shared the workflow details — the
+    pre-approval gating logic is non-obvious and getting it wrong
+    creates parent-facing friction.
+
 ## Gotchas
 
 - **Timezone handling**: Be careful with date comparisons and `new Date()` as it can lead to UTC pitfalls. Use local `YYYY-MM-DD` strings for comparisons.
