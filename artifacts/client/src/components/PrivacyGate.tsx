@@ -209,6 +209,9 @@ function SlideToUnlock({ onUnlock }: { onUnlock: () => void }) {
     const onUp = () => {
       if (!draggingRef.current) return;
       draggingRef.current = false;
+      // Restore the page's normal text-selection behavior now that
+      // the drag is over.
+      document.body.style.userSelect = "";
       // Snap back if released before completion — forces a real drag,
       // not a half-hearted nudge.
       setProgress((p) => (p >= 0.995 ? p : 0));
@@ -283,6 +286,14 @@ function SlideToUnlock({ onUnlock }: { onUnlock: () => void }) {
       <div
         ref={handleRef}
         onMouseDown={(e) => {
+          // preventDefault stops the browser from starting a text /
+          // element selection when the drag begins (otherwise the
+          // page text under and around the modal gets highlighted as
+          // the user moves the mouse). We also flip body user-select
+          // to "none" while the drag is live as a belt-and-braces
+          // guard for browsers that ignore preventDefault here.
+          e.preventDefault();
+          document.body.style.userSelect = "none";
           draggingRef.current = true;
           setFromClientX(e.clientX);
         }}
