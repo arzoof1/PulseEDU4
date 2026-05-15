@@ -8988,6 +8988,22 @@ function App() {
                 label: "Verify Pullout",
                 icon: IconClipboard,
               })}
+            {/* Pickup Line Viewer — opens the authenticated /pickup/teacher
+                kiosk in a new tab. It lives at a path-routed URL outside
+                the staff app bundle, so we use an <a target="_blank">
+                styled like a nav-item rather than a setActiveSection. */}
+            <a
+              key="pickupTeacher"
+              href="/pickup/teacher"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="nav-item"
+              style={{ textDecoration: "none" }}
+              title="Pickup Line Viewer (opens in a new tab)"
+            >
+              <span className="nav-icon">🚗</span>
+              Pickup Line Viewer
+            </a>
             {/* Spotlight — anchored at the bottom of Quick Access by user
                 request so it reads as the "fun bonus" tool sitting under
                 the workhorse items. Custom standout button (not a regular
