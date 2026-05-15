@@ -5391,4 +5391,14 @@ export async function ensurePickupSchema(): Promise<void> {
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_events_by_school_date ON pickup_queue_events(school_id, occurred_at)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS pickup_events_by_student ON pickup_queue_events(student_id)`);
+
+  // School-settings additions for the Pick-Up settings card.
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_cutoff_time TEXT NOT NULL DEFAULT '15:30'
+  `);
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_teacher_view_scope TEXT NOT NULL DEFAULT 'all_students'
+  `);
 }

@@ -16,6 +16,7 @@ import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import IssSettingsPage from "./components/IssSettingsPage";
+import PickupSettingsPage from "./components/PickupSettingsPage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
@@ -19269,6 +19270,10 @@ function App() {
         <IssSettingsPage />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "pickup" && (
+        <PickupSettingsPage />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "cameras" && (
         <CameraRegistryPage />
       )}
@@ -19433,6 +19438,17 @@ function App() {
               title: "Camera Registry",
               subtitle:
                 "Named security cameras for the case file's video evidence dropdown.",
+              group: "feature-config",
+            });
+            // Parent Pick-Up — cutoff time, teacher release scope, and
+            // copy-to-clipboard kiosk URLs (curb / walker / teacher /
+            // hallway TVs). Visible to anyone who can manage settings.
+            tiles.push({
+              id: "pickup",
+              icon: "🚗",
+              title: "Parent Pick-Up",
+              subtitle:
+                "Reconciliation cutoff, teacher release scope, kiosk URLs.",
               group: "feature-config",
             });
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV

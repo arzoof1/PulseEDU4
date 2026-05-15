@@ -178,16 +178,14 @@ _Populate as you build_
     Student Photos work below — today the walker page shows initials
     bubbles. Once `students.photo_object_key` lands, swap the bubble
     for the real photo on the walker row + curb confirmation card.
-  - **Pick-up cutoff in school settings.** Today the "Still on
-    campus" tile uses a hard-coded 3:30 PM client-local cutoff.
-    Move to a per-school setting + server-derived gating (folds into
-    the school-local timezone item below).
   - **Teacher "Released to walk out" from the signage tile.** TVs
-    aren't authenticated, so the slide is read-only today. If a
-    teacher action is needed beyond the curb page, build a separate
-    `/pickup/teacher` authenticated page that writes the
-    `released_to_walk` event scoped via section_roster ownership
-    (the gate currently requires curb access for the same reason).
+    aren't authenticated, so the slide is read-only today. The
+    `/pickup/teacher` authenticated page now handles teacher-side
+    releases (any signed-in staff, server-enforced view-scope via
+    `pickup_teacher_view_scope`, with confirm modal + 10s undo).
+    Pick-up cutoff is now a per-school setting (`pickup_cutoff_time`)
+    surfaced in Settings → Pick-Up; the Admin Hub "Still on campus"
+    tile reads it from the server (no more hard-coded 15:30).
   - **Open design question (deferred).** Whether "added to line"
     should ping the classroom with an in-app chime or stay
     visual-only. Lean visual-only — schools with 30 cars/min in the

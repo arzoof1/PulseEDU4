@@ -117,6 +117,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     finderShowAbsentBanner,
     staffDirectoryShowCellPhone,
     manualRosterUploadEnabled,
+    pickupCutoffTime,
+    pickupTeacherViewScope,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -417,6 +419,36 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.staffDirectoryShowCellPhone = staffDirectoryShowCellPhone;
+  }
+  // Pick-Up cutoff time: "HH:MM" 24h, validated lexically. Used by the
+  // Admin Hub "Still on campus" reconciliation tile and (eventually)
+  // QR signed-token expiry. Any settings-manager can flip it.
+  if (pickupCutoffTime !== undefined) {
+    if (
+      typeof pickupCutoffTime !== "string" ||
+      !/^([01]\d|2[0-3]):[0-5]\d$/.test(pickupCutoffTime)
+    ) {
+      res
+        .status(400)
+        .json({ error: "pickupCutoffTime must be HH:MM (24h)" });
+      return;
+    }
+    updates.pickupCutoffTime = pickupCutoffTime;
+  }
+  // Pick-Up teacher-view scope: controls what /pickup/teacher returns
+  // and what releases that page is allowed to write.
+  if (pickupTeacherViewScope !== undefined) {
+    if (
+      pickupTeacherViewScope !== "all_students" &&
+      pickupTeacherViewScope !== "own_roster"
+    ) {
+      res.status(400).json({
+        error:
+          "pickupTeacherViewScope must be 'all_students' or 'own_roster'",
+      });
+      return;
+    }
+    updates.pickupTeacherViewScope = pickupTeacherViewScope;
   }
   if (issCapacityBehavior !== undefined) {
     if (issCapacityBehavior !== "soft" && issCapacityBehavior !== "hard") {

@@ -116,6 +116,12 @@ export default function PickupApp() {
     if (!isAdmin(me)) return <NoAccess role="admin" />;
     return <AuthorizationsAdminPage />;
   }
+  if (path.includes("/pickup/teacher")) {
+    // Any signed-in staff can use the teacher view. Server-side scope
+    // enforcement (own_roster vs all_students) protects the release
+    // event itself, so there's no role gate here.
+    return <TeacherQueuePage me={me} />;
+  }
 
   // /pickup → simple landing page that links to the three sub-routes.
   return (
@@ -137,6 +143,9 @@ export default function PickupApp() {
             Manage pickup numbers
           </a>
         )}
+        <a href="/pickup/teacher" style={tileLinkStyle}>
+          Teacher view
+        </a>
         {!canRunCurb(me) && !isAdmin(me) && (
           <div style={{ color: "#6b7280" }}>
             You do not have access to the pickup module. Ask an admin to grant
@@ -1057,6 +1066,387 @@ const walkerRow: React.CSSProperties = {
   borderRadius: 8,
   background: "#fff",
 };
+// ---------------------------------------------------------------------------
+// TEACHER QUEUE — /pickup/teacher
+//
+// Any signed-in staff. Lists today's car-rider queue (newest at the
+// bottom so a teacher who just glanced away spots the new arrival
+// without scrolling). The server controls scope:
+//   all_students → entire school queue, isOnMyRoster annotates each row.
+//   own_roster   → only the caller's own roster (server-filtered).
+//
+// Mis-click protection:
+//   - Confirm modal on Release.
+//   - 10s undo toast after release. Undo writes a release_undone audit
+//     row, which the queue derivation flips back to in_queue without
+//     touching the original addedAt position.
+// ---------------------------------------------------------------------------
+type TeacherQueueEntry = {
+  studentDbId: number;
+  firstName: string;
+  lastName: string;
+  grade: number | null;
+  addedAt: string;
+  status: "in_queue" | "walking_out";
+  isOnMyRoster: boolean;
+};
+
+function TeacherQueuePage({ me }: { me: Me }) {
+  const [entries, setEntries] = useState<TeacherQueueEntry[]>([]);
+  const [viewScope, setViewScope] = useState<"all_students" | "own_roster">(
+    "all_students",
+  );
+  const [showMineOnly, setShowMineOnly] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [confirmRelease, setConfirmRelease] =
+    useState<TeacherQueueEntry | null>(null);
+  const [undoFor, setUndoFor] = useState<{
+    entry: TeacherQueueEntry;
+    expiresAt: number;
+  } | null>(null);
+  const [now, setNow] = useState(Date.now());
+  const [err, setErr] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    const r = await authFetch("/api/pickup/teacher-queue");
+    if (!r.ok) {
+      setErr(await r.text());
+      setLoading(false);
+      return;
+    }
+    const j = (await r.json()) as {
+      viewScope: "all_students" | "own_roster";
+      entries: TeacherQueueEntry[];
+    };
+    setViewScope(j.viewScope);
+    setEntries(j.entries ?? []);
+    setLoading(false);
+  }, []);
+
+  useEffect(() => {
+    void reload();
+    // Light polling — the queue changes on the order of seconds and
+    // there's no websocket on this artifact yet. 4s matches the curb
+    // and walker pages.
+    const id = window.setInterval(() => void reload(), 4000);
+    return () => window.clearInterval(id);
+  }, [reload]);
+
+  // Drives the undo toast countdown.
+  useEffect(() => {
+    if (!undoFor) return;
+    const id = window.setInterval(() => setNow(Date.now()), 250);
+    return () => window.clearInterval(id);
+  }, [undoFor]);
+
+  // Auto-dismiss the undo toast once its window expires.
+  useEffect(() => {
+    if (undoFor && now >= undoFor.expiresAt) {
+      setUndoFor(null);
+    }
+  }, [now, undoFor]);
+
+  const visibleEntries = useMemo(() => {
+    if (showMineOnly && viewScope === "all_students") {
+      return entries.filter((e) => e.isOnMyRoster);
+    }
+    return entries;
+  }, [entries, showMineOnly, viewScope]);
+
+  const release = async (entry: TeacherQueueEntry) => {
+    setErr(null);
+    setConfirmRelease(null);
+    const r = await authFetch("/api/pickup/queue/event", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        studentDbId: entry.studentDbId,
+        action: "released_to_walk",
+      }),
+    });
+    if (!r.ok) {
+      setErr(await r.text());
+      return;
+    }
+    setUndoFor({ entry, expiresAt: Date.now() + 10_000 });
+    void reload();
+  };
+
+  const undo = async () => {
+    if (!undoFor) return;
+    setErr(null);
+    const r = await authFetch("/api/pickup/queue/release-undo", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ studentDbId: undoFor.entry.studentDbId }),
+    });
+    if (!r.ok) {
+      setErr(await r.text());
+      return;
+    }
+    setUndoFor(null);
+    void reload();
+  };
+
+  return (
+    <div style={{ maxWidth: 760, margin: "0 auto", padding: "24px 16px" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "baseline",
+          justifyContent: "space-between",
+          gap: 12,
+          marginBottom: 12,
+        }}
+      >
+        <h1 style={{ margin: 0, fontSize: 24 }}>Pick-Up — teacher view</h1>
+        <div style={{ fontSize: 13, color: "#6b7280" }}>
+          Signed in as {me.displayName ?? "Staff"}
+        </div>
+      </div>
+      <p style={{ color: "#6b7280", marginTop: 0, fontSize: 13 }}>
+        Newest arrivals at the bottom. A blue left border means the student
+        is on your class roster. Press Release when the student walks out;
+        you have 10 seconds to undo.
+      </p>
+
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          gap: 12,
+          flexWrap: "wrap",
+          marginBottom: 12,
+        }}
+      >
+        <span style={{ fontSize: 12, color: "#6b7280" }}>
+          {viewScope === "own_roster"
+            ? "School policy: only the student's own teacher can release."
+            : "School policy: any teacher can release any student."}
+        </span>
+        {viewScope === "all_students" && (
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 13,
+            }}
+          >
+            <input
+              type="checkbox"
+              checked={showMineOnly}
+              onChange={(e) => setShowMineOnly(e.target.checked)}
+            />
+            Show only my roster
+          </label>
+        )}
+      </div>
+
+      {err && <div style={errBox}>{err}</div>}
+      {loading ? (
+        <div style={{ color: "#6b7280" }}>Loading queue…</div>
+      ) : visibleEntries.length === 0 ? (
+        <div
+          style={{
+            ...infoBox,
+            marginTop: 0,
+            padding: "16px 12px",
+            textAlign: "center",
+          }}
+        >
+          No students currently in the pick-up line.
+        </div>
+      ) : (
+        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          {visibleEntries.map((entry) => {
+            const walking = entry.status === "walking_out";
+            const mine = entry.isOnMyRoster;
+            return (
+              <div
+                key={entry.studentDbId}
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 12,
+                  padding: "12px 14px",
+                  background: walking ? "#f0fdf4" : "white",
+                  border: "1px solid #e5e7eb",
+                  borderLeft: mine
+                    ? "4px solid #2563eb"
+                    : "1px solid #e5e7eb",
+                  borderRadius: 8,
+                }}
+              >
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 700, fontSize: 16 }}>
+                    {entry.firstName} {entry.lastName}
+                    {mine && (
+                      <span
+                        style={{
+                          marginLeft: 8,
+                          fontSize: 11,
+                          fontWeight: 600,
+                          color: "#1e40af",
+                          background: "#dbeafe",
+                          padding: "2px 6px",
+                          borderRadius: 8,
+                        }}
+                      >
+                        MY ROSTER
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    {entry.grade !== null ? `Grade ${entry.grade} · ` : ""}
+                    Added{" "}
+                    {new Date(entry.addedAt).toLocaleTimeString([], {
+                      hour: "numeric",
+                      minute: "2-digit",
+                    })}
+                  </div>
+                </div>
+                {walking ? (
+                  <span style={chipGreen}>Walking out</span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmRelease(entry)}
+                    style={{
+                      padding: "8px 14px",
+                      borderRadius: 8,
+                      border: "1px solid #2563eb",
+                      background: "#2563eb",
+                      color: "white",
+                      fontWeight: 600,
+                      cursor: "pointer",
+                    }}
+                  >
+                    Release
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {confirmRelease && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+          onClick={() => setConfirmRelease(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              borderRadius: 12,
+              padding: 20,
+              maxWidth: 360,
+              width: "90%",
+              boxShadow: "0 20px 40px rgba(0,0,0,0.2)",
+            }}
+          >
+            <h2 style={{ marginTop: 0, fontSize: 18 }}>Release student?</h2>
+            <p style={{ fontSize: 14, color: "#374151" }}>
+              {confirmRelease.firstName} {confirmRelease.lastName} will be
+              marked as walking out to the curb. You'll have 10 seconds to
+              undo.
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+                marginTop: 12,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => setConfirmRelease(null)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "1px solid #d1d5db",
+                  background: "white",
+                  cursor: "pointer",
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => void release(confirmRelease)}
+                style={{
+                  padding: "8px 14px",
+                  borderRadius: 8,
+                  border: "1px solid #2563eb",
+                  background: "#2563eb",
+                  color: "white",
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                Release
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {undoFor && (
+        <div
+          style={{
+            position: "fixed",
+            bottom: 24,
+            left: "50%",
+            transform: "translateX(-50%)",
+            background: "#111827",
+            color: "white",
+            padding: "10px 16px",
+            borderRadius: 999,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            boxShadow: "0 10px 30px rgba(0,0,0,0.3)",
+            zIndex: 60,
+          }}
+        >
+          <span style={{ fontSize: 14 }}>
+            Released {undoFor.entry.firstName} {undoFor.entry.lastName} ·{" "}
+            {Math.max(0, Math.ceil((undoFor.expiresAt - now) / 1000))}s
+          </span>
+          <button
+            type="button"
+            onClick={() => void undo()}
+            style={{
+              padding: "4px 12px",
+              borderRadius: 999,
+              border: "1px solid #f59e0b",
+              background: "#f59e0b",
+              color: "#111827",
+              fontWeight: 700,
+              cursor: "pointer",
+            }}
+          >
+            Undo
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const linkStyle: React.CSSProperties = {
   display: "inline-block",
   padding: "10px 16px",

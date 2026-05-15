@@ -144,6 +144,23 @@ export const schoolSettingsTable = pgTable(
   schoolWideExpectationAcronym: text("school_wide_expectation_acronym")
     .notNull()
     .default("PRIDE"),
+  // -----------------------------------------------------------------
+  // Parent Pick-Up Module per-school settings.
+  //   pickupCutoffTime — "HH:MM" school-local. After this time the
+  //     Admin Hub "Still on campus" tile becomes visible. Default 15:30.
+  //   pickupTeacherViewScope — controls what /pickup/teacher returns:
+  //     'all_students' (default) shows the full school queue; teachers
+  //     can release anyone (any-staff-can-release matches the school
+  //     reality where a kid in art class needs to be released by the
+  //     art teacher, not their homeroom). 'own_roster' restricts to
+  //     students on the calling teacher's class_sections roster.
+  //     The server enforces this on EVERY release event, so a stale
+  //     client tab can't bypass it.
+  // -----------------------------------------------------------------
+  pickupCutoffTime: text("pickup_cutoff_time").notNull().default("15:30"),
+  pickupTeacherViewScope: text("pickup_teacher_view_scope")
+    .notNull()
+    .default("all_students"),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()

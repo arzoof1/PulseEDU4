@@ -44,14 +44,17 @@ interface ReconciliationStudent {
 
 interface ReconciliationResp {
   asOf: string;
+  // Server-derived from school_settings.pickup_cutoff_time. Older
+  // server builds didn't return this field, so the client falls back
+  // to the historical default below.
+  cutoffTime?: string;
   byMode: Record<string, ReconciliationStudent[]>;
 }
 
-// "After-cutoff" gate for the still-on-campus tile. School-overridable
-// later (replit.md spec calls for a per-school setting); for now the
-// default 3:30 PM matches the spec text and avoids alarming admins
-// during the school day.
-const RECONCILIATION_CUTOFF_HHMM = "15:30";
+// Fallback cutoff used only when the server response predates the
+// pickupCutoffTime field. The authoritative value is the school's
+// Settings → Pick-Up cutoff (returned in `cutoffTime` above).
+const RECONCILIATION_CUTOFF_FALLBACK_HHMM = "15:30";
 
 const DISMISSAL_MODE_LABELS: Record<string, string> = {
   car_rider: "Car riders",
@@ -95,7 +98,8 @@ function nowHHMM(): string {
 // front office can call the right list of parents.
 function ReconciliationTile({ data }: { data: ReconciliationResp | null }) {
   if (!data) return null;
-  const beforeCutoff = nowHHMM() < RECONCILIATION_CUTOFF_HHMM;
+  const cutoff = data.cutoffTime || RECONCILIATION_CUTOFF_FALLBACK_HHMM;
+  const beforeCutoff = nowHHMM() < cutoff;
   const modeKeys = Object.keys(data.byMode).sort();
   const total = modeKeys.reduce((n, k) => n + data.byMode[k]!.length, 0);
   if (beforeCutoff) return null;

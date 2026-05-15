@@ -14,8 +14,11 @@ import {
   pickupQueueEventsTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
+  schoolSettingsTable,
+  classSectionsTable,
+  sectionRosterTable,
 } from "@workspace/db";
-import { and, eq, inArray, gte, sql, desc, asc } from "drizzle-orm";
+import { and, eq, inArray, gt, gte, sql, desc, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
@@ -45,12 +48,71 @@ const TERMINAL_ACTIONS = new Set([
 const VALID_ACTIONS = new Set([
   "added",
   "released_to_walk",
+  "release_undone",
   "in_car",
   "walker_released",
   "auto_cleared",
   "restricted_attempt",
   "restricted_override",
 ]);
+
+// Window during which a teacher can take back a `released_to_walk`
+// they themselves wrote. Matches the 10s undo toast on the client.
+const RELEASE_UNDO_WINDOW_MS = 10_000;
+
+// Resolve the integer student PKs that a given teacher owns across
+// their non-planning class sections. section_roster.student_id is the
+// district-supplied TEXT code, so we join through students to get the
+// integer PK the queue is keyed on.
+async function loadOwnRosterStudentIds(
+  schoolId: number,
+  staffId: number,
+): Promise<Set<number>> {
+  const rows = await db
+    .select({ id: studentsTable.id })
+    .from(classSectionsTable)
+    .innerJoin(
+      sectionRosterTable,
+      eq(sectionRosterTable.sectionId, classSectionsTable.id),
+    )
+    .innerJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.studentId, sectionRosterTable.studentId),
+        eq(studentsTable.schoolId, classSectionsTable.schoolId),
+      ),
+    )
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, staffId),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  return new Set(rows.map((r) => r.id));
+}
+
+// Read-or-default the per-school pickup settings. Mirrors the same
+// "settings row may not exist for a brand-new tenant" pattern as the
+// schoolSettings route — falls back to the schema defaults instead of
+// failing the request.
+async function loadPickupSettings(schoolId: number): Promise<{
+  cutoffTime: string;
+  teacherViewScope: "all_students" | "own_roster";
+}> {
+  const [row] = await db
+    .select({
+      cutoffTime: schoolSettingsTable.pickupCutoffTime,
+      teacherViewScope: schoolSettingsTable.pickupTeacherViewScope,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  return {
+    cutoffTime: row?.cutoffTime ?? "15:30",
+    teacherViewScope:
+      row?.teacherViewScope === "own_roster" ? "own_roster" : "all_students",
+  };
+}
 
 async function requireStaff(
   req: Request,
@@ -158,6 +220,14 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
       const existing = byStudent.get(sid);
       if (existing) {
         existing.status = "walking_out";
+      }
+    } else if (action === "release_undone") {
+      // Teacher hit Undo within the 10s window. Flip back to in_queue
+      // without touching addedAt — the student keeps their original
+      // queue position rather than getting bumped to the back.
+      const existing = byStudent.get(sid);
+      if (existing) {
+        existing.status = "in_queue";
       }
     }
   }
@@ -511,16 +581,18 @@ router.post("/pickup/queue/event", requireStaff, async (req, res) => {
     return;
   }
 
-  // Both in_car and released_to_walk require curb access for now. The
-  // long-term design is "released_to_walk is the teacher's button on
-  // the classroom signage tile" with a section_roster check proving the
-  // student belongs to that teacher's class. Until the signage tile
-  // (Phase F) lands with that membership join, gating the audit-write
-  // route to curb-access-only avoids any signed-in staff being able to
-  // mutate another classroom's queue state.
-  if (!canRunCurb(staff)) {
-    res.status(403).json({ error: "Pickup curb access not granted" });
-    return;
+  // `in_car` is curb-only — it terminates the queue entry and is the
+  // dispatcher's call. `released_to_walk` is now the teacher action from
+  // /pickup/teacher: any signed-in staff may write it, with a server-side
+  // view-scope gate (own_roster requires section_roster membership).
+  if (action === "in_car") {
+    if (!canRunCurb(staff)) {
+      res.status(403).json({ error: "Pickup curb access not granted" });
+      return;
+    }
+  } else {
+    // released_to_walk — view-scope enforcement happens after the
+    // cross-school check below so we can return a clean 403.
   }
 
   // Cross-school safety: confirm the student belongs to this school.
@@ -538,6 +610,23 @@ router.post("/pickup/queue/event", requireStaff, async (req, res) => {
     return;
   }
 
+  if (action === "released_to_walk") {
+    const settings = await loadPickupSettings(schoolId);
+    if (settings.teacherViewScope === "own_roster" && !canRunCurb(staff)) {
+      // Curb dispatchers can release anyone regardless of scope —
+      // they're the fallback when a teacher is absent. Everyone else
+      // has to be on the student's section roster.
+      const ownRoster = await loadOwnRosterStudentIds(schoolId, staff.id);
+      if (!ownRoster.has(studentDbId)) {
+        res.status(403).json({
+          error:
+            "This school restricts release to the student's own teacher",
+        });
+        return;
+      }
+    }
+  }
+
   await db.insert(pickupQueueEventsTable).values({
     schoolId,
     studentId: studentDbId,
@@ -548,6 +637,201 @@ router.post("/pickup/queue/event", requireStaff, async (req, res) => {
     note,
   });
   res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// POST /pickup/queue/release-undo
+// Body: { studentDbId: number }
+// Reverses a `released_to_walk` event the caller themselves wrote within
+// the last RELEASE_UNDO_WINDOW_MS. Writes a `release_undone` audit row
+// rather than deleting the original — the audit log is append-only.
+// ---------------------------------------------------------------------------
+router.post("/pickup/queue/release-undo", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const studentDbId = Number(req.body?.studentDbId);
+  if (!Number.isInteger(studentDbId) || studentDbId <= 0) {
+    res.status(400).json({ error: "studentDbId required" });
+    return;
+  }
+
+  const cutoff = new Date(Date.now() - RELEASE_UNDO_WINDOW_MS);
+  const [recent] = await db
+    .select({
+      id: pickupQueueEventsTable.id,
+      occurredAt: pickupQueueEventsTable.occurredAt,
+    })
+    .from(pickupQueueEventsTable)
+    .where(
+      and(
+        eq(pickupQueueEventsTable.schoolId, schoolId),
+        eq(pickupQueueEventsTable.studentId, studentDbId),
+        eq(pickupQueueEventsTable.actorStaffId, staff.id),
+        eq(pickupQueueEventsTable.action, "released_to_walk"),
+        gte(pickupQueueEventsTable.occurredAt, cutoff),
+      ),
+    )
+    .orderBy(desc(pickupQueueEventsTable.occurredAt))
+    .limit(1);
+  if (!recent) {
+    res.status(409).json({
+      error: "No recent release to undo (window is 10 seconds)",
+    });
+    return;
+  }
+
+  // Race guard: only allow undo if the actor's release is still the
+  // latest event for this student. If anyone (including the same actor)
+  // wrote a later event — another release, an in_car, a release_undone,
+  // etc. — the queue state has already moved on and undoing would
+  // incorrectly reverse the newer action.
+  const [later] = await db
+    .select({ id: pickupQueueEventsTable.id })
+    .from(pickupQueueEventsTable)
+    .where(
+      and(
+        eq(pickupQueueEventsTable.schoolId, schoolId),
+        eq(pickupQueueEventsTable.studentId, studentDbId),
+        gt(pickupQueueEventsTable.occurredAt, recent.occurredAt),
+      ),
+    )
+    .limit(1);
+  if (later) {
+    res.status(409).json({
+      error: "Release was superseded by a newer event — cannot undo",
+    });
+    return;
+  }
+
+  await db.insert(pickupQueueEventsTable).values({
+    schoolId,
+    studentId: studentDbId,
+    pickupAuthorizationId: null,
+    actorStaffId: staff.id,
+    actorDisplayName: staff.displayName ?? "Staff",
+    action: "release_undone",
+    note: `Undo of release at ${recent.occurredAt.toISOString()}`,
+  });
+  res.json({ ok: true });
+});
+
+// ---------------------------------------------------------------------------
+// GET /pickup/teacher-queue
+// Any signed-in staff. Returns the queue scoped per the school's
+// pickup_teacher_view_scope setting, with `isOnMyRoster` flag per row.
+// Newest-at-bottom (asc by addedAt) — the existing /pickup/queue
+// derivation already returns that order, so we just filter + annotate.
+// ---------------------------------------------------------------------------
+router.get("/pickup/teacher-queue", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const settings = await loadPickupSettings(schoolId);
+
+  // Reuse the same derivation the /pickup/queue route uses.
+  const startOfToday = new Date(startOfTodayIso());
+  const events = await db
+    .select({
+      studentId: pickupQueueEventsTable.studentId,
+      action: pickupQueueEventsTable.action,
+      occurredAt: pickupQueueEventsTable.occurredAt,
+      pickupAuthorizationId: pickupQueueEventsTable.pickupAuthorizationId,
+    })
+    .from(pickupQueueEventsTable)
+    .where(
+      and(
+        eq(pickupQueueEventsTable.schoolId, schoolId),
+        gte(pickupQueueEventsTable.occurredAt, startOfToday),
+      ),
+    )
+    .orderBy(asc(pickupQueueEventsTable.occurredAt));
+
+  const TERMINAL = new Set(["in_car", "auto_cleared", "walker_released"]);
+  type Entry = {
+    studentId: number;
+    addedAt: string;
+    status: "in_queue" | "walking_out";
+    pickupAuthorizationId: number | null;
+  };
+  const byStudent = new Map<number, Entry>();
+  for (const e of events) {
+    if (TERMINAL.has(e.action)) {
+      byStudent.delete(e.studentId);
+      continue;
+    }
+    if (e.action === "added") {
+      byStudent.set(e.studentId, {
+        studentId: e.studentId,
+        addedAt: e.occurredAt.toISOString(),
+        status: "in_queue",
+        pickupAuthorizationId: e.pickupAuthorizationId,
+      });
+    } else if (e.action === "released_to_walk") {
+      const ex = byStudent.get(e.studentId);
+      if (ex) ex.status = "walking_out";
+    } else if (e.action === "release_undone") {
+      const ex = byStudent.get(e.studentId);
+      if (ex) ex.status = "in_queue";
+    }
+  }
+
+  let entries = Array.from(byStudent.values()).sort((a, b) =>
+    a.addedAt.localeCompare(b.addedAt),
+  );
+
+  // Compute roster membership once, regardless of scope — the client
+  // uses it both for the "own_roster" filter (already done server-side
+  // when scope='own_roster') and for the highlight + Show-mine toggle.
+  const ownRoster = await loadOwnRosterStudentIds(schoolId, staff.id);
+
+  if (settings.teacherViewScope === "own_roster") {
+    entries = entries.filter((e) => ownRoster.has(e.studentId));
+  }
+
+  // Hydrate names + grade for the surviving set.
+  const ids = entries.map((e) => e.studentId);
+  let nameById = new Map<
+    number,
+    { firstName: string; lastName: string; grade: number }
+  >();
+  if (ids.length > 0) {
+    const rows = await db
+      .select({
+        id: studentsTable.id,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.id, ids),
+        ),
+      );
+    nameById = new Map(rows.map((r) => [r.id, r]));
+  }
+
+  res.json({
+    viewScope: settings.teacherViewScope,
+    entries: entries.map((e) => {
+      const n = nameById.get(e.studentId);
+      return {
+        studentDbId: e.studentId,
+        firstName: n?.firstName ?? "",
+        lastName: n?.lastName ?? "",
+        grade: n?.grade ?? null,
+        addedAt: e.addedAt,
+        status: e.status,
+        isOnMyRoster: ownRoster.has(e.studentId),
+      };
+    }),
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -803,7 +1087,12 @@ router.get("/pickup/reconciliation", requireStaff, async (req, res) => {
     byMode[k].push(s);
   }
 
-  res.json({ asOf: new Date().toISOString(), byMode });
+  const settings = await loadPickupSettings(schoolId);
+  res.json({
+    asOf: new Date().toISOString(),
+    cutoffTime: settings.cutoffTime,
+    byMode,
+  });
 });
 
 // ---------------------------------------------------------------------------

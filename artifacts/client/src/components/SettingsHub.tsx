@@ -21,6 +21,7 @@ export type SettingsTileId =
   | "school-wide-expectations"
   | "intervention-strategies"
   | "iss-settings"
+  | "pickup"
   | "staff-preview"
   | "separation-tags"
   | "staff-directory"
