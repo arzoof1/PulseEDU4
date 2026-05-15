@@ -13,6 +13,14 @@ interface SearchHit {
   firstName: string;
   lastName: string;
   grade: number;
+  // Current-period enrichment (server resolves the bell-schedule period
+  // active right now, then joins each hit's section roster against it).
+  // Null when no default bell schedule is configured or the lookup runs
+  // outside the school day.
+  currentPeriodName?: string | null;
+  currentRoom?: string | null;
+  currentTeacherName?: string | null;
+  currentWorkExtension?: string | null;
 }
 
 interface StaffHit {
@@ -503,51 +511,99 @@ export function StudentFinderModal({
                   overflow: "hidden",
                 }}
               >
-                {hits.map((h) => (
-                  <li key={h.studentId}>
-                    <button
-                      type="button"
-                      onClick={() => setSelected(h.studentId)}
-                      style={{
-                        width: "100%",
-                        textAlign: "left",
-                        background: "white",
-                        border: "none",
-                        borderBottom: "1px solid var(--border)",
-                        padding: "10px 12px",
-                        cursor: "pointer",
-                        display: "flex",
-                        gap: 12,
-                        alignItems: "baseline",
-                        fontSize: 14,
-                      }}
-                      onMouseEnter={(e) =>
-                        (e.currentTarget.style.background = "#f8fafc")
-                      }
-                      onMouseLeave={(e) =>
-                        (e.currentTarget.style.background = "white")
-                      }
-                    >
-                      <strong>
-                        {h.lastName}, {h.firstName}
-                      </strong>
-                      <span style={{ color: "var(--muted, #64748b)" }}>
-                        Grade {h.grade}
-                      </span>
-                      <span
+                {hits.map((h) => {
+                  const hasLocation =
+                    h.currentRoom ||
+                    h.currentWorkExtension ||
+                    h.currentTeacherName;
+                  return (
+                    <li key={h.studentId}>
+                      <button
+                        type="button"
+                        onClick={() => setSelected(h.studentId)}
                         style={{
-                          color: "var(--muted, #64748b)",
-                          marginLeft: "auto",
-                          fontFamily:
-                            "ui-monospace, SFMono-Regular, monospace",
-                          fontSize: 12,
+                          width: "100%",
+                          textAlign: "left",
+                          background: "white",
+                          border: "none",
+                          borderBottom: "1px solid var(--border)",
+                          padding: "10px 12px",
+                          cursor: "pointer",
+                          display: "flex",
+                          flexDirection: "column",
+                          gap: 4,
+                          fontSize: 14,
                         }}
+                        onMouseEnter={(e) =>
+                          (e.currentTarget.style.background = "#f8fafc")
+                        }
+                        onMouseLeave={(e) =>
+                          (e.currentTarget.style.background = "white")
+                        }
                       >
-                        {h.studentId}
-                      </span>
-                    </button>
-                  </li>
-                ))}
+                        <div
+                          style={{
+                            display: "flex",
+                            gap: 12,
+                            alignItems: "baseline",
+                          }}
+                        >
+                          <strong>
+                            {h.lastName}, {h.firstName}
+                          </strong>
+                          <span style={{ color: "var(--muted, #64748b)" }}>
+                            Grade {h.grade}
+                          </span>
+                          <span
+                            style={{
+                              color: "var(--muted, #64748b)",
+                              marginLeft: "auto",
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, monospace",
+                              fontSize: 12,
+                            }}
+                          >
+                            {h.studentId}
+                          </span>
+                        </div>
+                        {hasLocation && (
+                          <div
+                            style={{
+                              display: "flex",
+                              gap: 12,
+                              flexWrap: "wrap",
+                              fontSize: 12,
+                              color: "#334155",
+                            }}
+                          >
+                            {h.currentPeriodName && (
+                              <span
+                                style={{
+                                  background: "var(--success-soft, #dcfce7)",
+                                  color: "#065f46",
+                                  fontWeight: 600,
+                                  padding: "1px 6px",
+                                  borderRadius: 4,
+                                }}
+                              >
+                                NOW · {h.currentPeriodName}
+                              </span>
+                            )}
+                            <span>🚪 Room {h.currentRoom ?? "—"}</span>
+                            <span>
+                              📞 Ext {h.currentWorkExtension ?? "—"}
+                            </span>
+                            {h.currentTeacherName && (
+                              <span style={{ color: "var(--muted, #64748b)" }}>
+                                {h.currentTeacherName}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>

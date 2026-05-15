@@ -51,6 +51,12 @@ function nowHHMM(): string {
 }
 
 // Typeahead — name or student_id, school-scoped, capped at 20 results.
+// Each hit is enriched with the student's CURRENT-period room +
+// teacher extension so the searcher can read the answer to "where is
+// this kid right now / who do I call?" without clicking through to the
+// schedule. When the school has no default bell schedule configured
+// (or it's outside the school day) the location fields come back null
+// and the row degrades to the original name + grade + ID display.
 router.get("/student-finder/search", async (req: Request, res: Response) => {
   if (!req.staffId) {
     res.status(401).json({ error: "Sign-in required" });
@@ -91,7 +97,92 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
     .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName))
     .limit(20);
 
-  res.json({ students: rows });
+  // Resolve the school's current bell-schedule period (if any) and join
+  // each hit's section roster against it. We do this in two queries
+  // total (one for the period, one bulk join across all 20 hits)
+  // rather than per-row, to keep the typeahead snappy.
+  type Enrichment = {
+    currentPeriodName: string | null;
+    currentRoom: string | null;
+    currentTeacherName: string | null;
+    currentWorkExtension: string | null;
+  };
+  const enrichmentByStudent = new Map<string, Enrichment>();
+
+  if (rows.length > 0) {
+    const [schedule] = await db
+      .select()
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+    if (schedule) {
+      const now = nowHHMM();
+      const bellPeriods = await db
+        .select()
+        .from(bellSchedulePeriodsTable)
+        .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
+      const current = bellPeriods.find(
+        (bp) => now >= bp.startTime && now < bp.endTime,
+      );
+      if (current) {
+        const ids = rows.map((r) => r.studentId);
+        const sectionRows = await db
+          .select({
+            studentId: sectionRosterTable.studentId,
+            room: staffTable.defaultRoom,
+            teacherName: staffTable.displayName,
+            workExtension: staffTable.workExtension,
+          })
+          .from(sectionRosterTable)
+          .innerJoin(
+            classSectionsTable,
+            eq(classSectionsTable.id, sectionRosterTable.sectionId),
+          )
+          .innerJoin(
+            staffTable,
+            eq(staffTable.id, classSectionsTable.teacherStaffId),
+          )
+          .where(
+            and(
+              eq(sectionRosterTable.schoolId, schoolId),
+              eq(classSectionsTable.schoolId, schoolId),
+              eq(staffTable.schoolId, schoolId),
+              eq(classSectionsTable.isPlanning, false),
+              eq(classSectionsTable.period, current.periodNumber),
+              inArray(sectionRosterTable.studentId, ids),
+            ),
+          );
+        // First-row-wins on co-teaching; the locator just needs A room.
+        for (const r of sectionRows) {
+          if (enrichmentByStudent.has(r.studentId)) continue;
+          enrichmentByStudent.set(r.studentId, {
+            currentPeriodName: current.name,
+            currentRoom: r.room ?? null,
+            currentTeacherName: r.teacherName ?? null,
+            currentWorkExtension: r.workExtension ?? null,
+          });
+        }
+      }
+    }
+  }
+
+  const students = rows.map((r) => {
+    const e = enrichmentByStudent.get(r.studentId);
+    return {
+      ...r,
+      currentPeriodName: e?.currentPeriodName ?? null,
+      currentRoom: e?.currentRoom ?? null,
+      currentTeacherName: e?.currentTeacherName ?? null,
+      currentWorkExtension: e?.currentWorkExtension ?? null,
+    };
+  });
+
+  res.json({ students });
 });
 
 // Staff typeahead — name search, school-scoped, capped at 20 results.
