@@ -8,6 +8,19 @@ import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { authFetch } from "../../lib/authToken";
 
+// Mirror of lib/db/src/schema/staffAst.ts AST_CATEGORIES — kept in sync
+// manually so this module doesn't pull in a server-side import. The
+// server is the source of truth and rejects unknown values, so a drift
+// here will surface as a 400 not a silent miscategorization.
+const AST_CATEGORIES = [
+  "Family-Facing",
+  "Culture & Climate",
+  "Athletics",
+  "Academic Enrichment",
+  "Operational/PD",
+] as const;
+type AstCategory = (typeof AST_CATEGORIES)[number];
+
 type AstRequest = {
   id: number;
   staffId: number;
@@ -20,6 +33,7 @@ type AstRequest = {
   useStartAt: string | null;
   useEndAt: string | null;
   createdAt: string;
+  category: AstCategory | null;
   preapprovalNote: string | null;
   completionNote: string | null;
   confirmNote: string | null;
@@ -102,21 +116,30 @@ function QueueRow({
   endpoint,
   approveLabel,
   busy,
+  showCategory,
   onAction,
 }: {
   row: Row;
   endpoint: (id: number) => string;
   approveLabel: string;
   busy: boolean;
+  // Show the category dropdown — only for the two queues where the
+  // admin's "approve" action is the *first* approval on the request
+  // (earn pre-approval, use approval). Completion-confirm rows already
+  // had their category set at pre-approval time, so showing it again
+  // would imply it can be edited (it cannot, by design).
+  showCategory: boolean;
   onAction: (
     id: number,
     decision: "approve" | "deny",
     note: string,
     url: string,
+    category: AstCategory | "",
   ) => Promise<void>;
 }) {
   const [note, setNote] = useState("");
   const [showNote, setShowNote] = useState(false);
+  const [category, setCategory] = useState<AstCategory | "">("");
   const r = row.request;
   return (
     <div
@@ -150,6 +173,21 @@ function QueueRow({
         </div>
       )}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        {showCategory && (
+          <select
+            value={category}
+            onChange={(e) => setCategory(e.target.value as AstCategory | "")}
+            style={{ ...input, flex: "0 0 auto", minWidth: 180 }}
+            title="Admin-only AST category — staff never see this"
+          >
+            <option value="">— Category (optional) —</option>
+            {AST_CATEGORIES.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+        )}
         <input
           type="text"
           placeholder="Optional note (REQUIRED for deny)"
@@ -162,7 +200,7 @@ function QueueRow({
           type="button"
           style={btnApprove}
           disabled={busy}
-          onClick={() => onAction(r.id, "approve", note, endpoint(r.id))}
+          onClick={() => onAction(r.id, "approve", note, endpoint(r.id), category)}
         >
           {approveLabel}
         </button>
@@ -171,7 +209,7 @@ function QueueRow({
           style={btnDeny}
           disabled={busy || !note.trim()}
           title={!note.trim() ? "Type a note explaining why" : "Deny"}
-          onClick={() => onAction(r.id, "deny", note, endpoint(r.id))}
+          onClick={() => onAction(r.id, "deny", note, endpoint(r.id), category)}
         >
           Deny
         </button>
@@ -220,6 +258,7 @@ export default function AdminAstQueuePage() {
       decision: "approve" | "deny",
       note: string,
       url: string,
+      category: AstCategory | "",
     ) => {
       setBusy(true);
       setErr(null);
@@ -231,6 +270,9 @@ export default function AdminAstQueuePage() {
           body: JSON.stringify({
             decision,
             note: note.trim() || undefined,
+            // Server only stores category on approval, but sending it
+            // on deny is harmless — server ignores it for that branch.
+            category: category || undefined,
           }),
         });
         const j = await r.json();
@@ -304,6 +346,8 @@ export default function AdminAstQueuePage() {
             />
           </div>
 
+          <SectionBand color="blue" label="Open queue" />
+
           <div style={card}>
             <h3 style={{ marginTop: 0 }}>
               Earn pre-approvals ({queue.counts.earnPreapprovals})
@@ -322,6 +366,7 @@ export default function AdminAstQueuePage() {
                   endpoint={earnPreEndpoint.endpoint}
                   approveLabel={earnPreEndpoint.approveLabel}
                   busy={busy}
+                  showCategory
                   onAction={handleAction}
                 />
               ))
@@ -346,6 +391,7 @@ export default function AdminAstQueuePage() {
                   endpoint={earnConfirmEndpoint.endpoint}
                   approveLabel={earnConfirmEndpoint.approveLabel}
                   busy={busy}
+                  showCategory={false}
                   onAction={handleAction}
                 />
               ))
@@ -371,11 +417,14 @@ export default function AdminAstQueuePage() {
                   endpoint={useDecideEndpoint.endpoint}
                   approveLabel={useDecideEndpoint.approveLabel}
                   busy={busy}
+                  showCategory
                   onAction={handleAction}
                 />
               ))
             )}
           </div>
+
+          <SectionBand color="slate" label="History" />
 
           <div style={card}>
             <h3 style={{ marginTop: 0 }}>Recently decided</h3>
@@ -408,6 +457,39 @@ export default function AdminAstQueuePage() {
           </div>
         </>
       )}
+    </div>
+  );
+}
+
+// Colored band that visually separates the "open queue" panels from
+// the "history" panel below. Blue = work to do, slate = done.
+function SectionBand({
+  color,
+  label,
+}: {
+  color: "blue" | "slate";
+  label: string;
+}) {
+  const palette =
+    color === "blue"
+      ? { bg: "#dbeafe", fg: "#1e40af", bar: "#0ea5e9" }
+      : { bg: "#e2e8f0", fg: "#334155", bar: "#64748b" };
+  return (
+    <div
+      style={{
+        background: palette.bg,
+        color: palette.fg,
+        borderLeft: `4px solid ${palette.bar}`,
+        borderRadius: 8,
+        padding: "8px 14px",
+        marginBottom: 10,
+        fontSize: "0.78rem",
+        fontWeight: 700,
+        letterSpacing: 0.4,
+        textTransform: "uppercase",
+      }}
+    >
+      {label}
     </div>
   );
 }

@@ -326,6 +326,42 @@ export default function StaffAstPage() {
     }
   };
 
+  // Small colored band that visually separates "Open requests" (blue,
+   // still in flight with admin) from "History" (slate, done) so a
+   // staff member can scan their list at a glance without parsing
+   // every state pill.
+  const SectionBand = ({
+    color,
+    label,
+  }: {
+    color: "blue" | "slate";
+    label: string;
+  }) => {
+    const palette =
+      color === "blue"
+        ? { bg: "#dbeafe", fg: "#1e40af", bar: "#0ea5e9" }
+        : { bg: "#e2e8f0", fg: "#334155", bar: "#64748b" };
+    return (
+      <div
+        style={{
+          background: palette.bg,
+          color: palette.fg,
+          borderLeft: `4px solid ${palette.bar}`,
+          borderRadius: 8,
+          padding: "8px 14px",
+          marginBottom: 10,
+          marginTop: 6,
+          fontSize: "0.78rem",
+          fontWeight: 700,
+          letterSpacing: 0.4,
+          textTransform: "uppercase",
+        }}
+      >
+        {label}
+      </div>
+    );
+  };
+
   const groupedRequests = useMemo(() => {
     const list = me?.requests ?? [];
     const open = list.filter(
@@ -554,6 +590,7 @@ export default function StaffAstPage() {
         </div>
       )}
 
+      <SectionBand color="blue" label="Open requests" />
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>Open requests</h3>
         {groupedRequests.open.length === 0 ? (
@@ -692,6 +729,7 @@ export default function StaffAstPage() {
         )}
       </div>
 
+      <SectionBand color="slate" label="History" />
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>History</h3>
         {groupedRequests.closed.length === 0 ? (

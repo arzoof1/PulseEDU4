@@ -95,6 +95,12 @@ export const staffAstRequestsTable = pgTable(
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     cancelNote: text("cancel_note"),
 
+    // Admin-only AST category, set at the moment of approval (earn
+    // pre-approval OR use approval). Staff never see this — it exists
+    // purely to power the AST Insights dashboard. NULL = legacy row
+    // approved before the column existed (rendered "Uncategorized").
+    category: text("category").$type<AstCategory>(),
+
     // Set when the requesting staff member opens the AST page after a
     // decision (preapprove / deny / confirm) has been written. Used by
     // the sidebar bell to count only UNREAD admin replies — i.e. things
@@ -117,6 +123,27 @@ export const staffAstRequestsTable = pgTable(
 
 export type StaffAstRequestRow =
   typeof staffAstRequestsTable.$inferSelect;
+
+// AST category — set by admin at the moment of pre-approval (earn) or
+// approval (use). Teachers never see this dropdown; it's purely an
+// admin classification so the AST Insights dashboard can show "what
+// kinds of work is the contract funding". Nullable: pre-existing rows
+// + admins who skip the picker render as "Uncategorized".
+export const AST_CATEGORIES = [
+  "Family-Facing",
+  "Culture & Climate",
+  "Athletics",
+  "Academic Enrichment",
+  "Operational/PD",
+] as const;
+export type AstCategory = (typeof AST_CATEGORIES)[number];
+
+export function isAstCategory(v: unknown): v is AstCategory {
+  return (
+    typeof v === "string" &&
+    (AST_CATEGORIES as readonly string[]).includes(v)
+  );
+}
 
 // Append-only ledger. Bank balance for a staff = SUM(delta_quarter_hours)
 // over rows where school_id = X and staff_id = Y. Never delete rows; the

@@ -19,9 +19,47 @@ import {
   staffTable,
   staffAstRequestsTable,
   staffAstLedgerTable,
+  isAstCategory,
+  AST_CATEGORIES,
+  type AstCategory,
 } from "@workspace/db";
+
+// Strip the admin-only `category` field before returning request rows
+// to staff-facing endpoints. Category is set by approvers and powers the
+// AST Insights dashboard; staff must never see how their work was
+// classified (avoids "you only approved this because it was Athletics"
+// arguments). Admin endpoints (/ast/admin-queue, /ast/insights) keep
+// category intact.
+function stripAdminFields<T extends { category?: AstCategory | null } | null | undefined>(
+  row: T,
+): T {
+  if (!row) return row;
+  // Spread + delete to avoid mutating the original Drizzle row.
+  const { category: _omit, ...rest } = row as { category?: unknown } & object;
+  return rest as T;
+}
+function stripAdminFieldsList<T extends { category?: AstCategory | null }>(
+  rows: T[],
+): T[] {
+  return rows.map((r) => stripAdminFields(r));
+}
 import { and, desc, eq, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+
+// Parse the optional `category` field on admin pre-approve / decide
+// payloads. Returns:
+//   { ok: true, value: AstCategory | null } — null = "leave uncategorized"
+//   { ok: false }                            — caller passed something
+//                                              outside the enum
+function parseCategory(
+  v: unknown,
+): { ok: true; value: AstCategory | null } | { ok: false } {
+  if (v === undefined || v === null || v === "") {
+    return { ok: true, value: null };
+  }
+  if (isAstCategory(v)) return { ok: true, value: v };
+  return { ok: false };
+}
 
 const router: IRouter = Router();
 
@@ -134,7 +172,7 @@ router.get(
       balanceQuarterHours: balance,
       canApproveAst: canApproveAst(me),
       needsCompletion,
-      requests,
+      requests: stripAdminFieldsList(requests),
     });
   },
 );
@@ -341,7 +379,7 @@ router.post(
       })
       .returning();
     req.log.info({ requestId: row?.id, staffId: me.id }, "AST earn submitted");
-    res.json({ ok: true, request: row });
+    res.json({ ok: true, request: stripAdminFields(row) });
   },
 );
 
@@ -362,6 +400,11 @@ router.patch(
     }
     const decision = String(req.body?.decision ?? "");
     const note = String(req.body?.note ?? "").trim() || null;
+    const cat = parseCategory(req.body?.category);
+    if (!cat.ok) {
+      res.status(400).json({ error: "Invalid AST category" });
+      return;
+    }
 
     if (decision !== "approve" && decision !== "deny") {
       res
@@ -406,6 +449,10 @@ router.patch(
               preapprovedAt: now,
               preapprovedByStaffId: me.id,
               preapprovalNote: note,
+              // Only set category on approval; denial leaves it null so a
+              // resubmitted-and-then-approved request gets categorized
+              // by the second admin action, not the first.
+              category: cat.value,
             }
           : {
               state: "denied",
@@ -481,7 +528,7 @@ router.post(
       })
       .where(eq(staffAstRequestsTable.id, id))
       .returning();
-    res.json({ ok: true, request: updated });
+    res.json({ ok: true, request: stripAdminFields(updated) });
   },
 );
 
@@ -649,7 +696,7 @@ router.post(
         quarterHoursRequested: qh,
       })
       .returning();
-    res.json({ ok: true, request: row });
+    res.json({ ok: true, request: stripAdminFields(row) });
   },
 );
 
@@ -670,6 +717,11 @@ router.patch(
     }
     const decision = String(req.body?.decision ?? "");
     const note = String(req.body?.note ?? "").trim() || null;
+    const cat = parseCategory(req.body?.category);
+    if (!cat.ok) {
+      res.status(400).json({ error: "Invalid AST category" });
+      return;
+    }
 
     if (decision !== "approve" && decision !== "deny") {
       res
@@ -757,6 +809,7 @@ router.patch(
                 preapprovedAt: now,
                 preapprovedByStaffId: me.id,
                 preapprovalNote: note,
+                category: cat.value,
               }
             : {
                 state: "denied",
@@ -782,6 +835,302 @@ router.patch(
       return { http: 200, body: { ok: true, request: updated } };
     });
     res.status(result.http).json(result.body);
+  },
+);
+
+// ---------------------------------------------------------------------------
+// INSIGHTS — admin-only dashboard aggregator
+// ---------------------------------------------------------------------------
+// Single round-trip aggregator for the AST Insights page. Returns the
+// five panels (headline tiles, top-5 balances + earners, by-category,
+// by-month, by-role-group) for the CURRENT school year (Jul 1 → Jun 30
+// in server-local time, matching schoolYearLabelFor's convention).
+// "Earned YTD" sums positive `earn_confirm` ledger entries; "Used YTD"
+// sums absolute `use_approval` debits. Lapse/transfer rows are excluded
+// from earned/used totals (they're flow-control, not contract-funded
+// activity). Banked total reads the live ledger sum (no time filter).
+router.get(
+  "/ast/insights",
+  requireApprover,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    // Current school year window. Matches lib/schoolYear.ts: the year
+    // boundary is July 1 in server-local time. We re-derive it here
+    // (rather than importing) because the helper returns a label and we
+    // need a Date.
+    const now = new Date();
+    const sy = now.getMonth() + 1 >= 7 ? now.getFullYear() : now.getFullYear() - 1;
+    const yearStart = new Date(sy, 6, 1, 0, 0, 0, 0); // Jul 1 00:00 local
+    const yearEnd = new Date(sy + 1, 6, 1, 0, 0, 0, 0); // next Jul 1
+
+    // Headline + ledger-driven aggregates run as parallel SQL.
+    const [
+      bankedRow,
+      earnedRow,
+      usedRow,
+      topBalanceRows,
+      topEarnerRows,
+      byCategoryRows,
+      byMonthRows,
+      byRoleRows,
+    ] = await Promise.all([
+      // Banked total — sum of every ledger row across the school.
+      // Includes lapses/transfers (negative), which is correct: the
+      // bank should reflect actual outstanding obligation.
+      db
+        .select({
+          total: sql<number>`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .where(eq(staffAstLedgerTable.schoolId, schoolId)),
+
+      // Earned YTD — positive earn_confirm rows in the current SY.
+      db
+        .select({
+          total: sql<number>`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .where(
+          and(
+            eq(staffAstLedgerTable.schoolId, schoolId),
+            eq(staffAstLedgerTable.kind, "earn_confirm"),
+            sql`${staffAstLedgerTable.createdAt} >= ${yearStart}`,
+            sql`${staffAstLedgerTable.createdAt} < ${yearEnd}`,
+          ),
+        ),
+
+      // Used YTD — abs(sum) of use_approval debits in the current SY.
+      db
+        .select({
+          total: sql<number>`COALESCE(ABS(SUM(${staffAstLedgerTable.deltaQuarterHours})), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .where(
+          and(
+            eq(staffAstLedgerTable.schoolId, schoolId),
+            eq(staffAstLedgerTable.kind, "use_approval"),
+            sql`${staffAstLedgerTable.createdAt} >= ${yearStart}`,
+            sql`${staffAstLedgerTable.createdAt} < ${yearEnd}`,
+          ),
+        ),
+
+      // Top 5 balances (current bank, all-time).
+      db
+        .select({
+          staffId: staffAstLedgerTable.staffId,
+          staffName: staffTable.displayName,
+          balanceQh: sql<number>`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .leftJoin(staffTable, eq(staffTable.id, staffAstLedgerTable.staffId))
+        .where(eq(staffAstLedgerTable.schoolId, schoolId))
+        .groupBy(staffAstLedgerTable.staffId, staffTable.displayName)
+        .having(sql`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0) > 0`)
+        .orderBy(sql`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0) DESC`)
+        .limit(5),
+
+      // Top 5 earners YTD (positive earn_confirm sums, current SY).
+      db
+        .select({
+          staffId: staffAstLedgerTable.staffId,
+          staffName: staffTable.displayName,
+          earnedQh: sql<number>`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .leftJoin(staffTable, eq(staffTable.id, staffAstLedgerTable.staffId))
+        .where(
+          and(
+            eq(staffAstLedgerTable.schoolId, schoolId),
+            eq(staffAstLedgerTable.kind, "earn_confirm"),
+            sql`${staffAstLedgerTable.createdAt} >= ${yearStart}`,
+            sql`${staffAstLedgerTable.createdAt} < ${yearEnd}`,
+          ),
+        )
+        .groupBy(staffAstLedgerTable.staffId, staffTable.displayName)
+        .orderBy(sql`SUM(${staffAstLedgerTable.deltaQuarterHours}) DESC`)
+        .limit(5),
+
+      // By category — join ledger to its originating request to read
+      // category. Lapse/transfer rows have no request_id and are
+      // excluded by the INNER JOIN. Earn vs use split via kind.
+      db
+        .select({
+          category: staffAstRequestsTable.category,
+          earnedQh: sql<number>`COALESCE(SUM(CASE WHEN ${staffAstLedgerTable.kind} = 'earn_confirm' THEN ${staffAstLedgerTable.deltaQuarterHours} ELSE 0 END), 0)::int`,
+          usedQh: sql<number>`COALESCE(SUM(CASE WHEN ${staffAstLedgerTable.kind} = 'use_approval' THEN -${staffAstLedgerTable.deltaQuarterHours} ELSE 0 END), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .innerJoin(
+          staffAstRequestsTable,
+          eq(staffAstRequestsTable.id, staffAstLedgerTable.requestId),
+        )
+        .where(
+          and(
+            eq(staffAstLedgerTable.schoolId, schoolId),
+            sql`${staffAstLedgerTable.createdAt} >= ${yearStart}`,
+            sql`${staffAstLedgerTable.createdAt} < ${yearEnd}`,
+            sql`${staffAstLedgerTable.kind} IN ('earn_confirm','use_approval')`,
+          ),
+        )
+        .groupBy(staffAstRequestsTable.category),
+
+      // By month — earned vs used per calendar month within the SY.
+      db
+        .select({
+          month: sql<string>`TO_CHAR(${staffAstLedgerTable.createdAt}, 'YYYY-MM')`,
+          earnedQh: sql<number>`COALESCE(SUM(CASE WHEN ${staffAstLedgerTable.kind} = 'earn_confirm' THEN ${staffAstLedgerTable.deltaQuarterHours} ELSE 0 END), 0)::int`,
+          usedQh: sql<number>`COALESCE(SUM(CASE WHEN ${staffAstLedgerTable.kind} = 'use_approval' THEN -${staffAstLedgerTable.deltaQuarterHours} ELSE 0 END), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .where(
+          and(
+            eq(staffAstLedgerTable.schoolId, schoolId),
+            sql`${staffAstLedgerTable.createdAt} >= ${yearStart}`,
+            sql`${staffAstLedgerTable.createdAt} < ${yearEnd}`,
+            sql`${staffAstLedgerTable.kind} IN ('earn_confirm','use_approval')`,
+          ),
+        )
+        .groupBy(sql`TO_CHAR(${staffAstLedgerTable.createdAt}, 'YYYY-MM')`)
+        .orderBy(sql`TO_CHAR(${staffAstLedgerTable.createdAt}, 'YYYY-MM')`),
+
+      // By role group — derive bucket from staff role flags. No
+      // department field exists today (see Future-work note in
+      // replit.md), so we group by the highest-priority role flag.
+      // Order matters: a teacher who is also a dean groups under
+      // "Core Team" so the picture matches who's actually doing the
+      // extra-duty work.
+      db
+        .select({
+          isAdmin: staffTable.isAdmin,
+          isDistrictAdmin: staffTable.isDistrictAdmin,
+          isSuperUser: staffTable.isSuperUser,
+          isMtssCoordinator: staffTable.isMtssCoordinator,
+          isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+          isDean: staffTable.isDean,
+          isPbisCoordinator: staffTable.isPbisCoordinator,
+          isEseCoordinator: staffTable.isEseCoordinator,
+          isCounselor: staffTable.isCounselor,
+          isGuidanceCounselor: staffTable.isGuidanceCounselor,
+          isSocialWorker: staffTable.isSocialWorker,
+          isSchoolPsychologist: staffTable.isSchoolPsychologist,
+          earnedQh: sql<number>`COALESCE(SUM(CASE WHEN ${staffAstLedgerTable.kind} = 'earn_confirm' THEN ${staffAstLedgerTable.deltaQuarterHours} ELSE 0 END), 0)::int`,
+          usedQh: sql<number>`COALESCE(SUM(CASE WHEN ${staffAstLedgerTable.kind} = 'use_approval' THEN -${staffAstLedgerTable.deltaQuarterHours} ELSE 0 END), 0)::int`,
+        })
+        .from(staffAstLedgerTable)
+        .innerJoin(staffTable, eq(staffTable.id, staffAstLedgerTable.staffId))
+        .where(
+          and(
+            eq(staffAstLedgerTable.schoolId, schoolId),
+            sql`${staffAstLedgerTable.createdAt} >= ${yearStart}`,
+            sql`${staffAstLedgerTable.createdAt} < ${yearEnd}`,
+            sql`${staffAstLedgerTable.kind} IN ('earn_confirm','use_approval')`,
+          ),
+        )
+        .groupBy(
+          staffTable.id,
+          staffTable.isAdmin,
+          staffTable.isDistrictAdmin,
+          staffTable.isSuperUser,
+          staffTable.isMtssCoordinator,
+          staffTable.isBehaviorSpecialist,
+          staffTable.isDean,
+          staffTable.isPbisCoordinator,
+          staffTable.isEseCoordinator,
+          staffTable.isCounselor,
+          staffTable.isGuidanceCounselor,
+          staffTable.isSocialWorker,
+          staffTable.isSchoolPsychologist,
+        ),
+    ]);
+
+    // Roll up the per-staff role rows into role-group buckets.
+    type Bucket = "Admin" | "Core Team" | "Counselor / Social Work" | "Teacher";
+    const roleTotals: Record<Bucket, { earnedQh: number; usedQh: number }> = {
+      Admin: { earnedQh: 0, usedQh: 0 },
+      "Core Team": { earnedQh: 0, usedQh: 0 },
+      "Counselor / Social Work": { earnedQh: 0, usedQh: 0 },
+      Teacher: { earnedQh: 0, usedQh: 0 },
+    };
+    for (const r of byRoleRows) {
+      let bucket: Bucket = "Teacher";
+      if (r.isAdmin || r.isDistrictAdmin || r.isSuperUser) bucket = "Admin";
+      else if (
+        r.isMtssCoordinator ||
+        r.isBehaviorSpecialist ||
+        r.isDean ||
+        r.isPbisCoordinator ||
+        r.isEseCoordinator
+      )
+        bucket = "Core Team";
+      else if (
+        r.isCounselor ||
+        r.isGuidanceCounselor ||
+        r.isSocialWorker ||
+        r.isSchoolPsychologist
+      )
+        bucket = "Counselor / Social Work";
+      roleTotals[bucket].earnedQh += Number(r.earnedQh ?? 0);
+      roleTotals[bucket].usedQh += Number(r.usedQh ?? 0);
+    }
+    const byRoleGroup = (Object.keys(roleTotals) as Bucket[])
+      .map((name) => ({
+        roleGroup: name,
+        earnedQh: roleTotals[name].earnedQh,
+        usedQh: roleTotals[name].usedQh,
+      }))
+      .filter((b) => b.earnedQh > 0 || b.usedQh > 0);
+
+    // Pad by-month so every month in the SY shows up even if zero, so
+    // the trend chart doesn't look gappy in the first weeks of school.
+    const monthMap = new Map<string, { earnedQh: number; usedQh: number }>();
+    for (const r of byMonthRows) {
+      monthMap.set(r.month, {
+        earnedQh: Number(r.earnedQh ?? 0),
+        usedQh: Number(r.usedQh ?? 0),
+      });
+    }
+    const byMonth: Array<{ month: string; earnedQh: number; usedQh: number }> = [];
+    // Walk Jul → Jun. We pad through the current month only — future
+    // months in the SY would just show empty bars and confuse readers.
+    const cur = new Date(yearStart);
+    while (cur < yearEnd && cur <= now) {
+      const key = `${cur.getFullYear()}-${String(cur.getMonth() + 1).padStart(2, "0")}`;
+      const v = monthMap.get(key) ?? { earnedQh: 0, usedQh: 0 };
+      byMonth.push({ month: key, ...v });
+      cur.setMonth(cur.getMonth() + 1);
+    }
+
+    // Normalize category rows: NULL → "Uncategorized" + numeric coerce.
+    const byCategory = byCategoryRows.map((r) => ({
+      category: r.category ?? "Uncategorized",
+      earnedQh: Number(r.earnedQh ?? 0),
+      usedQh: Number(r.usedQh ?? 0),
+    }));
+
+    res.json({
+      schoolYearLabel: `${String(sy % 100).padStart(2, "0")}-${String((sy + 1) % 100).padStart(2, "0")}`,
+      categories: AST_CATEGORIES,
+      totals: {
+        bankedQh: Number(bankedRow[0]?.total ?? 0),
+        earnedYtdQh: Number(earnedRow[0]?.total ?? 0),
+        usedYtdQh: Number(usedRow[0]?.total ?? 0),
+      },
+      top5Balances: topBalanceRows.map((r) => ({
+        staffId: r.staffId,
+        staffName: r.staffName ?? `Staff #${r.staffId}`,
+        balanceQh: Number(r.balanceQh ?? 0),
+      })),
+      top5Earners: topEarnerRows.map((r) => ({
+        staffId: r.staffId,
+        staffName: r.staffName ?? `Staff #${r.staffId}`,
+        earnedQh: Number(r.earnedQh ?? 0),
+      })),
+      byCategory,
+      byMonth,
+      byRoleGroup,
+    });
   },
 );
 
@@ -855,7 +1204,7 @@ router.post(
       })
       .where(eq(staffAstRequestsTable.id, id))
       .returning();
-    res.json({ ok: true, request: updated });
+    res.json({ ok: true, request: stripAdminFields(updated) });
   },
 );
 

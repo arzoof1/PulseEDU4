@@ -12,6 +12,7 @@ import {
 import AdminHubPage from "./components/AdminHubPage";
 import StaffAstPage from "./components/ast/StaffAstPage";
 import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
+import AstInsightsPage from "./components/ast/AstInsightsPage";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
 import WatchlistNetwork from "./components/WatchlistNetwork";
@@ -4492,6 +4493,7 @@ function App() {
     | "interventionReportsLegacy"
     | "ast"
     | "astAdmin"
+    | "astInsights"
   >("hallPasses");
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
@@ -8326,6 +8328,7 @@ function App() {
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
     { key: "astAdmin", label: "AST Approvals", icon: IconClock },
+    { key: "astInsights", label: "AST Insights", icon: IconClipboard },
   ];
   // Anyone with the canApproveAst flag — admin tier OR an explicit per-staff
   // grant (e.g. confidential secretary) — can see the admin AST queue.
@@ -9326,6 +9329,7 @@ function App() {
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
                 {canApproveAst && renderNavItem(adminNavSections[2])}
+                {canApproveAst && renderNavItem(adminNavSections[3])}
               </NavGroup>
             )}
           </aside>
@@ -15893,6 +15897,7 @@ function App() {
       {activeSection === "ast" && <StaffAstPage />}
 
       {activeSection === "astAdmin" && canApproveAst && <AdminAstQueuePage />}
+      {activeSection === "astInsights" && canApproveAst && <AstInsightsPage />}
 
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
         <>

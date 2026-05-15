@@ -5461,6 +5461,14 @@ export async function ensureAstSchema(): Promise<void> {
     ALTER TABLE staff_ast_requests
       ADD COLUMN IF NOT EXISTS staff_acknowledged_at TIMESTAMPTZ
   `);
+  // Additive: AST category — set by admin at pre-approval time, never
+  // by staff. Constrained to the AST_CATEGORIES enum at the app layer
+  // (no CHECK constraint so the enum can evolve without a schema
+  // migration). NULL → "Uncategorized" in the dashboard.
+  await db.execute(sql`
+    ALTER TABLE staff_ast_requests
+      ADD COLUMN IF NOT EXISTS category TEXT
+  `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_staff_idx ON staff_ast_requests(school_id, staff_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_state_idx ON staff_ast_requests(school_id, state)`);
 
