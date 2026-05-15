@@ -188,6 +188,7 @@ type LookupHit = {
     firstName: string;
     lastName: string;
     grade: number;
+    dismissalMode?: string;
     restricted: boolean;
   }>;
 };
@@ -491,6 +492,16 @@ function WalkerGatePage({ me }: { me: Me }) {
   const [windowOpensAt, setWindowOpensAt] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
 
+  // Keypad lookup state — mirrors CurbKeypadPage so a guardian at the
+  // walker gate can type their pickup number and release every walker
+  // attached to that authorization in one tap (no scrolling a 600-row
+  // roster on a tablet).
+  const [pad, setPad] = useState("");
+  const [hit, setHit] = useState<LookupHit | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+
   const refresh = useCallback(async () => {
     const res = await authFetch("/api/pickup/walkers");
     if (!res.ok) return;
@@ -510,18 +521,140 @@ function WalkerGatePage({ me }: { me: Me }) {
     return () => clearInterval(t);
   }, [refresh]);
 
-  const release = async (studentDbId: number) => {
+  const releasedTodayIds = useMemo(
+    () => new Set(rows.filter((r) => r.released).map((r) => r.studentDbId)),
+    [rows],
+  );
+
+  const release = async (
+    studentDbId: number,
+    opts?: {
+      pickupAuthorizationId?: number;
+      overrideJustification?: string;
+    },
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const body: Record<string, unknown> = { studentDbId };
+    if (opts?.pickupAuthorizationId !== undefined) {
+      body.pickupAuthorizationId = opts.pickupAuthorizationId;
+    }
+    if (opts?.overrideJustification) {
+      body.overrideJustification = opts.overrideJustification;
+    }
     const res = await authFetch("/api/pickup/walkers/release", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ studentDbId }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const data = (await res.json().catch(() => ({}))) as { error?: string };
-      alert(data.error ?? `Release failed (${res.status})`);
+      return { ok: false, error: data.error ?? `Release failed (${res.status})` };
+    }
+    return { ok: true };
+  };
+
+  const tap = (s: string) => {
+    setHit(null);
+    setErrorMsg(null);
+    setOkMsg(null);
+    if (s === "DEL") {
+      setPad((v) => v.slice(0, -1));
       return;
     }
-    await refresh();
+    if (s === "CLR") {
+      setPad("");
+      return;
+    }
+    if (pad.length >= 6) return;
+    setPad((v) => v + s);
+  };
+
+  const lookup = async () => {
+    if (!pad) return;
+    setBusy(true);
+    setErrorMsg(null);
+    setOkMsg(null);
+    try {
+      const res = await authFetch("/api/pickup/lookup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ pickupNumber: pad }),
+      });
+      const data = (await res.json()) as LookupHit & { error?: string };
+      if (!res.ok) {
+        setErrorMsg(data.error ?? `Lookup failed (${res.status})`);
+        return;
+      }
+      setHit(data);
+    } catch (e) {
+      setErrorMsg(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Of everyone on the typed authorization, which ones are walkers we
+  // can release here? Non-walker siblings (car-rider, bus, aftercare)
+  // are shown but disabled — the guardian needs to go to the curb line
+  // for those, which mirrors how the curb keypad treats walkers.
+  const lookupCandidates = useMemo(() => {
+    if (!hit?.primary) return [];
+    return [hit.primary, ...hit.siblings];
+  }, [hit]);
+  const walkerCandidates = lookupCandidates.filter(
+    (c) => c.dismissalMode === "walker",
+  );
+  const nonWalkerCandidates = lookupCandidates.filter(
+    (c) => c.dismissalMode !== "walker",
+  );
+  const releasableWalkers = walkerCandidates.filter(
+    (c) => !releasedTodayIds.has(c.studentDbId),
+  );
+  // Restricted-pickup gate: same rule as the curb keypad. If ANY walker
+  // we're about to release is on a restricted authorization, we require
+  // an admin user + a >=5-char justification (recorded in the audit row
+  // server-side). Without this, a restricted guardian could just walk
+  // up to the walker gate to bypass the curb-side prompt.
+  const [overrideText, setOverrideText] = useState("");
+  const hasRestricted = releasableWalkers.some((c) => c.restricted);
+  const overrideOk =
+    !hasRestricted ||
+    (isAdmin(me) && overrideText.trim().length >= 5);
+
+  const releaseFromLookup = async () => {
+    if (releasableWalkers.length === 0) return;
+    if (hasRestricted && !overrideOk) return;
+    setBusy(true);
+    setErrorMsg(null);
+    setOkMsg(null);
+    try {
+      const released: string[] = [];
+      const failures: string[] = [];
+      for (const c of releasableWalkers) {
+        const result = await release(c.studentDbId, {
+          pickupAuthorizationId: c.authorizationId,
+          overrideJustification: c.restricted ? overrideText : undefined,
+        });
+        const label = `${c.firstName} ${c.lastName.charAt(0)}.`;
+        if (result.ok) released.push(label);
+        else failures.push(`${label} (${result.error ?? "failed"})`);
+      }
+      await refresh();
+      if (released.length > 0) {
+        setOkMsg(
+          `Released ${released.length} walker${released.length === 1 ? "" : "s"}: ${released.join(", ")}`,
+        );
+      }
+      if (failures.length > 0) {
+        setErrorMsg(`Could not release: ${failures.join("; ")}`);
+      }
+      if (failures.length === 0) {
+        setPad("");
+        setHit(null);
+        setOverrideText("");
+      }
+    } finally {
+      setBusy(false);
+    }
   };
 
   const visible = rows.filter((r) => {
@@ -543,6 +676,195 @@ function WalkerGatePage({ me }: { me: Me }) {
           {windowOpensAt && <> Opens at {windowOpensAt}.</>}
         </div>
       )}
+
+      {/* Keypad lookup — fast path for guardians who know their pickup
+          number. Mirrors the curb keypad layout so staff trained on
+          one station can run the other without retraining. */}
+      <div style={twoCol}>
+        <div style={col}>
+          <div style={padDisplay}>{pad || "—"}</div>
+          <div style={keypadGrid}>
+            {[
+              "1",
+              "2",
+              "3",
+              "4",
+              "5",
+              "6",
+              "7",
+              "8",
+              "9",
+              "CLR",
+              "0",
+              "DEL",
+            ].map((k) => (
+              <button
+                key={k}
+                onClick={() => tap(k)}
+                style={k === "DEL" || k === "CLR" ? keyAlt : keyMain}
+              >
+                {k}
+              </button>
+            ))}
+          </div>
+          <button
+            onClick={lookup}
+            disabled={!pad || busy}
+            style={primaryBtn}
+          >
+            {busy ? "Looking up…" : "Look up"}
+          </button>
+          {errorMsg && <div style={errBox}>{errorMsg}</div>}
+          {okMsg && (
+            <div
+              style={{
+                ...errBox,
+                background: "#ecfdf5",
+                color: "#065f46",
+                border: "1px solid #86efac",
+              }}
+            >
+              {okMsg}
+            </div>
+          )}
+        </div>
+        <div style={col}>
+          {hit ? (
+            <div>
+              <div style={cardTitle}>
+                #{hit.authorization.pickupNumber} ·{" "}
+                {hit.authorization.guardianLabel}
+              </div>
+              {walkerCandidates.length === 0 && (
+                <div style={{ ...errBox, marginTop: 0 }}>
+                  No walkers on this authorization. Use the curb keypad
+                  for car-rider siblings.
+                </div>
+              )}
+              {walkerCandidates.map((c) => {
+                const alreadyOut = releasedTodayIds.has(c.studentDbId);
+                const borderColor = c.restricted
+                  ? "#dc2626"
+                  : alreadyOut
+                    ? "#86efac"
+                    : "#e5e7eb";
+                const bg = c.restricted
+                  ? "#fef2f2"
+                  : alreadyOut
+                    ? "#ecfdf5"
+                    : "#fff";
+                return (
+                  <div
+                    key={c.authorizationId}
+                    style={{ ...studentCard, borderColor, background: bg }}
+                  >
+                    <div style={{ fontWeight: 600 }}>
+                      {c.firstName} {c.lastName}
+                    </div>
+                    <div style={{ color: "#6b7280", fontSize: 13 }}>
+                      Grade {c.grade} · ID {c.studentId} · walker
+                    </div>
+                    {c.restricted && (
+                      <div
+                        style={{
+                          color: "#dc2626",
+                          marginTop: 6,
+                          fontWeight: 600,
+                        }}
+                      >
+                        RESTRICTED — guardian not authorized for this student
+                      </div>
+                    )}
+                    {alreadyOut && (
+                      <div
+                        style={{
+                          color: "#15803d",
+                          marginTop: 6,
+                          fontWeight: 600,
+                          fontSize: 13,
+                        }}
+                      >
+                        Already released today
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {hasRestricted && (
+                <div style={overrideBox}>
+                  <div style={{ fontWeight: 600, color: "#7f1d1d" }}>
+                    Admin override required
+                  </div>
+                  <div style={{ fontSize: 13, marginTop: 4, color: "#7f1d1d" }}>
+                    {isAdmin(me)
+                      ? "Type a justification (5+ chars). This is recorded in the audit log."
+                      : "Only an admin can release a restricted authorization. Get an admin to type their justification here."}
+                  </div>
+                  <textarea
+                    value={overrideText}
+                    onChange={(e) => setOverrideText(e.target.value)}
+                    rows={2}
+                    style={textareaStyle}
+                    placeholder="e.g. front office confirmed parent identity by phone"
+                    disabled={!isAdmin(me)}
+                  />
+                </div>
+              )}
+              {nonWalkerCandidates.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    padding: 10,
+                    background: "#fef3c7",
+                    border: "1px solid #fde68a",
+                    borderRadius: 8,
+                    fontSize: 13,
+                    color: "#78350f",
+                  }}
+                >
+                  <strong>Not walkers (send to curb):</strong>{" "}
+                  {nonWalkerCandidates
+                    .map(
+                      (c) =>
+                        `${c.firstName} ${c.lastName.charAt(0)}. (${c.dismissalMode ?? "—"})`,
+                    )
+                    .join(", ")}
+                </div>
+              )}
+              <button
+                onClick={releaseFromLookup}
+                disabled={
+                  busy ||
+                  !windowOpen ||
+                  releasableWalkers.length === 0 ||
+                  !overrideOk
+                }
+                style={{
+                  ...primaryBtn,
+                  marginTop: 12,
+                  background: "#16a34a",
+                }}
+              >
+                {releasableWalkers.length === 0
+                  ? walkerCandidates.length > 0
+                    ? "All walkers already released"
+                    : "Nothing to release"
+                  : hasRestricted
+                    ? `Override + release ${releasableWalkers.length} walker${releasableWalkers.length === 1 ? "" : "s"}`
+                    : `Release ${releasableWalkers.length} walker${releasableWalkers.length === 1 ? "" : "s"}`}
+              </button>
+            </div>
+          ) : (
+            <div style={{ color: "#6b7280" }}>
+              Type a pickup number and tap Look up. The family's
+              walker-mode siblings will be released together; car-rider
+              siblings get sent to the curb line instead.
+            </div>
+          )}
+        </div>
+      </div>
+
+      <h3 style={{ margin: "28px 0 8px" }}>Walker roster</h3>
       <input
         type="search"
         placeholder="Filter by name or ID…"
@@ -582,7 +904,11 @@ function WalkerGatePage({ me }: { me: Me }) {
               )}
             </div>
             <button
-              onClick={() => release(r.studentDbId)}
+              onClick={async () => {
+                const result = await release(r.studentDbId);
+                if (result.ok) await refresh();
+                else alert(result.error ?? "Release failed");
+              }}
               disabled={Boolean(r.released) || !windowOpen}
               style={{
                 ...primaryBtn,

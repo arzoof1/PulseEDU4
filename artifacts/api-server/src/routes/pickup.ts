@@ -352,6 +352,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
     firstName: string;
     lastName: string;
     grade: number;
+    dismissalMode: string;
     restricted: boolean;
   }> = [];
   if (auth.parentId !== null && primary) {
@@ -376,6 +377,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
           grade: studentsTable.grade,
+          dismissalMode: studentsTable.dismissalMode,
         })
         .from(studentsTable)
         .where(
@@ -393,6 +395,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           firstName: s.firstName,
           lastName: s.lastName,
           grade: s.grade,
+          dismissalMode: s.dismissalMode,
           restricted: sibAuth.restrictedFrom,
         };
       });
@@ -962,6 +965,28 @@ router.post("/pickup/walkers/release", requireStaff, async (req, res) => {
     return;
   }
 
+  // Optional context from the keypad lookup flow. When present we
+  // enforce the same restricted-pickup rules as /pickup/queue/add so
+  // a restricted guardian can't bypass the curb-side override prompt
+  // by walking up to the walker gate instead.
+  const rawAuthId = req.body?.pickupAuthorizationId;
+  const pickupAuthorizationId =
+    rawAuthId === undefined || rawAuthId === null
+      ? null
+      : Number(rawAuthId);
+  if (
+    pickupAuthorizationId !== null &&
+    (!Number.isInteger(pickupAuthorizationId) || pickupAuthorizationId <= 0)
+  ) {
+    res
+      .status(400)
+      .json({ error: "pickupAuthorizationId must be a positive integer" });
+    return;
+  }
+  const rawJust = req.body?.overrideJustification;
+  const overrideJustification =
+    typeof rawJust === "string" ? rawJust.trim() : "";
+
   // Cross-school + walker-mode check.
   const [student] = await db
     .select({
@@ -984,6 +1009,47 @@ router.post("/pickup/walkers/release", requireStaff, async (req, res) => {
       .status(400)
       .json({ error: "Student is not flagged as a walker for dismissal" });
     return;
+  }
+
+  // Restricted-pickup gate. Mirrors /pickup/queue/add: any restricted
+  // authorization needs an admin + a >=5-char justification, which we
+  // bake into the audit row's note column so reviewers can see why
+  // the gate let them through.
+  let auditNote: string | null = null;
+  if (pickupAuthorizationId !== null) {
+    const [auth] = await db
+      .select()
+      .from(studentPickupAuthorizationsTable)
+      .where(
+        and(
+          eq(studentPickupAuthorizationsTable.id, pickupAuthorizationId),
+          eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+          eq(studentPickupAuthorizationsTable.studentId, studentDbId),
+          eq(studentPickupAuthorizationsTable.active, true),
+        ),
+      );
+    if (!auth) {
+      res
+        .status(404)
+        .json({ error: "Pickup authorization not found for that student" });
+      return;
+    }
+    if (auth.restrictedFrom) {
+      if (overrideJustification.length < 5) {
+        res.status(409).json({
+          error:
+            "Restricted authorization — admin must supply a justification (5+ chars)",
+        });
+        return;
+      }
+      if (!staff.isAdmin && !staff.isSuperUser && !staff.isDistrictAdmin) {
+        res.status(403).json({
+          error: "Only an admin can override a restricted pickup",
+        });
+        return;
+      }
+      auditNote = `RESTRICTED override: ${overrideJustification}`;
+    }
   }
 
   // Server-side bell-window enforcement (parallel to the GET endpoint).
@@ -1017,11 +1083,11 @@ router.post("/pickup/walkers/release", requireStaff, async (req, res) => {
   await db.insert(pickupQueueEventsTable).values({
     schoolId,
     studentId: studentDbId,
-    pickupAuthorizationId: null,
+    pickupAuthorizationId,
     actorStaffId: staff.id,
     actorDisplayName: staff.displayName ?? "Staff",
     action: "walker_released",
-    note: null,
+    note: auditNote,
   });
   res.json({ ok: true });
 });
