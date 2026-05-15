@@ -5402,3 +5402,74 @@ export async function ensurePickupSchema(): Promise<void> {
       ADD COLUMN IF NOT EXISTS pickup_teacher_view_scope TEXT NOT NULL DEFAULT 'all_students'
   `);
 }
+
+// ---------------------------------------------------------------------------
+// AST (Alternate Schedule Time) schema. HCTA-contract earn/use bank with
+// quarter-hour increments and a per-staff append-only ledger. See
+// lib/db/src/schema/staffAst.ts for the state machine. Idempotent on every
+// boot.
+// ---------------------------------------------------------------------------
+export async function ensureAstSchema(): Promise<void> {
+  await db.execute(sql`
+    ALTER TABLE staff
+      ADD COLUMN IF NOT EXISTS can_approve_ast BOOLEAN NOT NULL DEFAULT false
+  `);
+  // Backfill: anyone already flagged as an admin tier (school admin /
+  // district admin / super user) gets approver rights for free. This is
+  // a one-time idempotent set — admins demoted later don't lose AST
+  // approval automatically (intentional: a building can decide its own
+  // approver list independent of the admin role).
+  await db.execute(sql`
+    UPDATE staff
+       SET can_approve_ast = true
+     WHERE can_approve_ast = false
+       AND (is_admin OR is_district_admin OR is_super_user)
+  `);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_ast_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending_preapproval',
+      event_date TEXT,
+      reason TEXT,
+      quarter_hours_requested INTEGER NOT NULL,
+      quarter_hours_actual INTEGER,
+      use_start_at TIMESTAMPTZ,
+      use_end_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      preapproved_at TIMESTAMPTZ,
+      preapproved_by_staff_id INTEGER,
+      preapproval_note TEXT,
+      completion_submitted_at TIMESTAMPTZ,
+      completion_note TEXT,
+      confirmed_at TIMESTAMPTZ,
+      confirmed_by_staff_id INTEGER,
+      confirm_note TEXT,
+      denied_at TIMESTAMPTZ,
+      denied_by_staff_id INTEGER,
+      deny_note TEXT,
+      cancelled_at TIMESTAMPTZ,
+      cancel_note TEXT
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_staff_idx ON staff_ast_requests(school_id, staff_id)`);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_state_idx ON staff_ast_requests(school_id, state)`);
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_ast_ledger (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      delta_quarter_hours INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      request_id INTEGER,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_ledger_school_staff_idx ON staff_ast_ledger(school_id, staff_id)`);
+}

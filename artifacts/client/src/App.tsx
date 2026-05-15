@@ -10,6 +10,8 @@ import {
   HelpToggleButton,
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
+import StaffAstPage from "./components/ast/StaffAstPage";
+import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
 import WatchlistNetwork from "./components/WatchlistNetwork";
@@ -4324,6 +4326,7 @@ function App() {
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
+    canApproveAst?: boolean;
     defaultRoom?: string | null;
     // Set when this session is currently previewing-as another staff
     // member via the Admin → Preview as Staff tool. Triggers the
@@ -4485,6 +4488,8 @@ function App() {
     | "equityDashboard"
     | "earlyWarningDashboard"
     | "interventionReportsLegacy"
+    | "ast"
+    | "astAdmin"
   >("hallPasses");
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
@@ -8272,6 +8277,7 @@ function App() {
     { key: "logIntervention", label: "Log Intervention", icon: IconClipboard },
     { key: "myInterventions", label: "My Interventions", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
+    { key: "ast", label: "AST", icon: IconClock },
   ];
   // Sidebar entries that map to a per-school feature flag. Anything not
   // in this map (Hall Passes, Tardy Pass, Teacher Roster) is always on.
@@ -8317,7 +8323,15 @@ function App() {
   const adminNavSections: NavSection[] = [
     { key: "staffRoles", label: "Staff & Roles", icon: IconUser },
     { key: "settings", label: "Settings", icon: IconSettings },
+    { key: "astAdmin", label: "AST Approvals", icon: IconClock },
   ];
+  // Anyone with the canApproveAst flag — admin tier OR an explicit per-staff
+  // grant (e.g. confidential secretary) — can see the admin AST queue.
+  const canApproveAst =
+    Boolean(authUser?.isAdmin) ||
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    Boolean(authUser?.canApproveAst);
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
@@ -9273,6 +9287,7 @@ function App() {
                     icon: IconClipboard,
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
+                {canApproveAst && renderNavItem(adminNavSections[2])}
               </NavGroup>
             )}
           </aside>
@@ -15837,6 +15852,10 @@ function App() {
         </>
       )}
 
+      {activeSection === "ast" && <StaffAstPage />}
+
+      {activeSection === "astAdmin" && canApproveAst && <AdminAstQueuePage />}
+
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
         <>
           <HowToUseHelp title="How to use Verify Pullouts">
@@ -19199,7 +19218,11 @@ function App() {
       {activeSection === "displays" && canManageDisplays && <Displays />}
 
       {activeSection === "adminHub" && (
-        <AdminHubPage />
+        <AdminHubPage
+          onOpenAstQueue={
+            canApproveAst ? () => setActiveSection("astAdmin") : undefined
+          }
+        />
       )}
 
       {activeSection === "watchlistHub" && (

@@ -197,20 +197,28 @@ function ReconciliationTile({ data }: { data: ReconciliationResp | null }) {
   );
 }
 
-export default function AdminHubPage() {
+export default function AdminHubPage({
+  onOpenAstQueue,
+}: {
+  // Optional deep-link to the AST admin queue. When provided, the AST
+  // pending-count tile becomes clickable. Wired by App.tsx.
+  onOpenAstQueue?: () => void;
+} = {}) {
   const [recent, setRecent] = useState<RecentRow[] | null>(null);
   const [ack, setAck] = useState<AckResp | null>(null);
   const [reconciliation, setReconciliation] =
     useState<ReconciliationResp | null>(null);
+  const [astPending, setAstPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2, r3] = await Promise.all([
+      const [r1, r2, r3, r4] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
         authFetch("/api/pickup/reconciliation"),
+        authFetch("/api/ast/admin-pending-count"),
       ]);
       if (!r1.ok) throw new Error(await r1.text());
       if (!r2.ok) throw new Error(await r2.text());
@@ -218,6 +226,14 @@ export default function AdminHubPage() {
       const d2 = (await r2.json()) as AckResp;
       setRecent(d1.rows);
       setAck(d2);
+      // AST count is best-effort. 403 (non-AST-approver staff who can
+      // still use the Admin Hub for ISS/OSS) is silently ignored.
+      if (r4.ok) {
+        const d4 = (await r4.json()) as { total?: number };
+        setAstPending(typeof d4.total === "number" ? d4.total : 0);
+      } else {
+        setAstPending(null);
+      }
       // Reconciliation is best-effort; admins without curb access still
       // see the rest of the hub. (canRunCurb covers admin already, so a
       // 403 here would only happen on a misconfigured tenant.)
@@ -393,6 +409,54 @@ export default function AdminHubPage() {
       )}
 
       <ReconciliationTile data={reconciliation} />
+
+      {astPending !== null && (
+        <button
+          type="button"
+          onClick={() => onOpenAstQueue?.()}
+          disabled={!onOpenAstQueue}
+          style={{
+            ...card,
+            textAlign: "left",
+            cursor: onOpenAstQueue ? "pointer" : "default",
+            background: astPending > 0 ? "#fff7ed" : "var(--surface, #fff)",
+            borderColor: astPending > 0 ? "#fed7aa" : "var(--border, #e5e7eb)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>⏱ AST: {astPending}</h3>
+            <div
+              style={{
+                color: "var(--text-subtle, #64748b)",
+                fontSize: 13,
+                marginTop: 2,
+              }}
+            >
+              {astPending === 0
+                ? "No pending Alternate Schedule Time approvals."
+                : `${astPending} pending Alternate Schedule Time approval${astPending === 1 ? "" : "s"}. Click to review.`}
+            </div>
+          </div>
+          {astPending > 0 && (
+            <span
+              style={{
+                background: "#ea580c",
+                color: "white",
+                borderRadius: 999,
+                padding: "4px 12px",
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              {astPending}
+            </span>
+          )}
+        </button>
+      )}
 
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>Recent assignments</h3>

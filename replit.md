@@ -225,6 +225,45 @@ _Populate as you build_
     revocation — schools sometimes flip it back) but is gated at
     render time. Document this in the school-settings privacy page.
 
+- **AST (Alternate Schedule Time) — follow-ups after MVP ship.**
+  Phase 1 shipped: `staff_ast_requests` + `staff_ast_ledger` schema
+  with quarter-hours stored as INT (no float drift), full earn/use
+  state machine in `routes/ast.ts` with tx-locked balance checks,
+  `canApproveAst` per-staff flag (any admin OR confidential
+  secretary), `StaffAstPage` + `AdminAstQueuePage`, top-level "AST"
+  nav for staff + "AST Approvals" admin nav, Admin Hub "AST: N"
+  tile deep-linking to the queue. Bell-only notifications via
+  `/api/ast/admin-pending-count` polling — no email dispatch. What
+  remains:
+  - **Year-end lapse cron (July 1).** Per HCTA contract, unused
+    balance lapses on June 30. Add a daily cron in
+    `artifacts/api-server/src/cron/` that, on July 1 in school-local
+    TZ, posts a `lapse` ledger entry per staff zeroing their bank
+    and logs a per-school summary row. Idempotent — re-run on the
+    same date is a no-op. Document the school-year boundary the
+    same way as the case-number TZ caveat above.
+  - **Voluntary mid-year transfer zero-out hook.** When a staff
+    record is moved to a different school (or marked inactive),
+    the AST bank should be zeroed at the source school with a
+    `transfer_out` ledger entry. Currently the bank silently
+    "follows" the row because the ledger is keyed to `staff_id`,
+    not `(school_id, staff_id)`. Fix by enforcing zero-out in the
+    staff-transfer admin path and adding a guard in
+    `/api/ast/me` that filters by current school.
+  - **Optional weekly email digest for admins.** Bell-only is the
+    primary notification channel, but a weekly Friday-morning
+    "5 pending AST approvals" email is cheap insurance for admins
+    who don't open the Admin Hub daily. Gate behind a per-school
+    `ast_email_digest_enabled` setting (default OFF). Re-uses the
+    existing Resend integration.
+  - **Per-staff ledger drilldown.** Today the staff page shows
+    request history; admins have no way to audit a specific
+    staffer's full ledger (credits, debits, lapses) in one view.
+    Add `GET /api/ast/staff/:id/ledger` (admin-gated) and a small
+    drilldown modal accessible from the Staff & Roles page.
+    Useful when a teacher disputes their balance or when prepping
+    end-of-year reports for the bargaining unit.
+
 ## Gotchas
 
 - **Timezone handling**: Be careful with date comparisons and `new Date()` as it can lead to UTC pitfalls. Use local `YYYY-MM-DD` strings for comparisons.

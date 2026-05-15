@@ -26,6 +26,7 @@ import {
   seedStudentRetentionsIfEmpty,
   ensureDataImporterRollbackSchema,
   ensurePickupSchema,
+  ensureAstSchema,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -140,6 +141,7 @@ async function runSeed(): Promise<void> {
   // manual_roster_upload_enabled toggle. Idempotent — safe on every boot.
   await ensureDataImporterRollbackSchema();
   await ensurePickupSchema();
+  await ensureAstSchema();
 }
 
 // In production we MUST open the port within the platform's health-check

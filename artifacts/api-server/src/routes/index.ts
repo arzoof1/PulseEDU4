@@ -82,6 +82,7 @@ import spotlightRouter from "./spotlight";
 import watchlistRouter from "./watchlist";
 import onboardingRouter from "./onboarding";
 import pickupRouter from "./pickup";
+import astRouter from "./ast";
 
 const router: IRouter = Router();
 
@@ -168,5 +169,6 @@ router.use(spotlightRouter);
 router.use(watchlistRouter);
 router.use(onboardingRouter);
 router.use(pickupRouter);
+router.use(astRouter);
 
 export default router;

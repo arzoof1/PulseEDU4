@@ -131,6 +131,14 @@ export const staffTable = pgTable("staff", {
   capManageDismissal: boolean("cap_manage_dismissal")
     .notNull()
     .default(false),
+  // AST (Alternate Schedule Time) per HCTA contract. Grants the holder
+  // permission to pre-approve / confirm / deny earn requests and approve /
+  // deny use requests. Backfilled true for any admin tier (school admin /
+  // district admin / super user) at boot so the rollout doesn't break
+  // existing workflows; admins can extend it to a confidential secretary
+  // or anyone else who needs to sign off without taking on the rest of
+  // the admin role. Route gates check admin OR this flag.
+  canApproveAst: boolean("can_approve_ast").notNull().default(false),
 
   // Optional home/default classroom for this staff member. Stored as
   // free text (the location name) so historical records remain intact if
