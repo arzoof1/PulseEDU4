@@ -29,6 +29,15 @@ interface SettingsResp {
   pickupTeacherViewScope?: "all_students" | "own_roster" | null;
 }
 
+interface MeResp {
+  staff?: {
+    isAdmin?: boolean;
+    isSuperUser?: boolean;
+    isDistrictAdmin?: boolean;
+    capCarRiderMonitor?: boolean;
+  };
+}
+
 interface PlaylistRow {
   id: number;
   name: string;
@@ -104,12 +113,56 @@ function CopyButton({ value }: { value: string }) {
   );
 }
 
-function UrlListItem({ title, path }: { title: string; path: string }) {
+function RoleBadge({ canOpen, label }: { canOpen: boolean; label: string }) {
+  return (
+    <span
+      style={{
+        fontSize: 11,
+        fontWeight: 600,
+        padding: "2px 8px",
+        borderRadius: 999,
+        background: canOpen ? "#d1fae5" : "#fef3c7",
+        color: canOpen ? "#065f46" : "#92400e",
+        whiteSpace: "nowrap",
+      }}
+      title={
+        canOpen
+          ? "Your account can open this URL."
+          : `This URL needs the ${label} role. It still works on a station that's signed in with that role — bookmark it there.`
+      }
+    >
+      {canOpen ? "✓ You can open" : `🔒 ${label} only`}
+    </span>
+  );
+}
+
+function UrlListItem({
+  title,
+  path,
+  canOpen,
+  requiredLabel,
+}: {
+  title: string;
+  path: string;
+  canOpen: boolean;
+  requiredLabel: string;
+}) {
   const url = `${window.location.origin}${path}`;
   return (
     <div style={urlRow}>
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 600, marginBottom: 2 }}>{title}</div>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "center",
+            gap: 8,
+            marginBottom: 2,
+            flexWrap: "wrap",
+          }}
+        >
+          <span style={{ fontWeight: 600 }}>{title}</span>
+          <RoleBadge canOpen={canOpen} label={requiredLabel} />
+        </div>
         <div
           style={{
             color: "var(--text-subtle)",
@@ -154,13 +207,25 @@ export default function PickupSettingsPage() {
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [canCurb, setCanCurb] = useState(false);
+  const [canAdmin, setCanAdmin] = useState(false);
 
   useEffect(() => {
     void (async () => {
-      const [s, p] = await Promise.all([
+      const [s, p, m] = await Promise.all([
         authFetch("/api/school-settings"),
         authFetch("/api/displays/playlists"),
+        authFetch("/api/auth/me"),
       ]);
+      if (m.ok) {
+        const me = (await m.json()) as MeResp;
+        const st = me.staff ?? {};
+        const isAdmin = Boolean(
+          st.isAdmin || st.isSuperUser || st.isDistrictAdmin,
+        );
+        setCanAdmin(isAdmin);
+        setCanCurb(isAdmin || Boolean(st.capCarRiderMonitor));
+      }
       if (s.ok) {
         const d = (await s.json()) as SettingsResp;
         if (
@@ -214,6 +279,9 @@ export default function PickupSettingsPage() {
       })),
     [playlists],
   );
+  // Walker / curb need the Car-Rider Monitor cap (or admin). Admin URL
+  // needs admin/SU/DA. Teacher view is open to any signed-in staff. TVs
+  // are public (no auth) so the badge is always green.
 
   return (
     <div>
@@ -355,13 +423,30 @@ export default function PickupSettingsPage() {
           One link per station. Open each on the right device, then save it
           to the bookmark bar / home screen.
         </p>
-        <UrlListItem title="Curb keypad (front office tablet)" path="/pickup/curb" />
-        <UrlListItem title="Walker gate (walker dismissal door)" path="/pickup/walkers" />
+        <UrlListItem
+          title="Curb keypad (front office tablet)"
+          path="/pickup/curb"
+          canOpen={canCurb}
+          requiredLabel="Car-Rider Monitor"
+        />
+        <UrlListItem
+          title="Walker gate (walker dismissal door)"
+          path="/pickup/walkers"
+          canOpen={canCurb}
+          requiredLabel="Car-Rider Monitor"
+        />
         <UrlListItem
           title="Teacher view (any classroom laptop)"
           path="/pickup/teacher"
+          canOpen={true}
+          requiredLabel="Any signed-in staff"
         />
-        <UrlListItem title="Manage pickup numbers" path="/pickup/admin" />
+        <UrlListItem
+          title="Manage pickup numbers"
+          path="/pickup/admin"
+          canOpen={canAdmin}
+          requiredLabel="Admin"
+        />
         {tvUrls.length === 0 ? (
           <div
             style={{
@@ -375,7 +460,13 @@ export default function PickupSettingsPage() {
           </div>
         ) : (
           tvUrls.map((u) => (
-            <UrlListItem key={u.path} title={u.title} path={u.path} />
+            <UrlListItem
+              key={u.path}
+              title={u.title}
+              path={u.path}
+              canOpen={true}
+              requiredLabel="Public"
+            />
           ))
         )}
       </div>
