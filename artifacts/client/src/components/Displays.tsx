@@ -26,6 +26,7 @@ interface PlaylistRow {
   defaultDurationSeconds: number;
   showPbisHousePage: boolean;
   showActiveHallPasses: boolean;
+  showPickupQueue: boolean;
   showHeartbeat: boolean;
   // Manual on/off kill switch (independent of the time-window
   // `scheduleEnabled`). When false the public URL serves an
@@ -64,6 +65,7 @@ interface PlaylistDetail {
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
     showActiveHallPasses: boolean;
+    showPickupQueue: boolean;
     showHeartbeat: boolean;
     scheduleEnabled: boolean;
     scheduleStartTime: string | null;
@@ -355,6 +357,7 @@ export default function Displays() {
                     {p.defaultDurationSeconds}s default
                     {p.showPbisHousePage ? " · 🏠 House page" : ""}
                     {p.showActiveHallPasses ? " · 🎫 Hall passes" : ""}
+                    {p.showPickupQueue ? " · 🚗 Pick-up queue" : ""}
                     {p.showHeartbeat ? " · 💓 Heartbeat" : ""}
                   </div>
                   <div
@@ -482,6 +485,7 @@ function PlaylistEditor({
     defaultDurationSeconds?: number;
     showPbisHousePage?: boolean;
     showActiveHallPasses?: boolean;
+    showPickupQueue?: boolean;
     showHeartbeat?: boolean;
     scheduleEnabled?: boolean;
     scheduleStartTime?: string | null;
@@ -836,6 +840,25 @@ function PlaylistEditor({
               />
               <span style={{ fontSize: 14 }}>
                 Show Active Hall Passes slide each loop
+              </span>
+            </label>
+            <label
+              style={{ display: "flex", alignItems: "center", gap: 8 }}
+            >
+              <input
+                type="checkbox"
+                checked={detail.playlist.showPickupQueue}
+                onChange={(e) =>
+                  void patchPlaylist({
+                    showPickupQueue: e.currentTarget.checked,
+                  })
+                }
+              />
+              <span style={{ fontSize: 14 }}>
+                Show Parent Pick-Up queue each loop
+                {detail.playlist.ownerStaffId
+                  ? " (filtered to this playlist's owner roster)"
+                  : " (school-wide — no owner set)"}
               </span>
             </label>
             <label

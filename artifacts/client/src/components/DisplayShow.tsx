@@ -100,6 +100,7 @@ interface PublicPlaylist {
     defaultDurationSeconds: number;
     showPbisHousePage: boolean;
     showActiveHallPasses: boolean;
+    showPickupQueue: boolean;
     showHeartbeat: boolean;
     scheduleEnabled: boolean;
     scheduleStartTime: string | null;
@@ -117,6 +118,21 @@ interface PublicPlaylist {
     recent: RecentRecognition[];
   } | null;
   hallPassData: HallPassData | null;
+  pickupQueueData: PickupQueueData | null;
+}
+
+interface PickupQueueEntry {
+  position: number;
+  studentLabel: string;
+  grade: number | null;
+  addedAt: string;
+  status: "in_queue" | "walking_out";
+}
+
+interface PickupQueueData {
+  queue: PickupQueueEntry[];
+  ownerFiltered: boolean;
+  generatedAt: string;
 }
 
 interface PublicOverride {
@@ -185,6 +201,7 @@ function pickActiveOverride(
 type Slide =
   | { kind: "house"; data: PublicPlaylist["houseData"] }
   | { kind: "passes"; data: HallPassData }
+  | { kind: "pickup"; data: PickupQueueData }
   | { kind: "heartbeat"; schoolId: number }
   | { kind: "item"; item: PublicItem };
 
@@ -340,6 +357,9 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
     if (playlist.playlist.showActiveHallPasses && playlist.hallPassData) {
       list.push({ kind: "passes", data: playlist.hallPassData });
     }
+    if (playlist.playlist.showPickupQueue && playlist.pickupQueueData) {
+      list.push({ kind: "pickup", data: playlist.pickupQueueData });
+    }
     if (playlist.playlist.showHeartbeat) {
       // Heartbeat is rendered as an iframe of the existing /signage/heartbeat
       // page, which polls /api/pulse/* for itself. We just need to know
@@ -476,6 +496,13 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
           // key forces a fresh mount when the slide changes so the
           // useTimer inside cleans up correctly.
           key={`passes-${slideIdx}`}
+        />
+      ) : slide.kind === "pickup" ? (
+        <PickupQueueSlide
+          data={slide.data}
+          durationSeconds={Math.max(defaultDuration, 12)}
+          onDone={advance}
+          key={`pickup-${slideIdx}`}
         />
       ) : slide.kind === "heartbeat" ? (
         <HeartbeatSlide
@@ -997,6 +1024,114 @@ function HallPassesSlide({
           {data.passes.slice(0, 12).map((p) => (
             <ActivePassCard key={p.id} pass={p} />
           ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ===================================================================
+// Pickup queue slide. Mirrors HallPassesSlide's contract — auto-
+// advances after `durationSeconds`. Server already filtered to the
+// playlist owner's roster (when set), so we just render what arrives.
+// Read-only on purpose: TVs aren't authenticated, so the teacher's
+// "released to walk" action lives in the staff curb page, not here.
+// ===================================================================
+function PickupQueueSlide({
+  data,
+  durationSeconds,
+  onDone,
+}: {
+  data: PickupQueueData;
+  durationSeconds: number;
+  onDone: () => void;
+}) {
+  useTimer(durationSeconds, onDone);
+  return (
+    <div
+      style={{
+        position: "absolute",
+        inset: 0,
+        background: "linear-gradient(135deg, #042f2e 0%, #134e4a 100%)",
+        color: "white",
+        padding: "48px 56px",
+        display: "flex",
+        flexDirection: "column",
+        gap: 24,
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 16 }}>
+        <div style={{ fontSize: 48, fontWeight: 800 }}>🚗 Pick-Up Line</div>
+        <div style={{ fontSize: 18, opacity: 0.7 }}>
+          {data.queue.length} waiting
+          {data.ownerFiltered ? " · your students" : " · school-wide"}
+        </div>
+      </div>
+      {data.queue.length === 0 ? (
+        <div
+          style={{
+            flex: 1,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 28,
+            opacity: 0.55,
+          }}
+        >
+          No students in the pick-up line right now.
+        </div>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(320px, 1fr))",
+            gap: 14,
+            overflow: "hidden",
+          }}
+        >
+          {data.queue.slice(0, 12).map((e) => {
+            const accent = e.status === "walking_out" ? "#22c55e" : "#fbbf24";
+            return (
+              <div
+                key={`${e.position}-${e.studentLabel}`}
+                style={{
+                  background: "rgba(255,255,255,0.05)",
+                  border: `1px solid ${accent}`,
+                  borderLeft: `5px solid ${accent}`,
+                  borderRadius: 10,
+                  padding: "12px 16px",
+                }}
+              >
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    gap: 8,
+                  }}
+                >
+                  <div style={{ fontWeight: 700, fontSize: 22 }}>
+                    {e.studentLabel}
+                  </div>
+                  <div
+                    style={{
+                      fontVariantNumeric: "tabular-nums",
+                      fontWeight: 700,
+                      color: accent,
+                      fontSize: 20,
+                    }}
+                  >
+                    #{e.position}
+                  </div>
+                </div>
+                <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>
+                  {e.grade !== null ? `Grade ${e.grade} · ` : ""}
+                  {e.status === "walking_out"
+                    ? "Released — walking out"
+                    : "In line"}
+                </div>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>

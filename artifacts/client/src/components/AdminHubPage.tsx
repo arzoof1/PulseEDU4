@@ -33,6 +33,34 @@ interface AckResp {
   students: AckExpected[];
 }
 
+interface ReconciliationStudent {
+  id: number;
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  grade: number | null;
+  dismissalMode: string | null;
+}
+
+interface ReconciliationResp {
+  asOf: string;
+  byMode: Record<string, ReconciliationStudent[]>;
+}
+
+// "After-cutoff" gate for the still-on-campus tile. School-overridable
+// later (replit.md spec calls for a per-school setting); for now the
+// default 3:30 PM matches the spec text and avoids alarming admins
+// during the school day.
+const RECONCILIATION_CUTOFF_HHMM = "15:30";
+
+const DISMISSAL_MODE_LABELS: Record<string, string> = {
+  car_rider: "Car riders",
+  walker: "Walkers",
+  bus: "Bus riders",
+  aftercare: "Aftercare",
+  parent_pickup_only: "Parent pick-up only",
+};
+
 const card: CSSProperties = {
   padding: "1rem 1.1rem",
   border: "1px solid var(--border, #e5e7eb)",
@@ -56,17 +84,129 @@ const bigBtn: CSSProperties = {
   textAlign: "left",
 };
 
+function nowHHMM(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
+}
+
+// Renders the "Still on campus" reconciliation tile. Hidden until the
+// configured cutoff so it doesn't alarm admins mid-day, and hidden if
+// the queue is empty (no signal). Grouped by dismissal mode so the
+// front office can call the right list of parents.
+function ReconciliationTile({ data }: { data: ReconciliationResp | null }) {
+  if (!data) return null;
+  const beforeCutoff = nowHHMM() < RECONCILIATION_CUTOFF_HHMM;
+  const modeKeys = Object.keys(data.byMode).sort();
+  const total = modeKeys.reduce((n, k) => n + data.byMode[k]!.length, 0);
+  if (beforeCutoff) return null;
+  if (total === 0) {
+    return (
+      <div style={card}>
+        <h3 style={{ marginTop: 0 }}>🚗 Still on campus</h3>
+        <p style={{ color: "var(--text-subtle)", margin: 0 }}>
+          All students have been released as of{" "}
+          {new Date(data.asOf).toLocaleTimeString()}.
+        </p>
+      </div>
+    );
+  }
+  return (
+    <div
+      style={{
+        ...card,
+        borderColor: "#fbbf24",
+        background: "#fffbeb",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>🚗 Still on campus</h3>
+        <span style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+          {total} student{total === 1 ? "" : "s"} not yet released · as of{" "}
+          {new Date(data.asOf).toLocaleTimeString()}
+        </span>
+      </div>
+      <p
+        style={{
+          margin: "6px 0 10px",
+          color: "var(--text-subtle)",
+          fontSize: 12,
+        }}
+      >
+        Anyone with no release event today (in-car, walker-released, or
+        auto-cleared). Grouped by the student's dismissal mode so the
+        front office can call the right list of parents.
+      </p>
+      <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+        {modeKeys.map((mode) => {
+          const students = data.byMode[mode]!;
+          const label = DISMISSAL_MODE_LABELS[mode] ?? mode;
+          return (
+            <div key={mode}>
+              <div
+                style={{
+                  fontSize: 13,
+                  fontWeight: 700,
+                  marginBottom: 4,
+                  color: "#92400e",
+                }}
+              >
+                {label} · {students.length}
+              </div>
+              <div
+                style={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 6,
+                }}
+              >
+                {students.map((s) => (
+                  <span
+                    key={s.id}
+                    style={{
+                      padding: "3px 8px",
+                      background: "white",
+                      border: "1px solid #fbbf24",
+                      borderRadius: 999,
+                      fontSize: 12,
+                    }}
+                  >
+                    {s.firstName} {s.lastName}
+                    {s.grade !== null && (
+                      <span
+                        style={{
+                          marginLeft: 4,
+                          color: "var(--text-subtle)",
+                          fontSize: 11,
+                        }}
+                      >
+                        Gr {s.grade}
+                      </span>
+                    )}
+                  </span>
+                ))}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 export default function AdminHubPage() {
   const [recent, setRecent] = useState<RecentRow[] | null>(null);
   const [ack, setAck] = useState<AckResp | null>(null);
+  const [reconciliation, setReconciliation] =
+    useState<ReconciliationResp | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2] = await Promise.all([
+      const [r1, r2, r3] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
+        authFetch("/api/pickup/reconciliation"),
       ]);
       if (!r1.ok) throw new Error(await r1.text());
       if (!r2.ok) throw new Error(await r2.text());
@@ -74,6 +214,14 @@ export default function AdminHubPage() {
       const d2 = (await r2.json()) as AckResp;
       setRecent(d1.rows);
       setAck(d2);
+      // Reconciliation is best-effort; admins without curb access still
+      // see the rest of the hub. (canRunCurb covers admin already, so a
+      // 403 here would only happen on a misconfigured tenant.)
+      if (r3.ok) {
+        setReconciliation((await r3.json()) as ReconciliationResp);
+      } else {
+        setReconciliation(null);
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load Admin Hub");
@@ -82,6 +230,14 @@ export default function AdminHubPage() {
 
   useEffect(() => {
     void reload();
+    // Poll every 30s so the "Still on campus" tile shrinks in real
+    // time as the front office runs the curb keypad. 30s matches the
+    // hall-passes polling cadence elsewhere in the app — cheap and
+    // good enough for a dismissal window that lasts ~20 minutes.
+    const id = setInterval(() => {
+      void reload();
+    }, 30_000);
+    return () => clearInterval(id);
   }, [reload]);
 
   const cancelLog = async (kind: "iss" | "oss", id: number) => {
@@ -231,6 +387,8 @@ export default function AdminHubPage() {
           </div>
         </div>
       )}
+
+      <ReconciliationTile data={reconciliation} />
 
       <div style={card}>
         <h3 style={{ marginTop: 0 }}>Recent assignments</h3>

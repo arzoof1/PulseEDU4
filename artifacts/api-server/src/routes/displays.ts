@@ -37,8 +37,11 @@ import {
   displayPlaylistsTable,
   displayPlaylistItemsTable,
   displayPlaylistOverridesTable,
+  classSectionsTable,
+  sectionRosterTable,
+  pickupQueueEventsTable,
 } from "@workspace/db";
-import { and, eq, sql, desc, asc, inArray } from "drizzle-orm";
+import { and, eq, gte, sql, desc, asc, inArray } from "drizzle-orm";
 import {
   ObjectStorageService,
   ObjectNotFoundError,
@@ -190,6 +193,7 @@ router.get("/displays/playlists", async (req, res) => {
         defaultDurationSeconds: displayPlaylistsTable.defaultDurationSeconds,
         showPbisHousePage: displayPlaylistsTable.showPbisHousePage,
         showActiveHallPasses: displayPlaylistsTable.showActiveHallPasses,
+        showPickupQueue: displayPlaylistsTable.showPickupQueue,
         showHeartbeat: displayPlaylistsTable.showHeartbeat,
         scheduleEnabled: displayPlaylistsTable.scheduleEnabled,
         scheduleStartTime: displayPlaylistsTable.scheduleStartTime,
@@ -380,6 +384,9 @@ router.patch("/displays/playlists/:id", async (req, res) => {
     }
     if (req.body?.showActiveHallPasses !== undefined) {
       update.showActiveHallPasses = Boolean(req.body.showActiveHallPasses);
+    }
+    if (req.body?.showPickupQueue !== undefined) {
+      update.showPickupQueue = Boolean(req.body.showPickupQueue);
     }
     if (req.body?.showHeartbeat !== undefined) {
       update.showHeartbeat = Boolean(req.body.showHeartbeat);
@@ -744,6 +751,151 @@ router.delete("/displays/playlists/:id/items/:itemId", async (req, res) => {
 // no district student id, no teacher email, no notes — only fields the
 // front-of-school TV is OK to show. Computes `minutesOpen` server-side so
 // the cycler doesn't need a synced clock with the database.
+// Pickup queue, optionally filtered to one teacher's class roster.
+// Mirrors the derivation in /api/pickup/queue (today's append-only
+// event log, terminal events remove the student) but joins through
+// section_roster so a classroom-mounted TV only shows that teacher's
+// students. When ownerStaffId is null (commons display) the school-
+// wide queue is returned. Public endpoint — no PII (first name + last
+// initial only, same convention as the hall-passes slide).
+async function loadPickupQueueForOwner(
+  schoolId: number,
+  ownerStaffId: number | null,
+) {
+  // School-local "today" boundary, matching the pickup route helper.
+  const now = new Date();
+  const startOfToday = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    0,
+    0,
+    0,
+    0,
+  );
+
+  const events = await db
+    .select({
+      studentId: pickupQueueEventsTable.studentId,
+      action: pickupQueueEventsTable.action,
+      occurredAt: pickupQueueEventsTable.occurredAt,
+    })
+    .from(pickupQueueEventsTable)
+    .where(
+      and(
+        eq(pickupQueueEventsTable.schoolId, schoolId),
+        gte(pickupQueueEventsTable.occurredAt, startOfToday),
+      ),
+    )
+    .orderBy(asc(pickupQueueEventsTable.occurredAt));
+
+  const TERMINAL = new Set(["in_car", "auto_cleared", "walker_released"]);
+  type Entry = {
+    studentId: number;
+    addedAt: Date;
+    status: "in_queue" | "walking_out";
+  };
+  const byStudent = new Map<number, Entry>();
+  for (const e of events) {
+    if (TERMINAL.has(e.action)) {
+      byStudent.delete(e.studentId);
+      continue;
+    }
+    if (e.action === "added") {
+      byStudent.set(e.studentId, {
+        studentId: e.studentId,
+        addedAt: e.occurredAt,
+        status: "in_queue",
+      });
+    } else if (e.action === "released_to_walk") {
+      const ex = byStudent.get(e.studentId);
+      if (ex) ex.status = "walking_out";
+    }
+  }
+
+  let entries = Array.from(byStudent.values()).sort(
+    (a, b) => a.addedAt.getTime() - b.addedAt.getTime(),
+  );
+
+  // Owner-roster filter. section_roster.studentId is the TEXT district
+  // code, not the integer PK, so we have to join through students to
+  // translate. Returns the set of student integer PKs the owner teaches
+  // across all of their non-planning sections.
+  if (ownerStaffId !== null && entries.length > 0) {
+    const rosterRows = await db
+      .select({ id: studentsTable.id })
+      .from(classSectionsTable)
+      .innerJoin(
+        sectionRosterTable,
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      )
+      .innerJoin(
+        studentsTable,
+        and(
+          eq(studentsTable.studentId, sectionRosterTable.studentId),
+          eq(studentsTable.schoolId, classSectionsTable.schoolId),
+        ),
+      )
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.teacherStaffId, ownerStaffId),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      );
+    const allowed = new Set(rosterRows.map((r) => r.id));
+    entries = entries.filter((e) => allowed.has(e.studentId));
+  }
+
+  // Hydrate names + grade for the surviving set.
+  const ids = entries.map((e) => e.studentId);
+  let nameById = new Map<
+    number,
+    { firstName: string; lastName: string; grade: number }
+  >();
+  if (ids.length > 0) {
+    const rows = await db
+      .select({
+        id: studentsTable.id,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.id, ids),
+        ),
+      );
+    nameById = new Map(
+      rows.map((r) => [
+        r.id,
+        { firstName: r.firstName, lastName: r.lastName, grade: r.grade },
+      ]),
+    );
+  }
+
+  const queue = entries.map((e, idx) => {
+    const s = nameById.get(e.studentId);
+    const firstName = s?.firstName ?? "Student";
+    const lastInitial = s?.lastName ? `${s.lastName.charAt(0)}.` : "";
+    return {
+      position: idx + 1,
+      studentLabel: lastInitial ? `${firstName} ${lastInitial}` : firstName,
+      grade: s?.grade ?? null,
+      addedAt: e.addedAt.toISOString(),
+      status: e.status,
+    };
+  });
+
+  return {
+    queue,
+    ownerFiltered: ownerStaffId !== null,
+    generatedAt: new Date().toISOString(),
+  };
+}
+
 async function loadActiveHallPasses(schoolId: number) {
   const rows = await db
     .select({
@@ -828,6 +980,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
           defaultDurationSeconds: pl.defaultDurationSeconds,
           showPbisHousePage: false,
           showActiveHallPasses: false,
+          showPickupQueue: false,
           showHeartbeat: false,
           scheduleEnabled: false,
           scheduleStartTime: null,
@@ -839,6 +992,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         items: [],
         overrides: [],
         houseData: null,
+        pickupQueueData: null,
       });
       return;
     }
@@ -953,6 +1107,19 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       hallPassData = await loadActiveHallPasses(pl.schoolId);
     }
 
+    // Pickup queue (v2 toggle). Filtered to the playlist owner's
+    // class roster so a classroom-mounted TV only shows that
+    // teacher's students. When the playlist has no owner (e.g. a
+    // commons display), the toggle still works but renders the
+    // school-wide queue.
+    let pickupQueueData: unknown = null;
+    if (pl.showPickupQueue) {
+      pickupQueueData = await loadPickupQueueForOwner(
+        pl.schoolId,
+        pl.ownerStaffId,
+      );
+    }
+
     // Per-display schedule overrides. Each override row points at ANOTHER
     // playlist whose items get cycled in place of the base loop during a
     // (dayOfWeek, startTime, endTime) window. We pre-resolve the items
@@ -1038,6 +1205,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         defaultDurationSeconds: pl.defaultDurationSeconds,
         showPbisHousePage: pl.showPbisHousePage,
         showActiveHallPasses: pl.showActiveHallPasses,
+        showPickupQueue: pl.showPickupQueue,
         showHeartbeat: pl.showHeartbeat,
         scheduleEnabled: pl.scheduleEnabled,
         scheduleStartTime: pl.scheduleStartTime,
@@ -1072,6 +1240,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
       })),
       houseData,
       hallPassData,
+      pickupQueueData,
     });
   } catch (e) {
     // eslint-disable-next-line no-console
