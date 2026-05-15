@@ -1,17 +1,16 @@
-// AST clock bell for the global header. One badge serves both audiences:
-//   - Staff side: counts requests THEY need to act on (preapproved earns
-//     awaiting completion submission, plus recently-decided requests).
-//   - Admin/approver side: counts items in the approval queue.
-// Click routes to whichever surface has work — admin queue if the user
-// is an approver and there is something pending there, otherwise the
-// staff page. Polls every 60s plus on a manual refresh trigger.
+// AST clock pill for the global header — ADMIN side only.
+// Visible only to approvers when the queue has items. Shows the clock
+// icon with the word "AST" and a count badge so it reads as
+// "AST queue has work" at a glance. Click jumps to the approvals page.
+//
+// The staff-side counterpart is a small badge rendered next to the
+// "AST" item in the left sidebar (see AstSidebarBadge).
 import { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 interface Props {
   refreshKey: number;
   canApproveAst: boolean;
-  onOpenStaff: () => void;
   onOpenAdmin: () => void;
 }
 
@@ -58,46 +57,37 @@ function ensureStyles(): void {
 export default function AstNotificationBell({
   refreshKey,
   canApproveAst,
-  onOpenStaff,
   onOpenAdmin,
 }: Props) {
-  const [staffCount, setStaffCount] = useState(0);
-  const [adminCount, setAdminCount] = useState(0);
+  const [count, setCount] = useState(0);
 
   useEffect(() => {
     ensureStyles();
   }, []);
 
   useEffect(() => {
+    if (!canApproveAst) {
+      setCount(0);
+      return;
+    }
     let cancelled = false;
     let interval: ReturnType<typeof setInterval> | null = null;
 
     async function poll() {
       try {
-        const calls: Promise<Response>[] = [
-          authFetch("/api/ast/my-actionable-count", { cache: "no-store" }),
-        ];
-        if (canApproveAst) {
-          calls.push(
-            authFetch("/api/ast/admin-pending-count", { cache: "no-store" }),
-          );
-        }
-        const results = await Promise.all(calls);
+        const r = await authFetch("/api/ast/admin-pending-count", {
+          cache: "no-store",
+        });
+        if (!r.ok) return;
+        const d = (await r.json()) as { count?: number };
         if (cancelled) return;
-        if (results[0]?.ok) {
-          const d = (await results[0].json()) as { count?: number };
-          setStaffCount(Number(d?.count ?? 0));
-        }
-        if (canApproveAst && results[1]?.ok) {
-          const d = (await results[1].json()) as { count?: number };
-          setAdminCount(Number(d?.count ?? 0));
-        }
+        setCount(Number(d?.count ?? 0));
       } catch {
         /* swallow */
       }
     }
 
-    poll();
+    void poll();
     interval = setInterval(poll, 60_000);
     return () => {
       cancelled = true;
@@ -105,36 +95,40 @@ export default function AstNotificationBell({
     };
   }, [refreshKey, canApproveAst]);
 
-  const total = staffCount + adminCount;
-  if (total <= 0) return null;
-
-  const goAdmin = canApproveAst && adminCount > 0;
-  const title = goAdmin
-    ? `${adminCount} AST request${adminCount === 1 ? "" : "s"} awaiting your approval`
-    : `${staffCount} AST update${staffCount === 1 ? "" : "s"} for you`;
+  if (!canApproveAst || count <= 0) return null;
+  const title = `${count} AST request${count === 1 ? "" : "s"} awaiting your approval`;
 
   return (
     <button
       type="button"
-      onClick={goAdmin ? onOpenAdmin : onOpenStaff}
+      onClick={onOpenAdmin}
       className="ast-bell-btn"
       title={title}
       aria-label={title}
       style={{
         position: "relative",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
         background: "rgba(59, 130, 246, 0.12)",
         border: "1px solid rgba(59, 130, 246, 0.55)",
         cursor: "pointer",
-        padding: "0.3rem 0.55rem",
-        fontSize: "1.25rem",
+        padding: "0.3rem 0.65rem",
+        fontSize: "1rem",
         borderRadius: 999,
         marginRight: "0.25rem",
         lineHeight: 1,
+        color: "var(--text, #0f172a)",
       }}
     >
-      <span className="ast-bell-icon" aria-hidden="true">
+      <span
+        className="ast-bell-icon"
+        aria-hidden="true"
+        style={{ fontSize: "1.15rem" }}
+      >
         ⏰
       </span>
+      <span style={{ fontWeight: 600, fontSize: "0.85rem" }}>AST</span>
       <span
         style={{
           position: "absolute",
@@ -150,7 +144,7 @@ export default function AstNotificationBell({
           boxShadow: "0 0 0 2px white",
         }}
       >
-        {total}
+        {count}
       </span>
     </button>
   );

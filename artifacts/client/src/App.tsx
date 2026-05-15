@@ -30,6 +30,7 @@ import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import AstNotificationBell from "./components/AstNotificationBell";
+import AstSidebarBadge from "./components/AstSidebarBadge";
 import { StudentFinderModal } from "./components/StudentFinderModal";
 import StaffDirectoryPage from "./components/StaffDirectoryPage";
 import OnboardingChecklist from "./components/OnboardingChecklist";
@@ -8652,15 +8653,13 @@ function App() {
           refreshKey={interventionRefreshKey}
           onClick={() => setActiveSection("interventionsToday")}
         />
-        {/* AST clock bell — shows when the staff member has a pre-approved
-            earn awaiting completion submission, a recently-decided
-            request, OR (for approvers) anything pending in the queue.
-            Clicks route to the admin queue if there's admin work,
-            otherwise to the staff page. */}
+        {/* AST admin clock — visible only to approvers when there's
+            something pending in the AST queue. Clicks straight into the
+            approvals page. Staff side gets a quieter badge in the
+            sidebar next to the AST nav item. */}
         <AstNotificationBell
           refreshKey={interventionRefreshKey}
           canApproveAst={canApproveAst}
-          onOpenStaff={() => setActiveSection("ast")}
           onOpenAdmin={() => setActiveSection("astAdmin")}
         />
         {/* Student Finder — "where is this kid right now?" lookup
@@ -9006,11 +9005,30 @@ function App() {
             {/* AST (Alternate Schedule Time) — visible to every staff
                 member. The actual approval queue lives under School
                 Admin and is gated by canApproveAst. */}
-            {renderNavItem({
-              key: "ast",
-              label: "AST",
-              icon: IconClock,
-            })}
+            <span
+              style={{
+                position: "relative",
+                display: "inline-flex",
+                alignItems: "center",
+              }}
+            >
+              {renderNavItem({
+                key: "ast",
+                label: "AST",
+                icon: IconClock,
+              })}
+              <span
+                style={{
+                  position: "absolute",
+                  right: 8,
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  pointerEvents: "none",
+                }}
+              >
+                <AstSidebarBadge refreshKey={interventionRefreshKey} />
+              </span>
+            </span>
             {/* Verify Pullout — surfaces in Quick Access ONLY when there's
                 pending work (pendingPulloutCount > 0). When the queue is
                 empty it retreats to its quiet home in Behavior Support.

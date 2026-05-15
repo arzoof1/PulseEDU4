@@ -217,6 +217,15 @@ export default function StaffAstPage() {
 
   useEffect(() => {
     void load();
+    // Mark all admin replies as read for this user. Drives the sidebar
+    // bell to zero on visit. Fire-and-forget — failure is silent because
+    // the next visit will retry.
+    void authFetch("/api/ast/acknowledge", {
+      method: "POST",
+      cache: "no-store",
+    }).catch(() => {
+      /* swallow */
+    });
   }, [load]);
 
   const balanceQh = me?.balanceQuarterHours ?? 0;

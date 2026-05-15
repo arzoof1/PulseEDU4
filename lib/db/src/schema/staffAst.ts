@@ -94,6 +94,14 @@ export const staffAstRequestsTable = pgTable(
     denyNote: text("deny_note"),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
     cancelNote: text("cancel_note"),
+
+    // Set when the requesting staff member opens the AST page after a
+    // decision (preapprove / deny / confirm) has been written. Used by
+    // the sidebar bell to count only UNREAD admin replies — i.e. things
+    // the staff member hasn't seen yet. NULL means "still unread".
+    staffAcknowledgedAt: timestamp("staff_acknowledged_at", {
+      withTimezone: true,
+    }),
   },
   (t) => ({
     bySchoolStaff: index("staff_ast_requests_school_staff_idx").on(

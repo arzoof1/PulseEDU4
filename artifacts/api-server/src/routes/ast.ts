@@ -203,11 +203,12 @@ router.get(
   },
 );
 
-// Lightweight endpoint for the staff-side AST clock bell. Counts requests
-// the signed-in staffer needs to act on (preapproved earns awaiting
-// completion submission) plus recently-decided requests they haven't
-// "seen" yet (denials in the last 7 days, confirmations in the last 3).
-// Single COUNT query so the badge poll is cheap.
+// Lightweight endpoint for the staff-side AST sidebar bell. Counts ONLY
+// admin replies the staff member hasn't read yet — i.e. rows where an
+// admin has decided (preapprove / deny / confirm) AND staff_acknowledged_at
+// is still NULL. Standing to-dos like "preapproved earn awaiting your
+// completion submission" are NOT counted: the user wants the bell to
+// mean "admin replied, go look", not "you have homework."
 router.get(
   "/ast/my-actionable-count",
   requireAnyStaff,
@@ -222,23 +223,43 @@ router.get(
         and(
           eq(staffAstRequestsTable.schoolId, schoolId),
           eq(staffAstRequestsTable.staffId, me.id),
+          sql`${staffAstRequestsTable.staffAcknowledgedAt} IS NULL`,
           sql`(
-            (${staffAstRequestsTable.kind} = 'earn'
-              AND ${staffAstRequestsTable.state} = 'preapproved')
-            OR
-            (${staffAstRequestsTable.state} = 'denied'
-              AND ${staffAstRequestsTable.deniedAt} > NOW() - INTERVAL '7 days')
-            OR
-            (${staffAstRequestsTable.state} = 'confirmed'
-              AND ${staffAstRequestsTable.confirmedAt} > NOW() - INTERVAL '3 days')
-            OR
-            (${staffAstRequestsTable.kind} = 'use'
-              AND ${staffAstRequestsTable.state} = 'preapproved'
-              AND ${staffAstRequestsTable.preapprovedAt} > NOW() - INTERVAL '3 days')
+            ${staffAstRequestsTable.preapprovedAt} IS NOT NULL
+            OR ${staffAstRequestsTable.deniedAt} IS NOT NULL
+            OR ${staffAstRequestsTable.confirmedAt} IS NOT NULL
           )`,
         ),
       );
     res.json({ count: Number(row?.n ?? 0) });
+  },
+);
+
+// Mark all of the signed-in staff member's pending admin replies as read.
+// Called by StaffAstPage on mount. Idempotent.
+router.post(
+  "/ast/acknowledge",
+  requireAnyStaff,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const me = getStaff(req);
+    await db
+      .update(staffAstRequestsTable)
+      .set({ staffAcknowledgedAt: new Date() })
+      .where(
+        and(
+          eq(staffAstRequestsTable.schoolId, schoolId),
+          eq(staffAstRequestsTable.staffId, me.id),
+          sql`${staffAstRequestsTable.staffAcknowledgedAt} IS NULL`,
+          sql`(
+            ${staffAstRequestsTable.preapprovedAt} IS NOT NULL
+            OR ${staffAstRequestsTable.deniedAt} IS NOT NULL
+            OR ${staffAstRequestsTable.confirmedAt} IS NOT NULL
+          )`,
+        ),
+      );
+    res.json({ ok: true });
   },
 );
 

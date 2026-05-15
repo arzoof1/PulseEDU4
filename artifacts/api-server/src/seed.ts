@@ -5452,8 +5452,14 @@ export async function ensureAstSchema(): Promise<void> {
       denied_by_staff_id INTEGER,
       deny_note TEXT,
       cancelled_at TIMESTAMPTZ,
-      cancel_note TEXT
+      cancel_note TEXT,
+      staff_acknowledged_at TIMESTAMPTZ
     )
+  `);
+  // Additive: older deployments missed staff_acknowledged_at.
+  await db.execute(sql`
+    ALTER TABLE staff_ast_requests
+      ADD COLUMN IF NOT EXISTS staff_acknowledged_at TIMESTAMPTZ
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_staff_idx ON staff_ast_requests(school_id, staff_id)`);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_requests_school_state_idx ON staff_ast_requests(school_id, state)`);
