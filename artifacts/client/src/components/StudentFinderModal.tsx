@@ -718,6 +718,7 @@ export function StudentFinderModal({
                       <th>Subject</th>
                       <th>Teacher</th>
                       <th style={{ width: "12%" }}>Room</th>
+                      <th style={{ width: "10%" }}>Ext</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -760,7 +761,7 @@ export function StudentFinderModal({
                                 ? `${fmtTime(p.startTime)} – ${fmtTime(p.endTime)}`
                                 : "—"}
                             </td>
-                            <td colSpan={3} style={{ fontStyle: "italic" }}>
+                            <td colSpan={4} style={{ fontStyle: "italic" }}>
                               No scheduled class
                             </td>
                           </tr>
@@ -804,12 +805,23 @@ export function StudentFinderModal({
                           <td>{c.courseName}</td>
                           <td>
                             {c.teacherName}
+                            {/* Cell phone stays inline under the name; the
+                                work extension graduated to its own column
+                                so users can scan it without hunting. */}
                             <PhoneLine
-                              workExtension={c.workExtension}
+                              workExtension={null}
                               cellPhone={c.cellPhone}
                             />
                           </td>
                           <td>{c.room ?? "—"}</td>
+                          <td
+                            style={{
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, monospace",
+                            }}
+                          >
+                            {c.workExtension ?? "—"}
+                          </td>
                         </tr>
                       ));
                     })}
