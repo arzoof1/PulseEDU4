@@ -101,7 +101,7 @@ async function balanceQuarterHours(
 // READ — staff side (my balance + my requests + actionable count)
 // ---------------------------------------------------------------------------
 router.get(
-  "/api/ast/me",
+  "/ast/me",
   requireAnyStaff,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -143,7 +143,7 @@ router.get(
 // READ — admin side (the queue grouped by panel + counts for the tile)
 // ---------------------------------------------------------------------------
 router.get(
-  "/api/ast/admin-queue",
+  "/ast/admin-queue",
   requireApprover,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -207,7 +207,7 @@ router.get(
 // query so the badge poll is cheap. Returns 0 for non-approvers (instead
 // of 403) so the client doesn't have to special-case rendering.
 router.get(
-  "/api/ast/admin-pending-count",
+  "/ast/admin-pending-count",
   requireAnyStaff,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -240,7 +240,7 @@ router.get(
 // EARN — submit
 // ---------------------------------------------------------------------------
 router.post(
-  "/api/ast/earn",
+  "/ast/earn",
   requireAnyStaff,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -289,7 +289,7 @@ router.post(
 // EARN — admin pre-approve / deny
 // ---------------------------------------------------------------------------
 router.patch(
-  "/api/ast/earn/:id/preapprove",
+  "/ast/earn/:id/preapprove",
   requireApprover,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -364,7 +364,7 @@ router.patch(
 // EARN — staff submits completion
 // ---------------------------------------------------------------------------
 router.post(
-  "/api/ast/earn/:id/complete",
+  "/ast/earn/:id/complete",
   requireAnyStaff,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -429,7 +429,7 @@ router.post(
 // EARN — admin confirms / denies completion → posts ledger row on confirm
 // ---------------------------------------------------------------------------
 router.patch(
-  "/api/ast/earn/:id/confirm",
+  "/ast/earn/:id/confirm",
   requireApprover,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -530,7 +530,7 @@ router.patch(
 // USE — submit
 // ---------------------------------------------------------------------------
 router.post(
-  "/api/ast/use",
+  "/ast/use",
   requireAnyStaff,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -597,7 +597,7 @@ router.post(
 // USE — admin approves / denies → debits bank on approval
 // ---------------------------------------------------------------------------
 router.patch(
-  "/api/ast/use/:id/decide",
+  "/ast/use/:id/decide",
   requireApprover,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
@@ -729,7 +729,7 @@ router.patch(
 // CANCEL — staff cancels their own pending request
 // ---------------------------------------------------------------------------
 router.post(
-  "/api/ast/:id/cancel",
+  "/ast/:id/cancel",
   requireAnyStaff,
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
