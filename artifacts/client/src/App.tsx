@@ -29,6 +29,7 @@ import LogTardyModal from "./components/LogTardyModal";
 import CheckInOutModal from "./components/CheckInOutModal";
 import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
+import AstNotificationBell from "./components/AstNotificationBell";
 import { StudentFinderModal } from "./components/StudentFinderModal";
 import StaffDirectoryPage from "./components/StaffDirectoryPage";
 import OnboardingChecklist from "./components/OnboardingChecklist";
@@ -8650,6 +8651,17 @@ function App() {
         <InterventionsBell
           refreshKey={interventionRefreshKey}
           onClick={() => setActiveSection("interventionsToday")}
+        />
+        {/* AST clock bell — shows when the staff member has a pre-approved
+            earn awaiting completion submission, a recently-decided
+            request, OR (for approvers) anything pending in the queue.
+            Clicks route to the admin queue if there's admin work,
+            otherwise to the staff page. */}
+        <AstNotificationBell
+          refreshKey={interventionRefreshKey}
+          canApproveAst={canApproveAst}
+          onOpenStaff={() => setActiveSection("ast")}
+          onOpenAdmin={() => setActiveSection("astAdmin")}
         />
         {/* Student Finder — "where is this kid right now?" lookup
             available to every signed-in staff member (hall monitors,

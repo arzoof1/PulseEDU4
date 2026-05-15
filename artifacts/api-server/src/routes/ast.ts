@@ -203,6 +203,45 @@ router.get(
   },
 );
 
+// Lightweight endpoint for the staff-side AST clock bell. Counts requests
+// the signed-in staffer needs to act on (preapproved earns awaiting
+// completion submission) plus recently-decided requests they haven't
+// "seen" yet (denials in the last 7 days, confirmations in the last 3).
+// Single COUNT query so the badge poll is cheap.
+router.get(
+  "/ast/my-actionable-count",
+  requireAnyStaff,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const me = getStaff(req);
+    const [row] = await db
+      .select({ n: sql<number>`COUNT(*)::int` })
+      .from(staffAstRequestsTable)
+      .where(
+        and(
+          eq(staffAstRequestsTable.schoolId, schoolId),
+          eq(staffAstRequestsTable.staffId, me.id),
+          sql`(
+            (${staffAstRequestsTable.kind} = 'earn'
+              AND ${staffAstRequestsTable.state} = 'preapproved')
+            OR
+            (${staffAstRequestsTable.state} = 'denied'
+              AND ${staffAstRequestsTable.deniedAt} > NOW() - INTERVAL '7 days')
+            OR
+            (${staffAstRequestsTable.state} = 'confirmed'
+              AND ${staffAstRequestsTable.confirmedAt} > NOW() - INTERVAL '3 days')
+            OR
+            (${staffAstRequestsTable.kind} = 'use'
+              AND ${staffAstRequestsTable.state} = 'preapproved'
+              AND ${staffAstRequestsTable.preapprovedAt} > NOW() - INTERVAL '3 days')
+          )`,
+        ),
+      );
+    res.json({ count: Number(row?.n ?? 0) });
+  },
+);
+
 // Lightweight endpoint for the Admin Hub tile + nav badge. Single COUNT
 // query so the badge poll is cheap. Returns 0 for non-approvers (instead
 // of 403) so the client doesn't have to special-case rendering.
