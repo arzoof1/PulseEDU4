@@ -562,6 +562,11 @@ function StudentPhotoManager({
   // confirm does it actually upload.
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
+  // Photo-edit actions are hidden behind a pencil toggle so the row
+  // next to the avatar reads as a clean "name + photo" identity strip
+  // until someone actually wants to change it. Opens the camera panel
+  // also force-opens the action row so Cancel/Capture stay reachable.
+  const [actionsOpen, setActionsOpen] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -759,6 +764,7 @@ function StudentPhotoManager({
   function openCamera() {
     setErr(null);
     setPreviewBlob(null);
+    setActionsOpen(true);
     setCameraOpen(true);
     // The mount effect (on cameraOpen) handles the actual getUserMedia
     // + srcObject attach, because that path needs the <video> element
@@ -1023,95 +1029,164 @@ function StudentPhotoManager({
           photoConsent={photoConsent}
           size={64}
         />
-        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-          <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
-            Student photo
-          </div>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        <div
+          style={{
+            display: "flex",
+            flexDirection: "column",
+            gap: 6,
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 8,
+            }}
+          >
+            <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+              Student photo
+            </div>
+            {/* Pencil toggle — collapsed view shows just the avatar +
+                title; click to slide the four action buttons open. */}
             <button
               type="button"
-              style={btn}
-              disabled={busy}
-              onClick={() => fileInputRef.current?.click()}
-            >
-              Upload
-            </button>
-            <button
-              type="button"
-              style={btn}
-              disabled={busy}
-              onClick={openCamera}
-            >
-              Take photo
-            </button>
-            {photoObjectKey && (
-              <button
-                type="button"
-                style={{
-                  ...btn,
-                  borderColor: "#fecaca",
-                  color: "#b91c1c",
-                }}
-                disabled={busy}
-                onClick={handleRemove}
-              >
-                Remove
-              </button>
-            )}
-            {isAdmin && (
-              <button
-                type="button"
-                style={btn}
-                disabled={bulkRunning}
-                onClick={() => bulkInputRef.current?.click()}
-                title="Pick many image files at once. Each filename (without extension) is matched to a student ID — e.g. 1234.jpg sets the photo for student 1234."
-              >
-                Bulk upload…
-              </button>
-            )}
-            {/* capture="environment" hints to mobile browsers that
-                tapping this opens the rear camera natively (iOS / Android),
-                which is the most reliable phone/tablet capture path —
-                getUserMedia in Safari has historically been finicky.
-                On desktop the attribute is ignored and the user gets a
-                normal file picker. */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              capture="environment"
-              style={{ display: "none" }}
-              onChange={handleFile}
-            />
-            <input
-              ref={bulkInputRef}
-              type="file"
-              accept="image/*"
-              multiple
-              style={{ display: "none" }}
-              onChange={handleBulkFiles}
-            />
-          </div>
-          {isAdmin && (
-            <label
+              aria-label={
+                actionsOpen ? "Hide photo actions" : "Edit photo"
+              }
+              aria-expanded={actionsOpen}
+              title={actionsOpen ? "Hide" : "Edit photo"}
+              onClick={() => setActionsOpen((o) => !o)}
               style={{
-                fontSize: "0.75rem",
-                color: "#475569",
+                background: actionsOpen ? "#e0f2fe" : "transparent",
+                border: "1px solid",
+                borderColor: actionsOpen ? "#0ea5e9" : "#cbd5e1",
+                borderRadius: 6,
+                width: 28,
+                height: 28,
                 display: "inline-flex",
                 alignItems: "center",
-                gap: 6,
+                justifyContent: "center",
+                cursor: "pointer",
+                color: actionsOpen ? "#0369a1" : "#475569",
+                fontSize: 14,
+                lineHeight: 1,
+                transition: "transform 0.18s ease, background 0.18s ease",
+                transform: actionsOpen ? "rotate(0deg)" : "rotate(0deg)",
               }}
             >
-              <input
-                type="checkbox"
-                checked={photoConsent}
-                disabled={busy}
-                onChange={(e) => toggleConsent(e.target.checked)}
-              />
-              Photo consent (admin) — when off, every render falls back to
-              initials regardless of whether bytes are stored.
-            </label>
-          )}
+              {actionsOpen ? "✕" : "✎"}
+            </button>
+          </div>
+          {/* Slide-open panel. We animate grid-template-rows so the
+              collapsed state genuinely takes 0 height (no layout
+              shifting from a hidden-but-occupying row). */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateRows: actionsOpen ? "1fr" : "0fr",
+              transition: "grid-template-rows 0.22s ease",
+            }}
+          >
+            <div style={{ overflow: "hidden", minHeight: 0 }}>
+              <div
+                style={{
+                  display: "flex",
+                  flexDirection: "column",
+                  gap: 6,
+                  paddingTop: 2,
+                }}
+              >
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    style={btn}
+                    disabled={busy}
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    Upload
+                  </button>
+                  <button
+                    type="button"
+                    style={btn}
+                    disabled={busy}
+                    onClick={openCamera}
+                  >
+                    Take photo
+                  </button>
+                  {photoObjectKey && (
+                    <button
+                      type="button"
+                      style={{
+                        ...btn,
+                        borderColor: "#fecaca",
+                        color: "#b91c1c",
+                      }}
+                      disabled={busy}
+                      onClick={handleRemove}
+                    >
+                      Remove
+                    </button>
+                  )}
+                  {isAdmin && (
+                    <button
+                      type="button"
+                      style={btn}
+                      disabled={bulkRunning}
+                      onClick={() => bulkInputRef.current?.click()}
+                      title="Pick many image files at once. Each filename (without extension) is matched to a student ID — e.g. 1234.jpg sets the photo for student 1234."
+                    >
+                      Bulk upload…
+                    </button>
+                  )}
+                  {/* capture="environment" hints to mobile browsers that
+                      tapping this opens the rear camera natively, which
+                      is the most reliable phone/tablet capture path —
+                      getUserMedia in Safari has historically been
+                      finicky. On desktop the attribute is ignored. */}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    capture="environment"
+                    style={{ display: "none" }}
+                    onChange={handleFile}
+                  />
+                  <input
+                    ref={bulkInputRef}
+                    type="file"
+                    accept="image/*"
+                    multiple
+                    style={{ display: "none" }}
+                    onChange={handleBulkFiles}
+                  />
+                </div>
+                {isAdmin && (
+                  <label
+                    style={{
+                      fontSize: "0.75rem",
+                      color: "#475569",
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: 6,
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={photoConsent}
+                      disabled={busy}
+                      onChange={(e) => toggleConsent(e.target.checked)}
+                    />
+                    Photo consent (admin) — when off, every render falls
+                    back to initials regardless of whether bytes are
+                    stored.
+                  </label>
+                )}
+              </div>
+            </div>
+          </div>
           {err && (
             <div style={{ color: "#b91c1c", fontSize: "0.75rem" }}>{err}</div>
           )}
