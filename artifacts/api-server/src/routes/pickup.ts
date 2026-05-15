@@ -895,6 +895,79 @@ router.get("/pickup/walkers", requireStaff, async (req, res) => {
     ]),
   );
 
+  // ---------------------------------------------------------------------
+  // Sibling soft-flag. Build, per walker student, the list of OTHER
+  // walker students who share at least one guardian (parentId) with
+  // them — and whether each of those siblings has been released yet
+  // today. The gate UI uses this to show "Sister Marcus G5 still on
+  // campus" so staff can choose to hold the present sibling. This is
+  // INFORMATIONAL ONLY — no server-side block. Real-life exceptions
+  // (one sibling at tutoring / absent / picked up early) are common,
+  // so a hard block would just train staff to override constantly.
+  //
+  // Authorizations with a NULL parentId can't be sibling-grouped —
+  // we have no portal-account anchor — so those students show no
+  // sibling badge. That matches /pickup/lookup's split-custody rule.
+  // ---------------------------------------------------------------------
+  const walkerIds = new Set(walkers.map((w) => w.id));
+  const allActiveAuths = walkerIds.size
+    ? await db
+        .select({
+          studentId: studentPickupAuthorizationsTable.studentId,
+          parentId: studentPickupAuthorizationsTable.parentId,
+        })
+        .from(studentPickupAuthorizationsTable)
+        .where(
+          and(
+            eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+            eq(studentPickupAuthorizationsTable.active, true),
+          ),
+        )
+    : [];
+  // parentId → Set<walkerStudentDbId>
+  const parentToWalkers = new Map<number, Set<number>>();
+  // walkerStudentDbId → Set<parentId>
+  const walkerToParents = new Map<number, Set<number>>();
+  for (const a of allActiveAuths) {
+    if (a.parentId === null) continue;
+    if (!walkerIds.has(a.studentId)) continue;
+    if (!parentToWalkers.has(a.parentId)) {
+      parentToWalkers.set(a.parentId, new Set());
+    }
+    parentToWalkers.get(a.parentId)!.add(a.studentId);
+    if (!walkerToParents.has(a.studentId)) {
+      walkerToParents.set(a.studentId, new Set());
+    }
+    walkerToParents.get(a.studentId)!.add(a.parentId);
+  }
+  const walkerById = new Map(walkers.map((w) => [w.id, w]));
+  const siblingsFor = (studentDbId: number) => {
+    const parents = walkerToParents.get(studentDbId);
+    if (!parents) return [];
+    const sibIds = new Set<number>();
+    for (const pid of parents) {
+      const ws = parentToWalkers.get(pid);
+      if (!ws) continue;
+      for (const sid of ws) {
+        if (sid !== studentDbId) sibIds.add(sid);
+      }
+    }
+    return [...sibIds]
+      .map((sid) => {
+        const s = walkerById.get(sid);
+        if (!s) return null;
+        return {
+          studentDbId: s.id,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          grade: s.grade,
+          releasedToday: releasedById.has(s.id),
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null)
+      .sort((a, b) => a.grade - b.grade || a.lastName.localeCompare(b.lastName));
+  };
+
   // Bell-window gate. Look for a period named "Walker Release" or
   // "Walker Dismissal" on today's default schedule. If none configured,
   // the gate stays OPEN so the feature still works pre-onboarding —
@@ -935,6 +1008,7 @@ router.get("/pickup/walkers", requireStaff, async (req, res) => {
         lastName: w.lastName,
         grade: w.grade,
         released,
+        siblingWalkers: siblingsFor(w.id),
       };
     }),
     windowOpen,

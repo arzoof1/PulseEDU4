@@ -484,6 +484,13 @@ type WalkerRow = {
   lastName: string;
   grade: number;
   released: { releasedAt: string; releasedBy: string } | null;
+  siblingWalkers: Array<{
+    studentDbId: number;
+    firstName: string;
+    lastName: string;
+    grade: number;
+    releasedToday: boolean;
+  }>;
 };
 
 function WalkerGatePage({ me }: { me: Me }) {
@@ -902,6 +909,54 @@ function WalkerGatePage({ me }: { me: Me }) {
                   by {r.released.releasedBy}
                 </div>
               )}
+              {(() => {
+                // Soft sibling flag — informational only, no hard block.
+                // Shows OTHER walker siblings on this family and whether
+                // they're already out the door, so gate staff can choose
+                // to hold this kid until a younger sibling arrives.
+                // Defensive default: if a stale client hits an older
+                // server build (or vice versa during a deploy window)
+                // siblingWalkers may be undefined — treat that as "no
+                // sibling info" rather than crashing the gate UI.
+                const sibs = r.siblingWalkers ?? [];
+                if (sibs.length === 0) return null;
+                const stillIn = sibs.filter((s) => !s.releasedToday);
+                if (r.released) return null;
+                if (stillIn.length === 0) {
+                  return (
+                    <div
+                      style={{
+                        color: "#15803d",
+                        fontSize: 13,
+                        marginTop: 4,
+                        fontWeight: 600,
+                      }}
+                    >
+                      ✓ All {r.siblingWalkers.length} walker sibling
+                      {r.siblingWalkers.length === 1 ? "" : "s"} already out
+                    </div>
+                  );
+                }
+                return (
+                  <div
+                    style={{
+                      color: "#b45309",
+                      fontSize: 13,
+                      marginTop: 4,
+                      fontWeight: 600,
+                    }}
+                  >
+                    👥 Sibling{stillIn.length === 1 ? "" : "s"} still on
+                    campus:{" "}
+                    {stillIn
+                      .map(
+                        (s) =>
+                          `${s.firstName} ${s.lastName.charAt(0)}. (G${s.grade})`,
+                      )
+                      .join(", ")}
+                  </div>
+                );
+              })()}
             </div>
             <button
               onClick={async () => {
