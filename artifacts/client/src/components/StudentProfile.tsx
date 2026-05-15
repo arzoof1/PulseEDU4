@@ -551,6 +551,17 @@ function StudentPhotoManager({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  // cameraReady flips true once the <video> element has metadata + a
+  // playing frame, so the Capture button is disabled-grey until you can
+  // actually see yourself. Eliminates the "took a photo, got nothing"
+  // failure mode where the user clicked before getUserMedia delivered
+  // its first frame.
+  const [cameraReady, setCameraReady] = useState(false);
+  // Preview-before-upload: snap() now produces a Blob that lives here
+  // until the user confirms "Use this photo" or "Retake". Only on
+  // confirm does it actually upload.
+  const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -600,6 +611,89 @@ function StudentPhotoManager({
       }
     };
   }, []);
+
+  // When cameraOpen flips true the <video> element mounts on the very
+  // next render. This effect runs AFTER that render, so videoRef.current
+  // is guaranteed non-null — much more reliable than the old
+  // setTimeout(0) trick which sometimes attached the stream to a
+  // detached element (causing the "black box" symptom).
+  useEffect(() => {
+    if (!cameraOpen) return;
+    if (previewBlob) return; // we're showing the still preview, not video
+    let cancelled = false;
+    setCameraReady(false);
+    (async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "user", width: 640, height: 480 },
+          audio: false,
+        });
+        if (cancelled) {
+          for (const t of stream.getTracks()) t.stop();
+          return;
+        }
+        streamRef.current = stream;
+        const v = videoRef.current;
+        if (!v) {
+          for (const t of stream.getTracks()) t.stop();
+          streamRef.current = null;
+          setErr("Camera UI didn't mount in time — try again.");
+          return;
+        }
+        v.srcObject = stream;
+        const onReady = () => {
+          v.removeEventListener("loadedmetadata", onReady);
+          v.removeEventListener("playing", onReady);
+          if (!cancelled) setCameraReady(true);
+        };
+        v.addEventListener("loadedmetadata", onReady);
+        v.addEventListener("playing", onReady);
+        try {
+          await v.play();
+        } catch (playErr) {
+          // Some browsers (Safari) refuse autoplay even with `muted`.
+          // Surface the message so the user knows to interact first.
+          setErr(
+            playErr instanceof Error
+              ? `Camera couldn't start: ${playErr.message}`
+              : "Camera couldn't start.",
+          );
+        }
+      } catch (e) {
+        if (cancelled) return;
+        setErr(
+          e instanceof Error
+            ? `Camera unavailable: ${e.message}`
+            : "Camera unavailable",
+        );
+        setCameraOpen(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      // Stream is intentionally NOT torn down here — closeCamera() and
+      // the unmount effect handle that. Tearing down on every effect
+      // re-run would kill the live preview when React strict-mode
+      // double-invokes the effect in dev.
+    };
+  }, [cameraOpen, previewBlob]);
+
+  // Object-URL housekeeping for the still preview so we don't leak
+  // blob URLs across retakes.
+  useEffect(() => {
+    if (!previewBlob) {
+      setPreviewUrl((u) => {
+        if (u) URL.revokeObjectURL(u);
+        return null;
+      });
+      return;
+    }
+    const url = URL.createObjectURL(previewBlob);
+    setPreviewUrl(url);
+    return () => {
+      URL.revokeObjectURL(url);
+    };
+  }, [previewBlob]);
 
   async function uploadBlob(blob: Blob, filename: string) {
     setBusy(true);
@@ -662,45 +756,26 @@ function StudentPhotoManager({
     await uploadBlob(file, file.name);
   }
 
-  async function openCamera() {
+  function openCamera() {
     setErr(null);
-    // Defensive: if a previous getUserMedia() stream is still live (user
-    // double-clicked, or a prior open path didn't clean up), stop its
-    // tracks before requesting a new one. Otherwise the browser keeps
-    // the camera LED / tab indicator on for the orphaned stream.
+    setPreviewBlob(null);
+    setCameraOpen(true);
+    // The mount effect (on cameraOpen) handles the actual getUserMedia
+    // + srcObject attach, because that path needs the <video> element
+    // to already be in the DOM.
+  }
+
+  function stopStream() {
     if (streamRef.current) {
       for (const t of streamRef.current.getTracks()) t.stop();
       streamRef.current = null;
-    }
-    if (cameraOpen) return;
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: "user" },
-        audio: false,
-      });
-      streamRef.current = stream;
-      setCameraOpen(true);
-      // Defer so the <video> element exists.
-      setTimeout(() => {
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          void videoRef.current.play();
-        }
-      }, 0);
-    } catch (e) {
-      setErr(
-        e instanceof Error
-          ? `Camera unavailable: ${e.message}`
-          : "Camera unavailable",
-      );
     }
   }
 
   function closeCamera() {
-    if (streamRef.current) {
-      for (const t of streamRef.current.getTracks()) t.stop();
-      streamRef.current = null;
-    }
+    stopStream();
+    setCameraReady(false);
+    setPreviewBlob(null);
     setCameraOpen(false);
   }
 
@@ -710,34 +785,8 @@ function StudentPhotoManager({
       setErr("Camera not ready yet — try again.");
       return;
     }
-    // The user may click "Capture" before the <video> has actually
-    // received its first frame from getUserMedia(). In that case
-    // videoWidth/Height are still 0 and toBlob would silently produce
-    // a blank image (or null). Wait briefly for readyState >= 2
-    // (HAVE_CURRENT_DATA) instead of silently bailing.
-    if (v.readyState < 2 || !v.videoWidth || !v.videoHeight) {
-      const ready = await new Promise<boolean>((resolve) => {
-        const onReady = () => {
-          v.removeEventListener("loadeddata", onReady);
-          resolve(true);
-        };
-        v.addEventListener("loadeddata", onReady);
-        // Hard cap so we don't hang forever if the camera never delivers.
-        window.setTimeout(() => {
-          v.removeEventListener("loadeddata", onReady);
-          resolve(v.readyState >= 2 && !!v.videoWidth && !!v.videoHeight);
-        }, 1500);
-      });
-      if (!ready || !v.videoWidth || !v.videoHeight) {
-        setErr("Camera didn't deliver a frame — try again or use Upload.");
-        return;
-      }
-    }
-    // Re-check the ref after the await: the user may have closed the
-    // panel (or HMR swapped the component) while we were waiting for
-    // loadeddata, in which case `v` points at a detached element.
-    if (!videoRef.current) {
-      setErr("Camera was closed before capture completed.");
+    if (!cameraReady || v.readyState < 2 || !v.videoWidth || !v.videoHeight) {
+      setErr("Camera still warming up — wait a second and try again.");
       return;
     }
     const w = v.videoWidth;
@@ -762,6 +811,23 @@ function StudentPhotoManager({
       setErr("Could not capture image.");
       return;
     }
+    // Stop the live stream now — we don't need the camera light on
+    // while the user reviews the still. If they hit Retake we'll
+    // re-acquire via the mount effect.
+    stopStream();
+    setCameraReady(false);
+    setPreviewBlob(blob);
+  }
+
+  function retake() {
+    setPreviewBlob(null);
+    // setCameraOpen is already true — clearing previewBlob causes the
+    // mount effect to re-acquire the stream and re-attach to <video>.
+  }
+
+  async function confirmPreview() {
+    if (!previewBlob) return;
+    const blob = previewBlob;
     closeCamera();
     await uploadBlob(blob, `${studentId}-snapshot.jpg`);
   }
@@ -1143,25 +1209,121 @@ function StudentPhotoManager({
       )}
       {cameraOpen && (
         <div style={{ marginTop: 10 }}>
-          <video
-            ref={videoRef}
-            playsInline
-            muted
-            style={{
-              width: 320,
-              height: 240,
-              background: "#000",
-              borderRadius: 6,
-            }}
-          />
-          <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
-            <button type="button" style={btn} onClick={snap} disabled={busy}>
-              📸 Capture
-            </button>
-            <button type="button" style={btn} onClick={closeCamera}>
-              Cancel
-            </button>
-          </div>
+          {previewBlob && previewUrl ? (
+            // Confirm-before-upload step: nothing has been saved yet.
+            // The user picks "Use this photo" to actually upload, or
+            // "Retake" to re-acquire the live stream.
+            <>
+              <div
+                style={{
+                  width: 320,
+                  height: 240,
+                  background: "#000",
+                  borderRadius: 6,
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}
+              >
+                <img
+                  src={previewUrl}
+                  alt="Captured preview"
+                  style={{
+                    maxWidth: "100%",
+                    maxHeight: "100%",
+                    display: "block",
+                  }}
+                />
+              </div>
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: "0.75rem",
+                  color: "#475569",
+                }}
+              >
+                Preview only — nothing saved yet.
+              </div>
+              <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  style={{
+                    ...btn,
+                    background: "#16a34a",
+                    color: "white",
+                    borderColor: "#16a34a",
+                  }}
+                  onClick={confirmPreview}
+                  disabled={busy}
+                >
+                  ✓ Use this photo
+                </button>
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={retake}
+                  disabled={busy}
+                >
+                  ↻ Retake
+                </button>
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={closeCamera}
+                  disabled={busy}
+                >
+                  Cancel
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <video
+                ref={videoRef}
+                autoPlay
+                playsInline
+                muted
+                style={{
+                  width: 320,
+                  height: 240,
+                  background: "#000",
+                  borderRadius: 6,
+                  // Mirror so the user sees themselves like a bathroom
+                  // mirror (selfie convention). The captured frame is
+                  // NOT mirrored — drawImage reads the un-flipped
+                  // source pixels, so the saved photo orients
+                  // correctly for everyone else viewing it.
+                  transform: "scaleX(-1)",
+                  objectFit: "cover",
+                }}
+              />
+              <div
+                style={{
+                  marginTop: 6,
+                  fontSize: "0.75rem",
+                  color: cameraReady ? "#15803d" : "#b45309",
+                }}
+              >
+                {cameraReady
+                  ? "● Live — click Capture when ready."
+                  : "Starting camera…"}
+              </div>
+              <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  style={btn}
+                  onClick={snap}
+                  disabled={busy || !cameraReady}
+                >
+                  📸 Capture
+                </button>
+                <button type="button" style={btn} onClick={closeCamera}>
+                  Cancel
+                </button>
+              </div>
+            </>
+          )}
         </div>
       )}
     </div>
