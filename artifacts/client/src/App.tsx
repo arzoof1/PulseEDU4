@@ -19874,6 +19874,15 @@ function App() {
           canManage={canManageMtssPlans}
           canEditSafetyPlan={canEditSafetyPlanClient}
           canPrintOverallReport={canPrintOverallReportClient}
+          // Mirrors server canManageStudentPhoto: safety-plan gate
+          // (Admin / SU / DA / BS / MTSS / SchoolPsych / Guidance) plus
+          // Counselor + Social Worker. Front-office staff are flagged
+          // isAdmin so they're already covered.
+          canManagePhoto={
+            canEditSafetyPlanClient ||
+            Boolean(authUser?.isCounselor) ||
+            Boolean(authUser?.isSocialWorker)
+          }
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}
           onBack={() => {

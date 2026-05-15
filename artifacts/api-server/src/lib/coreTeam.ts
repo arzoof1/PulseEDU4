@@ -85,14 +85,15 @@ export function canEditSafetyPlan(staff: {
   return Boolean(staff.isGuidanceCounselor) || isCoreTeam(staff);
 }
 
-// Student photo manager gate. Per spec: admin, behavior specialist, core
-// team, MTSS, front-office staff. We don't have a dedicated front-office
-// boolean column today — front-office staff are typically flagged
-// `isAdmin` in their staff record (they sit at the admin desk and run
-// the kiosks). So this gate maps to "admin OR core team OR guidance"
-// which is the same audience as canEditSafetyPlan. Bus drivers are
-// intentionally excluded — they don't carry login devices and the
-// upload UX (camera + crop) doesn't fit a driver workflow.
+// Student photo manager gate. Per spec: admin / front-office staff /
+// core team (BS, MTSS, school psych, district admin, super user) /
+// counselor (school OR guidance) / social worker. We don't have a
+// dedicated front-office boolean column today — front-office staff
+// are typically flagged `isAdmin` in their staff record (they sit at
+// the admin desk and run the kiosks). Bus drivers are intentionally
+// excluded — they don't carry login devices and the camera/upload UX
+// doesn't fit a driver workflow. Teachers are excluded too: photo
+// management is an office-side onboarding task, not a classroom one.
 export function canManageStudentPhoto(staff: {
   isSuperUser?: boolean | null;
   isDistrictAdmin?: boolean | null;
@@ -101,6 +102,12 @@ export function canManageStudentPhoto(staff: {
   isMtssCoordinator?: boolean | null;
   isSchoolPsychologist?: boolean | null;
   isGuidanceCounselor?: boolean | null;
+  isCounselor?: boolean | null;
+  isSocialWorker?: boolean | null;
 }): boolean {
-  return canEditSafetyPlan(staff);
+  return (
+    canEditSafetyPlan(staff) ||
+    Boolean(staff.isCounselor) ||
+    Boolean(staff.isSocialWorker)
+  );
 }

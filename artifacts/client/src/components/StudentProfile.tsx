@@ -506,6 +506,12 @@ interface Props {
   // Used to gate admin-only affordances such as the photo-consent
   // privacy toggle, which the server rejects (403) for non-admins.
   isAdmin?: boolean;
+  // True when the signed-in user can upload / capture / remove the
+  // student photo (admin / front-office / core team / counselor /
+  // guidance / social worker). Mirrors server canManageStudentPhoto.
+  // Distinct from canEditSafetyPlan because counselors + social
+  // workers can manage photos but don't necessarily edit safety plans.
+  canManagePhoto?: boolean;
 }
 
 // Single-entry student-photo manager — upload OR camera capture. Shown
@@ -533,6 +539,20 @@ function StudentPhotoManager({
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const bulkInputRef = useRef<HTMLInputElement | null>(null);
+  // Per-file progress for the bulk multi-upload flow. Each row maps a
+  // picked file → derived studentId (filename stem) → status. This is
+  // intentionally local to the manager so the modal closes on unmount;
+  // we don't need to persist it across navigations.
+  const [bulkRows, setBulkRows] = useState<
+    Array<{
+      filename: string;
+      studentId: string;
+      status: "pending" | "uploading" | "ok" | "skipped" | "failed";
+      error?: string;
+    }>
+  >([]);
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   // Pull current photo state on mount.
   useEffect(() => {
@@ -696,6 +716,128 @@ function StudentPhotoManager({
     await uploadBlob(blob, `${studentId}-snapshot.jpg`);
   }
 
+  // Bulk upload — admin picks many files at once. Each filename's stem
+  // (everything before the last dot) is treated as the studentId. We
+  // iterate sequentially so a tenant uploading 800 yearbook photos
+  // doesn't open 800 concurrent fetches and trigger backpressure / GCS
+  // throttling. Per-row status updates render live so the operator
+  // sees progress on a long batch. Errors don't abort the run — a bad
+  // filename or a deactivated student just marks that row failed and
+  // we move on.
+  function studentIdFromFilename(name: string): string {
+    const stem = name.replace(/\.[^./\\]+$/, "");
+    return stem.trim();
+  }
+
+  async function uploadOne(file: File, studentId: string): Promise<void> {
+    const reqRes = await authFetch("/api/storage/uploads/request-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: file.name,
+        size: file.size,
+        contentType: file.type || "image/jpeg",
+      }),
+    });
+    if (!reqRes.ok) throw new Error("Could not start upload");
+    const { uploadURL, objectPath } = (await reqRes.json()) as {
+      uploadURL: string;
+      objectPath: string;
+    };
+    const putRes = await fetch(uploadURL, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "image/jpeg" },
+      body: file,
+    });
+    if (!putRes.ok) throw new Error("Upload failed");
+    const saveRes = await authFetch(
+      `/api/students/${encodeURIComponent(studentId)}/photo`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objectPath }),
+      },
+    );
+    if (!saveRes.ok) {
+      const j = (await saveRes.json().catch(() => ({}))) as { error?: string };
+      throw new Error(j.error ?? `Save failed (${saveRes.status})`);
+    }
+  }
+
+  function handleBulkFiles(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = "";
+    if (files.length === 0) return;
+    const rows = files.map((f) => ({
+      filename: f.name,
+      studentId: studentIdFromFilename(f.name),
+      status: f.type.startsWith("image/")
+        ? ("pending" as const)
+        : ("skipped" as const),
+      error: f.type.startsWith("image/") ? undefined : "Not an image file",
+    }));
+    setBulkRows(rows);
+    void runBulk(files, rows);
+  }
+
+  async function runBulk(
+    files: File[],
+    initial: Array<{ filename: string; studentId: string; status: string }>,
+  ) {
+    setBulkRunning(true);
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i]!;
+      const initRow = initial[i]!;
+      if (initRow.status === "skipped") continue;
+      if (file.size > 8 * 1024 * 1024) {
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i
+              ? { ...r, status: "failed", error: "Image > 8 MB" }
+              : r,
+          ),
+        );
+        continue;
+      }
+      if (!initRow.studentId) {
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i
+              ? { ...r, status: "failed", error: "Filename has no studentId" }
+              : r,
+          ),
+        );
+        continue;
+      }
+      setBulkRows((prev) =>
+        prev.map((r, idx) =>
+          idx === i ? { ...r, status: "uploading" } : r,
+        ),
+      );
+      try {
+        await uploadOne(file, initRow.studentId);
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i ? { ...r, status: "ok" } : r,
+          ),
+        );
+      } catch (err) {
+        setBulkRows((prev) =>
+          prev.map((r, idx) =>
+            idx === i
+              ? {
+                  ...r,
+                  status: "failed",
+                  error: err instanceof Error ? err.message : "Upload failed",
+                }
+              : r,
+          ),
+        );
+      }
+    }
+    setBulkRunning(false);
+  }
+
   async function handleRemove() {
     if (!confirm("Remove this student's photo?")) return;
     setBusy(true);
@@ -800,12 +942,38 @@ function StudentPhotoManager({
                 Remove
               </button>
             )}
+            {isAdmin && (
+              <button
+                type="button"
+                style={btn}
+                disabled={bulkRunning}
+                onClick={() => bulkInputRef.current?.click()}
+                title="Pick many image files at once. Each filename (without extension) is matched to a student ID — e.g. 1234.jpg sets the photo for student 1234."
+              >
+                Bulk upload…
+              </button>
+            )}
+            {/* capture="environment" hints to mobile browsers that
+                tapping this opens the rear camera natively (iOS / Android),
+                which is the most reliable phone/tablet capture path —
+                getUserMedia in Safari has historically been finicky.
+                On desktop the attribute is ignored and the user gets a
+                normal file picker. */}
             <input
               ref={fileInputRef}
               type="file"
               accept="image/*"
+              capture="environment"
               style={{ display: "none" }}
               onChange={handleFile}
+            />
+            <input
+              ref={bulkInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              style={{ display: "none" }}
+              onChange={handleBulkFiles}
             />
           </div>
           {isAdmin && (
@@ -833,6 +1001,96 @@ function StudentPhotoManager({
           )}
         </div>
       </div>
+      {bulkRows.length > 0 && (
+        <div
+          style={{
+            marginTop: 10,
+            padding: "0.5rem 0.7rem",
+            background: "#fff",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            maxHeight: 240,
+            overflowY: "auto",
+          }}
+        >
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              fontSize: "0.78rem",
+              fontWeight: 600,
+              marginBottom: 4,
+            }}
+          >
+            <span>
+              Bulk upload —{" "}
+              {bulkRows.filter((r) => r.status === "ok").length}/
+              {bulkRows.length} done
+              {bulkRunning ? " (uploading…)" : ""}
+            </span>
+            {!bulkRunning && (
+              <button
+                type="button"
+                style={{
+                  ...btn,
+                  padding: "0.15rem 0.5rem",
+                  fontSize: "0.7rem",
+                }}
+                onClick={() => setBulkRows([])}
+              >
+                Clear
+              </button>
+            )}
+          </div>
+          <table style={{ width: "100%", fontSize: "0.72rem" }}>
+            <tbody>
+              {bulkRows.map((r, i) => {
+                const color =
+                  r.status === "ok"
+                    ? "#15803d"
+                    : r.status === "failed"
+                      ? "#b91c1c"
+                      : r.status === "skipped"
+                        ? "#6b7280"
+                        : "#0f172a";
+                return (
+                  <tr key={i}>
+                    <td
+                      style={{
+                        padding: "1px 4px",
+                        whiteSpace: "nowrap",
+                        color: "#64748b",
+                      }}
+                    >
+                      {r.filename}
+                    </td>
+                    <td
+                      style={{
+                        padding: "1px 4px",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      → {r.studentId || "(no id)"}
+                    </td>
+                    <td style={{ padding: "1px 4px", color }}>
+                      {r.status === "uploading"
+                        ? "uploading…"
+                        : r.status === "ok"
+                          ? "✓"
+                          : r.status === "skipped"
+                            ? "skipped"
+                            : r.status === "failed"
+                              ? `✗ ${r.error ?? ""}`
+                              : "queued"}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
       {cameraOpen && (
         <div style={{ marginTop: 10 }}>
           <video
@@ -1021,6 +1279,7 @@ export default function StudentProfile({
   canManage = false,
   canEditSafetyPlan = false,
   isAdmin = false,
+  canManagePhoto = false,
   onOpenSafetyPlan,
   canPrintOverallReport = false,
 }: Props) {
@@ -1431,7 +1690,7 @@ export default function StudentProfile({
                 demographics editor so a Counselor (who lacks
                 canManage / canManageMtssPlans) can still mark/unmark
                 retentions without needing the demographics editor. */}
-            {canEditSafetyPlan && data?.header && (
+            {canManagePhoto && data?.header && (
               <StudentPhotoManager
                 studentId={studentId}
                 firstName={data.header.firstName}
