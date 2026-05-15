@@ -10,6 +10,7 @@ import {
   type Role,
 } from "./watchlist/colors";
 import LogInteractionModal from "./watchlist/LogInteractionModal";
+import StudentPhoto from "./StudentPhoto";
 import {
   HowToUseHelp,
   HowToSection,
@@ -28,6 +29,8 @@ interface EgoStudent {
   firstName: string;
   lastName: string;
   grade: string | null;
+  photoObjectKey?: string | null;
+  photoConsent?: boolean;
 }
 
 interface EgoPlayer extends EgoStudent {
@@ -1179,6 +1182,13 @@ function CasePanel({
                 }}
                 title={p.primaryRole}
               >
+                <StudentPhoto
+                  firstName={p.firstName}
+                  lastName={p.lastName}
+                  photoObjectKey={p.photoObjectKey}
+                  photoConsent={p.photoConsent}
+                  size={18}
+                />
                 {p.firstName} {p.lastName}
                 {p.isCenter && (
                   <span

@@ -46,6 +46,17 @@ export const studentsTable = pgTable("students", {
   // end-of-day "still on campus" reconciliation tile.
   // Values: 'car_rider' | 'walker' | 'bus' | 'aftercare' | 'parent_pickup_only'
   dismissalMode: text("dismissal_mode").notNull().default("car_rider"),
+  // ----- Student photo (single-entry: upload OR camera capture) ----------
+  // Object-storage key under /api/storage/objects/* — bound to the student's
+  // school via bindObjectToSchool, ACL'd staff-only (no parent-portal read).
+  // Nullable: schools without yearbook ingest yet show initials bubbles.
+  photoObjectKey: text("photo_object_key"),
+  // Privacy/consent toggle — when false, all rendering paths show initials
+  // regardless of whether bytes are on disk. Default true matches FERPA
+  // "directory information" treatment; an admin can flip to false on the
+  // student profile page. Bytes are NOT deleted on consent revocation
+  // (schools sometimes flip it back), only render-gated.
+  photoConsent: boolean("photo_consent").notNull().default(true),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

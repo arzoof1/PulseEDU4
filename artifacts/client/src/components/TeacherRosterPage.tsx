@@ -16,6 +16,7 @@
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
+import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface TeacherOpt {
@@ -70,6 +71,10 @@ interface RosterRow {
   firstName: string;
   lastName: string;
   grade: number | string;
+  // Student photo (server-supplied). Renders as <StudentPhoto/>; falls
+  // back to colored initials bubble when null OR consent=false.
+  photoObjectKey?: string | null;
+  photoConsent?: boolean;
   ela: SubjectBlock;
   math: SubjectBlock;
   safetyPlan: SafetyPlanSummary | null;
@@ -1747,6 +1752,13 @@ export default function TeacherRosterPage({
                         gap: 8,
                       }}
                     >
+                      <StudentPhoto
+                        firstName={row.firstName}
+                        lastName={row.lastName}
+                        photoObjectKey={row.photoObjectKey}
+                        photoConsent={row.photoConsent}
+                        size={28}
+                      />
                       <span>
                         {row.lastName}, {row.firstName}
                       </span>

@@ -551,6 +551,13 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       firstName: stu.firstName,
       lastName: stu.lastName,
       grade: stu.grade,
+      // Student photo (single-entry: yearbook upload OR camera). When
+      // null OR consent=false the client renders a colored initials
+      // bubble. Surface here so the roster row can show a face — many
+      // teachers know returning students by sight long before they
+      // memorize their names.
+      photoObjectKey: stu.photoObjectKey,
+      photoConsent: stu.photoConsent,
       ela: buildSubjectBlock(elaRow, "ela", grade),
       math: buildSubjectBlock(mathRow, "math", grade),
       // Invisibility = no non-voided PBIS entry in the school's

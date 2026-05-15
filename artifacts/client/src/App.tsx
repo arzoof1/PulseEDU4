@@ -19874,6 +19874,7 @@ function App() {
           canManage={canManageMtssPlans}
           canEditSafetyPlan={canEditSafetyPlanClient}
           canPrintOverallReport={canPrintOverallReportClient}
+          isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}
           onBack={() => {
             const target = studentProfileReturnTo;

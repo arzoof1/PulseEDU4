@@ -84,3 +84,23 @@ export function canEditSafetyPlan(staff: {
 }): boolean {
   return Boolean(staff.isGuidanceCounselor) || isCoreTeam(staff);
 }
+
+// Student photo manager gate. Per spec: admin, behavior specialist, core
+// team, MTSS, front-office staff. We don't have a dedicated front-office
+// boolean column today — front-office staff are typically flagged
+// `isAdmin` in their staff record (they sit at the admin desk and run
+// the kiosks). So this gate maps to "admin OR core team OR guidance"
+// which is the same audience as canEditSafetyPlan. Bus drivers are
+// intentionally excluded — they don't carry login devices and the
+// upload UX (camera + crop) doesn't fit a driver workflow.
+export function canManageStudentPhoto(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+}): boolean {
+  return canEditSafetyPlan(staff);
+}

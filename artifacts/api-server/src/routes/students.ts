@@ -1,15 +1,53 @@
-import { Router, type IRouter } from "express";
+import {
+  Router,
+  type IRouter,
+  type Request,
+  type Response,
+  type NextFunction,
+} from "express";
 import {
   db,
   studentsTable,
   studentAccommodationsTable,
   schoolAccommodationsTable,
   studentEmergencyContactsTable,
+  staffTable,
 } from "@workspace/db";
 import { eq, isNull, and, asc, inArray, or, ilike } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import {
+  canManageStudentPhoto,
+  isAdminOrSuperUser,
+} from "../lib/coreTeam.js";
+import { bindObjectToSchool } from "./storage.js";
 
 const router: IRouter = Router();
+
+// Inline requireStaff — every route file in this codebase has its own
+// copy following the pattern in pickup.ts / interventions.ts. Keeps
+// students.ts self-contained and matches the audit pattern reviewers
+// expect when reading any one route file.
+async function requireStaff(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const staffId = req.staffId;
+  if (!staffId) {
+    res.status(401).json({ error: "Authentication required" });
+    return;
+  }
+  const [staff] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, staffId));
+  if (!staff || !staff.active) {
+    res.status(401).json({ error: "Staff not found or inactive" });
+    return;
+  }
+  (req as Request & { staff: typeof staffTable.$inferSelect }).staff = staff;
+  next();
+}
 
 router.get("/students", async (req, res) => {
   const schoolId = requireSchool(req, res);
@@ -130,5 +168,136 @@ router.get("/students/:studentId", async (req, res) => {
     emergencyContacts: contacts,
   });
 });
+
+// ---------------------------------------------------------------------------
+// Student photo manager — single-entry path. Bulk yearbook ZIP ingest is
+// future work (replit.md). Audience: canManageStudentPhoto (admin / core
+// team / guidance). Bytes go through the existing /api/storage/* pipeline,
+// so the ACL is school-scoped automatically; we just record the resulting
+// objectKey on the student row. Bytes are NEVER deleted on consent
+// revocation or photo replace — the previous object remains in storage
+// (orphaned) so an accidental delete can be recovered. A future cleanup
+// job could prune by age, but for now the storage cost is negligible.
+// ---------------------------------------------------------------------------
+router.post("/students/:studentId/photo", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  if (!canManageStudentPhoto(staff)) {
+    res.status(403).json({ error: "Not authorized to manage student photos" });
+    return;
+  }
+  const studentId = String(req.params.studentId ?? "");
+  const objectPath: string =
+    typeof req.body?.objectPath === "string" ? req.body.objectPath.trim() : "";
+  if (!studentId) {
+    res.status(400).json({ error: "studentId required" });
+    return;
+  }
+  if (!objectPath || !objectPath.startsWith("/objects/")) {
+    res.status(400).json({ error: "objectPath required (/objects/...)" });
+    return;
+  }
+  // Cross-school safety + verify the student exists in this tenant.
+  const [stu] = await db
+    .select({ id: studentsTable.id })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  if (!stu) {
+    res.status(404).json({ error: "Student not found" });
+    return;
+  }
+  // Bind the freshly-uploaded object to this school. bindObjectToSchool
+  // returns false if the path was either issued to a different school
+  // or already bound elsewhere — both cases must reject so a hostile
+  // client can't reassign someone else's image to one of our students.
+  const ok = await bindObjectToSchool(objectPath, schoolId);
+  if (!ok) {
+    res
+      .status(403)
+      .json({ error: "Object not bound — re-upload and try again" });
+    return;
+  }
+  await db
+    .update(studentsTable)
+    .set({ photoObjectKey: objectPath })
+    .where(
+      and(
+        eq(studentsTable.id, stu.id),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  res.json({ ok: true, photoObjectKey: objectPath });
+});
+
+router.delete("/students/:studentId/photo", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  if (!canManageStudentPhoto(staff)) {
+    res.status(403).json({ error: "Not authorized to manage student photos" });
+    return;
+  }
+  const studentId = String(req.params.studentId ?? "");
+  if (!studentId) {
+    res.status(400).json({ error: "studentId required" });
+    return;
+  }
+  const result = await db
+    .update(studentsTable)
+    .set({ photoObjectKey: null })
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId),
+        eq(studentsTable.schoolId, schoolId),
+      ),
+    );
+  res.json({ ok: true, updated: result.rowCount ?? 0 });
+});
+
+// PATCH /students/:studentId/photo-consent  body: { consent: boolean }
+// Admin-only — privacy toggle. Setting consent=false hides the photo
+// in every render path even if bytes are on disk.
+router.patch(
+  "/students/:studentId/photo-consent",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    if (!isAdminOrSuperUser(staff)) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const studentId = String(req.params.studentId ?? "");
+    const consent = req.body?.consent;
+    if (typeof consent !== "boolean") {
+      res.status(400).json({ error: "consent (boolean) required" });
+      return;
+    }
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const result = await db
+      .update(studentsTable)
+      .set({ photoConsent: consent })
+      .where(
+        and(
+          eq(studentsTable.studentId, studentId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
+    res.json({ ok: true, updated: result.rowCount ?? 0 });
+  },
+);
 
 export default router;

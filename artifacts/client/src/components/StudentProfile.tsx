@@ -6,7 +6,8 @@
 // enforces visibility (roster ∪ trusted-adult ∪ core team) and returns
 // 403 if the caller can't see this student. We surface that gracefully.
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import {
   Radar,
@@ -499,6 +500,364 @@ interface Props {
   // Coordinator / Guidance Counselor / School Psychologist). Server
   // re-checks via the same gate; this just hides the affordance.
   canPrintOverallReport?: boolean;
+  // True only for actual school Admin / SuperUser (mirrors the
+  // server's isAdminOrSuperUser gate). Distinct from canManage which
+  // also includes Behavior Specialist / MTSS Coord / PBIS Coord.
+  // Used to gate admin-only affordances such as the photo-consent
+  // privacy toggle, which the server rejects (403) for non-admins.
+  isAdmin?: boolean;
+}
+
+// Single-entry student-photo manager — upload OR camera capture. Shown
+// inside the StudentProfile header for users who can manage photos
+// (Admin / Core Team / Guidance — same gate as canEditSafetyPlan).
+// Bytes flow through the existing /api/storage/* presigned-PUT pipeline,
+// then we POST the resulting objectPath to /api/students/:id/photo.
+// The admin-only consent toggle calls PATCH /photo-consent.
+function StudentPhotoManager({
+  studentId,
+  firstName,
+  lastName,
+  isAdmin,
+}: {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  isAdmin: boolean;
+}) {
+  const [photoObjectKey, setPhotoObjectKey] = useState<string | null>(null);
+  const [photoConsent, setPhotoConsent] = useState<boolean>(true);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [cameraOpen, setCameraOpen] = useState(false);
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const streamRef = useRef<MediaStream | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  // Pull current photo state on mount.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}`,
+      );
+      if (!r.ok || cancelled) return;
+      const j = (await r.json()) as {
+        photoObjectKey?: string | null;
+        photoConsent?: boolean;
+      };
+      if (cancelled) return;
+      setPhotoObjectKey(j.photoObjectKey ?? null);
+      setPhotoConsent(j.photoConsent ?? true);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  // Camera lifecycle: stop the stream on close or unmount so the
+  // browser tab indicator doesn't stay red after the panel closes.
+  useEffect(() => {
+    return () => {
+      if (streamRef.current) {
+        for (const t of streamRef.current.getTracks()) t.stop();
+        streamRef.current = null;
+      }
+    };
+  }, []);
+
+  async function uploadBlob(blob: Blob, filename: string) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const reqRes = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: filename,
+          size: blob.size,
+          contentType: blob.type || "image/jpeg",
+        }),
+      });
+      if (!reqRes.ok) throw new Error("Could not start upload");
+      const { uploadURL, objectPath } = (await reqRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": blob.type || "image/jpeg" },
+        body: blob,
+      });
+      if (!putRes.ok) throw new Error("Upload failed");
+      const saveRes = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/photo`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ objectPath }),
+        },
+      );
+      if (!saveRes.ok) {
+        const j = (await saveRes.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        throw new Error(j.error ?? "Save failed");
+      }
+      setPhotoObjectKey(objectPath);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      setErr("Please pick an image file.");
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      setErr("Image must be under 8 MB.");
+      return;
+    }
+    await uploadBlob(file, file.name);
+  }
+
+  async function openCamera() {
+    setErr(null);
+    // Defensive: if a previous getUserMedia() stream is still live (user
+    // double-clicked, or a prior open path didn't clean up), stop its
+    // tracks before requesting a new one. Otherwise the browser keeps
+    // the camera LED / tab indicator on for the orphaned stream.
+    if (streamRef.current) {
+      for (const t of streamRef.current.getTracks()) t.stop();
+      streamRef.current = null;
+    }
+    if (cameraOpen) return;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user" },
+        audio: false,
+      });
+      streamRef.current = stream;
+      setCameraOpen(true);
+      // Defer so the <video> element exists.
+      setTimeout(() => {
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          void videoRef.current.play();
+        }
+      }, 0);
+    } catch (e) {
+      setErr(
+        e instanceof Error
+          ? `Camera unavailable: ${e.message}`
+          : "Camera unavailable",
+      );
+    }
+  }
+
+  function closeCamera() {
+    if (streamRef.current) {
+      for (const t of streamRef.current.getTracks()) t.stop();
+      streamRef.current = null;
+    }
+    setCameraOpen(false);
+  }
+
+  async function snap() {
+    const v = videoRef.current;
+    if (!v) return;
+    const w = v.videoWidth;
+    const h = v.videoHeight;
+    if (!w || !h) return;
+    // Crop to a centered square so the bubble crop is consistent.
+    const side = Math.min(w, h);
+    const sx = (w - side) / 2;
+    const sy = (h - side) / 2;
+    const canvas = document.createElement("canvas");
+    canvas.width = 512;
+    canvas.height = 512;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+    ctx.drawImage(v, sx, sy, side, side, 0, 0, 512, 512);
+    const blob: Blob | null = await new Promise((resolve) =>
+      canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
+    );
+    if (!blob) {
+      setErr("Could not capture image.");
+      return;
+    }
+    closeCamera();
+    await uploadBlob(blob, `${studentId}-snapshot.jpg`);
+  }
+
+  async function handleRemove() {
+    if (!confirm("Remove this student's photo?")) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/photo`,
+        { method: "DELETE" },
+      );
+      if (!r.ok) throw new Error("Remove failed");
+      setPhotoObjectKey(null);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Remove failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function toggleConsent(next: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/photo-consent`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ consent: next }),
+        },
+      );
+      if (!r.ok) throw new Error("Could not update consent");
+      setPhotoConsent(next);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not update consent");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const btn: React.CSSProperties = {
+    border: "1px solid #cbd5e1",
+    background: "#fff",
+    padding: "0.3rem 0.7rem",
+    borderRadius: 6,
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    cursor: busy ? "not-allowed" : "pointer",
+    opacity: busy ? 0.6 : 1,
+  };
+  return (
+    <div
+      style={{
+        marginTop: "0.6rem",
+        padding: "0.6rem 0.75rem",
+        background: "#f8fafc",
+        border: "1px solid #cbd5e1",
+        borderRadius: 6,
+      }}
+    >
+      <div
+        style={{ display: "flex", alignItems: "center", gap: 12 }}
+      >
+        <StudentPhoto
+          firstName={firstName}
+          lastName={lastName}
+          photoObjectKey={photoObjectKey}
+          photoConsent={photoConsent}
+          size={64}
+        />
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ fontSize: "0.85rem", fontWeight: 600 }}>
+            Student photo
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              style={btn}
+              disabled={busy}
+              onClick={() => fileInputRef.current?.click()}
+            >
+              Upload
+            </button>
+            <button
+              type="button"
+              style={btn}
+              disabled={busy}
+              onClick={openCamera}
+            >
+              Take photo
+            </button>
+            {photoObjectKey && (
+              <button
+                type="button"
+                style={{
+                  ...btn,
+                  borderColor: "#fecaca",
+                  color: "#b91c1c",
+                }}
+                disabled={busy}
+                onClick={handleRemove}
+              >
+                Remove
+              </button>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={handleFile}
+            />
+          </div>
+          {isAdmin && (
+            <label
+              style={{
+                fontSize: "0.75rem",
+                color: "#475569",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={photoConsent}
+                disabled={busy}
+                onChange={(e) => toggleConsent(e.target.checked)}
+              />
+              Photo consent (admin) — when off, every render falls back to
+              initials regardless of whether bytes are stored.
+            </label>
+          )}
+          {err && (
+            <div style={{ color: "#b91c1c", fontSize: "0.75rem" }}>{err}</div>
+          )}
+        </div>
+      </div>
+      {cameraOpen && (
+        <div style={{ marginTop: 10 }}>
+          <video
+            ref={videoRef}
+            playsInline
+            muted
+            style={{
+              width: 320,
+              height: 240,
+              background: "#000",
+              borderRadius: 6,
+            }}
+          />
+          <div style={{ marginTop: 6, display: "flex", gap: 6 }}>
+            <button type="button" style={btn} onClick={snap} disabled={busy}>
+              📸 Capture
+            </button>
+            <button type="button" style={btn} onClick={closeCamera}>
+              Cancel
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 // Mark/unmark grade-level retentions for a single student. Lives inside
@@ -661,6 +1020,7 @@ export default function StudentProfile({
   onBack,
   canManage = false,
   canEditSafetyPlan = false,
+  isAdmin = false,
   onOpenSafetyPlan,
   canPrintOverallReport = false,
 }: Props) {
@@ -1071,6 +1431,14 @@ export default function StudentProfile({
                 demographics editor so a Counselor (who lacks
                 canManage / canManageMtssPlans) can still mark/unmark
                 retentions without needing the demographics editor. */}
+            {canEditSafetyPlan && data?.header && (
+              <StudentPhotoManager
+                studentId={studentId}
+                firstName={data.header.firstName}
+                lastName={data.header.lastName}
+                isAdmin={isAdmin}
+              />
+            )}
             {canEditSafetyPlan && (
               <div style={{ marginTop: "0.6rem" }}>
                 <RetentionManager

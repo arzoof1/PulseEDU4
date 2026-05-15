@@ -1285,6 +1285,8 @@ router.get(
             firstName: stu.firstName,
             lastName: stu.lastName,
             grade: stu.grade,
+            photoObjectKey: stu.photoObjectKey,
+            photoConsent: stu.photoConsent,
             primaryRole,
             isCenter: entry.studentId === studentId,
           };

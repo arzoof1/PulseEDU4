@@ -859,6 +859,8 @@ router.get("/pickup/walkers", requireStaff, async (req, res) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
     })
     .from(studentsTable)
     .where(
@@ -1007,6 +1009,8 @@ router.get("/pickup/walkers", requireStaff, async (req, res) => {
         firstName: w.firstName,
         lastName: w.lastName,
         grade: w.grade,
+        photoObjectKey: w.photoObjectKey,
+        photoConsent: w.photoConsent,
         released,
         siblingWalkers: siblingsFor(w.id),
       };

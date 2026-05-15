@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { authFetch } from "../lib/authToken";
+import StudentPhoto from "../components/StudentPhoto";
 
 // =============================================================================
 // PickupApp — standalone mini-app for the Parent Pick-Up Module
@@ -483,6 +484,8 @@ type WalkerRow = {
   firstName: string;
   lastName: string;
   grade: number;
+  photoObjectKey: string | null;
+  photoConsent: boolean;
   released: { releasedAt: string; releasedBy: string } | null;
   siblingWalkers: Array<{
     studentDbId: number;
@@ -892,13 +895,21 @@ function WalkerGatePage({ me }: { me: Me }) {
               opacity: r.released ? 0.6 : 1,
             }}
           >
-            <div>
-              <div style={{ fontWeight: 600, fontSize: 18 }}>
-                {r.firstName} {r.lastName}
-              </div>
-              <div style={{ color: "#6b7280", fontSize: 13 }}>
-                Grade {r.grade} · ID {r.studentId}
-              </div>
+            <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+              <StudentPhoto
+                firstName={r.firstName}
+                lastName={r.lastName}
+                photoObjectKey={r.photoObjectKey}
+                photoConsent={r.photoConsent}
+                size={48}
+              />
+              <div>
+                <div style={{ fontWeight: 600, fontSize: 18 }}>
+                  {r.firstName} {r.lastName}
+                </div>
+                <div style={{ color: "#6b7280", fontSize: 13 }}>
+                  Grade {r.grade} · ID {r.studentId}
+                </div>
               {r.released && (
                 <div style={{ color: "#15803d", fontSize: 13, marginTop: 4 }}>
                   Released{" "}
@@ -957,6 +968,7 @@ function WalkerGatePage({ me }: { me: Me }) {
                   </div>
                 );
               })()}
+              </div>
             </div>
             <button
               onClick={async () => {
@@ -1491,6 +1503,83 @@ function TeacherQueuePage({ me }: { me: Me }) {
   const [now, setNow] = useState(Date.now());
   const [err, setErr] = useState<string | null>(null);
 
+  // ---- Sound chime on new arrivals ---------------------------------------
+  // Default OFF — schools with 30 cars/min would have chimes overlapping
+  // nonstop (per replit.md design call). Persisted in localStorage so a
+  // teacher who turned it on once doesn't have to re-enable on every page
+  // load. First user click also primes the AudioContext: browsers block
+  // playback until a user gesture, so we lazily create+resume on toggle.
+  const [soundOn, setSoundOn] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem("pickup_teacher_sound") === "1";
+    } catch {
+      return false;
+    }
+  });
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const prevIdsRef = useRef<Set<number> | null>(null);
+
+  const ensureAudio = useCallback(() => {
+    if (audioCtxRef.current) return audioCtxRef.current;
+    type AudioCtor = typeof AudioContext;
+    const Ctor: AudioCtor | undefined =
+      typeof window !== "undefined"
+        ? window.AudioContext ??
+          (window as unknown as { webkitAudioContext?: AudioCtor })
+            .webkitAudioContext
+        : undefined;
+    if (!Ctor) return null;
+    try {
+      audioCtxRef.current = new Ctor();
+      return audioCtxRef.current;
+    } catch {
+      return null;
+    }
+  }, []);
+
+  // Two short 880Hz tones — 200ms each, 100ms gap. Synthesized so we
+  // don't need to ship an audio asset.
+  const beepBeep = useCallback(() => {
+    const ctx = ensureAudio();
+    if (!ctx) return;
+    if (ctx.state === "suspended") void ctx.resume();
+    const playTone = (offsetMs: number) => {
+      const startSec = ctx.currentTime + offsetMs / 1000;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = 880;
+      // Quick attack/release so tones don't click. Volume capped at 0.18
+      // — audible in a noisy classroom hallway but not piercing.
+      gain.gain.setValueAtTime(0.0001, startSec);
+      gain.gain.exponentialRampToValueAtTime(0.18, startSec + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, startSec + 0.2);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(startSec);
+      osc.stop(startSec + 0.22);
+    };
+    playTone(0);
+    playTone(300);
+  }, [ensureAudio]);
+
+  const toggleSound = useCallback(() => {
+    setSoundOn((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem("pickup_teacher_sound", next ? "1" : "0");
+      } catch {
+        /* localStorage unavailable — ephemeral toggle is fine */
+      }
+      // Prime the AudioContext on the *enable* click so a future
+      // beep (triggered by a poll, not a click) is allowed to play.
+      if (next) {
+        const ctx = ensureAudio();
+        if (ctx?.state === "suspended") void ctx.resume();
+      }
+      return next;
+    });
+  }, [ensureAudio]);
+
   const reload = useCallback(async () => {
     const r = await authFetch("/api/pickup/teacher-queue");
     if (!r.ok) {
@@ -1505,7 +1594,25 @@ function TeacherQueuePage({ me }: { me: Me }) {
     setViewScope(j.viewScope);
     setEntries(j.entries ?? []);
     setLoading(false);
-  }, []);
+
+    // Diff against the previous set of student ids — beep if any
+    // brand-new id appeared. Skip the very first reload (prevIds is
+    // null) so a page refresh while students are already in line
+    // doesn't fire a misleading chime.
+    const nextIds = new Set((j.entries ?? []).map((e) => e.studentDbId));
+    const prev = prevIdsRef.current;
+    if (prev !== null) {
+      let hasNew = false;
+      for (const id of nextIds) {
+        if (!prev.has(id)) {
+          hasNew = true;
+          break;
+        }
+      }
+      if (hasNew && soundOn) beepBeep();
+    }
+    prevIdsRef.current = nextIds;
+  }, [soundOn, beepBeep]);
 
   useEffect(() => {
     void reload();
@@ -1625,6 +1732,32 @@ function TeacherQueuePage({ me }: { me: Me }) {
             Show only my roster
           </label>
         )}
+        <button
+          type="button"
+          onClick={toggleSound}
+          aria-pressed={soundOn}
+          title={
+            soundOn
+              ? "New-arrival chime is on. Click to silence."
+              : "Click to play a chime when a new student joins the line."
+          }
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            padding: "4px 10px",
+            fontSize: 12,
+            fontWeight: 600,
+            border: "1px solid",
+            borderColor: soundOn ? "#16a34a" : "#d1d5db",
+            background: soundOn ? "#dcfce7" : "white",
+            color: soundOn ? "#15803d" : "#374151",
+            borderRadius: 999,
+            cursor: "pointer",
+          }}
+        >
+          {soundOn ? "🔔 Sound on" : "🔕 Sound off"}
+        </button>
       </div>
 
       {err && <div style={errBox}>{err}</div>}
