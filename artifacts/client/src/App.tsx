@@ -44,6 +44,7 @@ import Tier3StrategiesAdmin from "./components/Tier3StrategiesAdmin";
 import TrustedAdultInterventionsAdmin from "./components/TrustedAdultInterventionsAdmin";
 import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
+import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
 import SeparationTagsAdmin from "./components/SeparationTagsAdmin";
 import SafetyPlanEditor from "./components/SafetyPlanEditor";
@@ -16826,6 +16827,14 @@ function App() {
       )}
 
       {activeSection === "teacherRoster" && (
+        // PrivacyGate forces a heavy-blur + drag-to-unlock confirmation
+        // every time the teacher enters this page, regardless of where
+        // they came from (Spotlight, dashboards, anywhere). The roster
+        // surfaces FAST scores, IEP/504/ELL flags, and safety plan
+        // indicators that can never land on a student-facing display.
+        // The gate re-arms on every visit because the conditional
+        // unmount + remount above resets PrivacyGate's internal state.
+        <PrivacyGate>
         <TeacherRosterPage
           isCoreTeam={
             Boolean(authUser?.isSuperUser) ||
@@ -16846,6 +16855,7 @@ function App() {
              Safety Plans page or from Student Profile. The hover popover
              still works because SafetyPlanPill renders without onOpen. */
         />
+        </PrivacyGate>
       )}
 
       {safetyPlanStudentId && (
