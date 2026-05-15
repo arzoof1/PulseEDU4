@@ -29,13 +29,15 @@ interface SettingsResp {
   pickupTeacherViewScope?: "all_students" | "own_roster" | null;
 }
 
+// /api/auth/me spreads the staff fields at the TOP level (see
+// publicStaff() in routes/auth.ts). There is no `.staff` wrapper —
+// reading me.staff.* would silently coerce every flag to false and
+// paint every badge amber even for SuperUsers.
 interface MeResp {
-  staff?: {
-    isAdmin?: boolean;
-    isSuperUser?: boolean;
-    isDistrictAdmin?: boolean;
-    capCarRiderMonitor?: boolean;
-  };
+  isAdmin?: boolean;
+  isSuperUser?: boolean;
+  isDistrictAdmin?: boolean;
+  capCarRiderMonitor?: boolean;
 }
 
 interface PlaylistRow {
@@ -219,12 +221,11 @@ export default function PickupSettingsPage() {
       ]);
       if (m.ok) {
         const me = (await m.json()) as MeResp;
-        const st = me.staff ?? {};
         const isAdmin = Boolean(
-          st.isAdmin || st.isSuperUser || st.isDistrictAdmin,
+          me.isAdmin || me.isSuperUser || me.isDistrictAdmin,
         );
         setCanAdmin(isAdmin);
-        setCanCurb(isAdmin || Boolean(st.capCarRiderMonitor));
+        setCanCurb(isAdmin || Boolean(me.capCarRiderMonitor));
       }
       if (s.ok) {
         const d = (await s.json()) as SettingsResp;

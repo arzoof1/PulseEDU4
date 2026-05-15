@@ -35,20 +35,23 @@ function useMe(): { me: Me | null; loading: boolean; error: string | null } {
       try {
         const res = await authFetch("/api/auth/me");
         if (!res.ok) throw new Error("Not signed in");
-        const data = (await res.json()) as {
-          staff?: Partial<Me> & { id?: number };
+        // /api/auth/me spreads the staff fields at the TOP level
+        // (see publicStaff() in routes/auth.ts) — there is no `.staff`
+        // wrapper. Reading data.staff.* silently coerced every role
+        // flag to false, locking even SuperUsers out of the kiosk
+        // gates with "Access denied."
+        const s = (await res.json()) as Partial<Me> & {
+          id?: number;
+          staffId?: number;
         };
         if (cancelled) return;
-        const s = data.staff ?? {};
         setMe({
           staffId: s.id ?? s.staffId ?? null,
           displayName: s.displayName ?? null,
           isAdmin: Boolean(s.isAdmin),
           isSuperUser: Boolean(s.isSuperUser),
           isDistrictAdmin: Boolean(s.isDistrictAdmin),
-          capCarRiderMonitor: Boolean(
-            (s as { capCarRiderMonitor?: boolean }).capCarRiderMonitor,
-          ),
+          capCarRiderMonitor: Boolean(s.capCarRiderMonitor),
         });
       } catch (e) {
         if (cancelled) return;
