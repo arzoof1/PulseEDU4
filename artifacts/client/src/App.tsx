@@ -8991,6 +8991,14 @@ function App() {
                 label: "Accommodations",
                 icon: IconClipboard,
               })}
+            {/* AST (Alternate Schedule Time) — visible to every staff
+                member. The actual approval queue lives under School
+                Admin and is gated by canApproveAst. */}
+            {renderNavItem({
+              key: "ast",
+              label: "AST",
+              icon: IconClock,
+            })}
             {/* Verify Pullout — surfaces in Quick Access ONLY when there's
                 pending work (pendingPulloutCount > 0). When the queue is
                 empty it retreats to its quiet home in Behavior Support.
