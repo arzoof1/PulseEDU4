@@ -121,6 +121,16 @@ export const staffTable = pgTable("staff", {
   capCarRiderMonitor: boolean("cap_car_rider_monitor")
     .notNull()
     .default(false),
+  // Parent Pick-Up Module — grants the holder permission to set a
+  // student's dismissal mode (car_rider / walker / bus / aftercare /
+  // parent_pickup_only). Until this cap landed, only `isAdmin` could
+  // change it, which forced a real front-office clerk to either get
+  // the full admin role or send the change up the chain. Admins
+  // retain implicit access via the route gate (admin OR this flag),
+  // so admins do not need this flag set.
+  capManageDismissal: boolean("cap_manage_dismissal")
+    .notNull()
+    .default(false),
 
   // Optional home/default classroom for this staff member. Stored as
   // free text (the location name) so historical records remain intact if

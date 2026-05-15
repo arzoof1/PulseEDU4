@@ -21,9 +21,18 @@ import { authFetch } from "../lib/authToken";
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
 
+type DismissalMode =
+  | "car_rider"
+  | "walker"
+  | "bus"
+  | "aftercare"
+  | "parent_pickup_only";
+
 interface ProfilePayload {
   header: {
     studentId: string;
+    studentDbId: number;
+    dismissalMode: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -512,6 +521,12 @@ interface Props {
   // Distinct from canEditSafetyPlan because counselors + social
   // workers can manage photos but don't necessarily edit safety plans.
   canManagePhoto?: boolean;
+  // Inline dismissal-mode editor on the header. Mirrors server
+  // `canManageDismissal` (admin tier OR cap_manage_dismissal). When
+  // false the chip still renders (read-only) so any staff member can
+  // see whether a kid is a walker, but the change-mode picker is
+  // hidden.
+  canManageDismissal?: boolean;
 }
 
 // Single-entry student-photo manager — upload OR camera capture. Shown
@@ -1273,6 +1288,159 @@ function RetentionManager({
   );
 }
 
+// Inline dismissal-mode chip + editor on the Student Profile header.
+// Read-only by default — every staff member can see whether a kid is a
+// walker / car-rider / bus rider, so the dispatcher at the front desk
+// answering "is Maya a walker today?" doesn't have to bounce out to
+// the pickup admin page. When `canEdit` is true (admin tier OR
+// cap_manage_dismissal), clicking the chip opens a small inline
+// picker. Saves go through PATCH /pickup/students/:id/dismissal-mode
+// which is keyed by db id (not the human studentId).
+const DISMISSAL_OPTIONS: Array<{ value: DismissalMode; label: string }> = [
+  { value: "car_rider", label: "Car Rider" },
+  { value: "walker", label: "Walker" },
+  { value: "bus", label: "Bus" },
+  { value: "aftercare", label: "Aftercare" },
+  { value: "parent_pickup_only", label: "Parent Pickup Only" },
+];
+
+function dismissalLabel(mode: string | null): string {
+  const found = DISMISSAL_OPTIONS.find((o) => o.value === mode);
+  return found?.label ?? (mode ? mode : "—");
+}
+
+function DismissalModeChip({
+  studentDbId,
+  value,
+  canEdit,
+  onSaved,
+}: {
+  studentDbId: number;
+  value: string | null;
+  canEdit: boolean;
+  onSaved: (next: string) => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Two modes carry safety/operational weight that the front desk
+  // needs to spot at a glance:
+  //   - walker: drives whether the kid belongs on the walker gate
+  //     roster.
+  //   - parent_pickup_only: custody / restraining-order context where
+  //     the standard car line cannot release the student.
+  // Both get a highlighted chip; everything else stays neutral.
+  const isWalker = value === "walker";
+  const isParentOnly = value === "parent_pickup_only";
+  const highlight = isWalker || isParentOnly;
+  const chipStyle: React.CSSProperties = {
+    display: "inline-block",
+    marginLeft: 4,
+    padding: "0.2rem 0.6rem",
+    borderRadius: 999,
+    fontSize: "0.78rem",
+    fontWeight: 600,
+    border: `1px solid ${highlight ? "#fdba74" : "#cbd5e1"}`,
+    background: highlight ? "#fff7ed" : "#f1f5f9",
+    color: highlight ? "#9a3412" : "#334155",
+    cursor: canEdit ? "pointer" : "default",
+  };
+
+  async function save(next: DismissalMode) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/pickup/students/${studentDbId}/dismissal-mode`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ dismissalMode: next }),
+        },
+      );
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `Save failed (${r.status})`);
+      }
+      onSaved(next);
+      setEditing(false);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <span
+        style={chipStyle}
+        title={
+          canEdit
+            ? "Dismissal mode — click to change"
+            : "Dismissal mode (read-only — needs the Set Dismissal Mode capability or admin role to change)"
+        }
+        onClick={() => {
+          if (canEdit) setEditing(true);
+        }}
+      >
+        🚸 {dismissalLabel(value)}
+      </span>
+    );
+  }
+
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 4,
+        marginLeft: 4,
+      }}
+    >
+      <select
+        value={value ?? "car_rider"}
+        disabled={busy}
+        onChange={(e) => void save(e.target.value as DismissalMode)}
+        style={{
+          padding: "0.18rem 0.4rem",
+          borderRadius: 6,
+          border: "1px solid #94a3b8",
+          fontSize: "0.78rem",
+        }}
+      >
+        {DISMISSAL_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => {
+          setEditing(false);
+          setErr(null);
+        }}
+        disabled={busy}
+        style={{
+          background: "transparent",
+          border: "1px solid #cbd5e1",
+          borderRadius: 6,
+          padding: "0.15rem 0.4rem",
+          fontSize: "0.72rem",
+          cursor: "pointer",
+        }}
+      >
+        ✕
+      </button>
+      {err && (
+        <span style={{ fontSize: "0.72rem", color: "#b91c1c" }}>{err}</span>
+      )}
+    </span>
+  );
+}
+
 export default function StudentProfile({
   studentId,
   onBack,
@@ -1280,6 +1448,7 @@ export default function StudentProfile({
   canEditSafetyPlan = false,
   isAdmin = false,
   canManagePhoto = false,
+  canManageDismissal = false,
   onOpenSafetyPlan,
   canPrintOverallReport = false,
 }: Props) {
@@ -1604,6 +1773,22 @@ export default function StudentProfile({
                   sev="watch"
                 />
               )}
+              <DismissalModeChip
+                studentDbId={header.studentDbId}
+                value={header.dismissalMode}
+                canEdit={canManageDismissal}
+                onSaved={(next) =>
+                  setData((prev) =>
+                    prev
+                      ? {
+                          ...prev,
+                          header: { ...prev.header, dismissalMode: next },
+                        }
+                      : prev,
+                  )
+                }
+              />
+              
               {canPrintOverallReport && (
                 <a
                   href={`/api/students/${encodeURIComponent(studentId)}/overall-report-pdf`}

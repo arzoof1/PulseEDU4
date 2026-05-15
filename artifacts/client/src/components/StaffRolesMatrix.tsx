@@ -53,6 +53,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capStaffRoles", label: "Staff & Roles" },
   { group: "Admin", key: "capManageRoles", label: "Manage Roles" },
   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
+  { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
 ];
 
 // Built-in roles that act as "preset" buttons. Clicking applies the

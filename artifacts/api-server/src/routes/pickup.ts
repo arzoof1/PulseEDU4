@@ -20,6 +20,7 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, gt, gte, sql, desc, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { canManageDismissal } from "../lib/coreTeam.js";
 
 const router: IRouter = Router();
 
@@ -139,6 +140,10 @@ async function requireStaff(
 function isAdmin(staff: typeof staffTable.$inferSelect): boolean {
   return Boolean(staff.isAdmin || staff.isSuperUser || staff.isDistrictAdmin);
 }
+
+// Dismissal-mode editor gate. Re-exported from lib/coreTeam.ts so the
+// definition can't drift between the route file and the shared helper
+// (architect feedback — earlier draft duplicated the predicate inline).
 
 function canRunCurb(staff: typeof staffTable.$inferSelect): boolean {
   return isAdmin(staff) || Boolean(staff.capCarRiderMonitor);
@@ -1488,8 +1493,8 @@ router.patch(
       .staff;
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    if (!isAdmin(staff)) {
-      res.status(403).json({ error: "Admin only" });
+    if (!canManageDismissal(staff)) {
+      res.status(403).json({ error: "Not authorized" });
       return;
     }
     const id = Number(req.params.id);

@@ -4323,6 +4323,7 @@ function App() {
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
+    capManageDismissal?: boolean;
     defaultRoom?: string | null;
     // Set when this session is currently previewing-as another staff
     // member via the Admin → Preview as Staff tool. Triggers the
@@ -19882,6 +19883,18 @@ function App() {
             canEditSafetyPlanClient ||
             Boolean(authUser?.isCounselor) ||
             Boolean(authUser?.isSocialWorker)
+          }
+          // Mirrors server canManageDismissal: admin tier OR the
+          // cap_manage_dismissal capability (granted to non-admin
+          // front-office staff who run dismissal). Surfaces the inline
+          // dismissal-mode picker on the Student Profile header.
+          canManageDismissal={
+            Boolean(
+              authUser?.isAdmin ||
+                authUser?.isSuperUser ||
+                authUser?.isDistrictAdmin ||
+                authUser?.capManageDismissal,
+            )
           }
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
           onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}

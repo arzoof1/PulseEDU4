@@ -986,6 +986,12 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
   res.json({
     header: {
       studentId: student.studentId,
+      // Internal DB id — needed by the inline dismissal-mode editor on
+      // the Student Profile, which calls PATCH /pickup/students/:id/
+      // dismissal-mode (the pickup endpoint is keyed by db id, not by
+      // the human-readable studentId).
+      studentDbId: student.id,
+      dismissalMode: student.dismissalMode,
       firstName: student.firstName,
       lastName: student.lastName,
       grade: student.grade,

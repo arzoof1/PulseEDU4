@@ -85,6 +85,21 @@ export function canEditSafetyPlan(staff: {
   return Boolean(staff.isGuidanceCounselor) || isCoreTeam(staff);
 }
 
+// Dismissal-mode editor gate. Admins can always set a student's
+// dismissal mode (car_rider / walker / bus / etc.); the cap_manage_
+// dismissal capability extends that permission to a non-admin clerk
+// (typically front office) without inheriting the rest of the admin
+// surface. Used by the /pickup/students/:id/dismissal-mode PATCH and
+// by the inline chip on the Student Profile.
+export function canManageDismissal(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  capManageDismissal?: boolean | null;
+}): boolean {
+  return isAdminOrSuperUser(staff) || Boolean(staff.capManageDismissal);
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a
