@@ -15,6 +15,16 @@ interface SearchHit {
   grade: number;
 }
 
+interface StaffHit {
+  id: number;
+  displayName: string;
+  email: string;
+  role: string;
+  defaultRoom: string | null;
+  workExtension: string | null;
+  cellPhone: string | null;
+}
+
 interface PeriodClass {
   courseName: string;
   teacherName: string;
@@ -105,8 +115,10 @@ export function StudentFinderModal({
   // search heuristics on a name we already resolved.
   initialStudentId?: string;
 }) {
+  const [mode, setMode] = useState<"students" | "staff">("students");
   const [query, setQuery] = useState(initialQuery);
   const [hits, setHits] = useState<SearchHit[]>([]);
+  const [staffHits, setStaffHits] = useState<StaffHit[]>([]);
   const [searching, setSearching] = useState(false);
   const [selected, setSelected] = useState<string | null>(
     initialStudentId ?? null,
@@ -131,35 +143,54 @@ export function StudentFinderModal({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  // Debounced typeahead.
+  // Debounced typeahead. Mode flips between student and staff search;
+  // the two share the same input + debounce so swapping tabs feels
+  // instantaneous rather than re-firing a request.
   useEffect(() => {
     if (selected) return; // pause search once a student is loaded
     const q = query.trim();
     if (q.length < 1) {
       setHits([]);
+      setStaffHits([]);
       return;
     }
     setSearching(true);
     const handle = window.setTimeout(async () => {
       try {
-        const r = await authFetch(
-          `/api/student-finder/search?q=${encodeURIComponent(q)}`,
-        );
-        if (!r.ok) {
+        if (mode === "students") {
+          const r = await authFetch(
+            `/api/student-finder/search?q=${encodeURIComponent(q)}`,
+          );
+          if (!r.ok) {
+            setHits([]);
+            setSearching(false);
+            return;
+          }
+          const data = (await r.json()) as { students: SearchHit[] };
+          setHits(data.students ?? []);
+          setStaffHits([]);
+        } else {
+          const r = await authFetch(
+            `/api/student-finder/staff-search?q=${encodeURIComponent(q)}`,
+          );
+          if (!r.ok) {
+            setStaffHits([]);
+            setSearching(false);
+            return;
+          }
+          const data = (await r.json()) as { staff: StaffHit[] };
+          setStaffHits(data.staff ?? []);
           setHits([]);
-          setSearching(false);
-          return;
         }
-        const data = (await r.json()) as { students: SearchHit[] };
-        setHits(data.students ?? []);
       } catch {
         setHits([]);
+        setStaffHits([]);
       } finally {
         setSearching(false);
       }
     }, 180);
     return () => window.clearTimeout(handle);
-  }, [query, selected]);
+  }, [query, selected, mode]);
 
   // Load schedule when a student is picked.
   useEffect(() => {
@@ -305,12 +336,63 @@ export function StudentFinderModal({
         {/* Search OR schedule */}
         {showingResults ? (
           <div style={{ padding: "12px 18px 18px", overflowY: "auto" }}>
+            {/* Mode tabs — students vs staff. Staff mode is for "what's
+                Ms. Smith's room / extension?" lookups; it does not load
+                a schedule, just shows the directory row inline. */}
+            <div
+              role="tablist"
+              aria-label="Finder mode"
+              style={{
+                display: "flex",
+                gap: 6,
+                marginBottom: 10,
+                borderBottom: "1px solid var(--border)",
+              }}
+            >
+              {(["students", "staff"] as const).map((m) => {
+                const active = mode === m;
+                return (
+                  <button
+                    key={m}
+                    type="button"
+                    role="tab"
+                    aria-selected={active}
+                    onClick={() => {
+                      setMode(m);
+                      // Clear the other mode's stale results so we don't
+                      // briefly render student rows under the Staff tab
+                      // (or vice-versa) until the new debounced search
+                      // resolves.
+                      setHits([]);
+                      setStaffHits([]);
+                    }}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      borderBottom: `2px solid ${active ? "#0ea5e9" : "transparent"}`,
+                      color: active ? "#0c4a6e" : "var(--muted, #64748b)",
+                      fontWeight: active ? 700 : 500,
+                      padding: "6px 10px",
+                      cursor: "pointer",
+                      fontSize: 13,
+                      marginBottom: -1,
+                    }}
+                  >
+                    {m === "students" ? "Students" : "Staff"}
+                  </button>
+                );
+              })}
+            </div>
             <input
               ref={inputRef}
               type="search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search by name or student ID…"
+              placeholder={
+                mode === "students"
+                  ? "Search by name or student ID…"
+                  : "Search staff by name or email…"
+              }
               style={{
                 width: "100%",
                 padding: "10px 12px",
@@ -331,12 +413,86 @@ export function StudentFinderModal({
               {searching
                 ? "Searching…"
                 : query.trim().length === 0
-                  ? "Type a name or student ID to look up where they are right now."
-                  : hits.length === 0
-                    ? "No students match that search."
-                    : `${hits.length} match${hits.length === 1 ? "" : "es"}`}
+                  ? mode === "students"
+                    ? "Type a name or student ID to look up where they are right now."
+                    : "Type a staff name or email to see room and extension."
+                  : mode === "students"
+                    ? hits.length === 0
+                      ? "No students match that search."
+                      : `${hits.length} match${hits.length === 1 ? "" : "es"}`
+                    : staffHits.length === 0
+                      ? "No staff match that search."
+                      : `${staffHits.length} match${staffHits.length === 1 ? "" : "es"}`}
             </div>
-            {hits.length > 0 && (
+            {mode === "staff" && staffHits.length > 0 && (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: "10px 0 0",
+                  border: "1px solid var(--border)",
+                  borderRadius: 8,
+                  overflow: "hidden",
+                }}
+              >
+                {staffHits.map((s) => (
+                  <li
+                    key={s.id}
+                    style={{
+                      borderBottom: "1px solid var(--border)",
+                      padding: "10px 12px",
+                      background: "white",
+                      fontSize: 14,
+                      display: "flex",
+                      flexDirection: "column",
+                      gap: 4,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 10,
+                        alignItems: "baseline",
+                        flexWrap: "wrap",
+                      }}
+                    >
+                      <strong>{s.displayName}</strong>
+                      <span
+                        style={{
+                          color: "var(--muted, #64748b)",
+                          fontSize: 12,
+                        }}
+                      >
+                        {s.role}
+                      </span>
+                      <span
+                        style={{
+                          marginLeft: "auto",
+                          color: "var(--muted, #64748b)",
+                          fontSize: 12,
+                        }}
+                      >
+                        {s.email}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        display: "flex",
+                        gap: 14,
+                        flexWrap: "wrap",
+                        fontSize: 13,
+                        color: "#334155",
+                      }}
+                    >
+                      <span>🚪 Room {s.defaultRoom ?? "—"}</span>
+                      <span>📞 Ext {s.workExtension ?? "—"}</span>
+                      {s.cellPhone && <span>📱 {s.cellPhone}</span>}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {mode === "students" && hits.length > 0 && (
               <ul
                 style={{
                   listStyle: "none",

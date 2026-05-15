@@ -94,6 +94,116 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
   res.json({ students: rows });
 });
 
+// Staff typeahead — name search, school-scoped, capped at 20 results.
+// Returns the columns that make it usable as a quick "where do I find this
+// person / what's their extension" lookup: displayName, defaultRoom,
+// workExtension, and (gated) cellPhone. Cell visibility mirrors the
+// /today endpoint: caller is Core Team OR per-school toggle is on.
+router.get(
+  "/student-finder/staff-search",
+  async (req: Request, res: Response) => {
+    if (!req.staffId) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const qRaw = typeof req.query.q === "string" ? req.query.q.trim() : "";
+    if (qRaw.length < 1) {
+      res.json({ staff: [] });
+      return;
+    }
+    const q = qRaw.slice(0, 64);
+
+    const [me] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, req.staffId!));
+    const callerIsCoreTeam = !!me && isCoreTeam(me);
+    const [visibilitySettings] = await db
+      .select({
+        staffDirectoryShowCellPhone:
+          schoolSettingsTable.staffDirectoryShowCellPhone,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId))
+      .limit(1);
+    const showCellPhone =
+      callerIsCoreTeam ||
+      Boolean(visibilitySettings?.staffDirectoryShowCellPhone);
+
+    const rows = await db
+      .select({
+        id: staffTable.id,
+        displayName: staffTable.displayName,
+        email: staffTable.email,
+        defaultRoom: staffTable.defaultRoom,
+        workExtension: staffTable.workExtension,
+        cellPhone: staffTable.cellPhone,
+        isAdmin: staffTable.isAdmin,
+        isDistrictAdmin: staffTable.isDistrictAdmin,
+        isSuperUser: staffTable.isSuperUser,
+        isPbisCoordinator: staffTable.isPbisCoordinator,
+        isBehaviorSpecialist: staffTable.isBehaviorSpecialist,
+        isMtssCoordinator: staffTable.isMtssCoordinator,
+        isSchoolPsychologist: staffTable.isSchoolPsychologist,
+        isCounselor: staffTable.isCounselor,
+        isSocialWorker: staffTable.isSocialWorker,
+        isGuidanceCounselor: staffTable.isGuidanceCounselor,
+        isDean: staffTable.isDean,
+        isEseCoordinator: staffTable.isEseCoordinator,
+        isIssTeacher: staffTable.isIssTeacher,
+      })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, schoolId),
+          or(
+            ilike(staffTable.displayName, `${q}%`),
+            // Allow substring match on the back end of name so "Smith"
+            // finds "John Smith" — staff often searched by last name.
+            ilike(staffTable.displayName, `% ${q}%`),
+            ilike(staffTable.email, `${q}%`),
+          ),
+        ),
+      )
+      .orderBy(asc(staffTable.displayName))
+      .limit(20);
+
+    // Derive a single human-friendly role label for display. Most staff
+    // will have one role flag set; if multiple, we pick the highest-tier.
+    function roleLabel(r: typeof rows[number]): string {
+      if (r.isSuperUser) return "SuperUser";
+      if (r.isDistrictAdmin) return "District Admin";
+      if (r.isAdmin) return "Admin";
+      if (r.isBehaviorSpecialist) return "Behavior Specialist";
+      if (r.isMtssCoordinator) return "MTSS Coordinator";
+      if (r.isSchoolPsychologist) return "School Psychologist";
+      if (r.isPbisCoordinator) return "PBIS Coordinator";
+      if (r.isGuidanceCounselor) return "Guidance Counselor";
+      if (r.isCounselor) return "School Counselor";
+      if (r.isSocialWorker) return "Social Worker";
+      if (r.isEseCoordinator) return "ESE Coordinator";
+      if (r.isDean) return "Dean";
+      if (r.isIssTeacher) return "ISS Teacher";
+      return "Teacher";
+    }
+
+    res.json({
+      staff: rows.map((r) => ({
+        id: r.id,
+        displayName: r.displayName,
+        email: r.email,
+        role: roleLabel(r),
+        defaultRoom: r.defaultRoom ?? null,
+        workExtension: r.workExtension ?? null,
+        cellPhone: showCellPhone ? (r.cellPhone ?? null) : null,
+      })),
+    });
+  },
+);
+
 // "Today" payload — bell schedule, the student's class per period, plus the
 // live overrides (active hall pass, absent flag).
 router.get(

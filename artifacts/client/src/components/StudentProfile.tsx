@@ -706,10 +706,42 @@ function StudentPhotoManager({
 
   async function snap() {
     const v = videoRef.current;
-    if (!v) return;
+    if (!v) {
+      setErr("Camera not ready yet — try again.");
+      return;
+    }
+    // The user may click "Capture" before the <video> has actually
+    // received its first frame from getUserMedia(). In that case
+    // videoWidth/Height are still 0 and toBlob would silently produce
+    // a blank image (or null). Wait briefly for readyState >= 2
+    // (HAVE_CURRENT_DATA) instead of silently bailing.
+    if (v.readyState < 2 || !v.videoWidth || !v.videoHeight) {
+      const ready = await new Promise<boolean>((resolve) => {
+        const onReady = () => {
+          v.removeEventListener("loadeddata", onReady);
+          resolve(true);
+        };
+        v.addEventListener("loadeddata", onReady);
+        // Hard cap so we don't hang forever if the camera never delivers.
+        window.setTimeout(() => {
+          v.removeEventListener("loadeddata", onReady);
+          resolve(v.readyState >= 2 && !!v.videoWidth && !!v.videoHeight);
+        }, 1500);
+      });
+      if (!ready || !v.videoWidth || !v.videoHeight) {
+        setErr("Camera didn't deliver a frame — try again or use Upload.");
+        return;
+      }
+    }
+    // Re-check the ref after the await: the user may have closed the
+    // panel (or HMR swapped the component) while we were waiting for
+    // loadeddata, in which case `v` points at a detached element.
+    if (!videoRef.current) {
+      setErr("Camera was closed before capture completed.");
+      return;
+    }
     const w = v.videoWidth;
     const h = v.videoHeight;
-    if (!w || !h) return;
     // Crop to a centered square so the bubble crop is consistent.
     const side = Math.min(w, h);
     const sx = (w - side) / 2;
@@ -718,7 +750,10 @@ function StudentPhotoManager({
     canvas.width = 512;
     canvas.height = 512;
     const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    if (!ctx) {
+      setErr("Could not initialize canvas for capture.");
+      return;
+    }
     ctx.drawImage(v, sx, sy, side, side, 0, 0, 512, 512);
     const blob: Blob | null = await new Promise((resolve) =>
       canvas.toBlob((b) => resolve(b), "image/jpeg", 0.9),
