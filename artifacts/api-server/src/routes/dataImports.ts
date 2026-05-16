@@ -1033,7 +1033,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
   // grades: comma-separated ints, e.g. "0,6,7" (0 = K). Used by every
   //   kind that can be joined back to studentsTable.
   // from / to: YYYY-MM-DD inclusive, used by behavior + assessments.
-  // subject: "ela" | "math" — FAST only.
+  // subject: "ela" | "math" | "algebra1" | "geometry" — FAST + EOC.
   // noteType: substring match (case-insensitive) — behavior only.
   // assessmentName: substring match (case-insensitive) — assessments only.
   // columns: comma-separated header names to keep in the output;
@@ -1066,8 +1066,11 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       ? req.query.to
       : null;
   const subjectFilter =
-    req.query.subject === "ela" || req.query.subject === "math"
-      ? (req.query.subject as "ela" | "math")
+    req.query.subject === "ela" ||
+    req.query.subject === "math" ||
+    req.query.subject === "algebra1" ||
+    req.query.subject === "geometry"
+      ? (req.query.subject as "ela" | "math" | "algebra1" | "geometry")
       : null;
   // Escape LIKE/ILIKE wildcards so a user typing "%" doesn't bypass
   // substring matching and dump every row in their school. Backslash
@@ -2163,7 +2166,7 @@ const BEHAVIOR_CONFIG: KindConfig<ParsedBehavior> = {
 // ---------------------------------------------------------------------------
 type ParsedFastScore = {
   studentId: string;
-  subject: "ela" | "math";
+  subject: "ela" | "math" | "algebra1" | "geometry";
   pm1: number | null;
   pm2: number | null;
   pm3: number | null;
@@ -2247,19 +2250,28 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
     }
     const studentId = row[target.student_id].toString().trim();
     // Subject normalization. "Reading" maps to ela because Florida FAST
-    // ELA Reading exports use that label; everything else normalizes to
-    // its base subject. Anything outside ela/math is rejected (we don't
-    // model EOC subjects yet — see schema header comment).
+    // ELA Reading exports use that label. EOC subjects (Algebra 1,
+    // Geometry) accept their common SIS export aliases too. Anything
+    // unrecognized is rejected.
     const subjectRaw = row[target.subject].toString().trim().toLowerCase();
-    let subject: "ela" | "math";
+    let subject: "ela" | "math" | "algebra1" | "geometry";
     if (subjectRaw === "ela" || subjectRaw === "reading") {
       subject = "ela";
     } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
       subject = "math";
+    } else if (
+      subjectRaw === "algebra1" ||
+      subjectRaw === "algebra 1" ||
+      subjectRaw === "alg1" ||
+      subjectRaw === "algebra_1"
+    ) {
+      subject = "algebra1";
+    } else if (subjectRaw === "geometry" || subjectRaw === "geo") {
+      subject = "geometry";
     } else {
       return {
         ok: false,
-        message: `Unsupported subject "${subjectRaw}" (expected ela or math)`,
+        message: `Unsupported subject "${subjectRaw}" (expected ela, math, algebra1, or geometry)`,
       };
     }
     const pm1 = target.pm1 !== undefined
@@ -2423,7 +2435,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
 // columns so a prior-year-only file can never wipe current-year PM data.
 type ParsedFastPriorYear = {
   studentId: string;
-  subject: "ela" | "math";
+  subject: "ela" | "math" | "algebra1" | "geometry";
   priorYearScore: number;
   priorYearBq: boolean | null;
 };
@@ -2487,18 +2499,28 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
       }
     }
     const studentId = row[target.student_id].toString().trim();
-    // Same subject normalization as FAST_SCORES_CONFIG. "Reading" maps to
-    // ela because Florida FAST ELA Reading exports use that label.
+    // Same subject normalization as FAST_SCORES_CONFIG — keep these two
+    // in sync. "Reading" maps to ela; EOC aliases map to algebra1 /
+    // geometry.
     const subjectRaw = row[target.subject].toString().trim().toLowerCase();
-    let subject: "ela" | "math";
+    let subject: "ela" | "math" | "algebra1" | "geometry";
     if (subjectRaw === "ela" || subjectRaw === "reading") {
       subject = "ela";
     } else if (subjectRaw === "math" || subjectRaw === "mathematics") {
       subject = "math";
+    } else if (
+      subjectRaw === "algebra1" ||
+      subjectRaw === "algebra 1" ||
+      subjectRaw === "alg1" ||
+      subjectRaw === "algebra_1"
+    ) {
+      subject = "algebra1";
+    } else if (subjectRaw === "geometry" || subjectRaw === "geo") {
+      subject = "geometry";
     } else {
       return {
         ok: false,
-        message: `Unsupported subject "${subjectRaw}" (expected ela or math)`,
+        message: `Unsupported subject "${subjectRaw}" (expected ela, math, algebra1, or geometry)`,
       };
     }
     const priorYearScore = parseOptionalInt(row[target.prior_year_score]);

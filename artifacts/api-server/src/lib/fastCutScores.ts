@@ -259,21 +259,32 @@ export const SUBJECT_KEYS: readonly Subject[] = [
   "geometry",
 ] as const;
 
-// ---- Algebra 1 EOC (FL DOE Rule 6A-1.09422, Oct 2023) ----
-// Source: FL DOE final achievement-level cut-score table (B.E.S.T.).
-// PLACEHOLDER: the FL DOE Rule 6A-1.09422 table only publishes whole
-// levels for EOC (L1 325–378, L2 379–399, L3 400–417, L4 418–434, L5
-// 435–475). The schema requires L1 Low/Mid/High + L2 Low/High sub
-// bands — we will NOT synthesize them by equal-split because the
-// bucket math drives PM3 targets that staff will treat as
-// authoritative. Awaiting official sub-band source.
-const ALGEBRA1_EOC: FastChart | null = null;
+// ---- Algebra 1 EOC (B.E.S.T., approved by SBE 2024-01-10) ----
+// Source: "Florida Assessment of Student Thinking (FAST) Achievement
+// Level Scale Scores including Learning Gains Subcategories"
+// (FLDOE, approved 2024-01-10). EOC scale is 325–475.
+const ALGEBRA1_EOC: FastChart | null = {
+  L1Low: [325, 342],
+  L1Mid: [343, 360],
+  L1High: [361, 378],
+  L2Low: [379, 389],
+  L2High: [390, 399],
+  L3: [400, 417],
+  L4: [418, 434],
+  L5: [435, 475],
+};
 
-// ---- Geometry EOC (FL DOE Rule 6A-1.09422, Oct 2023) ----
-// PLACEHOLDER: whole-level bands are L1 325–384, L2 385–403, L3
-// 404–422, L4 423–431, L5 432–475. Sub-bands awaiting official
-// source — see ALGEBRA1_EOC note above.
-const GEOMETRY_EOC: FastChart | null = null;
+// ---- Geometry EOC (B.E.S.T., approved by SBE 2024-01-10) ----
+const GEOMETRY_EOC: FastChart | null = {
+  L1Low: [325, 344],
+  L1Mid: [345, 364],
+  L1High: [365, 384],
+  L2Low: [385, 394],
+  L2High: [395, 403],
+  L3: [404, 422],
+  L4: [423, 431],
+  L5: [432, 475],
+};
 
 function chartFor(subject: Subject, grade: number): FastChart | null {
   switch (subject) {

@@ -33,7 +33,7 @@ export const studentFastScoresTable = pgTable(
     // Matches students.student_id (text, not globally unique). Same
     // convention as student_mtss_plans — JS-side join + AND-school.
     studentId: text("student_id").notNull(),
-    subject: text("subject").notNull(), // "ela" | "math"
+    subject: text("subject").notNull(), // "ela" | "math" | "algebra1" | "geometry"
     pm1: integer("pm1"),
     pm2: integer("pm2"),
     pm3: integer("pm3"),
