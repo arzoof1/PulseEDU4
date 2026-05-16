@@ -112,46 +112,18 @@ _Populate as you build_
     (admin-gated). Cheap COUNT/SUM over the runs + findings tables
     grouped by current month.
 
-- **School-local timezone — per-school IANA column.** Shipped
-  option (b) of the original two paths: `schoolYearLabelFor` and the
-  seed migration both use canonical `America/New_York`
-  (`DEFAULT_SCHOOL_TZ` in `lib/schoolYear.ts`). AST insights window
-  + lapse cron use the same constant. This is the right call for an
-  Eastern-only tenant base. Before onboarding the first non-Eastern
-  school, swap the constant for a per-school IANA column and thread
-  it through all four callers (`schoolYearLabelFor`, `seed.ts` case
-  backfill, `runAstYearEndLapse`, AST insights `yearStart` calc).
+- **School-local timezone — per-school IANA column.** Canonical
+  `America/New_York` (`DEFAULT_SCHOOL_TZ` in `lib/schoolYear.ts`) is
+  used by `schoolYearLabelFor`, seed case backfill, AST insights, and
+  the lapse cron. Before onboarding the first non-Eastern school, swap
+  the constant for a per-school IANA column and thread it through all
+  four callers.
 
 - **Refresh Core Team "How this works" / directions copy after the 4-phase
-  case enhancement suite ships.** Each new feature (mention tagging,
-  video evidence panel, AI consistency check, Case Insights dashboard)
-  needs its blurb added to the Core Team-facing help/directions panels
-  so a new admin onboarding mid-year understands what each affordance
-  does and where the admin-only gating starts/stops. Do this as a single
-  pass after Phase 4 — writing it piecemeal per phase invites drift.
-
-- **Witness statement chronological numbering (raise at end of 4-phase case enhancement rollout).**
-  Today witness statements are addressable only by internal DB id. Admins
-  asked for a human-readable identifier they can write on a printed copy
-  or quote to a parent/officer when the original is requested later.
-  Recommended approach: per-case sequence rather than a global counter —
-  format `CASE-{year}-{caseNumber}-WS-{seq}` (e.g. `CASE-2026-0042-WS-03`).
-  - Assign `ws_seq INT` on the witness_statements row at the moment the
-    owning interaction is attached to a case (promote-to-case OR PATCH
-    interaction caseId). Statements on still-loose interactions stay
-    un-numbered until promotion, which matches investigative reality.
-  - Composite unique index `(school_id, case_id, ws_seq)`. Sequence is
-    derived as `MAX(ws_seq) + 1` within the case under the same `FOR
-    UPDATE` lock the promote/attach flow already takes, so two concurrent
-    attaches can't collide.
-  - Surface the formatted ID in: PlayerDrawer header, Case Detail
-    statements list, witness statement PDF/print, and the audit log
-    payload. Make it copy-on-click.
-  - Backfill existing already-attached statements once at deploy time
-    using `created_at ASC` order within each case.
-  - A separate global statement number (`WS-2026-04412`) was considered
-    and rejected: admins look up by case first, and a global counter
-    duplicates the cross-reference work case# already does.
+  case enhancement suite ships.** Mention tagging, video evidence panel,
+  AI consistency check, and Case Insights dashboard each need a blurb in
+  the Core Team-facing help/directions panels. Do as a single pass after
+  Phase 4 — piecemeal invites drift.
 
 - **Admin Hub ISS log: view detail + edit/delete with audit guardrails**
   Click into a row in the Admin Hub recent feed to see the full assignment.
@@ -189,26 +161,19 @@ _Populate as you build_
 
 - **Feature licensing — Phase 2+.** Phase 1 shipped: Plans table,
   per-school Overrides with expiration + audit, SuperUser admin UI,
-  AST + Parent Portal gated end-to-end as the proof. See
-  `lib/featureLicensing.ts` + `routes/featureLicensing.ts`. Open:
-  - ~~**Wrap remaining server-gated features with client `<FeatureGate>`**~~
-    SHIPPED for the page renders — MTSS Plans, ISS Dashboard,
-    Displays, and House Rankings now wrap their `activeSection`
-    branches in `<FeatureGate feature="..." label="...">` in
-    `App.tsx`. Schools without the feature see the UpsellCard (when
-    `showUpsell` is on) instead of a broken page. Nav-item HIDE
-    (hiding the sidebar entry entirely when off+no-upsell) is still
-    TODO; today the nav item shows and the click lands on the
-    upsell card, which is acceptable.
-  - **Expired-override cron sweep.** Today `loadEffectiveFeatures`
-    filters expired overrides at read time for `showUpsell` +
-    quotas, but the runtime `super_feature_*` boolean still
-    reflects the override's `enabled` value until the next manual
-    reapply. Daily cron: find overrides whose `expires_at` has
-    passed in the last 24h, call `reapplyLicensingToSchool` for
-    each affected school, post an audit row.
-  - **Quota enforcement.** Phase 1 stored quotas (JSONB on plans
-    + overrides) but no feature reads them. Wire the first consumer
+  AST + Parent Portal gated end-to-end, and page-level `<FeatureGate>`
+  wraps for MTSS Plans, ISS Dashboard, Displays, and House Rankings.
+  See `lib/featureLicensing.ts` + `routes/featureLicensing.ts`. Open:
+  - **Nav-item HIDE.** Sidebar entry currently shows for off+no-upsell
+    features and clicks land on the upsell card; acceptable but worth
+    hiding entirely when both off and no-upsell.
+  - **Expired-override cron sweep.** `loadEffectiveFeatures` filters
+    expired overrides at read time, but the runtime `super_feature_*`
+    boolean still reflects the override's `enabled` value until manual
+    reapply. Daily cron: find overrides whose `expires_at` passed in
+    the last 24h, call `reapplyLicensingToSchool`, post audit row.
+  - **Quota enforcement.** Phase 1 stored quotas (JSONB on plans +
+    overrides) but no feature reads them. Wire the first consumer
     (likely "max active parent invites" or "max display playlists")
     via `getQuota(req, schoolId, key, quotaName)` — already
     implemented, just unused.
@@ -267,15 +232,10 @@ _Populate as you build_
   secretary), `StaffAstPage` + `AdminAstQueuePage`, top-level "AST"
   nav for staff + "AST Approvals" admin nav, Admin Hub "AST: N"
   tile deep-linking to the queue. Bell-only notifications via
-  `/api/ast/admin-pending-count` polling — no email dispatch. What
-  remains:
-  - ~~**Year-end lapse cron (July 1).**~~ SHIPPED.
-    `artifacts/api-server/src/cron/astLapse.ts`,
-    scheduled in `index.ts` at `5 0 1 7 *` America/New_York. Inserts
-    a `lapse` ledger entry per staff with positive balance. Idempotent
-    via note-prefix skip (`year-end lapse YY-YY%`). Override via
-    `AST_LAPSE_CRON` / `AST_LAPSE_TZ` env. Logs a per-school summary
-    + a roll-up line.
+  `/api/ast/admin-pending-count` polling — no email dispatch.
+  Year-end lapse cron shipped (`cron/astLapse.ts`, `5 0 1 7 *` ET,
+  tx + advisory-lock idempotent; env overrides `AST_LAPSE_CRON` /
+  `AST_LAPSE_TZ`). What remains:
   - **Voluntary mid-year transfer zero-out hook.** When a staff
     record is moved to a different school (or marked inactive),
     the AST bank should be zeroed at the source school with a
@@ -314,6 +274,7 @@ _Populate as you build_
 - [Orval documentation](https://orval.dev/): For OpenAPI-based API code generation.
 - [Recharts documentation](https://recharts.org/en-US/guide/GettingStarted): For charting components used in dashboards.
 - [pdfkit documentation](http://pdfkit.org/docs/getting_started.html): For server-side PDF generation.
+
 ## Spotlight governor (v2)
 
 Quartile-tiered point pool that activates only when the house
