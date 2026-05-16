@@ -159,24 +159,39 @@ _Populate as you build_
     visual-only. Lean visual-only — schools with 30 cars/min in the
     queue would have chimes overlapping nonstop.
 
-- **Feature licensing — Phase 2+.** Phase 1 shipped: Plans table,
-  per-school Overrides with expiration + audit, SuperUser admin UI,
-  AST + Parent Portal gated end-to-end, and page-level `<FeatureGate>`
-  wraps for MTSS Plans, ISS Dashboard, Displays, and House Rankings.
-  See `lib/featureLicensing.ts` + `routes/featureLicensing.ts`. Open:
-  - **Nav-item HIDE.** Sidebar entry currently shows for off+no-upsell
-    features and clicks land on the upsell card; acceptable but worth
-    hiding entirely when both off and no-upsell.
-  - **Expired-override cron sweep.** `loadEffectiveFeatures` filters
-    expired overrides at read time, but the runtime `super_feature_*`
-    boolean still reflects the override's `enabled` value until manual
-    reapply. Daily cron: find overrides whose `expires_at` passed in
-    the last 24h, call `reapplyLicensingToSchool`, post audit row.
-  - **Quota enforcement.** Phase 1 stored quotas (JSONB on plans +
-    overrides) but no feature reads them. Wire the first consumer
-    (likely "max active parent invites" or "max display playlists")
-    via `getQuota(req, schoolId, key, quotaName)` — already
-    implemented, just unused.
+- **Feature licensing — Phase 2 SHIPPED. Phase 3+ open.** Phase 1
+  shipped: Plans table, per-school Overrides with expiration + audit,
+  SuperUser admin UI, AST + Parent Portal gated end-to-end, and
+  page-level `<FeatureGate>` wraps for MTSS Plans, ISS Dashboard,
+  Displays, and House Rankings. Phase 2 shipped:
+  - Nav-item HIDE for off+no-upsell features (MTSS Plans, ISS
+    Dashboard, Displays — wraps `renderGatedNavItem` in App.tsx).
+  - Daily expired-override sweep cron + append-only
+    `feature_licensing_audit_log` table with a partial unique index
+    on `override_id WHERE action='override_expired_sweep'` for
+    idempotency (`cron/featureLicensingOverrideSweep.ts`, scheduled
+    at 02:15 UTC; override via `FEATURE_LICENSING_SWEEP_CRON`).
+  - First quota consumer wired:
+    `parentPortal.maxParentAccounts` enforced in
+    `routes/parentInvites.ts` on both single (`/send-one`) and bulk
+    (`/send`) paths via `checkParentAccountQuota` +
+    `enforceParentAccountQuota` in `lib/featureLicensing.ts`.
+    Quota count = accepted parents + live pending invites. Single
+    returns 403 `quota_exceeded`; bulk emits per-row
+    `skipped/quota_exceeded` so partial batches still succeed
+    cleanly. Undefined / non-positive quotas treated as unlimited.
+
+  Phase 3 candidates (not blocking deploy):
+  - Wire `maxDisplayPlaylists` (second quota consumer) to validate
+    the registry pattern with a non-parent feature.
+  - SuperUser-facing audit-log viewer in
+    `SchoolLicensingPage.tsx` — today the audit table is
+    write-only from the cron's perspective; admins have no UI to
+    see "what was swept when, and on which override".
+  - Telemetry tile on the SuperUser dashboard:
+    schools-near-quota count (e.g. ≥80% on any seat-style quota)
+    so the sales/CS team has lead time to upsell before tenants
+    hit the wall.
 
 - **Student Photos — prerequisite for walker verification, also useful
   app-wide.** New work item, separate from the pickup module but
