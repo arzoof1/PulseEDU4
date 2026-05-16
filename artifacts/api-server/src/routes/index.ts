@@ -84,7 +84,7 @@ import onboardingRouter from "./onboarding";
 import pickupRouter from "./pickup";
 import astRouter from "./ast";
 import featureLicensingRouter from "./featureLicensing";
-import { requireFeature } from "../lib/featureLicensing";
+import { requireFeature, requireFeatureForParent } from "../lib/featureLicensing";
 
 const router: IRouter = Router();
 
@@ -129,23 +129,27 @@ router.use(adminStaffRouter);
 // Mount paths are relative to the parent router's mount point (which
 // is `/api` in app.ts) — do NOT include a leading `/api`.
 //
-// Why we only gate STAFF-facing surfaces:
-//   - `requireFeature` reads `req.schoolId`, which is populated by the
-//     staff-auth middleware in app.ts. Parent-authenticated routes
-//     (`/parent/*`) don't have it (parent sessions use `req.parentId`
-//     and resolve school context internally), so adding the gate there
-//     would 401 legitimate parents.
-//   - The licensing intent is "school doesn't have the feature → no
-//     new admin work flows in". Existing parents can still log in.
-//     Stopping admin invites/preview is enough to stem new parent
-//     onboarding when the school's parentPortal license is off.
-//
-// `parentPortal` parent-side gating is a Phase 2 follow-up — needs a
-// parent-aware variant of `requireFeature` that resolves schoolId
-// from `req.parentId`'s student → school link.
+// Staff-facing gates use `requireFeature` (reads `req.schoolId` populated
+// by staff-auth middleware in app.ts). Parent-facing gates use
+// `requireFeatureForParent` (resolves schoolId from `req.parentId` →
+// parents.school_id) because parent sessions don't carry `req.schoolId`.
 router.use("/ast", requireFeature("ast"));
 router.use("/admin/parent-invites", requireFeature("parentPortal"));
 router.use("/admin/parent-preview", requireFeature("parentPortal"));
+
+// Parent-side runtime gates. Mounted BEFORE the parent runtime routers
+// (parentSnapshotRouter / parentHeartbeatPrefsRouter / parentSnapshotPdfRouter)
+// so a school's parentPortal license being revoked blocks already-
+// logged-in parents from hitting the snapshot, PDF, and prefs APIs.
+// `requireFeatureForParent` resolves school context from `req.parentId`
+// since parent sessions don't have `req.schoolId`. Returns 403
+// `parent_portal_disabled` which the client maps to a friendly screen.
+router.use("/parent/snapshot", requireFeatureForParent("parentPortal"));
+router.use("/parent/snapshot.pdf", requireFeatureForParent("parentPortal"));
+router.use(
+  "/parent/heartbeat-prefs",
+  requireFeatureForParent("parentPortal"),
+);
 
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);

@@ -2,11 +2,13 @@ import type { Request, RequestHandler } from "express";
 import { eq, and } from "drizzle-orm";
 import {
   db,
+  parentsTable,
   plansTable,
   schoolFeatureOverridesTable,
   schoolsTable,
   schoolSettingsTable,
 } from "@workspace/db";
+import { verifyParentAuthToken } from "./authToken.js";
 
 // =============================================================================
 // Feature licensing — server-side helpers
@@ -347,6 +349,74 @@ export function requireFeature(key: string): RequestHandler {
       const ok = await isFeatureEnabled(req, schoolId, key);
       if (!ok) {
         res.status(404).json({ error: "feature_not_available" });
+        return;
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
+// Parent-aware variant of `requireFeature`. Parent sessions don't have
+// `req.schoolId` (they use `req.parentId`), so we resolve the school by
+// looking up the parent row's `school_id`. Mirrors the parent-id
+// resolution pattern used by parentSnapshot / parentHeartbeatPrefs so
+// the gate works whether it's mounted before or after the route-local
+// resolver.
+//
+// On feature OFF, returns 403 with `{error: "parent_portal_disabled"}`
+// so the parent client can render a friendly "school has paused the
+// parent portal" screen rather than a generic error. If the request is
+// not authenticated as a parent, we pass through so the downstream
+// route returns its own 401.
+const PARENT_SCHOOL_CACHE = new WeakMap<Request, Map<number, number | null>>();
+
+async function resolveParentSchoolId(
+  req: Request,
+  parentId: number,
+): Promise<number | null> {
+  let cache = PARENT_SCHOOL_CACHE.get(req);
+  if (!cache) {
+    cache = new Map();
+    PARENT_SCHOOL_CACHE.set(req, cache);
+  }
+  const cached = cache.get(parentId);
+  if (cached !== undefined) return cached;
+  const [row] = await db
+    .select({ schoolId: parentsTable.schoolId })
+    .from(parentsTable)
+    .where(eq(parentsTable.id, parentId))
+    .limit(1);
+  const sid = row?.schoolId ?? null;
+  cache.set(parentId, sid);
+  return sid;
+}
+
+export function requireFeatureForParent(key: string): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      let pid: number | null = req.parentId ?? req.session.parentId ?? null;
+      if (!pid) {
+        const auth = req.headers.authorization;
+        if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+          pid = verifyParentAuthToken(auth.slice(7).trim());
+        }
+      }
+      if (!pid) {
+        // Let the downstream route return its standard 401.
+        next();
+        return;
+      }
+      req.parentId = pid;
+      const schoolId = await resolveParentSchoolId(req, pid);
+      if (!schoolId) {
+        next();
+        return;
+      }
+      const ok = await isFeatureEnabled(req, schoolId, key);
+      if (!ok) {
+        res.status(403).json({ error: "parent_portal_disabled" });
         return;
       }
       next();

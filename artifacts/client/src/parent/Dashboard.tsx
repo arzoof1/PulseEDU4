@@ -198,6 +198,10 @@ export default function Dashboard({ me }: { me: ParentMe }) {
   const [snapshot, setSnapshot] = useState<Snapshot | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  // Set when the server returns 403 parent_portal_disabled — the school
+  // has turned off the parent-portal license. We render a dedicated
+  // friendly screen rather than the raw error string.
+  const [portalDisabled, setPortalDisabled] = useState(false);
   const [view, setView] = useState<"snapshot" | "prefs">("snapshot");
   // Bumping this nonce forces the snapshot effect to re-run even when
   // activeStudentId is unchanged — used after returning from the
@@ -217,6 +221,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     let cancelled = false;
     setLoading(true);
     setError("");
+    setPortalDisabled(false);
     (async () => {
       try {
         const res = await parentFetch(
@@ -225,7 +230,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
         if (cancelled) return;
         if (!res.ok) {
           const body = await res.json().catch(() => ({}));
-          setError(body.error ?? `Could not load snapshot (${res.status})`);
+          if (res.status === 403 && body.error === "parent_portal_disabled") {
+            setPortalDisabled(true);
+          } else {
+            setError(body.error ?? `Could not load snapshot (${res.status})`);
+          }
         } else {
           setSnapshot((await res.json()) as Snapshot);
         }
@@ -297,6 +306,28 @@ export default function Dashboard({ me }: { me: ParentMe }) {
     } finally {
       setPdfDownloading(false);
     }
+  }
+
+  if (portalDisabled) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-slate-50 p-6">
+        <div className="max-w-md w-full bg-white border border-slate-200 rounded-2xl p-8 text-center shadow-sm">
+          <div className="mx-auto mb-4 h-12 w-12 rounded-full bg-amber-100 flex items-center justify-center">
+            <ShieldAlert className="h-6 w-6 text-amber-600" />
+          </div>
+          <div className="text-lg font-semibold mb-2">
+            Parent portal paused
+          </div>
+          <p className="text-sm text-slate-600 mb-6">
+            Your school has paused the parent portal. Please contact the
+            school office for an update, or check back later.
+          </p>
+          <Button variant="outline" onClick={handleSignOut}>
+            Sign out
+          </Button>
+        </div>
+      </div>
+    );
   }
 
   if (me.students.length === 0) {
