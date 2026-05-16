@@ -259,15 +259,46 @@ export const SUBJECT_KEYS: readonly Subject[] = [
   "geometry",
 ] as const;
 
-// ---- Algebra 1 EOC (FL DOE FAST Table 8 continuation) ----
-// PLACEHOLDER: awaiting authoritative cut-score values from FL DOE.
-// While empty, hasChart() returns false for this subject and consumers
-// fall through to their existing "no chart" branch.
-const ALGEBRA1_EOC: FastChart | null = null;
+// ---- Algebra 1 EOC (FL DOE Rule 6A-1.09422, Oct 2023) ----
+// Source: FL DOE final achievement-level cut-score table (B.E.S.T.).
+// EOC range: 325–475. Published bands are whole-level only (L1–L5);
+// the L1 Low/Mid/High and L2 Low/High sub-bands the bucket-target
+// math needs are NOT published, so we split L1 into equal thirds and
+// L2 into equal halves. Refine if FL DOE ever publishes official sub
+// bands.
+//   L1: 325–378  → Low 325–342, Mid 343–360, High 361–378
+//   L2: 379–399  → Low 379–388, High 389–399
+//   L3: 400–417
+//   L4: 418–434
+//   L5: 435–475
+const ALGEBRA1_EOC: FastChart | null = {
+  L1Low: [325, 342],
+  L1Mid: [343, 360],
+  L1High: [361, 378],
+  L2Low: [379, 388],
+  L2High: [389, 399],
+  L3: [400, 417],
+  L4: [418, 434],
+  L5: [435, 475],
+};
 
-// ---- Geometry EOC (FL DOE FAST Table 8 continuation) ----
-// PLACEHOLDER: awaiting authoritative cut-score values from FL DOE.
-const GEOMETRY_EOC: FastChart | null = null;
+// ---- Geometry EOC (FL DOE Rule 6A-1.09422, Oct 2023) ----
+// Same source + sub-band synthesis approach as Algebra 1 above.
+//   L1: 325–384  → Low 325–344, Mid 345–364, High 365–384
+//   L2: 385–403  → Low 385–393, High 394–403
+//   L3: 404–422
+//   L4: 423–431
+//   L5: 432–475
+const GEOMETRY_EOC: FastChart | null = {
+  L1Low: [325, 344],
+  L1Mid: [345, 364],
+  L1High: [365, 384],
+  L2Low: [385, 393],
+  L2High: [394, 403],
+  L3: [404, 422],
+  L4: [423, 431],
+  L5: [432, 475],
+};
 
 function chartFor(subject: Subject, grade: number): FastChart | null {
   switch (subject) {
