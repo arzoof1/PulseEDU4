@@ -68,6 +68,7 @@ export * from "./tier3Strategies";
 export * from "./tier3StrategyUsage";
 export * from "./safetyPlans";
 export * from "./issAdminLogs";
+export * from "./issAdminLogAudit";
 export * from "./ossLogs";
 export * from "./disciplineReasons";
 export * from "./schoolClosedDays";

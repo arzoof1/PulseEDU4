@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
 import AddDisciplineLogModal from "./AddDisciplineLogModal";
+import IssLogDetailDrawer from "./IssLogDetailDrawer";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 interface RecentRow {
@@ -210,6 +211,10 @@ export default function AdminHubPage({
     useState<ReconciliationResp | null>(null);
   const [astPending, setAstPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
+  const [issDetail, setIssDetail] = useState<{
+    id: number;
+    studentName: string;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const reload = useCallback(async () => {
@@ -471,6 +476,15 @@ export default function AdminHubPage({
             {recent.map((r) => (
               <div
                 key={`${r.kind}-${r.id}`}
+                onClick={() => {
+                  // Detail drawer is ISS-only for now (the audit-trail
+                  // edit/delete flow only covers ISS assignments).
+                  if (r.kind !== "iss") return;
+                  const name = r.student
+                    ? `${r.student.firstName} ${r.student.lastName}`
+                    : r.studentId;
+                  setIssDetail({ id: r.id, studentName: name });
+                }}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "auto 1fr auto auto",
@@ -480,6 +494,7 @@ export default function AdminHubPage({
                   border: "1px solid #e5e7eb",
                   borderRadius: 8,
                   opacity: r.cancelledAt ? 0.55 : 1,
+                  cursor: r.kind === "iss" ? "pointer" : "default",
                 }}
               >
                 <span
@@ -525,7 +540,12 @@ export default function AdminHubPage({
                 {!r.cancelledAt && (
                   <button
                     type="button"
-                    onClick={() => cancelLog(r.kind, r.id)}
+                    onClick={(e) => {
+                      // Stop the row's click handler from also opening
+                      // the detail drawer when the admin clicks Cancel.
+                      e.stopPropagation();
+                      void cancelLog(r.kind, r.id);
+                    }}
                     style={{
                       padding: "3px 8px",
                       fontSize: 12,
@@ -551,6 +571,18 @@ export default function AdminHubPage({
           onSaved={async () => {
             setShowModal(null);
             await reload();
+          }}
+        />
+      )}
+
+      {issDetail && (
+        <IssLogDetailDrawer
+          logId={issDetail.id}
+          studentName={issDetail.studentName}
+          onClose={() => setIssDetail(null)}
+          onChanged={(opts) => {
+            void reload();
+            if (opts?.deleted) setIssDetail(null);
           }}
         />
       )}

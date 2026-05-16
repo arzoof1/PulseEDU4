@@ -125,13 +125,41 @@ _Populate as you build_
   the Core Team-facing help/directions panels. Do as a single pass after
   Phase 4 — piecemeal invites drift.
 
-- **Admin Hub ISS log: view detail + edit/delete with audit guardrails**
-  Click into a row in the Admin Hub recent feed to see the full assignment.
-  - **Delete entire assignment**: only allowed if **no day has been served yet** (no `iss_attendance_day` rows for that `admin_log_id` show any served signal — present periods, marked-served, or rolled-from). Audit retention for partially-served assignments is intentional.
-  - **Trim the tail**: even on a partially-served assignment, the user should be able to remove **future** day rows (and **today's** row only while it has not yet been served — i.e. `present_periods` is empty AND `marked_served = false`). Already-served past days are immutable.
-  - **Edit reason / notes / dates**: future days can be re-dated; past served days cannot. Reason and notes are editable on any non-cancelled assignment, with the change recorded in an audit trail.
-  - **Required "reason for edit"**: every edit/trim/delete prompts the user for a short justification ("why are you changing this?") that is stored on the audit row. This is the column auditors will read first to understand whether a change was a typo correction, a legitimate behavior update, or something that needs follow-up. Should be required (non-empty, min ~5 chars), not optional.
-  - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
+- **Admin Hub ISS log: view detail + edit/delete with audit guardrails — SHIPPED.**
+  Click an ISS row in the Admin Hub recent feed to open
+  `IssLogDetailDrawer` with Detail + History tabs. Backend audit
+  table `iss_admin_log_audit` (created by `ensureAdminHubSchema` in
+  `seed.ts`) captures every mutation with `actor_staff_id`,
+  `actor_display_name`, `action` enum (`edit_reason` |
+  `edit_notes` | `edit_dates` | `trim_days` |
+  `delete_assignment`), `before_json`, `after_json`,
+  `edit_reason TEXT NOT NULL` (min 5 chars enforced
+  client + server), and `created_at`. Routes added to
+  `routes/adminHub.ts`:
+  - `GET /admin-hub/iss-logs/:id` (log + day rows)
+  - `GET /admin-hub/iss-logs/:id/audit`
+  - `PATCH /admin-hub/iss-logs/:id` (edit reason and/or notes)
+  - `PATCH /admin-hub/iss-logs/:id/dates` (add and/or trim day rows
+    via diff; emits `edit_dates` for adds and `trim_days` for
+    removes — both can fire in one diff)
+  - `DELETE /admin-hub/iss-logs/:id` (gated to zero-served days)
+
+  All three mutation handlers run validation **inside** the tx via
+  `SELECT ... FOR UPDATE` on both the parent log and its day rows
+  (concurrency-safe: prevents the "served-between-check-and-delete"
+  TOCTOU). `.returning()` on the day insert/delete means audit rows
+  reflect the *actual* post-mutation DB state, not intent — important
+  because `onConflictDoNothing` on the (school, student, day)
+  unique index can lose a write to a parallel ISS Teacher walk-in.
+
+  Served-day check helper `isDayServed()` lives in `adminHub.ts`
+  and is mirrored exactly by client-side `isServed()` in
+  `IssLogDetailDrawer.tsx` (present periods non-empty OR
+  `marked_served` true OR `rolled_from_date` non-null) — keep these
+  two in sync if the servedness signals ever change.
+
+  OSS edit/delete intentionally NOT implemented yet — only ISS per
+  the original spec. OSS rows in the recent feed remain non-clickable.
 
 - **Parent Pick-Up Module — remaining work.** Tag-management
   (bulk-assign, reissue, single + batch PDF, capacity warn),

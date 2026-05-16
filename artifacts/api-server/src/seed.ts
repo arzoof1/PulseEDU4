@@ -1168,6 +1168,28 @@ export async function ensureAdminHubSchema() {
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS student_emergency_contact_slot_uq ON student_emergency_contacts(school_id, student_id, slot)`,
   );
+
+  // ---- iss_admin_log_audit (append-only audit trail for ISS edits) ----
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS iss_admin_log_audit (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      admin_log_id INTEGER NOT NULL,
+      actor_staff_id INTEGER NOT NULL,
+      actor_display_name TEXT NOT NULL,
+      action TEXT NOT NULL,
+      before_json JSONB,
+      after_json JSONB,
+      edit_reason TEXT NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_admin_log_audit_by_log ON iss_admin_log_audit(admin_log_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS iss_admin_log_audit_by_school ON iss_admin_log_audit(school_id)`,
+  );
 }
 
 // -----------------------------------------------------------------------------
