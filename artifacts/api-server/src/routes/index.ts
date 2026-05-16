@@ -84,6 +84,7 @@ import onboardingRouter from "./onboarding";
 import pickupRouter from "./pickup";
 import astRouter from "./ast";
 import featureLicensingRouter from "./featureLicensing";
+import fastCoverageRouter from "./fastCoverage";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -226,5 +227,6 @@ router.use(onboardingRouter);
 router.use(pickupRouter);
 router.use(astRouter);
 router.use(featureLicensingRouter);
+router.use(fastCoverageRouter);
 
 export default router;

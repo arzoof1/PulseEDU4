@@ -20,6 +20,7 @@ import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
+import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
@@ -19737,6 +19738,19 @@ function App() {
                 group: "admin-tenancy",
               });
             }
+            // FAST score coverage — admin-only telemetry tile that
+            // flags grades missing PM3 scores before the Teacher
+            // Roster would silently render blank LG buckets.
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "fast-coverage",
+                icon: "📊",
+                title: "FAST Coverage",
+                subtitle:
+                  "Per-grade FAST score loading status. Spot missing PM3 imports before sharing the Teacher Roster.",
+                group: "feature-config",
+              });
+            }
             return tiles;
           })()}
           onSelect={setSettingsTile}
@@ -19777,6 +19791,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "data-management" && (
         <DataManagementHub canActAsDistrict={canActAsDistrict} />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "fast-coverage" && (isAdmin || isDistrictAdmin || isSuperUser) && (
+        <FastCoveragePage />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "parent-portal-sections" && (isAdmin || isSuperUser) && (

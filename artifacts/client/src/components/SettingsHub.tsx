@@ -27,6 +27,7 @@ export type SettingsTileId =
   | "staff-directory"
   | "cameras"
   | "case-outcomes"
+  | "fast-coverage"
   | "onboarding";
 
 export type SettingsGroupId =

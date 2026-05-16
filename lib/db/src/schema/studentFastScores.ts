@@ -14,9 +14,10 @@ import {
 // PM3 spring), the prior-year final scale score, and a Bottom Quartile
 // flag derived from the prior-year final.
 //
-// `subject` is "ela" or "math". Algebra 1 / Geometry EOC scores are not
-// tracked yet — those students just won't have a row, which the Teacher
-// Roster handles by hiding the Math pill (or by future expansion).
+// `subject` is "ela" | "math" | "algebra1" | "geometry". Stored as TEXT
+// (no enum constraint) so adding new EOC subjects is a code-only change.
+// Algebra 1 / Geometry rows use the EOC scale; chart lookup in
+// fastCutScores.ts is by subject only for those (grade is ignored).
 //
 // v1 stores the raw scores only; the level/sub-level placement and the
 // bucket-target gap are computed at read time using fastCutScores.ts.

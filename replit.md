@@ -70,29 +70,29 @@ _Populate as you build_
 ## Future work
 
 - **🚩 PRE-DEPLOYMENT BLOCKER — FAST scale-score coverage gaps.**
-  Before going public, the cut-score table in
-  `artifacts/api-server/src/lib/fastCutScores.ts` and the seed/import
-  data must cover every grade a real tenant will roster.
-  - **Add Algebra 1 EOC and Geometry EOC scale charts** (FL DOE FAST
-    Table 8 continuation). Today these subjects render "n/a" for every
-    HS Math student; without them, a 9th/10th grader taking Algebra 1
-    or Geometry has no PM pills and no LG bucket. Wire the new charts
-    into the `MATH` record and update `hasChart()` accordingly.
-  - **Decide and implement 3rd-grade bucket behavior.** Today 3rd
-    graders are deliberately suppressed (no prior-grade chart). For a
-    K–5 tenant this means the entire 3rd-grade roster shows "—" in the
-    LG column. Either (a) document this as intended and add a tooltip
-    explaining "Bucket starts in 4th grade" or (b) fall back to placing
-    PM3 on the **current** (3rd) grade chart and computing the bucket
-    from there, accepting that the gap will be optimistic since no
-    grade-jump is involved.
-  - **Verify scale-score data coverage at onboarding.** Today only
-    grades 6–10 ELA and 6–8 Math have student PM1/PM2/PM3 in the seed.
-    Any tenant rostering grades 3–5 needs FAST data uploaded for those
-    grades; if missing, pills + bucket silently render blank rather
-    than warning the admin. Add an onboarding check (or Settings
-    telemetry tile) that flags "FAST scores missing for grades X, Y,
-    Z" so admins know to import before showing the roster to teachers.
+  Partially shipped. Remaining blocker is cut-score data only.
+  - **SHIPPED — 3rd-grade bucket fallback (Option B).** 3rd graders
+    now place PM3 on the G3 chart and compute the bucket from there.
+    `bucketTarget` no longer suppresses grade 3.
+  - **SHIPPED — EOC scaffolding.** `Subject` union extended to
+    `"ela" | "math" | "algebra1" | "geometry"`. `chartFor()` routes
+    EOC subjects to their own charts (grade-agnostic). `ALGEBRA1_EOC`
+    + `GEOMETRY_EOC` exist as `FastChart | null` placeholders —
+    today they short-circuit to "n/a" the same way as before, but
+    populating the constants is now the only change needed.
+  - **SHIPPED — FAST Coverage telemetry tile** (Settings →
+    "📊 FAST Coverage", admin-gated). Backed by
+    `GET /api/insights/fast-coverage` in `routes/fastCoverage.ts`.
+    Per-(subject, grade) status: Complete / Partial PM3 / Missing
+    PM3 / No chart. Warns admins about Algebra1/Geometry rostered
+    students whose buckets won't render until cut scores land.
+  - **OPEN — Wire the FL DOE FAST Table 8 continuation values into
+    `ALGEBRA1_EOC` and `GEOMETRY_EOC`.** User to supply cut-score
+    doc/URL. Once the constants are populated, the importer +
+    insights + teacher-roster paths still need their `ela | math`
+    string literals widened to the new `Subject` union (~11 file
+    blast radius — held until values arrive so it's testable in a
+    single pass).
 
 
 - **AI Consistency Check — onboarding step + admin telemetry tile.**

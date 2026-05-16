@@ -1,12 +1,21 @@
 // FAST cut-score tables and placement helpers.
 //
 // Source: FL DOE FAST scale-score "Learning Gains" tables.
-//   - ELA   → Table 6 (grades 3–10)
-//   - Math  → Table 8 (grades 3–8 + Algebra 1 + Geometry)
+//   - ELA       → Table 6 (grades 3–10)
+//   - Math      → Table 8 (grades 3–8)
+//   - Algebra 1 → Table 8 continuation, EOC scale (separate chart)
+//   - Geometry  → Table 8 continuation, EOC scale (separate chart)
 //
-// Algebra 1 and Geometry EOC are intentionally NOT included in the
-// chart yet — per spec, the Teacher Roster hides the bucket icon for
-// those students (and we don't have FAST EOC scores in seed data).
+// EOC subjects are stored under their own subject keys ("algebra1" /
+// "geometry"), NOT under "math" with grade 9/10 — a 9th grader could
+// take Geometry early and an 8th grader could take Algebra 1, so the
+// EOC subject is what determines the chart, not the student's grade.
+//
+// The Algebra 1 and Geometry chart objects below are intentionally
+// EMPTY placeholders awaiting authoritative FL DOE cut-score values
+// (see Run & Operate notes). Until they're populated, `hasChart()`
+// returns false for those subjects and the roster falls back to the
+// "n/a" bucket render — same as today.
 //
 // Conventions:
 //   - Each grade has Levels 1–5.
@@ -18,9 +27,13 @@
 //   - PM1 / PM2 placement: use the student's CURRENT-grade chart.
 //   - PM3 placement:       use the PRIOR-grade chart (it represents
 //                          end-of-prior-year mastery).
-//   - 3rd grade has no prior-grade chart, so we fall back to G3 for
-//     PM3 placement and the bucket icon is HIDDEN.
-//   - Algebra 1 / Geometry: not in this table; bucket also HIDDEN.
+//   - 3rd grade has no prior-grade chart, so we fall back to the G3
+//     chart for PM3 placement AND compute the bucket target from G3.
+//     The gap will be optimistic since no grade-jump is involved —
+//     intentional per product decision; tooltip on the roster should
+//     note this for the 3rd-grade column.
+//   - Algebra 1 / Geometry EOC: scored on EOC scale (425–575); chart
+//     lookup is by subject only, grade is ignored for those rows.
 //
 // Bucket target:
 //   - Always computed against the student's CURRENT-grade chart.
@@ -234,11 +247,40 @@ const MATH: Record<number, FastChart> = {
   },
 };
 
-export type Subject = "ela" | "math";
+export type Subject = "ela" | "math" | "algebra1" | "geometry";
+
+// All recognised subject keys (registry use — keep in sync with Subject).
+// Used by the FAST coverage telemetry tile so it can enumerate which
+// charts exist without hard-coding the list in every consumer.
+export const SUBJECT_KEYS: readonly Subject[] = [
+  "ela",
+  "math",
+  "algebra1",
+  "geometry",
+] as const;
+
+// ---- Algebra 1 EOC (FL DOE FAST Table 8 continuation) ----
+// PLACEHOLDER: awaiting authoritative cut-score values from FL DOE.
+// While empty, hasChart() returns false for this subject and consumers
+// fall through to their existing "no chart" branch.
+const ALGEBRA1_EOC: FastChart | null = null;
+
+// ---- Geometry EOC (FL DOE FAST Table 8 continuation) ----
+// PLACEHOLDER: awaiting authoritative cut-score values from FL DOE.
+const GEOMETRY_EOC: FastChart | null = null;
 
 function chartFor(subject: Subject, grade: number): FastChart | null {
-  const table = subject === "ela" ? ELA : MATH;
-  return table[grade] ?? null;
+  switch (subject) {
+    case "ela":
+      return ELA[grade] ?? null;
+    case "math":
+      return MATH[grade] ?? null;
+    case "algebra1":
+      // EOC charts are keyed by subject only, not grade.
+      return ALGEBRA1_EOC;
+    case "geometry":
+      return GEOMETRY_EOC;
+  }
 }
 
 // Public: does this (subject, grade) have a chart at all?
@@ -274,13 +316,20 @@ export function placeOnChart(
 }
 
 // Place a PM3 score using the PRIOR-grade chart (per the worked
-// example). 3rd graders have no prior chart — caller should still
-// expect a placement (we fall back to G3) but suppress the bucket icon.
+// example). 3rd graders have no prior chart — we fall back to the
+// current (G3) chart so they still get a placement AND a bucket
+// (option B per product decision). For EOC subjects the grade is
+// ignored — the chart is keyed by subject only.
 export function placePm3(
   score: number,
   subject: Subject,
   currentGrade: number,
 ): Placement | null {
+  // EOC subjects: chart lookup ignores grade, so prior-grade fallback
+  // is a no-op. Place directly on the EOC chart.
+  if (subject === "algebra1" || subject === "geometry") {
+    return placeOnChart(score, subject, currentGrade);
+  }
   const priorGrade = currentGrade - 1;
   const c = chartFor(subject, priorGrade);
   if (c) return placeOnChart(score, subject, priorGrade);
@@ -337,15 +386,19 @@ function subLevelMin(c: FastChart, sub: SubLevel): number | null {
 
 // Compute the bucket target on the CURRENT-grade chart given the PM3
 // placement sub-level. Returns null when:
-//   - no current-grade chart exists (Algebra/Geometry, etc.)
+//   - no current-grade chart exists (EOC placeholders, K–2, etc.)
 //   - the student is already at L5 (no next stop)
-//   - currentGrade === 3 (per spec: hide bucket for grade 3)
+//
+// Note: 3rd grade is intentionally NOT suppressed here — per product
+// decision (option B), G3 students get a bucket computed against
+// their G3 chart (same chart their PM3 was placed on, since there's
+// no prior-grade chart). The gap will be optimistic — surface a
+// tooltip in the UI explaining "no grade-jump applied for 3rd grade."
 export function bucketTarget(
   subject: Subject,
   currentGrade: number,
   placedSubLevel: SubLevel,
 ): { score: number; nextStop: SubLevel } | null {
-  if (currentGrade === 3) return null;
   const c = chartFor(subject, currentGrade);
   if (!c) return null;
   const next = NEXT_STOP[placedSubLevel];
