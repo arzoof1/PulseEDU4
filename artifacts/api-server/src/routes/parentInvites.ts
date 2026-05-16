@@ -15,6 +15,7 @@ import {
   sendParentInviteEmail,
 } from "../lib/parentInviteEmail.js";
 import { logger } from "../lib/logger.js";
+import { enforceParentAccountQuota } from "../lib/featureLicensing.js";
 
 const router: IRouter = Router();
 
@@ -233,6 +234,12 @@ router.post("/admin/parent-invites/send-one", async (req, res) => {
     return;
   }
   const email = body.email.trim().toLowerCase();
+
+  // Phase 2 licensing — refuse if this would push the school over its
+  // maxParentAccounts quota. Checked BEFORE the dup-invite guard so a
+  // quota-blocked tenant gets the right error message instead of a
+  // misleading 409 about an existing invite.
+  if (!(await enforceParentAccountQuota(req, res, schoolId, 1))) return;
 
   const [student] = await db
     .select({

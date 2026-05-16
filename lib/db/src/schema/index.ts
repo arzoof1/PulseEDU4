@@ -94,3 +94,4 @@ export * from "./caseFootageRequests";
 export * from "./caseOutcomeTypes";
 export * from "./staffAst";
 export * from "./featurePlans";
+export * from "./featureLicensingAuditLog";

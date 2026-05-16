@@ -35,6 +35,7 @@ import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
+import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
 
 // -----------------------------------------------------------------------------
 // Process-level error surface. Without these handlers an unhandled promise
@@ -342,6 +343,42 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule AST year-end lapse",
+          );
+        }
+
+        // Phase 2 of feature licensing — daily sweep that finds
+        // expired overrides and re-applies plan + remaining overrides
+        // to roll the runtime super_feature_* booleans back. The read
+        // path (`loadEffectiveFeatures`) already ignores expired
+        // overrides, but the stored boolean is what nav-gates and
+        // schoolSettings consumers see. Idempotent — partial unique
+        // index on the audit table guarantees a given override is
+        // swept at most once. Schedule daily at 02:15 UTC; override
+        // via FEATURE_LICENSING_SWEEP_CRON.
+        const sweepExpr =
+          process.env.FEATURE_LICENSING_SWEEP_CRON ?? "15 2 * * *";
+        try {
+          cron.schedule(sweepExpr, async () => {
+            try {
+              const r = await runFeatureLicensingOverrideSweep(new Date());
+              if (r.overridesSwept > 0) {
+                logger.info(r, "Feature licensing override sweep complete");
+              }
+            } catch (cronErr) {
+              logger.error(
+                { err: cronErr },
+                "Feature licensing override sweep failed",
+              );
+            }
+          });
+          logger.info(
+            { expr: sweepExpr },
+            "Feature licensing override sweep scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule feature licensing override sweep",
           );
         }
       }

@@ -5559,6 +5559,29 @@ export async function ensureFeaturePlansSchema() {
     sql`CREATE INDEX IF NOT EXISTS school_feature_overrides_school_idx ON school_feature_overrides(school_id)`,
   );
 
+  // Phase 2: licensing audit log. Append-only. Drives the expired-
+  // override sweep's idempotency via a partial unique index on
+  // override_id (one sweep audit row per override, ever).
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS feature_licensing_audit_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      action TEXT NOT NULL,
+      override_id INTEGER,
+      feature_key TEXT,
+      payload JSONB NOT NULL DEFAULT '{}'::jsonb,
+      actor_staff_id INTEGER,
+      actor_name TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS feature_licensing_audit_school_idx ON feature_licensing_audit_log(school_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS feature_licensing_audit_expired_sweep_unique ON feature_licensing_audit_log(override_id) WHERE action = 'override_expired_sweep'`,
+  );
+
   // (Column adds for schools.plan_id + school_settings.super_feature_ast
   // happen earlier via ensureFeaturePlansColumns, before seedTenancy.)
 

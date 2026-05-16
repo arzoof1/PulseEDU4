@@ -1,7 +1,8 @@
-import type { Request, RequestHandler } from "express";
+import type { Request, RequestHandler, Response } from "express";
 import { eq, and, sql } from "drizzle-orm";
 import {
   db,
+  parentInvitesTable,
   parentsTable,
   plansTable,
   schoolFeatureOverridesTable,
@@ -682,6 +683,91 @@ export async function listSchoolsWithLicensing(): Promise<
       overrideCount: overrideCountBySchool.get(s.id) ?? 0,
     };
   });
+}
+
+// =============================================================================
+// Quota enforcement helpers
+// =============================================================================
+// Phase 2 — first quota consumer is `parentPortal.maxParentAccounts`.
+// "Account slot" = accepted parent rows + live (pending, not-expired)
+// invites. Counted together so a tenant can't game the quota by
+// blasting out invites that haven't accepted yet.
+//
+// Returns `{ allowed: true }` when the quota is undefined (unlimited)
+// or when the proposed addition keeps the school under the limit.
+// Returns `{ allowed: false, quota, current }` otherwise. Callers
+// translate that into the 4xx response shape they want.
+
+export type QuotaCheckResult =
+  | { allowed: true; quota: number | null; current: number }
+  | { allowed: false; quota: number; current: number };
+
+export async function checkParentAccountQuota(
+  req: Request,
+  schoolId: number,
+  additional: number,
+): Promise<QuotaCheckResult> {
+  const raw = await getQuota(req, schoolId, "parentPortal", "maxParentAccounts");
+  // Quota MUST be a positive integer to enforce. Undefined / non-number
+  // / non-positive => treat as unlimited (no rollout breakage if a
+  // SuperUser accidentally types `0` while editing the plan JSON).
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return { allowed: true, quota: null, current: 0 };
+  }
+  const quota = Math.floor(raw);
+
+  // accepted parents
+  const parentRows = await db
+    .select({ id: parentsTable.id })
+    .from(parentsTable)
+    .where(eq(parentsTable.schoolId, schoolId));
+
+  // live (pending, not-yet-expired) invites — re-counted on every check
+  // because cron-driven expiration would otherwise lag the gate.
+  const now = new Date();
+  const inviteRows = await db
+    .select({ id: parentInvitesTable.id })
+    .from(parentInvitesTable)
+    .where(
+      and(
+        eq(parentInvitesTable.schoolId, schoolId),
+        eq(parentInvitesTable.status, "pending"),
+        sql`${parentInvitesTable.expiresAt} > ${now}`,
+      ),
+    );
+
+  const current = parentRows.length + inviteRows.length;
+  if (current + Math.max(0, additional) > quota) {
+    return { allowed: false, quota, current };
+  }
+  return { allowed: true, quota, current };
+}
+
+// Convenience for routes: write the 403 + return false when the quota
+// would be exceeded; return true otherwise. Keeps the route bodies
+// readable.
+export async function enforceParentAccountQuota(
+  req: Request,
+  res: Response,
+  schoolId: number,
+  additional: number,
+): Promise<boolean> {
+  const r = await checkParentAccountQuota(req, schoolId, additional);
+  if (!r.allowed) {
+    res.status(403).json({
+      error: "quota_exceeded",
+      message:
+        `This school has reached its Parent Portal seat limit ` +
+        `(${r.current}/${r.quota}). Ask your district admin to ` +
+        `raise the quota for this school.`,
+      quota: r.quota,
+      current: r.current,
+      feature: "parentPortal",
+      quotaName: "maxParentAccounts",
+    });
+    return false;
+  }
+  return true;
 }
 
 // Suppress unused-import warning in builds that tree-shake `and` away.

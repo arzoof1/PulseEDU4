@@ -8413,6 +8413,38 @@ function App() {
       {navBadge(s.key)}
     </button>
   );
+  // Phase 2 of feature licensing — hoisted visibility states for the
+  // nav entries whose PAGES are already wrapped in <FeatureGate>. The
+  // page-side gate alone would render blank when the feature is off
+  // and no upsell is configured; this nav-side gate hides the entry
+  // entirely in that case (true "hide" behavior) so users never
+  // dead-click into a blank section. Hoisted (not called inline
+  // inside conditional JSX) so the hook order stays stable.
+  const mtssPlansVis = useFeatureVisible("mtssPlans");
+  const issDashboardVis = useFeatureVisible("issDashboard");
+  const displaysVis = useFeatureVisible("displays");
+  const renderGatedNavItem = (
+    s: NavSection,
+    vis: { visible: boolean; locked: boolean },
+  ) => {
+    if (!vis.visible) return null;
+    if (!vis.locked) return renderNavItem(s);
+    return (
+      <span
+        key={s.key}
+        style={{
+          position: "relative",
+          display: "inline-flex",
+          alignItems: "center",
+        }}
+      >
+        {renderNavItem(s)}
+        <span style={{ marginLeft: 4 }}>
+          <LockedBadge />
+        </span>
+      </span>
+    );
+  };
   const userInitials = currentStaffUser
     .replace(/\(.*?\)/g, "")
     .trim()
@@ -9214,11 +9246,14 @@ function App() {
                     Insights Hub tiles are intentionally kept as a parallel
                     discovery path. */}
                 {canManageMtssPlans &&
-                  renderNavItem({
-                    key: "mtssPlans",
-                    label: "MTSS Plans",
-                    icon: IconClipboard,
-                  })}
+                  renderGatedNavItem(
+                    {
+                      key: "mtssPlans",
+                      label: "MTSS Plans",
+                      icon: IconClipboard,
+                    },
+                    mtssPlansVis,
+                  )}
                 {canEditSafetyPlanClient &&
                   renderNavItem({
                     key: "safetyPlans",
@@ -9270,11 +9305,14 @@ function App() {
                     icon: IconClipboard,
                   })}
                 {canViewIssDashboard &&
-                  renderNavItem({
-                    key: "issDashboard",
-                    label: "ISS Dashboard",
-                    icon: IconClipboard,
-                  })}
+                  renderGatedNavItem(
+                    {
+                      key: "issDashboard",
+                      label: "ISS Dashboard",
+                      icon: IconClipboard,
+                    },
+                    issDashboardVis,
+                  )}
                 {canReviewPullouts && !isBehaviorSpec &&
                   renderNavItem({
                     key: "behaviorReview",
@@ -9359,7 +9397,10 @@ function App() {
                   renderNavItem(adminNavSections[0])}
                 {canManageBellSchedules &&
                   bellScheduleNavSections.map(renderNavItem)}
-                {canManageDisplays && displaysNavSections.map(renderNavItem)}
+                {canManageDisplays &&
+                  displaysNavSections.map((s) =>
+                    renderGatedNavItem(s, displaysVis),
+                  )}
                 {canAccessMtssHub &&
                   renderNavItem({
                     key: "trustedAdultsAdmin",
