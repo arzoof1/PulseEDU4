@@ -1241,16 +1241,22 @@ export async function ensureWatchlistSchema() {
   // when the old unique index is still present, so subsequent boots
   // do nothing.
   await db.execute(sql`ALTER TABLE interaction_cases ADD COLUMN IF NOT EXISTS school_year_label TEXT`);
+  // TZ-aware school-year backfill. Casts opened_at to America/New_York
+  // before extracting month/year so cases opened in the late-evening
+  // boundary window (e.g. 9pm PT on June 30 = July 1 UTC) land in
+  // the correct school year. Matches schoolYearLabelFor's default TZ
+  // in artifacts/api-server/src/lib/schoolYear.ts. When a real cross-
+  // TZ tenant onboards, swap this constant for a per-school IANA col.
   await db.execute(sql`
     UPDATE interaction_cases
        SET school_year_label = CASE
-         WHEN EXTRACT(MONTH FROM opened_at) >= 7
-           THEN LPAD((EXTRACT(YEAR FROM opened_at)::INT % 100)::TEXT, 2, '0')
+         WHEN EXTRACT(MONTH FROM (opened_at AT TIME ZONE 'America/New_York')) >= 7
+           THEN LPAD((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT % 100)::TEXT, 2, '0')
                 || '-'
-                || LPAD(((EXTRACT(YEAR FROM opened_at)::INT + 1) % 100)::TEXT, 2, '0')
-         ELSE LPAD(((EXTRACT(YEAR FROM opened_at)::INT - 1) % 100)::TEXT, 2, '0')
+                || LPAD(((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT + 1) % 100)::TEXT, 2, '0')
+         ELSE LPAD(((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT - 1) % 100)::TEXT, 2, '0')
                 || '-'
-                || LPAD((EXTRACT(YEAR FROM opened_at)::INT % 100)::TEXT, 2, '0')
+                || LPAD((EXTRACT(YEAR FROM (opened_at AT TIME ZONE 'America/New_York'))::INT % 100)::TEXT, 2, '0')
        END
      WHERE school_year_label IS NULL OR school_year_label = ''
   `);
@@ -1325,6 +1331,10 @@ export async function ensureWatchlistSchema() {
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS witness_statements_school_idx ON witness_statements(school_id)`);
   await db.execute(sql`CREATE UNIQUE INDEX IF NOT EXISTS witness_statements_interaction_student_idx ON witness_statements(interaction_id, student_id)`);
+  // Per-case sequence number for human-readable witness statement IDs
+  // (CASE-26-27-0042-WS-03). Assigned at promote-to-case / attach time.
+  // NULL while the statement's interaction is still loose.
+  await db.execute(sql`ALTER TABLE witness_statements ADD COLUMN IF NOT EXISTS ws_seq INTEGER`);
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS interaction_audit_log (

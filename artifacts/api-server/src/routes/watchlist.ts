@@ -88,6 +88,7 @@ import {
   isCaseInvestigator,
 } from "../lib/coreTeam.js";
 import { schoolYearLabelFor } from "../lib/schoolYear.js";
+import { assignWitnessSeqForInteraction } from "../lib/witnessStatementId.js";
 import {
   scheduleConsistencyRun,
   runConsistencyCheck,
@@ -2273,23 +2274,53 @@ router.patch("/watchlist/interactions/:id", async (req: Request, res: Response) 
   if (typeof b["status"] === "string" && ["open", "resolved", "dismissed"].includes(b["status"])) {
     patch.status = b["status"];
   }
-  const [row] = await db
-    .update(interactionsTable)
-    .set(patch)
-    .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)))
-    .returning();
+  // When this PATCH changes case attachment, the update + ws_seq
+  // assignment must happen in a single tx that locks the new case
+  // row first. Otherwise a concurrent attach/move can race between
+  // our UPDATE and assignWitnessSeqForInteraction and we'd number
+  // statements against a stale case.
+  const willChangeCase = b["caseId"] !== undefined;
+  const row = await db.transaction(async (tx) => {
+    if (willChangeCase && patch.caseId != null) {
+      // Lock the target case row before mutating the interaction so
+      // any concurrent assign on the same case serializes behind us.
+      await tx.execute(sql`
+        SELECT id FROM interaction_cases
+         WHERE id = ${patch.caseId} AND school_id = ${schoolId}
+         FOR UPDATE
+      `);
+    }
+    const [updated] = await tx
+      .update(interactionsTable)
+      .set(patch)
+      .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)))
+      .returning();
+    if (!updated) return null;
+    if (willChangeCase) {
+      await updateMentionCaseIdForInteraction({
+        schoolId,
+        interactionId: id,
+        newCaseId: updated.caseId ?? null,
+        executor: tx,
+      });
+      if (updated.caseId != null) {
+        // Re-validate inside tx: confirm interaction still belongs to
+        // the case we just locked before assigning seq numbers.
+        const stillAttached = updated.caseId === patch.caseId;
+        if (stillAttached) {
+          await assignWitnessSeqForInteraction(tx, {
+            schoolId,
+            caseId: updated.caseId,
+            interactionId: id,
+          });
+        }
+      }
+    }
+    return updated;
+  });
   if (!row) {
     res.status(404).json({ error: "Not found" });
     return;
-  }
-  // Keep the case_mentions denormalised pointer in sync when the
-  // interaction's case attachment changes (attach / detach / move).
-  if (b["caseId"] !== undefined) {
-    await updateMentionCaseIdForInteraction({
-      schoolId,
-      interactionId: id,
-      newCaseId: row.caseId ?? null,
-    });
   }
   await audit({
     schoolId,
@@ -2503,18 +2534,30 @@ router.post(
         .set({ caseId: caseRow.id, updatedAt: new Date() })
         .where(and(eq(interactionsTable.id, id), eq(interactionsTable.schoolId, schoolId)));
 
-      return { ok: true, caseRow };
-    });
+      // Stamp human-readable WS sequence numbers on any witness
+      // statements for this interaction now that it's attached to a
+      // case. See lib/witnessStatementId.ts.
+      await assignWitnessSeqForInteraction(tx, {
+        schoolId,
+        caseId: caseRow.id,
+        interactionId: id,
+      });
 
-    if (result.ok) {
-      // Promote just attached this interaction to a new case; re-point
-      // any existing witness-statement mentions at the new case_id.
+      // Re-point any existing witness-statement mentions at the new
+      // case_id. Must run inside this tx so the mention pointer
+      // update participates in the same atomic unit as the case
+      // creation, interaction attach, and ws_seq stamping — otherwise
+      // a rollback would leave the mentions index pointing at a case
+      // that never committed.
       await updateMentionCaseIdForInteraction({
         schoolId,
         interactionId: id,
-        newCaseId: result.caseRow.id,
+        newCaseId: caseRow.id,
+        executor: tx,
       });
-    }
+
+      return { ok: true, caseRow };
+    });
 
     if (!result.ok) {
       res.status(result.status).json({ error: result.error });

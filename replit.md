@@ -112,17 +112,15 @@ _Populate as you build_
     (admin-gated). Cheap COUNT/SUM over the runs + findings tables
     grouped by current month.
 
-- **School-local timezone for case-number school-year derivation.**
-  Today `schoolYearLabelFor(new Date())` (server) and the seed
-  migration's `EXTRACT(MONTH FROM opened_at)` both use server-local
-  time. Single-TZ deployments are fine, but the moment a cross-TZ
-  tenant is onboarded a case opened late on June 30 in Pacific time
-  will be stamped `26-27` instead of `25-26` (and similarly the year
-  portion at the Dec/Jan boundary). Fix by either (a) adding a
-  per-school IANA timezone column and threading it into the helper +
-  migration, or (b) explicitly forcing one canonical TZ
-  (`AT TIME ZONE 'America/New_York'`) and documenting it. Schedule
-  before onboarding the first non-Eastern school.
+- **School-local timezone — per-school IANA column.** Shipped
+  option (b) of the original two paths: `schoolYearLabelFor` and the
+  seed migration both use canonical `America/New_York`
+  (`DEFAULT_SCHOOL_TZ` in `lib/schoolYear.ts`). AST insights window
+  + lapse cron use the same constant. This is the right call for an
+  Eastern-only tenant base. Before onboarding the first non-Eastern
+  school, swap the constant for a per-school IANA column and thread
+  it through all four callers (`schoolYearLabelFor`, `seed.ts` case
+  backfill, `runAstYearEndLapse`, AST insights `yearStart` calc).
 
 - **Refresh Core Team "How this works" / directions copy after the 4-phase
   case enhancement suite ships.** Each new feature (mention tagging,
@@ -193,12 +191,15 @@ _Populate as you build_
   per-school Overrides with expiration + audit, SuperUser admin UI,
   AST + Parent Portal gated end-to-end as the proof. See
   `lib/featureLicensing.ts` + `routes/featureLicensing.ts`. Open:
-  - **Wrap remaining server-gated features with client `<FeatureGate>`**
-    — MTSS, ISS, Displays, Houses already have `requireFeature`
-    middleware mounted in `routes/index.ts` but the nav items
-    still render unconditionally. Either hide them when off, or
-    add a SuperUser "showUpsell" per-feature toggle so the schools
-    see an upgrade pill instead of a missing tab.
+  - ~~**Wrap remaining server-gated features with client `<FeatureGate>`**~~
+    SHIPPED for the page renders — MTSS Plans, ISS Dashboard,
+    Displays, and House Rankings now wrap their `activeSection`
+    branches in `<FeatureGate feature="..." label="...">` in
+    `App.tsx`. Schools without the feature see the UpsellCard (when
+    `showUpsell` is on) instead of a broken page. Nav-item HIDE
+    (hiding the sidebar entry entirely when off+no-upsell) is still
+    TODO; today the nav item shows and the click lands on the
+    upsell card, which is acceptable.
   - **Expired-override cron sweep.** Today `loadEffectiveFeatures`
     filters expired overrides at read time for `showUpsell` +
     quotas, but the runtime `super_feature_*` boolean still
@@ -246,6 +247,18 @@ _Populate as you build_
     revocation — schools sometimes flip it back) but is gated at
     render time. Document this in the school-settings privacy page.
 
+- **Witness statement chronological numbering — UI surfacing.**
+  Data layer shipped: `witness_statements.ws_seq` column + composite
+  numbering via `assignWitnessSeqForInteraction()` in
+  `lib/witnessStatementId.ts`, wired into both promote-to-case and
+  PATCH-interaction-caseId paths under tx lock. Format helper
+  `formatWitnessStatementId({yearLabel, caseNumber, wsSeq})` returns
+  `CASE-26-27-0042-WS-03`. Still TODO: surface the formatted ID in
+  the PlayerDrawer header, Case Detail statements list, witness
+  statement PDF/print, and the audit log payload (make it
+  copy-on-click). Also backfill existing already-attached statements
+  once at deploy time using `created_at ASC` order within each case.
+
 - **AST (Alternate Schedule Time) — follow-ups after MVP ship.**
   Phase 1 shipped: `staff_ast_requests` + `staff_ast_ledger` schema
   with quarter-hours stored as INT (no float drift), full earn/use
@@ -256,13 +269,13 @@ _Populate as you build_
   tile deep-linking to the queue. Bell-only notifications via
   `/api/ast/admin-pending-count` polling — no email dispatch. What
   remains:
-  - **Year-end lapse cron (July 1).** Per HCTA contract, unused
-    balance lapses on June 30. Add a daily cron in
-    `artifacts/api-server/src/cron/` that, on July 1 in school-local
-    TZ, posts a `lapse` ledger entry per staff zeroing their bank
-    and logs a per-school summary row. Idempotent — re-run on the
-    same date is a no-op. Document the school-year boundary the
-    same way as the case-number TZ caveat above.
+  - ~~**Year-end lapse cron (July 1).**~~ SHIPPED.
+    `artifacts/api-server/src/cron/astLapse.ts`,
+    scheduled in `index.ts` at `5 0 1 7 *` America/New_York. Inserts
+    a `lapse` ledger entry per staff with positive balance. Idempotent
+    via note-prefix skip (`year-end lapse YY-YY%`). Override via
+    `AST_LAPSE_CRON` / `AST_LAPSE_TZ` env. Logs a per-school summary
+    + a roll-up line.
   - **Voluntary mid-year transfer zero-out hook.** When a staff
     record is moved to a different school (or marked inactive),
     the AST bank should be zeroed at the source school with a

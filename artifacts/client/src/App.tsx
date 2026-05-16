@@ -14752,10 +14752,13 @@ function App() {
       {activeSection === "pbis" && <PbisPointsHub />}
 
       {activeSection === "houseRankings" && (
-        // Reuse the signage HousesSignage screen verbatim — when given
-        // schoolId="session" it drops the URL query param and trusts the
-        // logged-in session, which is what we want for in-app embedding.
-        <HousesSignage schoolId="session" />
+        <FeatureGate feature="houses" label="PBIS Houses">
+          {/* Reuse the signage HousesSignage screen verbatim — when given
+              schoolId="session" it drops the URL query param and trusts
+              the logged-in session, which is what we want for in-app
+              embedding. */}
+          <HousesSignage schoolId="session" />
+        </FeatureGate>
       )}
 
       {/* Read-only School Store catalog — sidebar entry visible to every
@@ -16003,6 +16006,7 @@ function App() {
       )}
 
       {activeSection === "issDashboard" && canViewIssDashboard && (
+        <FeatureGate feature="issDashboard" label="ISS Dashboard">
         <>
           <HowToUseHelp title="How to use the ISS Dashboard">
             <HowToSection title="What this page is">
@@ -16020,6 +16024,7 @@ function App() {
           </HowToUseHelp>
           <IssDashboardSection students={students} />
         </>
+        </FeatureGate>
       )}
 
       {activeSection === "issReporting" && canViewIssDashboard && (
@@ -16827,6 +16832,7 @@ function App() {
       })()}
 
       {activeSection === "mtssPlans" && canManageMtssPlans && (
+        <FeatureGate feature="mtssPlans" label="MTSS Plans">
         <>
           <HowToUseHelp title="How to use MTSS Plans">
             <HowToSection title="What this page is">
@@ -16855,6 +16861,7 @@ function App() {
             }}
           />
         </>
+        </FeatureGate>
       )}
 
       {activeSection === "safetyPlans" && canEditSafetyPlanClient && (
@@ -19327,7 +19334,11 @@ function App() {
         <BellScheduleSection />
       )}
 
-      {activeSection === "displays" && canManageDisplays && <Displays />}
+      {activeSection === "displays" && canManageDisplays && (
+        <FeatureGate feature="displays" label="Displays">
+          <Displays />
+        </FeatureGate>
+      )}
 
       {activeSection === "adminHub" && (
         <AdminHubPage

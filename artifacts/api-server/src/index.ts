@@ -34,6 +34,24 @@ import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 import { startReminderScheduler } from "./lib/scheduler";
+import { runAstYearEndLapse } from "./cron/astLapse";
+
+// -----------------------------------------------------------------------------
+// Process-level error surface. Without these handlers an unhandled promise
+// rejection or uncaught exception silently terminates the worker (in newer
+// Node) or hangs (in older Node) with nothing in the logs. We log the error
+// with pino so it lands in the same log sink as request errors, and re-throw
+// uncaughtException since trying to keep running after one is undefined
+// behavior.
+// -----------------------------------------------------------------------------
+process.on("unhandledRejection", (reason, promise) => {
+  logger.error({ err: reason, promise }, "Unhandled promise rejection");
+});
+process.on("uncaughtException", (err) => {
+  logger.fatal({ err }, "Uncaught exception — process will exit");
+  // Give pino a tick to flush.
+  setTimeout(() => process.exit(1), 100);
+});
 
 const rawPort = process.env["PORT"];
 
@@ -279,6 +297,51 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule intervention reminders",
+          );
+        }
+
+        // AST year-end lapse. Per HCTA contract, unused balance lapses
+        // on June 30. Fire at 00:05 school-local on July 1 so the day
+        // boundary is unambiguous. Idempotent — see runAstYearEndLapse.
+        // Override window via AST_LAPSE_CRON / AST_LAPSE_TZ.
+        const astLapseExpr = process.env.AST_LAPSE_CRON ?? "5 0 1 7 *";
+        const astLapseTz = process.env.AST_LAPSE_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            astLapseExpr,
+            async () => {
+              try {
+                const results = await runAstYearEndLapse(new Date());
+                const totalStaff = results.reduce(
+                  (n, r) => n + r.staffLapsed,
+                  0,
+                );
+                const totalQh = results.reduce(
+                  (n, r) => n + r.totalQuarterHoursLapsed,
+                  0,
+                );
+                logger.info(
+                  {
+                    schools: results.length,
+                    totalStaffLapsed: totalStaff,
+                    totalQuarterHoursLapsed: totalQh,
+                  },
+                  "AST year-end lapse cron complete",
+                );
+              } catch (cronErr) {
+                logger.error({ err: cronErr }, "AST year-end lapse failed");
+              }
+            },
+            { timezone: astLapseTz },
+          );
+          logger.info(
+            { expr: astLapseExpr, tz: astLapseTz },
+            "AST year-end lapse scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule AST year-end lapse",
           );
         }
       }

@@ -264,4 +264,48 @@ app.use(async (req, _res, next) => {
 
 app.use("/api", router);
 
+// -----------------------------------------------------------------------------
+// 5xx error surface. Before this middleware, an uncaught throw inside a route
+// would be swallowed by Express's default handler — a 500 with no body and
+// nothing in the structured logger. This catches anything that bubbles out,
+// logs it with request context (req.log already has reqId + schoolId from
+// pino-http), and returns a clean JSON 500 to the client. Stack traces are
+// only included in non-production responses so they don't leak to the parent
+// portal or a public preview.
+// -----------------------------------------------------------------------------
+app.use(
+  (
+    err: unknown,
+    req: express.Request,
+    res: express.Response,
+    next: express.NextFunction,
+  ) => {
+    if (res.headersSent) {
+      next(err);
+      return;
+    }
+    const e = err as { message?: string; stack?: string; status?: number };
+    const status = typeof e?.status === "number" ? e.status : 500;
+    const reqAny = req as unknown as { log?: typeof logger };
+    (reqAny.log ?? logger).error(
+      {
+        err,
+        path: req.path,
+        method: req.method,
+        schoolId: (req as { schoolId?: number | null }).schoolId ?? null,
+        staffId: (req as { staffId?: number | null }).staffId ?? null,
+        status,
+      },
+      "unhandled route error",
+    );
+    const body: Record<string, unknown> = {
+      error: e?.message ?? "Internal server error",
+    };
+    if (process.env.NODE_ENV !== "production" && e?.stack) {
+      body["stack"] = e.stack;
+    }
+    res.status(status).json(body);
+  },
+);
+
 export default app;
