@@ -216,6 +216,11 @@ type LookupHit = {
     grade: number;
     dismissalMode: string;
     restricted: boolean;
+    // Photo verification — server-supplied. Renders via
+    // <StudentPhoto/>, which falls back to initials when null or when
+    // photoConsent === false.
+    photoObjectKey: string | null;
+    photoConsent: boolean;
   } | null;
   siblings: Array<{
     authorizationId: number;
@@ -226,6 +231,8 @@ type LookupHit = {
     grade: number;
     dismissalMode?: string;
     restricted: boolean;
+    photoObjectKey: string | null;
+    photoConsent: boolean;
   }>;
 };
 
@@ -401,17 +408,47 @@ function CurbKeypadPage({ me }: { me: Me }) {
                     background: c.restricted ? "#fef2f2" : "#fff",
                   }}
                 >
-                  <div style={{ fontWeight: 600 }}>
-                    {c.firstName} {c.lastName}
-                  </div>
-                  <div style={{ color: "#6b7280", fontSize: 13 }}>
-                    Grade {c.grade} · ID {c.studentId}
-                  </div>
-                  {c.restricted && (
-                    <div style={{ color: "#dc2626", marginTop: 6, fontWeight: 600 }}>
-                      RESTRICTED — guardian not authorized for this student
+                  {/* Photo verification — the staffer at the curb
+                      visually matches the face on screen to the
+                      student walking out. Sized big (72px) on this
+                      card because it's THE moment-of-truth check;
+                      no other place in the app needs the photo
+                      this prominent. */}
+                  <div
+                    style={{
+                      display: "flex",
+                      gap: 14,
+                      alignItems: "center",
+                    }}
+                  >
+                    <StudentPhoto
+                      firstName={c.firstName}
+                      lastName={c.lastName}
+                      photoObjectKey={c.photoObjectKey}
+                      photoConsent={c.photoConsent}
+                      size={72}
+                    />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontWeight: 600 }}>
+                        {c.firstName} {c.lastName}
+                      </div>
+                      <div style={{ color: "#6b7280", fontSize: 13 }}>
+                        Grade {c.grade} · ID {c.studentId}
+                      </div>
+                      {c.restricted && (
+                        <div
+                          style={{
+                            color: "#dc2626",
+                            marginTop: 6,
+                            fontWeight: 600,
+                          }}
+                        >
+                          RESTRICTED — guardian not authorized for this
+                          student
+                        </div>
+                      )}
                     </div>
-                  )}
+                  </div>
                 </div>
               ))}
               {hasRestricted && (

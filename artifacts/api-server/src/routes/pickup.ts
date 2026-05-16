@@ -338,6 +338,13 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
       dismissalMode: studentsTable.dismissalMode,
+      // Photo verification at the curb — staff visually match the
+      // face on screen to the student walking out. Falls back to
+      // initials on the client when photoObjectKey is null or
+      // photoConsent is false. ACL on /api/storage/* enforces
+      // school-tenant isolation.
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
     })
     .from(studentsTable)
     .where(
@@ -360,6 +367,8 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
     grade: number;
     dismissalMode: string;
     restricted: boolean;
+    photoObjectKey: string | null;
+    photoConsent: boolean;
   }> = [];
   if (auth.parentId !== null && primary) {
     const sibAuths = await db
@@ -384,6 +393,8 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           lastName: studentsTable.lastName,
           grade: studentsTable.grade,
           dismissalMode: studentsTable.dismissalMode,
+          photoObjectKey: studentsTable.photoObjectKey,
+          photoConsent: studentsTable.photoConsent,
         })
         .from(studentsTable)
         .where(
@@ -403,6 +414,8 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           grade: s.grade,
           dismissalMode: s.dismissalMode,
           restricted: sibAuth.restrictedFrom,
+          photoObjectKey: s.photoObjectKey,
+          photoConsent: s.photoConsent,
         };
       });
     }
@@ -426,6 +439,8 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           grade: primary.grade,
           dismissalMode: primary.dismissalMode,
           restricted: auth.restrictedFrom,
+          photoObjectKey: primary.photoObjectKey,
+          photoConsent: primary.photoConsent,
         }
       : null,
     siblings,

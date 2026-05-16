@@ -134,20 +134,11 @@ _Populate as you build_
   - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
 
 - **Parent Pick-Up Module — remaining work.** Tag-management
-  (bulk-assign, reissue, single + batch PDF with QR, capacity warn)
-  shipped; QR scan on the curb page and photo verification on the
-  walker gate are the open items.
-  - **QR scan branch on `/pickup/lookup`.** Tags already print with
-    a plain-number QR (Phase 1). Phase 2 swaps the encoding to a
-    signed `{schoolId, authId, hmac}` payload (school-salt) and
-    wires `@zxing/browser` into the curb page's currently-disabled
-    "Scan QR" affordance. New signed-token verifier branch on the
-    lookup endpoint accepts either a typed number OR a scanned
-    token.
-  - **Photo verification on the walker gate.** Depends on the
-    Student Photos work below — today the walker page shows initials
-    bubbles. Once `students.photo_object_key` lands, swap the bubble
-    for the real photo on the walker row + curb confirmation card.
+  (bulk-assign, reissue, single + batch PDF, capacity warn),
+  walker-gate photo rendering, and **curb-page photo verification on
+  the lookup matches** all shipped. QR scan is **dropped** as a
+  product decision — typed numbers only, and the disabled "Scan QR"
+  button stays as-is until/unless we revive it. Remaining items:
   - **5-digit expansion path.** 4-digit range (1001–9999 = 8999
     slots/school) is plenty until a tenant exceeds ~7200 active
     tags (80% warn). When that fires for the first real tenant,
