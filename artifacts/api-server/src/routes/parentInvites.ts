@@ -15,7 +15,10 @@ import {
   sendParentInviteEmail,
 } from "../lib/parentInviteEmail.js";
 import { logger } from "../lib/logger.js";
-import { enforceParentAccountQuota } from "../lib/featureLicensing.js";
+import {
+  checkParentAccountQuota,
+  enforceParentAccountQuota,
+} from "../lib/featureLicensing.js";
 
 const router: IRouter = Router();
 
@@ -373,6 +376,17 @@ router.post("/admin/parent-invites/send", async (req, res) => {
     reason?: string;
   }> = [];
 
+  // Phase 2 licensing — compute the seat budget ONCE at the top of the
+  // batch, then decrement locally per successful insert. We can't call
+  // checkParentAccountQuota inside the loop because the freshly-inserted
+  // pending invites would feed back into the count and mask the actual
+  // remaining headroom (or worse, overshoot if the count query lags
+  // the transaction). When quota is null the bulk send is unlimited.
+  const initialQuota = await checkParentAccountQuota(req, schoolId, 0);
+  const quotaCap = initialQuota.allowed ? initialQuota.quota : initialQuota.quota;
+  let quotaRemaining: number | null =
+    typeof quotaCap === "number" ? Math.max(0, quotaCap - initialQuota.current) : null;
+
   for (const s of students) {
     if (!isValidEmail(s.parentEmail)) {
       results.push({
@@ -413,6 +427,18 @@ router.post("/admin/parent-invites/send", async (req, res) => {
       continue;
     }
 
+    // Seat budget gate. Skip (don't fail) so the batch still returns
+    // partial-success cleanly — the UI shows the quota-blocked rows
+    // separately and the admin can decide whether to raise the cap.
+    if (quotaRemaining !== null && quotaRemaining <= 0) {
+      results.push({
+        studentId: s.id,
+        status: "skipped",
+        reason: "quota_exceeded",
+      });
+      continue;
+    }
+
     const token = newInviteToken();
     const inserted = await db
       .insert(parentInvitesTable)
@@ -440,6 +466,7 @@ router.post("/admin/parent-invites/send", async (req, res) => {
         isResend: false,
       });
       results.push({ studentId: s.id, status: "sent" });
+      if (quotaRemaining !== null) quotaRemaining -= 1;
     } catch (err) {
       // Roll the invite back so the row count matches what actually went out.
       await db
