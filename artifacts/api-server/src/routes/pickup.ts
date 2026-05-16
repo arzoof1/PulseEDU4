@@ -20,7 +20,8 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, gt, gte, sql, desc, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
-import { canManageDismissal } from "../lib/coreTeam.js";
+import { canManageDismissal, canManagePickup } from "../lib/coreTeam.js";
+import { renderPickupTagsPdf, type PickupTagInput } from "../lib/pickupTagsPdf.js";
 
 const router: IRouter = Router();
 
@@ -1256,8 +1257,8 @@ router.get("/pickup/authorizations", requireStaff, async (req, res) => {
     .staff;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  if (!isAdmin(staff)) {
-    res.status(403).json({ error: "Admin only" });
+  if (!canManagePickup(staff)) {
+    res.status(403).json({ error: "Not authorized to manage pickup tags" });
     return;
   }
   const studentDbId = Number(req.query.studentDbId);
@@ -1309,8 +1310,8 @@ router.post("/pickup/authorizations", requireStaff, async (req, res) => {
     .staff;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  if (!isAdmin(staff)) {
-    res.status(403).json({ error: "Admin only" });
+  if (!canManagePickup(staff)) {
+    res.status(403).json({ error: "Not authorized to manage pickup tags" });
     return;
   }
 
@@ -1432,8 +1433,8 @@ router.patch("/pickup/authorizations/:id", requireStaff, async (req, res) => {
     .staff;
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  if (!isAdmin(staff)) {
-    res.status(403).json({ error: "Admin only" });
+  if (!canManagePickup(staff)) {
+    res.status(403).json({ error: "Not authorized to manage pickup tags" });
     return;
   }
   const id = Number(req.params.id);
@@ -1529,9 +1530,394 @@ router.patch(
   },
 );
 
+// ---------------------------------------------------------------------------
+// Number capacity helpers + bulk-assign + reissue + tag-print endpoints.
+// ---------------------------------------------------------------------------
+
+// 4-digit range: 1001..9999 inclusive = 8999 slots per school. The
+// admin UI surfaces a warning at 80% so an admin can plan ahead.
+const NUMBER_RANGE_MIN = 1001;
+const NUMBER_RANGE_MAX = 9999;
+const NUMBER_RANGE_TOTAL = NUMBER_RANGE_MAX - NUMBER_RANGE_MIN + 1;
+const CAPACITY_WARN_PCT = 0.8;
+
+// Pick the next available number, given a Set of already-used numbers.
+function nextFreeNumber(used: Set<string>): string | null {
+  for (let n = NUMBER_RANGE_MIN; n <= NUMBER_RANGE_MAX; n++) {
+    const candidate = String(n);
+    if (!used.has(candidate)) return candidate;
+  }
+  return null;
+}
+
+// GET /pickup/capacity — used + total + warn flag for the admin tile.
+router.get("/pickup/capacity", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  if (!canManagePickup(staff)) {
+    res.status(403).json({ error: "Not authorized to manage pickup tags" });
+    return;
+  }
+  const [row] = await db
+    .select({ used: sql<number>`COUNT(*)::int` })
+    .from(studentPickupAuthorizationsTable)
+    .where(
+      and(
+        eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+        eq(studentPickupAuthorizationsTable.active, true),
+      ),
+    );
+  const used = Number(row?.used ?? 0);
+  const pctUsed = used / NUMBER_RANGE_TOTAL;
+  res.json({
+    used,
+    total: NUMBER_RANGE_TOTAL,
+    pctUsed,
+    warn: pctUsed >= CAPACITY_WARN_PCT,
+  });
+});
+
+// POST /pickup/authorizations/bulk-assign
+// Body: { guardianLabel?: string } — defaults to "Primary".
+// Issues a fresh active authorization for every student in the school
+// who does NOT already have an active authorization. Idempotent — a
+// second run after a partial roster import only fills the new students.
+router.post(
+  "/pickup/authorizations/bulk-assign",
+  requireStaff,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!canManagePickup(staff)) {
+      res.status(403).json({ error: "Not authorized to manage pickup tags" });
+      return;
+    }
+    const guardianLabel =
+      typeof req.body?.guardianLabel === "string" &&
+      req.body.guardianLabel.trim().length > 0
+        ? String(req.body.guardianLabel).trim()
+        : "Primary";
+
+    try {
+      const result = await db.transaction(async (tx) => {
+        // 1. Pull students who don't already have an active authorization.
+        const studentsMissing = await tx
+          .select({ id: studentsTable.id })
+          .from(studentsTable)
+          .leftJoin(
+            studentPickupAuthorizationsTable,
+            and(
+              eq(
+                studentPickupAuthorizationsTable.studentId,
+                studentsTable.id,
+              ),
+              eq(studentPickupAuthorizationsTable.active, true),
+            ),
+          )
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              sql`${studentPickupAuthorizationsTable.id} IS NULL`,
+            ),
+          );
+
+        if (studentsMissing.length === 0) {
+          return { assigned: 0, totalStudents: 0, capacityHit: false };
+        }
+
+        // 2. Pull all active numbers (school-wide) so we don't collide.
+        const taken = await tx
+          .select({
+            pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+          })
+          .from(studentPickupAuthorizationsTable)
+          .where(
+            and(
+              eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+              eq(studentPickupAuthorizationsTable.active, true),
+            ),
+          );
+        const used = new Set(taken.map((t) => t.pickupNumber));
+
+        // 3. Issue numbers + insert rows.
+        let assigned = 0;
+        for (const s of studentsMissing) {
+          const num = nextFreeNumber(used);
+          if (!num) {
+            // Throw rolls back the whole batch so we don't partially
+            // assign half the roster.
+            throw new Error("CAPACITY_EXHAUSTED");
+          }
+          used.add(num);
+          await tx.insert(studentPickupAuthorizationsTable).values({
+            schoolId,
+            studentId: s.id,
+            parentId: null,
+            guardianLabel,
+            pickupNumber: num,
+            restrictedFrom: false,
+            active: true,
+          });
+          assigned++;
+        }
+        return {
+          assigned,
+          totalStudents: studentsMissing.length,
+          capacityHit: false,
+        };
+      });
+      res.json(result);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "CAPACITY_EXHAUSTED") {
+        res.status(409).json({
+          error:
+            "Not enough free pickup numbers to cover the remaining roster. Free up numbers or expand the range.",
+        });
+        return;
+      }
+      throw e;
+    }
+  },
+);
+
+// POST /pickup/authorizations/:id/reissue
+// Deactivates the existing authorization row and creates a new active
+// row with the same student/parent/guardianLabel but a freshly-issued
+// number. Used for "lost tag" reprints — the old card is immediately
+// invalid (curb keypad rejects deactivated rows) and a new card prints
+// from the returned authorization. Whole flow runs in one transaction.
+router.post(
+  "/pickup/authorizations/:id/reissue",
+  requireStaff,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!canManagePickup(staff)) {
+      res.status(403).json({ error: "Not authorized to manage pickup tags" });
+      return;
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+
+    try {
+      const created = await db.transaction(async (tx) => {
+        const [old] = await tx
+          .select()
+          .from(studentPickupAuthorizationsTable)
+          .where(
+            and(
+              eq(studentPickupAuthorizationsTable.id, id),
+              eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+            ),
+          );
+        if (!old) {
+          throw new Error("NOT_FOUND");
+        }
+        if (!old.active) {
+          throw new Error("ALREADY_INACTIVE");
+        }
+        // Deactivate first so its number frees up before we pick.
+        await tx
+          .update(studentPickupAuthorizationsTable)
+          .set({ active: false, deactivatedAt: new Date() })
+          .where(eq(studentPickupAuthorizationsTable.id, id));
+
+        const taken = await tx
+          .select({
+            pickupNumber: studentPickupAuthorizationsTable.pickupNumber,
+          })
+          .from(studentPickupAuthorizationsTable)
+          .where(
+            and(
+              eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+              eq(studentPickupAuthorizationsTable.active, true),
+            ),
+          );
+        const used = new Set(taken.map((t) => t.pickupNumber));
+        const num = nextFreeNumber(used);
+        if (!num) {
+          throw new Error("CAPACITY_EXHAUSTED");
+        }
+        const [inserted] = await tx
+          .insert(studentPickupAuthorizationsTable)
+          .values({
+            schoolId,
+            studentId: old.studentId,
+            parentId: old.parentId,
+            guardianLabel: old.guardianLabel,
+            pickupNumber: num,
+            restrictedFrom: old.restrictedFrom,
+            active: true,
+          })
+          .returning();
+        return inserted;
+      });
+      res.status(201).json({ authorization: created });
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (msg === "NOT_FOUND") {
+        res.status(404).json({ error: "Authorization not found" });
+        return;
+      }
+      if (msg === "ALREADY_INACTIVE") {
+        res.status(409).json({
+          error: "This authorization is already inactive; nothing to reissue.",
+        });
+        return;
+      }
+      if (msg === "CAPACITY_EXHAUSTED") {
+        res.status(409).json({ error: "No free pickup numbers available" });
+        return;
+      }
+      throw e;
+    }
+  },
+);
+
+// Internal helper used by both single-tag and batch-tag PDF endpoints.
+async function loadTagInputs(
+  schoolId: number,
+  authIds: number[] | null,
+): Promise<PickupTagInput[]> {
+  const conds = [
+    eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+    eq(studentPickupAuthorizationsTable.active, true),
+  ];
+  if (authIds !== null) {
+    conds.push(inArray(studentPickupAuthorizationsTable.id, authIds));
+  }
+  const auths = await db
+    .select()
+    .from(studentPickupAuthorizationsTable)
+    .where(and(...conds))
+    .orderBy(asc(studentPickupAuthorizationsTable.pickupNumber));
+  if (auths.length === 0) return [];
+
+  const studentIds = Array.from(new Set(auths.map((a) => a.studentId)));
+  const students = await db
+    .select({
+      id: studentsTable.id,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        inArray(studentsTable.id, studentIds),
+      ),
+    );
+  const studentById = new Map(students.map((s) => [s.id, s]));
+
+  const [settings] = await db
+    .select({ name: schoolSettingsTable.schoolName })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const schoolName = settings?.name ?? "School";
+
+  return auths.map((a) => {
+    const s = studentById.get(a.studentId);
+    const name = s ? `${s.firstName} ${s.lastName}`.trim() : `Student #${a.studentId}`;
+    return {
+      pickupNumber: a.pickupNumber,
+      studentName: name,
+      guardianLabel: a.guardianLabel,
+      restricted: a.restrictedFrom,
+      schoolName,
+    };
+  });
+}
+
+function sendTagsPdf(
+  res: Response,
+  pdf: Buffer,
+  filename: string,
+): void {
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `inline; filename="${filename}"`,
+  );
+  res.setHeader("Cache-Control", "no-store");
+  res.end(pdf);
+}
+
+// GET /pickup/authorizations/:id/tag.pdf — single-tag reprint.
+router.get(
+  "/pickup/authorizations/:id/tag.pdf",
+  requireStaff,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!canManagePickup(staff)) {
+      res.status(403).json({ error: "Not authorized to manage pickup tags" });
+      return;
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const tags = await loadTagInputs(schoolId, [id]);
+    if (tags.length === 0) {
+      res.status(404).json({ error: "Authorization not found or inactive" });
+      return;
+    }
+    const pdf = await renderPickupTagsPdf(tags);
+    sendTagsPdf(res, pdf, `pickup-tag-${tags[0]!.pickupNumber}.pdf`);
+  },
+);
+
+// GET /pickup/tags.pdf — batch print all active tags. Optional
+// ?ids=1,2,3 lets the admin print a filtered subset (used by the
+// "print all unprinted" workflow once we track print history; today
+// it's just a full batch when ids is omitted).
+router.get("/pickup/tags.pdf", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  if (!canManagePickup(staff)) {
+    res.status(403).json({ error: "Not authorized to manage pickup tags" });
+    return;
+  }
+  const idsRaw = String(req.query.ids ?? "").trim();
+  let ids: number[] | null = null;
+  if (idsRaw) {
+    ids = idsRaw
+      .split(",")
+      .map((s) => Number(s.trim()))
+      .filter((n) => Number.isInteger(n) && n > 0);
+    if (ids.length === 0) {
+      res.status(400).json({ error: "ids must be a comma-separated list of integers" });
+      return;
+    }
+  }
+  const tags = await loadTagInputs(schoolId, ids);
+  if (tags.length === 0) {
+    res.status(404).json({ error: "No active authorizations to print" });
+    return;
+  }
+  const pdf = await renderPickupTagsPdf(tags);
+  sendTagsPdf(res, pdf, `pickup-tags-${tags.length}.pdf`);
+});
+
 // Defensive: makes the typechecker keep `sql` and the action enum in scope
 // in case future helpers reach for them.
 void sql;
 void VALID_ACTIONS;
+void isAdmin;
 
 export default router;

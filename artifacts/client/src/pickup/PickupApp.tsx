@@ -23,7 +23,14 @@ type Me = {
   isAdmin: boolean;
   isSuperUser: boolean;
   isDistrictAdmin: boolean;
+  isBehaviorSpecialist: boolean;
+  isMtssCoordinator: boolean;
+  isSchoolPsychologist: boolean;
+  isCounselor: boolean;
+  isGuidanceCounselor: boolean;
   capCarRiderMonitor: boolean;
+  capManageDismissal: boolean;
+  canApproveAst: boolean;
 };
 
 function useMe(): { me: Me | null; loading: boolean; error: string | null } {
@@ -52,7 +59,14 @@ function useMe(): { me: Me | null; loading: boolean; error: string | null } {
           isAdmin: Boolean(s.isAdmin),
           isSuperUser: Boolean(s.isSuperUser),
           isDistrictAdmin: Boolean(s.isDistrictAdmin),
+          isBehaviorSpecialist: Boolean(s.isBehaviorSpecialist),
+          isMtssCoordinator: Boolean(s.isMtssCoordinator),
+          isSchoolPsychologist: Boolean(s.isSchoolPsychologist),
+          isCounselor: Boolean(s.isCounselor),
+          isGuidanceCounselor: Boolean(s.isGuidanceCounselor),
           capCarRiderMonitor: Boolean(s.capCarRiderMonitor),
+          capManageDismissal: Boolean(s.capManageDismissal),
+          canApproveAst: Boolean(s.canApproveAst),
         });
       } catch (e) {
         if (cancelled) return;
@@ -81,6 +95,27 @@ function canRunCurb(me: Me | null): boolean {
 function isAdmin(me: Me | null): boolean {
   if (!me) return false;
   return Boolean(me.isAdmin || me.isSuperUser || me.isDistrictAdmin);
+}
+
+// Pickup-tag management gate — keep in sync with server-side
+// canManagePickup() in artifacts/api-server/src/lib/coreTeam.ts.
+// Admin / Core Team / counselor (either flavor) / front-office
+// (capManageDismissal) / confidential secretary (canApproveAst).
+// Teachers intentionally excluded.
+function canManagePickup(me: Me | null): boolean {
+  if (!me) return false;
+  return Boolean(
+    me.isAdmin ||
+      me.isSuperUser ||
+      me.isDistrictAdmin ||
+      me.isBehaviorSpecialist ||
+      me.isMtssCoordinator ||
+      me.isSchoolPsychologist ||
+      me.isCounselor ||
+      me.isGuidanceCounselor ||
+      me.capManageDismissal ||
+      me.canApproveAst,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -117,7 +152,7 @@ export default function PickupApp() {
     return <WalkerGatePage me={me} />;
   }
   if (path.includes("/pickup/admin")) {
-    if (!isAdmin(me)) return <NoAccess role="admin" />;
+    if (!canManagePickup(me)) return <NoAccess role="pickup-tag manager" />;
     return <AuthorizationsAdminPage />;
   }
   if (path.includes("/pickup/teacher")) {

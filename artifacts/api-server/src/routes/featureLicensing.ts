@@ -21,6 +21,7 @@ import {
   applyPlanToSchool,
   applyOverridesToSchool,
   reapplyLicensingToSchool,
+  lockSchoolForLicensing,
   countSchoolsOnPlan,
   listSchoolsWithLicensing,
 } from "../lib/featureLicensing.js";
@@ -263,9 +264,16 @@ router.patch(
         }
       }
       // Wrap plan-pointer + super_feature_* booleans + overrides
-      // overlay in ONE tx so a mid-sequence failure can't leave the
-      // school in an inconsistent licensing state.
+      // overlay in ONE tx, gated behind the per-school licensing lock,
+      // so concurrent override mutations can't interleave and persist
+      // stale plan/flag state. Pointer write happens FIRST under the
+      // lock, then reapply re-reads the (now-current) pointer and
+      // applies flag + override overlay.
       await db.transaction(async (tx) => {
+        const locked = await lockSchoolForLicensing(schoolId, tx);
+        if (!locked) {
+          throw new Error("school_not_found");
+        }
         await applyPlanToSchool(schoolId, planIdNum, tx);
         await applyOverridesToSchool(schoolId, tx);
       });

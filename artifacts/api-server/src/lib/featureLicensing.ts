@@ -1,5 +1,5 @@
 import type { Request, RequestHandler } from "express";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 import {
   db,
   parentsTable,
@@ -290,7 +290,16 @@ export async function loadEffectiveFeatures(
     .select()
     .from(schoolFeatureOverridesTable)
     .where(eq(schoolFeatureOverridesTable.schoolId, schoolId));
-  const overrideByKey = new Map(overrides.map((o) => [o.featureKey, o]));
+  // Drop expired overrides at read time so `showUpsell` + per-override
+  // quotas don't keep leaking after the override's expiration date. The
+  // `enabled` boolean is read from school_settings.super_feature_* and
+  // will lag until the next reapply (cron sweep is Phase 4 work).
+  const now = Date.now();
+  const overrideByKey = new Map(
+    overrides
+      .filter((o) => !o.expiresAt || o.expiresAt.getTime() > now)
+      .map((o) => [o.featureKey, o]),
+  );
 
   const map: EffectiveFeatureMap = {};
   for (const spec of FEATURE_KEYS) {
@@ -486,20 +495,35 @@ export function requireFeatureForParent(key: string): RequestHandler {
 // helpers convenient to call outside a transaction (e.g. seeding).
 type DbOrTx = typeof db | Parameters<Parameters<typeof db.transaction>[0]>[0];
 
-export async function applyPlanToSchool(
+// Per-school lock used to serialize licensing mutations. Without this,
+// two concurrent SuperUser writes (e.g. assign-plan + override-upsert
+// landing within ms of each other) can interleave their read-then-write
+// of `schools.plan_id` + `school_settings.super_feature_*` and persist a
+// state that reflects neither caller's intent. `SELECT ... FOR UPDATE`
+// on the schools row makes the licensing critical section linearizable:
+// the second tx blocks until the first commits, then re-reads.
+export async function lockSchoolForLicensing(
+  schoolId: number,
+  tx: DbOrTx,
+): Promise<{ planId: number | null } | null> {
+  const rows = await tx.execute<{ plan_id: number | null }>(
+    sql`SELECT plan_id FROM schools WHERE id = ${schoolId} FOR UPDATE`,
+  );
+  const row = (rows as unknown as { rows: { plan_id: number | null }[] }).rows?.[0];
+  if (!row) return null;
+  return { planId: row.plan_id };
+}
+
+// Internal: translate a plan's `features` JSONB into the runtime
+// super_feature_* booleans. Does NOT touch `schools.plan_id` — the
+// caller (assign-plan route) is responsible for the pointer write so
+// reapply-during-an-override-upsert never re-writes the pointer from
+// a possibly-stale read.
+async function applyPlanFlagsToSchool(
   schoolId: number,
   planId: number | null,
-  tx: DbOrTx = db,
+  tx: DbOrTx,
 ): Promise<void> {
-  // Update the school's plan pointer first.
-  await tx
-    .update(schoolsTable)
-    .set({ planId })
-    .where(eq(schoolsTable.id, schoolId));
-
-  // Translate plan.features → super_feature_* booleans. If planId is
-  // null we leave the flags alone — the school just has no plan, which
-  // is fine for the rare "manually managed" case.
   if (planId == null) return;
   const [planRow] = await tx
     .select()
@@ -507,7 +531,6 @@ export async function applyPlanToSchool(
     .where(eq(plansTable.id, planId))
     .limit(1);
   if (!planRow) return;
-
   const patch: Record<string, boolean> = {};
   for (const spec of FEATURE_KEYS) {
     if (!spec.schoolSettingsKey) continue;
@@ -519,6 +542,22 @@ export async function applyPlanToSchool(
       .set(patch)
       .where(eq(schoolSettingsTable.schoolId, schoolId));
   }
+}
+
+export async function applyPlanToSchool(
+  schoolId: number,
+  planId: number | null,
+  tx: DbOrTx = db,
+): Promise<void> {
+  // Pointer write — only called when the caller explicitly intends to
+  // change the plan assignment. Reapply paths (override upsert/delete)
+  // must NOT call this directly; they go through reapplyLicensingToSchool
+  // which preserves the existing pointer under the row lock.
+  await tx
+    .update(schoolsTable)
+    .set({ planId })
+    .where(eq(schoolsTable.id, schoolId));
+  await applyPlanFlagsToSchool(schoolId, planId, tx);
 }
 
 export async function applyOverridesToSchool(
@@ -558,12 +597,19 @@ export async function reapplyLicensingToSchool(
   tx?: DbOrTx,
 ): Promise<void> {
   const runIn = async (t: DbOrTx) => {
-    const [school] = await t
-      .select({ planId: schoolsTable.planId })
-      .from(schoolsTable)
-      .where(eq(schoolsTable.id, schoolId))
-      .limit(1);
-    await applyPlanToSchool(schoolId, school?.planId ?? null, t);
+    // FOR UPDATE row lock — serializes this critical section against
+    // concurrent assign-plan / override-upsert / override-delete on the
+    // same school. Subsequent reads inside this tx see a consistent
+    // snapshot; the next caller blocks until we commit.
+    const locked = await lockSchoolForLicensing(schoolId, t);
+    if (!locked) return;
+    // Re-apply the flag portion only — pointer write was already done
+    // by the assign-plan route (if this reapply was triggered by a plan
+    // change) or is irrelevant (override mutations don't touch the
+    // pointer). This avoids the stale-read overwrite the architect
+    // flagged where a slow override tx would re-write plan_id with the
+    // value it saw before a faster assign-plan tx committed.
+    await applyPlanFlagsToSchool(schoolId, locked.planId, t);
     await applyOverridesToSchool(schoolId, t);
   };
   if (tx) {

@@ -100,6 +100,39 @@ export function canManageDismissal(staff: {
   return isAdminOrSuperUser(staff) || Boolean(staff.capManageDismissal);
 }
 
+// Pickup-number management gate — who can issue, reissue, reprint, and
+// deactivate pickup tags. Per product spec: admin, Core Team (BS / MTSS
+// / school psych / district admin / super), school counselor (either
+// guidance OR generic counselor flag), front-office secretary (the
+// existing `capManageDismissal` capability — front-office staff are
+// flagged with this for the dismissal-mode editor and it covers the
+// same desk), and confidential secretary (covered by `canApproveAst`
+// since that's the cap explicitly grouped with confidential secretary
+// per the AST module). Teachers intentionally excluded — pickup tags
+// are an office-side responsibility.
+export function canManagePickup(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+  capManageDismissal?: boolean | null;
+  canApproveAst?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(
+      staff.isCounselor ||
+        staff.isGuidanceCounselor ||
+        staff.capManageDismissal ||
+        staff.canApproveAst,
+    )
+  );
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a
