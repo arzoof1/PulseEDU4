@@ -4,10 +4,29 @@
 //   plan apply  → schoolSettings.super_feature_* flags
 //   override   → effective map (and re-applied flags)
 //   /api/me/features shape
-//   requireFeature() middleware (404 for off features) on /api/ast/* and
-//                                                       /api/admin/parent-invites
+//   requireFeature() middleware (404 feature_not_available) on every
+//     gated staff surface mounted in routes/index.ts:
+//       /ast/*                       (ast)
+//       /admin/parent-invites/*      (parentPortal)
+//       /admin/parent-preview        (parentPortal)
+//       /mtss-plans/*                (mtssPlans)
+//       /mtss-reports/*              (mtssPlans)
+//       /iss-roster/*                (issDashboard)
+//       /iss-attendance/*            (issDashboard)
+//       /displays/playlists/*        (displays)
+//       /displays/calendar           (displays)
+//       /houses                      (houses, signage-aware variant)
+//   requireFeatureForParent() (403 parent_portal_disabled) on parent-side
+//     gates:
+//       /parent/snapshot, /parent/snapshot.pdf, /parent/heartbeat-prefs
 //   parentAuth backstop on POST /parent-auth/accept-invite (410 when off,
 //                                                          200 when on)
+//
+// Every staff-side test follows the same two-sided contract: assert the
+// on-case first (so an off-case rejection proves the gate fired, not
+// "route missing" or "no school context"), toggle the feature off via
+// a school override, assert the gated response + error code, then
+// restore the override.
 //
 // These run against the live dev DATABASE_URL. Fixtures are namespaced
 // with a per-run random tag and torn down in afterAll.
@@ -29,7 +48,7 @@ import {
   studentsTable,
 } from "@workspace/db";
 import app from "../app";
-import { issueAuthToken } from "../lib/authToken";
+import { issueAuthToken, issueParentAuthToken } from "../lib/authToken";
 import { FEATURE_KEYS } from "../lib/featureLicensing";
 import {
   ensureAstSchema,
@@ -49,6 +68,8 @@ let parentPortalOffPlanId: number;
 let astOffPlanId: number;
 let inviteToken: string;
 let inviteId: number;
+let linkedParentId: number;
+let parentToken: string;
 
 let superToken: string;
 let adminToken: string;
@@ -179,6 +200,27 @@ beforeAll(async () => {
     })
     .returning();
   inviteId = invite.id;
+
+  // Pre-seeded parent already linked to the student, for parent-side
+  // gate tests (snapshot / snapshot.pdf / heartbeat-prefs). Kept
+  // separate from the invite-flow parent so the accept-invite test
+  // doesn't collide on email.
+  const [linkedParent] = await db
+    .insert(parentsTable)
+    .values({
+      schoolId,
+      email: `linked-${tag}@licensing.test.invalid`,
+      passwordHash: "x",
+      displayName: "Linked Parent",
+      active: true,
+    })
+    .returning();
+  linkedParentId = linkedParent.id;
+  await db.insert(parentStudentsTable).values({
+    parentId: linkedParentId,
+    studentId: studentDbId,
+  });
+  parentToken = issueParentAuthToken(linkedParentId);
 
   // Land on the all-on plan as the baseline.
   await request(app)
@@ -419,5 +461,227 @@ describe("feature licensing — end-to-end propagation", () => {
       .from(parentInvitesTable)
       .where(eq(parentInvitesTable.id, inviteId));
     expect(consumed.status).toBe("accepted");
+  });
+
+  it("POST /api/admin/parent-preview returns 404 when parentPortal off", async () => {
+    // Baseline on — admin can launch a preview session. Note: this
+    // call mutates the cookie jar to a parent session, but we use
+    // Bearer tokens for every other request in this suite so that's
+    // harmless. We also use a one-shot agent-less call to keep
+    // subsequent admin requests on `adminToken`.
+    const on = await request(app)
+      .post("/api/admin/parent-preview")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ studentRowId: studentDbId })
+      .expect(200);
+    expect(on.body.ok).toBe(true);
+
+    await upsertOverride("parentPortal", false);
+
+    const off = await request(app)
+      .post("/api/admin/parent-preview")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .send({ studentRowId: studentDbId })
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("parentPortal");
+  });
+
+  it("GET /api/parent/snapshot: 403 parent_portal_disabled when off, 200 when on", async () => {
+    // Verify the on-case first so a 403 in the off-case proves the
+    // gate fired (not "parent not linked" or "no school context").
+    await request(app)
+      .get(`/api/parent/snapshot?studentId=${studentDbId}`)
+      .set("Authorization", `Bearer ${parentToken}`)
+      .expect(200);
+
+    await upsertOverride("parentPortal", false);
+
+    const off = await request(app)
+      .get(`/api/parent/snapshot?studentId=${studentDbId}`)
+      .set("Authorization", `Bearer ${parentToken}`)
+      .expect(403);
+    expect(off.body.error).toBe("parent_portal_disabled");
+
+    await deleteOverride("parentPortal");
+  });
+
+  it("GET /api/parent/snapshot.pdf: 403 parent_portal_disabled when off, 200 PDF when on", async () => {
+    const on = await request(app)
+      .get(`/api/parent/snapshot.pdf?studentId=${studentDbId}`)
+      .set("Authorization", `Bearer ${parentToken}`)
+      .expect(200);
+    expect(on.headers["content-type"]).toMatch(/application\/pdf/);
+
+    await upsertOverride("parentPortal", false);
+
+    const off = await request(app)
+      .get(`/api/parent/snapshot.pdf?studentId=${studentDbId}`)
+      .set("Authorization", `Bearer ${parentToken}`)
+      .expect(403);
+    expect(off.body.error).toBe("parent_portal_disabled");
+
+    await deleteOverride("parentPortal");
+  });
+
+  it("/api/mtss-plans returns 404 when mtssPlans license is off", async () => {
+    await request(app)
+      .get("/api/mtss-plans?status=active")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+
+    await upsertOverride("mtssPlans", false);
+
+    const off = await request(app)
+      .get("/api/mtss-plans?status=active")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("mtssPlans");
+  });
+
+  it("/api/mtss-reports returns 404 when mtssPlans license is off", async () => {
+    // Use a valid request shape so the on-case lands on a deterministic
+    // 200 from the route handler. That way the off-case 404 unambiguously
+    // proves the gate fired (rather than the route having moved or
+    // started 400-ing on its own).
+    const on = await request(app)
+      .get("/api/mtss-reports/summary?range=30")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+    expect(on.body.filters).toBeDefined();
+    expect(on.body.filters.range).toBe("30");
+
+    await upsertOverride("mtssPlans", false);
+
+    const off = await request(app)
+      .get("/api/mtss-reports/summary")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("mtssPlans");
+  });
+
+  it("/api/iss-roster returns 404 when issDashboard license is off", async () => {
+    await request(app)
+      .get("/api/iss-roster")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+
+    await upsertOverride("issDashboard", false);
+
+    const off = await request(app)
+      .get("/api/iss-roster")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("issDashboard");
+  });
+
+  it("/api/iss-attendance returns 404 when issDashboard license is off", async () => {
+    await request(app)
+      .get("/api/iss-attendance")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+
+    await upsertOverride("issDashboard", false);
+
+    const off = await request(app)
+      .get("/api/iss-attendance")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("issDashboard");
+  });
+
+  it("/api/displays/playlists returns 404 when displays license is off", async () => {
+    await request(app)
+      .get("/api/displays/playlists")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+
+    await upsertOverride("displays", false);
+
+    const off = await request(app)
+      .get("/api/displays/playlists")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("displays");
+  });
+
+  it("/api/displays/calendar returns 404 when displays license is off", async () => {
+    // Valid fromDate so the on-case lands on the route handler's 200
+    // (empty calendar — this school has no playlists). Any off-case
+    // 404 then unambiguously means the gate fired.
+    const on = await request(app)
+      .get("/api/displays/calendar?fromDate=2026-05-16&days=7")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+    expect(Array.isArray(on.body.displays ?? [])).toBe(true);
+
+    await upsertOverride("displays", false);
+
+    const off = await request(app)
+      .get("/api/displays/calendar?fromDate=2026-05-16")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(off.body.error).toBe("feature_not_available");
+
+    await deleteOverride("displays");
+  });
+
+  it("/api/houses returns 404 when houses license is off (staff + signage paths)", async () => {
+    // Authenticated staff path uses req.schoolId from session.
+    await request(app)
+      .get("/api/houses")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(200);
+
+    // Unauthenticated signage path resolves school from ?schoolId=N.
+    // Baseline returns 200 (empty houses list) — proves the signage-
+    // aware gate let the route run when the license is on.
+    await request(app)
+      .get(`/api/houses?schoolId=${schoolId}`)
+      .expect(200);
+
+    await upsertOverride("houses", false);
+
+    const offStaff = await request(app)
+      .get("/api/houses")
+      .set("Authorization", `Bearer ${adminToken}`)
+      .expect(404);
+    expect(offStaff.body.error).toBe("feature_not_available");
+
+    const offSignage = await request(app)
+      .get(`/api/houses?schoolId=${schoolId}`)
+      .expect(404);
+    expect(offSignage.body.error).toBe("feature_not_available");
+
+    await deleteOverride("houses");
+  });
+
+  it("GET /api/parent/heartbeat-prefs: 403 parent_portal_disabled when off, 200 when on", async () => {
+    const on = await request(app)
+      .get(`/api/parent/heartbeat-prefs?studentId=${studentDbId}`)
+      .set("Authorization", `Bearer ${parentToken}`)
+      .expect(200);
+    expect(Array.isArray(on.body.sections)).toBe(true);
+
+    await upsertOverride("parentPortal", false);
+
+    const off = await request(app)
+      .get(`/api/parent/heartbeat-prefs?studentId=${studentDbId}`)
+      .set("Authorization", `Bearer ${parentToken}`)
+      .expect(403);
+    expect(off.body.error).toBe("parent_portal_disabled");
+
+    await deleteOverride("parentPortal");
   });
 });

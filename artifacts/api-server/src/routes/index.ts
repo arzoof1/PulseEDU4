@@ -84,7 +84,11 @@ import onboardingRouter from "./onboarding";
 import pickupRouter from "./pickup";
 import astRouter from "./ast";
 import featureLicensingRouter from "./featureLicensing";
-import { requireFeature, requireFeatureForParent } from "../lib/featureLicensing";
+import {
+  requireFeature,
+  requireFeatureAllowingSignageSchool,
+  requireFeatureForParent,
+} from "../lib/featureLicensing";
 
 const router: IRouter = Router();
 
@@ -136,6 +140,22 @@ router.use(adminStaffRouter);
 router.use("/ast", requireFeature("ast"));
 router.use("/admin/parent-invites", requireFeature("parentPortal"));
 router.use("/admin/parent-preview", requireFeature("parentPortal"));
+
+// Additional staff-licensed surfaces. Sub-path mounts (rather than the
+// router's whole prefix) so adjacent unauthenticated kiosk routes
+// (e.g. `/displays/public/*`) keep working for signage TVs.
+router.use("/mtss-plans", requireFeature("mtssPlans"));
+router.use("/mtss-reports", requireFeature("mtssPlans"));
+router.use("/iss-roster", requireFeature("issDashboard"));
+router.use("/iss-attendance", requireFeature("issDashboard"));
+router.use("/displays/playlists", requireFeature("displays"));
+router.use("/displays/calendar", requireFeature("displays"));
+
+// `/houses` doubles as a signage kiosk endpoint that authenticates via
+// `?schoolId=N`. Use the signage-aware variant so unauthenticated TV
+// kiosks at licensed schools keep working while unlicensed schools are
+// gated whether the caller is staff or signage.
+router.use("/houses", requireFeatureAllowingSignageSchool("houses"));
 
 // Parent-side runtime gates. Mounted BEFORE the parent runtime routers
 // (parentSnapshotRouter / parentHeartbeatPrefsRouter / parentSnapshotPdfRouter)

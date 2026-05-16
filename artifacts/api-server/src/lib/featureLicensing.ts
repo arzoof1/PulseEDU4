@@ -358,6 +358,45 @@ export function requireFeature(key: string): RequestHandler {
   };
 }
 
+// Signage-aware variant of `requireFeature`. A handful of staff routes
+// double as unauthenticated kiosk endpoints (e.g. `/api/houses` and the
+// pulse signage tile) and resolve their school context from a
+// `?schoolId=N` query param when no staff session is present. Standard
+// `requireFeature` would 401 those callers because `req.schoolId` is
+// only populated for authenticated staff. This variant accepts EITHER
+// `req.schoolId` OR a positive-integer `?schoolId` query param; if
+// neither resolves, it passes through so the downstream route can
+// return its own context error.
+export function requireFeatureAllowingSignageSchool(
+  key: string,
+): RequestHandler {
+  return async (req, res, next) => {
+    try {
+      let schoolId: number | null = req.schoolId ?? null;
+      if (!schoolId) {
+        const raw = req.query.schoolId;
+        const candidate = Number(Array.isArray(raw) ? raw[0] : raw);
+        if (Number.isFinite(candidate) && candidate > 0) {
+          schoolId = Math.floor(candidate);
+        }
+      }
+      if (!schoolId) {
+        // Let the route return its own 400/401 about missing schoolId.
+        next();
+        return;
+      }
+      const ok = await isFeatureEnabled(req, schoolId, key);
+      if (!ok) {
+        res.status(404).json({ error: "feature_not_available" });
+        return;
+      }
+      next();
+    } catch (err) {
+      next(err);
+    }
+  };
+}
+
 // Parent-aware variant of `requireFeature`. Parent sessions don't have
 // `req.schoolId` (they use `req.parentId`), so we resolve the school by
 // looking up the parent row's `school_id`. Mirrors the parent-id
