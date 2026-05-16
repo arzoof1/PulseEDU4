@@ -52,7 +52,7 @@ PulseEDU is a multi-tenant application providing tools for school operations, st
 - **Insights Dashboards**: Suite of analytics dashboards (Engagement, Behavior, Academics, SEB/SEL, Equity, Early Warning) providing aggregate data, trends, and top-N lists. Features grade/window filters, demographic disaggregation, and drill-down to student profiles.
 - **Teacher Roster**: Comprehensive view for teachers of their students, including FAST scores, ESE/504/ELL program flags, and safety plan indicators. Core Team members can view any teacher's roster.
 - **Data Importer**: Generic importer for assessments, rosters, and behavior data, supporting CSV uploads with template mapping, preview, commit, and rollback functionality.
-- **Parent Pick-Up Module**: Curb keypad (`/pickup/curb`) with phone-first numeric entry + sibling roll-up scoped to the typed parent's authorizations, restricted-tag override-with-justification, walker gate (`/pickup/walkers`) with bell-window enforcement, admin authorization issuer, classroom signage tile (filtered to playlist owner's roster), and Admin Hub "Still on campus" reconciliation tile (post-cutoff, grouped by dismissal mode). Audit trail in `pickup_queue_events` is append-only.
+- **Parent Pick-Up Module**: Curb keypad (`/pickup/curb`) with phone-first numeric entry + sibling roll-up scoped to the typed parent's authorizations, restricted-tag override-with-justification, walker gate (`/pickup/walkers`) with bell-window enforcement, admin authorization issuer (bulk start-of-year assign, lost-tag reissue, extra-guardian splits, single + batch PDF tag printing with QR codes, 80%-of-range capacity warning), classroom signage tile (filtered to playlist owner's roster), and Admin Hub "Still on campus" reconciliation tile (post-cutoff, grouped by dismissal mode). Tag-management role gate (`canManagePickup` in `lib/coreTeam.ts`) admits admin + Core Team + counselor + front-office + confidential secretary; teachers are excluded. Audit trail in `pickup_queue_events` is append-only.
 
 ## User preferences
 
@@ -163,33 +163,54 @@ _Populate as you build_
   - **Required "reason for edit"**: every edit/trim/delete prompts the user for a short justification ("why are you changing this?") that is stored on the audit row. This is the column auditors will read first to understand whether a change was a typo correction, a legitimate behavior update, or something that needs follow-up. Should be required (non-empty, min ~5 chars), not optional.
   - Needs a server-side audit log table for who/when/what/why changed before shipping (columns at minimum: `admin_log_id`, `actor_staff_id`, `actor_display_name`, `action` enum [`edit_reason` | `edit_notes` | `edit_dates` | `trim_days` | `delete_assignment`], `before_json`, `after_json`, `edit_reason TEXT NOT NULL`, `created_at`).
 
-- **Parent Pick-Up Module — remaining work after MVP ship.**
-  Phases A–F + H shipped (schema, curb keypad with sibling roll-up,
-  walker gate, admin authorizations, classroom signage tile, Admin
-  Hub reconciliation tile). What's still open:
-  - **QR generation + scan (Phase G).** Install `qrcode` +
-    `@zxing/browser`. Admin "Print pickup tags" page batch-renders
-    one PDF tag per `student_pickup_authorizations` row using the
-    existing pdfkit setup. QR encodes `{schoolId, authId, hmac}`
-    signed with school-salt; new signed-token verifier branch on
-    `/pickup/lookup` accepts either a typed number OR a scanned
-    token. The curb page already has a disabled "Scan QR" placeholder.
+- **Parent Pick-Up Module — remaining work.** Tag-management
+  (bulk-assign, reissue, single + batch PDF with QR, capacity warn)
+  shipped; QR scan on the curb page and photo verification on the
+  walker gate are the open items.
+  - **QR scan branch on `/pickup/lookup`.** Tags already print with
+    a plain-number QR (Phase 1). Phase 2 swaps the encoding to a
+    signed `{schoolId, authId, hmac}` payload (school-salt) and
+    wires `@zxing/browser` into the curb page's currently-disabled
+    "Scan QR" affordance. New signed-token verifier branch on the
+    lookup endpoint accepts either a typed number OR a scanned
+    token.
   - **Photo verification on the walker gate.** Depends on the
     Student Photos work below — today the walker page shows initials
     bubbles. Once `students.photo_object_key` lands, swap the bubble
     for the real photo on the walker row + curb confirmation card.
-  - **Teacher "Released to walk out" from the signage tile.** TVs
-    aren't authenticated, so the slide is read-only today. The
-    `/pickup/teacher` authenticated page now handles teacher-side
-    releases (any signed-in staff, server-enforced view-scope via
-    `pickup_teacher_view_scope`, with confirm modal + 10s undo).
-    Pick-up cutoff is now a per-school setting (`pickup_cutoff_time`)
-    surfaced in Settings → Pick-Up; the Admin Hub "Still on campus"
-    tile reads it from the server (no more hard-coded 15:30).
+  - **5-digit expansion path.** 4-digit range (1001–9999 = 8999
+    slots/school) is plenty until a tenant exceeds ~7200 active
+    tags (80% warn). When that fires for the first real tenant,
+    bump `NUMBER_RANGE_MAX` in `routes/pickup.ts` to 99999, widen
+    the PDF tag font down a notch, and have the curb keypad accept
+    4 OR 5 digit input. Schema is already TEXT so no migration.
   - **Open design question (deferred).** Whether "added to line"
     should ping the classroom with an in-app chime or stay
     visual-only. Lean visual-only — schools with 30 cars/min in the
     queue would have chimes overlapping nonstop.
+
+- **Feature licensing — Phase 2+.** Phase 1 shipped: Plans table,
+  per-school Overrides with expiration + audit, SuperUser admin UI,
+  AST + Parent Portal gated end-to-end as the proof. See
+  `lib/featureLicensing.ts` + `routes/featureLicensing.ts`. Open:
+  - **Wrap remaining server-gated features with client `<FeatureGate>`**
+    — MTSS, ISS, Displays, Houses already have `requireFeature`
+    middleware mounted in `routes/index.ts` but the nav items
+    still render unconditionally. Either hide them when off, or
+    add a SuperUser "showUpsell" per-feature toggle so the schools
+    see an upgrade pill instead of a missing tab.
+  - **Expired-override cron sweep.** Today `loadEffectiveFeatures`
+    filters expired overrides at read time for `showUpsell` +
+    quotas, but the runtime `super_feature_*` boolean still
+    reflects the override's `enabled` value until the next manual
+    reapply. Daily cron: find overrides whose `expires_at` has
+    passed in the last 24h, call `reapplyLicensingToSchool` for
+    each affected school, post an audit row.
+  - **Quota enforcement.** Phase 1 stored quotas (JSONB on plans
+    + overrides) but no feature reads them. Wire the first consumer
+    (likely "max active parent invites" or "max display playlists")
+    via `getQuota(req, schoolId, key, quotaName)` — already
+    implemented, just unused.
 
 - **Student Photos — prerequisite for walker verification, also useful
   app-wide.** New work item, separate from the pickup module but
@@ -280,30 +301,18 @@ _Populate as you build_
 - [Orval documentation](https://orval.dev/): For OpenAPI-based API code generation.
 - [Recharts documentation](https://recharts.org/en-US/guide/GettingStarted): For charting components used in dashboards.
 - [pdfkit documentation](http://pdfkit.org/docs/getting_started.html): For server-side PDF generation.
-## Spotlight governor (v2 — shipped)
+## Spotlight governor (v2)
 
-Replaces the old binary "capped house" cap. The point pool is now
-quartile-tiered by house standing and only activates when the leader
-is >`RUNAWAY_LEADER_THRESHOLD` (1500) points ahead of #2:
-
-- Healthy race (gap ≤ 1500): every house draws from `{1..10}`.
-- Rebalancer active (gap > 1500): per-rank pools
-  - top quartile  → `{1, 2, 3}`
-  - upper-middle  → `{2, 4, 6}`
-  - lower-middle  → `{4, 6, 8}`
-  - bottom quart. → `{6, 8, 10}`
-
-Quartile boundaries (`<0.25 / <0.5 / <0.75 / else`) work for any
-house count — 2/3/4/5+ all map cleanly with no gaps.
+Quartile-tiered point pool that activates only when the house
+standings gap exceeds `RUNAWAY_LEADER_THRESHOLD` (1500). Pools by
+rank when active: top `{1,2,3}` / upper-mid `{2,4,6}` / lower-mid
+`{4,6,8}` / bottom `{6,8,10}`; healthy race draws `{1..10}`.
 
 Key invariant: **the value the teacher sees IS the value the DB
-stores.** No silent downgrade, no `chosen=X, awarded=Y` audit note.
-`/spotlight/pick` bakes the pool-correct value into the reveal;
-`/spotlight/award` re-validates it and returns 409 ("re-spin") if
-standings shifted in the meantime. Strict integer 1..10 validation
-on `points` — no abs/floor coercion of tampered input.
+stores** — `/spotlight/pick` bakes the pool-correct value into the
+reveal; `/spotlight/award` re-validates and returns 409 ("re-spin")
+if standings shifted. Strict integer 1..10 validation; no coercion.
 
-Helpers live in `artifacts/api-server/src/routes/spotlight.ts`:
-`isRebalancerActive`, `poolForHouse`, `pickFromPool`,
-`computeHouseTotalsForCap`. Per-house rotation per session
-(`servedHouseIds[]` filter) still in effect.
+Helpers + per-house rotation in `routes/spotlight.ts`
+(`isRebalancerActive`, `poolForHouse`, `pickFromPool`,
+`computeHouseTotalsForCap`).
