@@ -32,6 +32,13 @@ import LogInterventionLauncher from "./components/LogInterventionLauncher";
 import InterventionsBell from "./components/InterventionsBell";
 import AstNotificationBell from "./components/AstNotificationBell";
 import AstSidebarBadge from "./components/AstSidebarBadge";
+import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
+import {
+  initFeatures,
+  useFeatureVisible,
+  LockedBadge,
+  FeatureGate,
+} from "./lib/features";
 import { StudentFinderModal } from "./components/StudentFinderModal";
 import StaffDirectoryPage from "./components/StaffDirectoryPage";
 import OnboardingChecklist from "./components/OnboardingChecklist";
@@ -4011,7 +4018,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // pbisReports etc. all live under Recognition because that's where their
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
-  administration: ["superUserHome", "districtAdmin"],
+  administration: ["superUserHome", "featureLicensing", "districtAdmin"],
   insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile"],
   recognition: [
     "pbis",
@@ -4463,6 +4470,7 @@ function App() {
     | "activeKiosks"
     | "parentAccess"
     | "superUserHome"
+    | "featureLicensing"
     | "districtAdmin"
     | "insights"
     | "insightsWatchlist"
@@ -5906,6 +5914,9 @@ function App() {
           (user: (typeof authUser & { authToken?: string }) | null) => {
             if (user?.authToken) setAuthToken(user.authToken);
             setAuthUser(user);
+            // Kick off feature-licensing fetch as soon as auth lands.
+            // Idempotent: no-op on repeated calls.
+            if (user) initFeatures();
           },
         )
         .catch(() => setAuthUser(null))
@@ -9008,31 +9019,42 @@ function App() {
               })}
             {/* AST (Alternate Schedule Time) — visible to every staff
                 member. The actual approval queue lives under School
-                Admin and is gated by canApproveAst. */}
-            <span
-              style={{
-                position: "relative",
-                display: "inline-flex",
-                alignItems: "center",
-              }}
+                Admin and is gated by canApproveAst. Feature-gated:
+                hidden when off, locked-upsell pill when showUpsell. */}
+            <FeatureGate
+              feature="ast"
+              fallback={
+                <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                  {renderNavItem({ key: "ast", label: "AST", icon: IconClock })}
+                  <span style={{ marginLeft: 4 }}><LockedBadge /></span>
+                </span>
+              }
             >
-              {renderNavItem({
-                key: "ast",
-                label: "AST",
-                icon: IconClock,
-              })}
               <span
                 style={{
-                  position: "absolute",
-                  right: 8,
-                  top: "50%",
-                  transform: "translateY(-50%)",
-                  pointerEvents: "none",
+                  position: "relative",
+                  display: "inline-flex",
+                  alignItems: "center",
                 }}
               >
-                <AstSidebarBadge refreshKey={interventionRefreshKey} />
+                {renderNavItem({
+                  key: "ast",
+                  label: "AST",
+                  icon: IconClock,
+                })}
+                <span
+                  style={{
+                    position: "absolute",
+                    right: 8,
+                    top: "50%",
+                    transform: "translateY(-50%)",
+                    pointerEvents: "none",
+                  }}
+                >
+                  <AstSidebarBadge refreshKey={interventionRefreshKey} />
+                </span>
               </span>
-            </span>
+            </FeatureGate>
             {/* Verify Pullout — surfaces in Quick Access ONLY when there's
                 pending work (pendingPulloutCount > 0). When the queue is
                 empty it retreats to its quiet home in Behavior Support.
@@ -9099,6 +9121,12 @@ function App() {
                   renderNavItem({
                     key: "superUserHome",
                     label: "SuperUser Home",
+                    icon: IconClipboard,
+                  })}
+                {isSuperUser &&
+                  renderNavItem({
+                    key: "featureLicensing",
+                    label: "Feature Licensing",
                     icon: IconClipboard,
                   })}
                 {renderNavItem({
@@ -9289,12 +9317,27 @@ function App() {
                     label: "Family Communication",
                     icon: IconUser,
                   })}
-                {canManageSettings &&
-                  renderNavItem({
-                    key: "parentAccess",
-                    label: "Parent Access",
-                    icon: IconUser,
-                  })}
+                {canManageSettings && (
+                  <FeatureGate
+                    feature="parentPortal"
+                    fallback={
+                      <span style={{ display: "inline-flex", alignItems: "center" }}>
+                        {renderNavItem({
+                          key: "parentAccess",
+                          label: "Parent Access",
+                          icon: IconUser,
+                        })}
+                        <LockedBadge />
+                      </span>
+                    }
+                  >
+                    {renderNavItem({
+                      key: "parentAccess",
+                      label: "Parent Access",
+                      icon: IconUser,
+                    })}
+                  </FeatureGate>
+                )}
               </NavGroup>
             )}
             {/* People accordion removed — Teacher Roster lives in
@@ -15895,10 +15938,26 @@ function App() {
         </>
       )}
 
-      {activeSection === "ast" && <StaffAstPage />}
+      {activeSection === "ast" && (
+        <FeatureGate feature="ast" label="AST">
+          <StaffAstPage />
+        </FeatureGate>
+      )}
 
-      {activeSection === "astAdmin" && canApproveAst && <AdminAstQueuePage />}
-      {activeSection === "astInsights" && canApproveAst && <AstInsightsPage />}
+      {activeSection === "astAdmin" && canApproveAst && (
+        <FeatureGate feature="ast" label="AST">
+          <AdminAstQueuePage />
+        </FeatureGate>
+      )}
+      {activeSection === "astInsights" && canApproveAst && (
+        <FeatureGate feature="ast" label="AST">
+          <AstInsightsPage />
+        </FeatureGate>
+      )}
+
+      {activeSection === "featureLicensing" && isSuperUser && (
+        <FeatureLicensingAdminPage />
+      )}
 
       {activeSection === "verifyPullouts" && canVerifyPullouts && (
         <>
@@ -19757,7 +19816,9 @@ function App() {
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (
-        <ParentAccess />
+        <FeatureGate feature="parentPortal" label="Parent Portal">
+          <ParentAccess />
+        </FeatureGate>
       )}
 
       {activeSection === "superUserHome" && isSuperUser && (

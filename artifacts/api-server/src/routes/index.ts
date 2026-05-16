@@ -83,6 +83,8 @@ import watchlistRouter from "./watchlist";
 import onboardingRouter from "./onboarding";
 import pickupRouter from "./pickup";
 import astRouter from "./ast";
+import featureLicensingRouter from "./featureLicensing";
+import { requireFeature } from "../lib/featureLicensing";
 
 const router: IRouter = Router();
 
@@ -116,6 +118,35 @@ router.use(pbisMilestonesRouter);
 router.use(pulloutsRouter);
 router.use(digestRouter);
 router.use(adminStaffRouter);
+
+// -----------------------------------------------------------------------------
+// Feature licensing gates — MUST be registered BEFORE the gated routers.
+// Express runs matching middleware in registration order; if the actual
+// router is registered first it handles the request and the gate never
+// fires. So we mount gates here, ahead of the parent + AST routers
+// below.
+//
+// Mount paths are relative to the parent router's mount point (which
+// is `/api` in app.ts) — do NOT include a leading `/api`.
+//
+// Why we only gate STAFF-facing surfaces:
+//   - `requireFeature` reads `req.schoolId`, which is populated by the
+//     staff-auth middleware in app.ts. Parent-authenticated routes
+//     (`/parent/*`) don't have it (parent sessions use `req.parentId`
+//     and resolve school context internally), so adding the gate there
+//     would 401 legitimate parents.
+//   - The licensing intent is "school doesn't have the feature → no
+//     new admin work flows in". Existing parents can still log in.
+//     Stopping admin invites/preview is enough to stem new parent
+//     onboarding when the school's parentPortal license is off.
+//
+// `parentPortal` parent-side gating is a Phase 2 follow-up — needs a
+// parent-aware variant of `requireFeature` that resolves schoolId
+// from `req.parentId`'s student → school link.
+router.use("/ast", requireFeature("ast"));
+router.use("/admin/parent-invites", requireFeature("parentPortal"));
+router.use("/admin/parent-preview", requireFeature("parentPortal"));
+
 router.use(parentEmailRouter);
 router.use(pulloutReasonsRouter);
 router.use(pulloutNoteTemplatesRouter);
@@ -170,5 +201,6 @@ router.use(watchlistRouter);
 router.use(onboardingRouter);
 router.use(pickupRouter);
 router.use(astRouter);
+router.use(featureLicensingRouter);
 
 export default router;

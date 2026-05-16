@@ -131,6 +131,9 @@ export const schoolSettingsTable = pgTable(
   superFeatureDataImports: boolean("super_feature_data_imports").notNull().default(true),
   superFeatureHouses: boolean("super_feature_houses").notNull().default(true),
   superFeatureParentPortal: boolean("super_feature_parent_portal").notNull().default(true),
+  // AST shipped after the original superFeature catalog; added here so
+  // the licensing layer can gate it like every other feature.
+  superFeatureAst: boolean("super_feature_ast").notNull().default(true),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

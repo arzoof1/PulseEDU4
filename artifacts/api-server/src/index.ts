@@ -27,6 +27,8 @@ import {
   ensureDataImporterRollbackSchema,
   ensurePickupSchema,
   ensureAstSchema,
+  ensureFeaturePlansColumns,
+  ensureFeaturePlansSchema,
 } from "./seed";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
@@ -57,6 +59,10 @@ if (Number.isNaN(port) || port <= 0) {
 // because the full seed (60-day demo data × 7 schools) takes well over
 // the platform's port-open timeout on a fresh DB.
 async function runSeed(): Promise<void> {
+  // Add schools.plan_id + school_settings.super_feature_ast BEFORE
+  // seedTenancy: that function inserts into schools via Drizzle, whose
+  // schema now references those columns. Idempotent ALTER … IF NOT EXISTS.
+  await ensureFeaturePlansColumns();
   await seedTenancy();
   await seedIfEmpty();
   // One-shot sweep of loose (case_id IS NULL) demo interactions left
@@ -142,6 +148,7 @@ async function runSeed(): Promise<void> {
   await ensureDataImporterRollbackSchema();
   await ensurePickupSchema();
   await ensureAstSchema();
+  await ensureFeaturePlansSchema();
 }
 
 // In production we MUST open the port within the platform's health-check

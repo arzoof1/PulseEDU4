@@ -6,8 +6,28 @@ import {
   parentStudentsTable,
   parentInvitesTable,
   studentsTable,
+  schoolSettingsTable,
 } from "@workspace/db";
 import { and, eq, inArray } from "drizzle-orm";
+
+// Feature-licensing backstop for the invite endpoints. The router-level
+// `requireFeature("parentPortal")` middleware in routes/index.ts only
+// covers staff-facing routes (it needs req.schoolId which parent
+// sessions don't have). Invite acceptance is parent-side but resolves
+// schoolId from the invite row itself, so we can enforce here directly.
+// Returns true when the school's parentPortal license is on. We read
+// superFeatureParentPortal — that's the runtime boolean plans + override
+// reapply write through to.
+async function isParentPortalLicensedForSchool(
+  schoolId: number,
+): Promise<boolean> {
+  const [s] = await db
+    .select({ on: schoolSettingsTable.superFeatureParentPortal })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId))
+    .limit(1);
+  return Boolean(s?.on);
+}
 import {
   issueParentAuthToken,
   verifyParentAuthToken,
@@ -213,6 +233,12 @@ router.get("/parent-auth/invite/:token", async (req, res) => {
     res.status(404).json({ error: GENERIC_INVITE_ERROR });
     return;
   }
+  // Feature-license backstop — if the school's parentPortal license
+  // was turned off after this invite was issued, refuse the token.
+  if (!(await isParentPortalLicensedForSchool(invite.schoolId))) {
+    res.status(410).json({ error: GENERIC_INVITE_ERROR });
+    return;
+  }
   if (invite.status === "revoked") {
     res.status(410).json({ error: GENERIC_INVITE_ERROR });
     return;
@@ -295,6 +321,11 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     .where(eq(parentInvitesTable.token, token.trim()));
   if (!invite || invite.status === "revoked") {
     res.status(404).json({ error: GENERIC_INVITE_ERROR });
+    return;
+  }
+  // Feature-license backstop — see GET /parent-auth/invite/:token.
+  if (!(await isParentPortalLicensedForSchool(invite.schoolId))) {
+    res.status(410).json({ error: GENERIC_INVITE_ERROR });
     return;
   }
   if (invite.expiresAt.getTime() < Date.now() && invite.status !== "accepted") {

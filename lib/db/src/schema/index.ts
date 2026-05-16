@@ -93,3 +93,4 @@ export * from "./caseConsistencyState";
 export * from "./caseFootageRequests";
 export * from "./caseOutcomeTypes";
 export * from "./staffAst";
+export * from "./featurePlans";

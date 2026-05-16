@@ -5487,3 +5487,112 @@ export async function ensureAstSchema(): Promise<void> {
   `);
   await db.execute(sql`CREATE INDEX IF NOT EXISTS staff_ast_ledger_school_staff_idx ON staff_ast_ledger(school_id, staff_id)`);
 }
+
+// -----------------------------------------------------------------------------
+// Feature licensing schema (Plans + per-school Overrides).
+// Idempotent. Layered on top of the existing super_feature_* flags on
+// school_settings — assigning a plan / applying overrides writes through
+// to those booleans, so the runtime gating path is unchanged.
+// Also seeds a default "enterprise" plan with every feature enabled and
+// auto-assigns it to any school whose plan_id is still NULL, so existing
+// tenants keep working after this rolls out.
+// -----------------------------------------------------------------------------
+// Two-phase migration: the column adds + plans table CREATE must happen
+// BEFORE seedTenancy (which inserts into schools via Drizzle, with a
+// schema definition that now includes plan_id). The backfill UPDATE
+// runs AFTER seedTenancy so it has rows to update. Both phases are
+// idempotent.
+export async function ensureFeaturePlansColumns() {
+  await db.execute(
+    sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS plan_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_ast BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+}
+
+export async function ensureFeaturePlansSchema() {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS plans (
+      id SERIAL PRIMARY KEY,
+      key TEXT NOT NULL,
+      label TEXT NOT NULL,
+      description TEXT,
+      features JSONB NOT NULL,
+      quotas JSONB NOT NULL DEFAULT '{}'::jsonb,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS plans_key_unique ON plans(key)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_feature_overrides (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      feature_key TEXT NOT NULL,
+      enabled BOOLEAN NOT NULL,
+      show_upsell BOOLEAN NOT NULL DEFAULT FALSE,
+      quotas JSONB NOT NULL DEFAULT '{}'::jsonb,
+      expires_at TIMESTAMPTZ,
+      reason TEXT,
+      granted_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_feature_overrides_school_feature_unique ON school_feature_overrides(school_id, feature_key)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_feature_overrides_school_idx ON school_feature_overrides(school_id)`,
+  );
+
+  // (Column adds for schools.plan_id + school_settings.super_feature_ast
+  // happen earlier via ensureFeaturePlansColumns, before seedTenancy.)
+
+  // Seed the default "enterprise" plan (everything on, no quotas).
+  // The keys here match FEATURE_KEYS in
+  // artifacts/api-server/src/lib/featureLicensing.ts — keep in sync.
+  const enterpriseFeatures = {
+    familyComm: true,
+    pbis: true,
+    schoolStore: true,
+    accommodations: true,
+    logIntervention: true,
+    requestPullout: true,
+    hallPasses: true,
+    tardyPass: true,
+    mtssPlans: true,
+    behaviorSpecialist: true,
+    issDashboard: true,
+    displays: true,
+    bellSchedule: true,
+    earlyWarning: true,
+    academics: true,
+    dataImports: true,
+    houses: true,
+    parentPortal: true,
+    ast: true,
+  };
+  await db.execute(sql`
+    INSERT INTO plans (key, label, description, features, quotas)
+    VALUES (
+      'enterprise',
+      'Enterprise',
+      'All PulseEDU features. Default plan assigned to every school on rollout.',
+      ${JSON.stringify(enterpriseFeatures)}::jsonb,
+      '{}'::jsonb
+    )
+    ON CONFLICT (key) DO NOTHING
+  `);
+
+  // Backfill: any school still on plan_id IS NULL gets the enterprise
+  // plan so the runtime behavior is unchanged after this migration.
+  await db.execute(sql`
+    UPDATE schools
+    SET plan_id = (SELECT id FROM plans WHERE key = 'enterprise')
+    WHERE plan_id IS NULL
+  `);
+}
