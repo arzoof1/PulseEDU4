@@ -22,6 +22,11 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 //  - Resetting per-mount: the parent should remount this component
 //    each time the protected route is entered (e.g. via React `key`)
 //    so the gate re-arms after every navigation.
+//
+// The same pattern is reused — same blur backdrop, same drag-to-
+// unlock — for destructive admin actions like deactivating a
+// district. See `SlideConfirmModal` below: it's the gate without the
+// "wrap a route" semantic, plus a Cancel button.
 
 interface PrivacyGateProps {
   // Headline shown above the message. Short, scannable.
@@ -29,6 +34,14 @@ interface PrivacyGateProps {
   // Body copy. Be specific about WHAT private data is on the next
   // screen so the teacher knows the cost of getting this wrong.
   message?: ReactNode;
+  // Label inside the slider track before it's all the way right.
+  sliderIdleLabel?: string;
+  // Label inside the slider track once fully unlocked.
+  sliderDoneLabel?: string;
+  // Small instructional copy below the slider.
+  footerHint?: string;
+  // ARIA label for the slider handle.
+  sliderAriaLabel?: string;
   // Children render behind the gate from the moment the gate opens
   // (so the page is loading in the background). They are blurred
   // until the teacher drags to unlock.
@@ -45,6 +58,10 @@ export default function PrivacyGate({
       or any student-facing display before continuing.
     </>
   ),
+  sliderIdleLabel = "SLIDE TO VIEW ROSTER →",
+  sliderDoneLabel = "UNLOCKED",
+  footerHint = "Slide the handle all the way to the right to confirm and view the page.",
+  sliderAriaLabel = "Slide to confirm and view roster",
   children,
 }: PrivacyGateProps) {
   const [unlocked, setUnlocked] = useState(false);
@@ -61,19 +78,96 @@ export default function PrivacyGate({
       <GateOverlay
         title={title}
         message={message}
+        sliderIdleLabel={sliderIdleLabel}
+        sliderDoneLabel={sliderDoneLabel}
+        sliderAriaLabel={sliderAriaLabel}
+        footerHint={footerHint}
         onUnlock={() => setUnlocked(true)}
       />
     </>
   );
 }
 
+// ---------------------------------------------------------------------------
+// SlideConfirmModal — same blur + drag-to-unlock pattern as PrivacyGate,
+// but framed as an action confirmation rather than a route gate. Use
+// for destructive admin actions where a stray click is unacceptable
+// (district deactivation, etc).
+// ---------------------------------------------------------------------------
+interface SlideConfirmModalProps {
+  open: boolean;
+  title: string;
+  message: ReactNode;
+  sliderIdleLabel?: string;
+  sliderDoneLabel?: string;
+  footerHint?: string;
+  sliderAriaLabel?: string;
+  cancelLabel?: string;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+export function SlideConfirmModal({
+  open,
+  title,
+  message,
+  sliderIdleLabel = "SLIDE TO CONFIRM →",
+  sliderDoneLabel = "CONFIRMED",
+  footerHint = "Slide the handle all the way to the right to confirm.",
+  sliderAriaLabel = "Slide to confirm",
+  cancelLabel = "Cancel",
+  onCancel,
+  onConfirm,
+}: SlideConfirmModalProps) {
+  // Escape key is the universal "get me out" gesture — wire it up so a
+  // stray click on a destructive button can always be backed out
+  // without the user having to find the cancel link first.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        onCancel();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onCancel]);
+  if (!open) return null;
+  return (
+    <GateOverlay
+      title={title}
+      message={message}
+      sliderIdleLabel={sliderIdleLabel}
+      sliderDoneLabel={sliderDoneLabel}
+      sliderAriaLabel={sliderAriaLabel}
+      footerHint={footerHint}
+      cancelLabel={cancelLabel}
+      onCancel={onCancel}
+      onUnlock={onConfirm}
+    />
+  );
+}
+
 function GateOverlay({
   title,
   message,
+  sliderIdleLabel,
+  sliderDoneLabel,
+  sliderAriaLabel,
+  footerHint,
+  cancelLabel,
+  onCancel,
   onUnlock,
 }: {
   title: string;
   message: ReactNode;
+  sliderIdleLabel: string;
+  sliderDoneLabel: string;
+  sliderAriaLabel: string;
+  footerHint: string;
+  cancelLabel?: string;
+  onCancel?: () => void;
   onUnlock: () => void;
 }) {
   return (
@@ -153,7 +247,12 @@ function GateOverlay({
           {message}
         </div>
 
-        <SlideToUnlock onUnlock={onUnlock} />
+        <SlideToUnlock
+          ariaLabel={sliderAriaLabel}
+          idleLabel={sliderIdleLabel}
+          doneLabel={sliderDoneLabel}
+          onUnlock={onUnlock}
+        />
 
         <div
           style={{
@@ -162,9 +261,34 @@ function GateOverlay({
             textAlign: "center",
           }}
         >
-          Slide the handle all the way to the right to confirm and view the
-          page.
+          {footerHint}
         </div>
+
+        {onCancel && (
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              marginTop: 4,
+            }}
+          >
+            <button
+              type="button"
+              onClick={onCancel}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#475569",
+                fontSize: 14,
+                cursor: "pointer",
+                padding: "6px 10px",
+                textDecoration: "underline",
+              }}
+            >
+              {cancelLabel ?? "Cancel"}
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -173,7 +297,17 @@ function GateOverlay({
 // Drag-to-unlock slider. iOS-style. Works with mouse + touch + keyboard
 // (Right arrow nudges the handle, Enter when fully right unlocks — so
 // the gate is still operable by users who can't drag).
-function SlideToUnlock({ onUnlock }: { onUnlock: () => void }) {
+function SlideToUnlock({
+  ariaLabel,
+  idleLabel,
+  doneLabel,
+  onUnlock,
+}: {
+  ariaLabel: string;
+  idleLabel: string;
+  doneLabel: string;
+  onUnlock: () => void;
+}) {
   const trackRef = useRef<HTMLDivElement>(null);
   const handleRef = useRef<HTMLDivElement>(null);
   const [progress, setProgress] = useState(0); // 0..1
@@ -249,7 +383,7 @@ function SlideToUnlock({ onUnlock }: { onUnlock: () => void }) {
     <div
       ref={trackRef}
       role="slider"
-      aria-label="Slide to confirm and view roster"
+      aria-label={ariaLabel}
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(progress * 100)}
@@ -281,7 +415,7 @@ function SlideToUnlock({ onUnlock }: { onUnlock: () => void }) {
           transition: "color 120ms",
         }}
       >
-        {progress >= 0.995 ? "UNLOCKED" : "SLIDE TO VIEW ROSTER →"}
+        {progress >= 0.995 ? doneLabel : idleLabel}
       </div>
       <div
         ref={handleRef}

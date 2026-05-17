@@ -14,6 +14,7 @@ import { authFetch } from "../../lib/authToken";
 import OnboardDistrictModal from "./OnboardDistrictModal";
 import OnboardSchoolModal from "./OnboardSchoolModal";
 import EditDistrictModal from "./EditDistrictModal";
+import { SlideConfirmModal } from "../PrivacyGate";
 
 type DistrictSummary = {
   id: number;
@@ -87,6 +88,12 @@ export default function SuperUserHomeRollups() {
   >(null);
   const [editing, setEditing] = useState<DistrictSummary | null>(null);
   const [togglingActive, setTogglingActive] = useState<number | null>(null);
+  // Deactivation goes through a slide-to-confirm modal (same blur +
+  // drag pattern as the teacher-roster PrivacyGate). A stray click on
+  // a district row's "Deactivate" button would otherwise lock every
+  // school in that district out of the app.
+  const [pendingDeactivate, setPendingDeactivate] =
+    useState<DistrictSummary | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -103,17 +110,24 @@ export default function SuperUserHomeRollups() {
     void reload();
   }, [reload]);
 
+  // Reactivation is a recoverable, additive action — a plain confirm
+  // is enough. Deactivation routes through the slide-to-confirm modal
+  // (see pendingDeactivate / applyToggle below).
   async function toggleActive(d: DistrictSummary) {
-    const next = !d.active;
+    if (d.active) {
+      setPendingDeactivate(d);
+      return;
+    }
     if (
       !window.confirm(
-        `${next ? "Reactivate" : "Deactivate"} ${d.name}?\n\n` +
-          (next
-            ? "It will reappear as a working tenant."
-            : "All schools in this district will be hidden from rollups and locked out of the app. Existing data is preserved."),
+        `Reactivate ${d.name}?\n\nIt will reappear as a working tenant.`,
       )
     )
       return;
+    await applyToggle(d, true);
+  }
+
+  async function applyToggle(d: DistrictSummary, next: boolean) {
     setTogglingActive(d.id);
     try {
       const res = await authFetch(`/api/tenancy/districts/${d.id}`, {
@@ -376,6 +390,46 @@ export default function SuperUserHomeRollups() {
           }}
         />
       )}
+
+      <SlideConfirmModal
+        open={!!pendingDeactivate}
+        title={
+          pendingDeactivate
+            ? `Deactivate ${pendingDeactivate.name}?`
+            : "Deactivate district?"
+        }
+        message={
+          pendingDeactivate ? (
+            <>
+              You're about to deactivate{" "}
+              <strong>{pendingDeactivate.name}</strong>. This will hide all{" "}
+              <strong>
+                {pendingDeactivate.schoolCount.toLocaleString()} school
+                {pendingDeactivate.schoolCount === 1 ? "" : "s"}
+              </strong>{" "}
+              from rollups and lock out{" "}
+              <strong>
+                {pendingDeactivate.staffCount.toLocaleString()} staff
+              </strong>{" "}
+              and every student in this district. Existing data is preserved
+              and can be restored by reactivating. Make sure no one in this
+              district is mid-session before continuing.
+            </>
+          ) : null
+        }
+        sliderIdleLabel="SLIDE TO DEACTIVATE DISTRICT →"
+        sliderDoneLabel="DEACTIVATING…"
+        sliderAriaLabel="Slide to deactivate district"
+        footerHint="Slide the handle all the way to the right to deactivate."
+        cancelLabel="Keep district active"
+        onCancel={() => setPendingDeactivate(null)}
+        onConfirm={() => {
+          const d = pendingDeactivate;
+          if (!d) return;
+          setPendingDeactivate(null);
+          void applyToggle(d, false);
+        }}
+      />
     </div>
   );
 }
