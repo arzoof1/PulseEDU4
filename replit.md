@@ -71,6 +71,18 @@ _Populate as you build_
 
 ### Recently shipped (reference only — no remaining action)
 
+- **Onboard-a-School (existing district).** `POST
+  /api/tenancy/onboard-school` in `routes/tenancy.ts` — SuperUser-only,
+  tx-wrapped school → schoolSettings → applyPlan → first admin under
+  an existing `districtId`. Reuses the same CSPRNG temp-password +
+  23505 → 409 patterns from `onboard-district`. New schools default
+  to `isPrimary: false` (the district's primary was created at
+  district onboarding). Client modal
+  `components/districtOverview/OnboardSchoolModal.tsx` is launched
+  from a per-card "+ Add school" button in `SuperUserHomeRollups`.
+  TODO when per-district plan selection lands: replace the hard-coded
+  `enterprise` lookup with the district's actual current plan.
+
 - **SuperUser Audit & Health panel.** `GET /api/superuser/audit-health`
   in `routes/districtOverview.ts` returns per-district health
   (schools active/inactive, active staff, audit events in last 7d

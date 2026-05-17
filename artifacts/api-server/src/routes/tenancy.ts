@@ -617,4 +617,196 @@ router.post("/tenancy/onboard-district", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// POST /api/tenancy/onboard-school
+//   SuperUser-only. Adds a school under an EXISTING district. Mirrors
+//   onboard-district but skips the district insert + inherits the district's
+//   current default plan (looked up from `plansTable.key = 'enterprise'`,
+//   same default the district wizard uses today — when per-district plan
+//   selection lands, swap this for the district's actual plan).
+//
+//   Transactional: school → schoolSettings → applyPlan → first admin.
+//   Returns the new IDs plus a one-time CSPRNG temp password.
+// ---------------------------------------------------------------------------
+router.post("/tenancy/onboard-school", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const body = (req.body ?? {}) as {
+    districtId?: unknown;
+    schoolName?: unknown;
+    schoolShortName?: unknown;
+    stateSchoolCode?: unknown;
+    adminEmail?: unknown;
+    adminFirstName?: unknown;
+    adminLastName?: unknown;
+  };
+
+  const districtId =
+    typeof body.districtId === "number" &&
+    Number.isInteger(body.districtId) &&
+    body.districtId > 0
+      ? body.districtId
+      : null;
+  const schoolName =
+    typeof body.schoolName === "string" ? body.schoolName.trim() : "";
+  const adminEmail =
+    typeof body.adminEmail === "string"
+      ? body.adminEmail.trim().toLowerCase()
+      : "";
+  const adminFirstName =
+    typeof body.adminFirstName === "string" ? body.adminFirstName.trim() : "";
+  const adminLastName =
+    typeof body.adminLastName === "string" ? body.adminLastName.trim() : "";
+
+  const missing: string[] = [];
+  if (districtId === null) missing.push("districtId");
+  if (!schoolName) missing.push("schoolName");
+  if (!adminEmail) missing.push("adminEmail");
+  if (!adminFirstName) missing.push("adminFirstName");
+  if (!adminLastName) missing.push("adminLastName");
+  if (missing.length > 0) {
+    res
+      .status(400)
+      .json({ error: `Missing required fields: ${missing.join(", ")}` });
+    return;
+  }
+  if (!/^\S+@\S+\.\S+$/.test(adminEmail)) {
+    res.status(400).json({ error: "adminEmail is not a valid email" });
+    return;
+  }
+
+  const schoolShortName =
+    typeof body.schoolShortName === "string" && body.schoolShortName.trim()
+      ? body.schoolShortName.trim()
+      : null;
+  const stateSchoolCode =
+    typeof body.stateSchoolCode === "string" && body.stateSchoolCode.trim()
+      ? body.stateSchoolCode.trim()
+      : null;
+
+  // Pre-flight: district must exist; admin email must be globally unique.
+  const [district] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId!));
+  if (!district) {
+    res.status(404).json({ error: `District ${districtId} not found` });
+    return;
+  }
+
+  // Cross-tenant guard — SuperUser is district-wide by default, NOT
+  // cross-district. Without this, a SuperUser in District A could
+  // create schools + admins inside District B by supplying its id.
+  // Matches the same env gate used by /superuser/overview + audit-health.
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const callerDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (callerDistrictId === null || callerDistrictId !== district.id) {
+      res.status(403).json({
+        error: "Cannot onboard a school into another district",
+      });
+      return;
+    }
+  }
+  const [emailClash] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.email, adminEmail));
+  if (emailClash) {
+    res
+      .status(409)
+      .json({ error: `A staff member with email ${adminEmail} already exists` });
+    return;
+  }
+
+  // Temp password (CSPRNG, same alphabet as onboard-district).
+  const ALPHABET =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let tempPassword = "";
+  for (let i = 0; i < 16; i++) {
+    tempPassword += ALPHABET[randomInt(0, ALPHABET.length)];
+  }
+  const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+  const [enterprisePlan] = await db
+    .select()
+    .from(plansTable)
+    .where(eq(plansTable.key, "enterprise"));
+
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [school] = await tx
+        .insert(schoolsTable)
+        .values({
+          districtId: district.id,
+          name: schoolName,
+          shortName: schoolShortName,
+          stateSchoolCode,
+          // Not the primary school of the district — that's the one
+          // created at district onboarding. Additional schools default
+          // to non-primary; active.
+          isPrimary: false,
+          active: true,
+        })
+        .returning();
+
+      await tx.insert(schoolSettingsTable).values({ schoolId: school.id });
+
+      if (enterprisePlan) {
+        await applyPlanToSchool(school.id, enterprisePlan.id, tx);
+      }
+
+      const [admin] = await tx
+        .insert(staffTable)
+        .values({
+          schoolId: school.id,
+          email: adminEmail,
+          passwordHash,
+          displayName: `${adminFirstName} ${adminLastName}`,
+          isAdmin: true,
+          active: true,
+        })
+        .returning();
+
+      return { school, admin };
+    });
+
+    res.status(201).json({
+      district: {
+        id: district.id,
+        name: district.name,
+        slug: district.slug,
+      },
+      school: {
+        id: result.school.id,
+        name: result.school.name,
+        shortName: result.school.shortName,
+      },
+      admin: {
+        id: result.admin.id,
+        email: result.admin.email,
+        displayName: result.admin.displayName,
+      },
+      tempPassword,
+    });
+  } catch (err: any) {
+    const pgCode = err?.cause?.code ?? err?.code;
+    if (pgCode === "23505") {
+      const detail: string = err?.cause?.detail ?? err?.detail ?? "";
+      const isEmail = /staff.*email/i.test(detail);
+      res.status(409).json({
+        error: isEmail
+          ? `A staff member with email ${adminEmail} already exists`
+          : "A row with this identifier already exists",
+      });
+      return;
+    }
+    req.log?.error?.({ err }, "onboard-school failed");
+    res
+      .status(500)
+      .json({ error: "Failed to onboard school — see server logs" });
+  }
+});
+
 export default router;

@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "../../lib/authToken";
 import OnboardDistrictModal from "./OnboardDistrictModal";
+import OnboardSchoolModal from "./OnboardSchoolModal";
 
 type DistrictSummary = {
   id: number;
@@ -80,6 +81,9 @@ export default function SuperUserHomeRollups() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showOnboard, setShowOnboard] = useState(false);
+  const [addSchoolFor, setAddSchoolFor] = useState<
+    { id: number; name: string } | null
+  >(null);
 
   const reload = useCallback(async () => {
     try {
@@ -252,11 +256,35 @@ export default function SuperUserHomeRollups() {
               <div
                 style={{
                   marginTop: "0.75rem",
-                  fontSize: "0.75rem",
-                  color: "var(--text-subtle)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "space-between",
+                  gap: 8,
                 }}
               >
-                Last activity: {formatLastActivity(d.lastActivityAt)}
+                <div
+                  style={{
+                    fontSize: "0.75rem",
+                    color: "var(--text-subtle)",
+                  }}
+                >
+                  Last activity: {formatLastActivity(d.lastActivityAt)}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setAddSchoolFor({ id: d.id, name: d.name })}
+                  style={{
+                    padding: "0.3rem 0.6rem",
+                    fontSize: "0.75rem",
+                    border: "1px solid var(--border, #e2e8f0)",
+                    borderRadius: 6,
+                    background: "var(--surface, #fff)",
+                    cursor: "pointer",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  + Add school
+                </button>
               </div>
             </div>
           ))}
@@ -268,6 +296,16 @@ export default function SuperUserHomeRollups() {
           onClose={() => setShowOnboard(false)}
           onCreated={() => {
             setShowOnboard(false);
+            void reload();
+          }}
+        />
+      )}
+      {addSchoolFor && (
+        <OnboardSchoolModal
+          district={addSchoolFor}
+          onClose={() => setAddSchoolFor(null)}
+          onCreated={() => {
+            setAddSchoolFor(null);
             void reload();
           }}
         />
