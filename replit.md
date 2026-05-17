@@ -71,6 +71,20 @@ _Populate as you build_
 
 ### Recently shipped (reference only — no remaining action)
 
+- **SuperUser + District Overview landing rollups + Onboard-a-District
+  wizard.** `routes/districtOverview.ts` (GET `/api/superuser/overview`,
+  GET `/api/district-admin/overview`) + POST
+  `/api/tenancy/onboard-district` (tx-wrapped district + first school +
+  schoolSettings + enterprise plan + first admin; CSPRNG temp password
+  returned once; 23505 → 409). Client components in
+  `components/districtOverview/` replace the placeholder card grids on
+  superUserHome + districtAdmin; roadmap cards moved into collapsed
+  `<details>`. Cross-district SuperUser reach is gated behind
+  `ALLOW_CROSS_DISTRICT_SUPERUSER=1` (defaults to caller's district);
+  swap for a per-staff `isCrossDistrictSuperUser` flag when that tier
+  lands. "Switch to school" row action hidden for non-SuperUser
+  (server returns `caller.isSuperUser`).
+
 - **FAST scale-score coverage.** 3rd-grade bucket fallback;
   EOC scaffolding + `ALGEBRA1_EOC` / `GEOMETRY_EOC` cut scores from
   FL DOE Table 8; `Subject` union widened to
