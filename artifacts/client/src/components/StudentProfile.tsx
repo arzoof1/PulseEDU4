@@ -519,6 +519,13 @@ interface Props {
   // Used to gate admin-only affordances such as the photo-consent
   // privacy toggle, which the server rejects (403) for non-admins.
   isAdmin?: boolean;
+  // True when the signed-in user can change this student's PBIS
+  // house via the Change House modal. Mirrors server isCoreTeam
+  // (Admin / SuperUser / DistrictAdmin / BehaviorSpecialist /
+  // MTSSCoordinator / SchoolPsychologist). Wider than `isAdmin`
+  // because Core Team can move kids between houses for behavior
+  // / sibling reasons.
+  canChangeHouse?: boolean;
   // True when the signed-in user can upload / capture / remove the
   // student photo (admin / front-office / core team / counselor /
   // guidance / social worker). Mirrors server canManageStudentPhoto.
@@ -1793,6 +1800,7 @@ export default function StudentProfile({
   canManage = false,
   canEditSafetyPlan = false,
   isAdmin = false,
+  canChangeHouse = false,
   canManagePhoto = false,
   canManageDismissal = false,
   onOpenSafetyPlan,
@@ -2178,7 +2186,7 @@ export default function StudentProfile({
                   No house
                 </span>
               )}
-              {isAdmin && (
+              {canChangeHouse && (
                 <button
                   type="button"
                   onClick={() => setChangeHouseOpen(true)}

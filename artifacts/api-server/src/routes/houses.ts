@@ -567,11 +567,13 @@ async function computeSortPlan(
 function parseBulkBody(req: Request): {
   includeAssigned: boolean;
   keepSiblings: boolean;
+  reason: string;
 } {
   const b = req.body ?? {};
   return {
     includeAssigned: b.includeAssigned === true,
     keepSiblings: b.keepSiblings === true,
+    reason: typeof b.reason === "string" ? b.reason.trim() : "",
   };
 }
 
@@ -580,6 +582,9 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (schoolId === null) return;
   const { includeAssigned, keepSiblings } = parseBulkBody(req);
+  // Preview does not require a reason — it doesn't write — but the
+  // commit endpoint does when includeAssigned is on (re-sorts of
+  // already-placed students need an audit-grade explanation).
   const plan = await computeSortPlan(
     schoolId,
     includeAssigned,
@@ -605,7 +610,19 @@ router.post("/houses/sort/commit", requireHouseAdmin(), async (req, res) => {
   const staff = (req as Request & { staff: StaffRow }).staff;
   const schoolId = requireSchool(req, res);
   if (schoolId === null) return;
-  const { includeAssigned, keepSiblings } = parseBulkBody(req);
+  const { includeAssigned, keepSiblings, reason } = parseBulkBody(req);
+  // When include-assigned is on the commit will move kids who
+  // already have a placement, so we require the same ≥10-char
+  // reason the single-student PATCH demands. Inserts-only sorts
+  // (the common onboarding case) accept no reason and fall back
+  // to a generated label.
+  if (includeAssigned && reason.length < 10) {
+    res.status(400).json({
+      error:
+        "Reason is required (at least 10 characters) when re-sorting students who already have a house.",
+    });
+    return;
+  }
   const plan = await computeSortPlan(
     schoolId,
     includeAssigned,
@@ -699,9 +716,12 @@ router.post("/houses/sort/commit", requireHouseAdmin(), async (req, res) => {
           studentDbId: m.studentDbId,
           fromHouseId: m.fromHouseId,
           toHouseId: m.toHouseId,
-          reason: keepSiblings
-            ? "Bulk sort (siblings kept together)"
-            : "Bulk sort",
+          reason:
+            includeAssigned && reason.length >= 10
+              ? reason
+              : keepSiblings
+                ? "Bulk sort (siblings kept together)"
+                : "Bulk sort",
           changedByStaffId: staff.id,
           source: "bulk_sort",
           sortJobId: job.id,

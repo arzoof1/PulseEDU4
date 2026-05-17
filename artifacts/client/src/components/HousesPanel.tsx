@@ -98,6 +98,10 @@ export default function HousesPanel(): React.ReactElement {
 function SortTab(): React.ReactElement {
   const [includeAssigned, setIncludeAssigned] = useState(false);
   const [keepSiblings, setKeepSiblings] = useState(true);
+  // Required (≥10 chars) only when includeAssigned is on, mirroring
+  // the server gate in routes/houses.ts. Persisted on every audit
+  // row this commit produces so the move can be defended later.
+  const [reason, setReason] = useState("");
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [preview, setPreview] = useState<PreviewResp | null>(null);
@@ -147,7 +151,13 @@ function SortTab(): React.ReactElement {
       const res = await authFetch("/api/houses/sort/commit", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ includeAssigned, keepSiblings }),
+        body: JSON.stringify({
+          includeAssigned,
+          keepSiblings,
+          // Only send when required — keeps the API surface tidy
+          // and matches the server-side conditional validation.
+          ...(includeAssigned ? { reason: reason.trim() } : {}),
+        }),
       });
       const body = (await res.json()) as {
         ok: boolean;
@@ -169,7 +179,7 @@ function SortTab(): React.ReactElement {
     } finally {
       setCommitting(false);
     }
-  }, [preview, includeAssigned, keepSiblings]);
+  }, [preview, includeAssigned, keepSiblings, reason]);
 
   return (
     <div className="card">
@@ -204,6 +214,31 @@ function SortTab(): React.ReactElement {
           Keep siblings together
         </label>
       </div>
+      {includeAssigned && (
+        <div style={{ margin: "0.5rem 0 0.75rem" }}>
+          <label
+            style={{
+              display: "block",
+              fontWeight: 600,
+              marginBottom: 4,
+              fontSize: "0.88rem",
+            }}
+          >
+            Reason for re-sorting already-placed students (required, min.
+            10 characters)
+          </label>
+          <textarea
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            rows={2}
+            style={{ width: "100%", padding: "0.4rem", maxWidth: 520 }}
+            placeholder="e.g. Rebalancing after Q2 enrollment surge."
+          />
+          <div style={{ color: "#94a3b8", fontSize: "0.78rem" }}>
+            {reason.trim().length}/10
+          </div>
+        </div>
+      )}
       <div style={{ display: "flex", gap: 8 }}>
         <button
           type="button"
@@ -217,9 +252,17 @@ function SortTab(): React.ReactElement {
           <button
             type="button"
             className="btn primary"
-            disabled={committing}
+            disabled={
+              committing ||
+              (includeAssigned && reason.trim().length < 10)
+            }
             onClick={runCommit}
             style={{ background: "#0f766e" }}
+            title={
+              includeAssigned && reason.trim().length < 10
+                ? "Enter a reason (≥10 characters) to re-sort already-placed students."
+                : ""
+            }
           >
             {committing ? "Applying…" : `Commit (${preview.totalChanged})`}
           </button>

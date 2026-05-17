@@ -7,7 +7,12 @@
 import React, { useEffect, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
-type House = { id: number; name: string; color: string };
+type House = {
+  id: number;
+  name: string;
+  color: string;
+  memberCount?: number;
+};
 
 type Props = {
   studentId: string;
@@ -38,7 +43,7 @@ export default function ChangeHouseModal({
       try {
         const res = await authFetch("/api/houses");
         const body = (await res.json()) as {
-          houses?: Array<{ id: number; name: string; color: string }>;
+          houses?: House[];
           error?: string;
         };
         if (cancelled) return;
@@ -56,6 +61,26 @@ export default function ChangeHouseModal({
       cancelled = true;
     };
   }, []);
+
+  // Smallest active house = the recommended pick. Ties broken by
+  // lowest id so the suggestion is deterministic across refreshes
+  // and matches the server-side recommendNextHouse heuristic. We
+  // skip the student's current house from the comparison — moving
+  // to "where you already are" isn't a real recommendation.
+  const recommendedId: number | null = (() => {
+    if (!houses || houses.length === 0) return null;
+    const eligible = houses.filter((h) => h.id !== currentHouseId);
+    if (eligible.length === 0) return null;
+    let best = eligible[0];
+    for (const h of eligible) {
+      const bc = best.memberCount ?? 0;
+      const hc = h.memberCount ?? 0;
+      if (hc < bc || (hc === bc && h.id < best.id)) best = h;
+    }
+    return best.id;
+  })();
+  const recommendedHouse =
+    recommendedId == null ? null : houses?.find((h) => h.id === recommendedId);
 
   async function save() {
     setErr(null);
@@ -134,22 +159,60 @@ export default function ChangeHouseModal({
           {houses === null ? (
             <div style={{ color: "#475569" }}>Loading houses…</div>
           ) : (
-            <select
-              value={pickedId}
-              onChange={(e) =>
-                setPickedId(
-                  e.target.value === "none" ? "none" : Number(e.target.value),
-                )
-              }
-              style={{ width: "100%", padding: "0.4rem" }}
-            >
-              <option value="none">— None —</option>
-              {houses.map((h) => (
-                <option key={h.id} value={h.id}>
-                  {h.name}
-                </option>
-              ))}
-            </select>
+            <>
+              <select
+                value={pickedId}
+                onChange={(e) =>
+                  setPickedId(
+                    e.target.value === "none" ? "none" : Number(e.target.value),
+                  )
+                }
+                style={{ width: "100%", padding: "0.4rem" }}
+              >
+                <option value="none">— None —</option>
+                {houses.map((h) => (
+                  <option key={h.id} value={h.id}>
+                    {h.name}
+                    {typeof h.memberCount === "number"
+                      ? ` (${h.memberCount})`
+                      : ""}
+                    {recommendedId === h.id ? "  — recommended" : ""}
+                  </option>
+                ))}
+              </select>
+              {recommendedHouse && pickedId !== recommendedHouse.id && (
+                <div
+                  style={{
+                    marginTop: 6,
+                    fontSize: "0.78rem",
+                    color: "#475569",
+                  }}
+                >
+                  Recommended:{" "}
+                  <strong>{recommendedHouse.name}</strong> — smallest
+                  house right now
+                  {typeof recommendedHouse.memberCount === "number"
+                    ? ` (${recommendedHouse.memberCount} students)`
+                    : ""}
+                  .{" "}
+                  <button
+                    type="button"
+                    onClick={() => setPickedId(recommendedHouse.id)}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      color: "#1e3a8a",
+                      cursor: "pointer",
+                      padding: 0,
+                      textDecoration: "underline",
+                      fontSize: "0.78rem",
+                    }}
+                  >
+                    Use recommendation
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </div>
         <div style={{ marginBottom: "0.75rem" }}>

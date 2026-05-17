@@ -14785,11 +14785,20 @@ function App() {
 
       {activeSection === "houseRankings" && (
         <FeatureGate feature="houses" label="PBIS Houses">
-          {/* Admin tooling (bulk sort + audit log) renders above the
-              public rankings; non-admins get a 403 from those endpoints
-              so the panel's empty/error state is what they would see —
-              we hide it entirely for them to keep the surface clean. */}
-          {(authUser?.isAdmin || authUser?.isSuperUser) && (
+          {/* Admin / Core Team tooling (bulk sort + audit log) renders
+              above the public rankings; everyone else gets a 403 from
+              those endpoints so the panel's empty/error state is what
+              they would see — we hide it entirely to keep the surface
+              clean. Mirrors the server `requireHouseAdmin` gate
+              (isCoreTeam in routes/houses.ts): Admin / SuperUser /
+              District Admin / Behavior Specialist / MTSS Coordinator /
+              School Psychologist. */}
+          {(authUser?.isAdmin ||
+            authUser?.isSuperUser ||
+            authUser?.isDistrictAdmin ||
+            authUser?.isBehaviorSpecialist ||
+            authUser?.isMtssCoordinator ||
+            authUser?.isSchoolPsychologist) && (
             <div style={{ marginBottom: "1rem" }}>
               <HousesPanel />
             </div>
@@ -20136,6 +20145,18 @@ function App() {
             )
           }
           isAdmin={Boolean(authUser?.isAdmin || authUser?.isSuperUser)}
+          // Change-house affordance: mirrors the server-side
+          // PATCH /students/:id/house gate (isCoreTeam). Wider than
+          // `isAdmin` (which controls the photo-consent toggle and
+          // a few other admin-only surfaces).
+          canChangeHouse={Boolean(
+            authUser?.isAdmin ||
+              authUser?.isSuperUser ||
+              authUser?.isDistrictAdmin ||
+              authUser?.isBehaviorSpecialist ||
+              authUser?.isMtssCoordinator ||
+              authUser?.isSchoolPsychologist,
+          )}
           onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}
           onBack={() => {
             const target = studentProfileReturnTo;
