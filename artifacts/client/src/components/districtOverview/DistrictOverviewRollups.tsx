@@ -7,6 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "../../lib/authToken";
 import EditSchoolModal from "./EditSchoolModal";
+import ChangePlanModal from "./ChangePlanModal";
 
 type SchoolRow = {
   id: number;
@@ -15,6 +16,9 @@ type SchoolRow = {
   stateSchoolCode: string | null;
   isPrimary: boolean;
   active: boolean;
+  planId: number | null;
+  planKey: string | null;
+  planLabel: string | null;
   studentCount: number;
   staffCount: number;
   pbisPoints7d: number;
@@ -76,6 +80,7 @@ export default function DistrictOverviewRollups() {
   const [error, setError] = useState<string | null>(null);
   const [switching, setSwitching] = useState<number | null>(null);
   const [editing, setEditing] = useState<SchoolRow | null>(null);
+  const [changingPlan, setChangingPlan] = useState<SchoolRow | null>(null);
   const [togglingActive, setTogglingActive] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
@@ -211,13 +216,14 @@ export default function DistrictOverviewRollups() {
             <thead>
               <tr style={{ background: "var(--surface-muted, #f8fafc)" }}>
                 <th style={th}>School</th>
+                <th style={th}>Plan</th>
                 <th style={thRight}>Students</th>
                 <th style={thRight}>Staff</th>
                 <th style={thRight}>PBIS pts (7d)</th>
                 <th style={thRight}>Hall passes (7d)</th>
                 <th style={thRight}>ISS days (7d)</th>
                 {data.caller.isSuperUser && (
-                  <th style={th} colSpan={3}></th>
+                  <th style={th} colSpan={4}></th>
                 )}
               </tr>
             </thead>
@@ -239,6 +245,13 @@ export default function DistrictOverviewRollups() {
                       {s.isPrimary ? " · primary" : ""}
                       {s.stateSchoolCode ? ` · ${s.stateSchoolCode}` : ""}
                     </div>
+                  </td>
+                  <td style={td}>
+                    <span style={{ fontSize: "0.8rem" }}>
+                      {s.planLabel ?? (
+                        <span style={{ color: "var(--text-subtle)" }}>—</span>
+                      )}
+                    </span>
                   </td>
                   <td style={tdRight}>{s.studentCount.toLocaleString()}</td>
                   <td style={tdRight}>{s.staffCount.toLocaleString()}</td>
@@ -290,6 +303,15 @@ export default function DistrictOverviewRollups() {
                       <td style={td}>
                         <button
                           type="button"
+                          onClick={() => setChangingPlan(s)}
+                          style={rowBtn}
+                        >
+                          Plan
+                        </button>
+                      </td>
+                      <td style={td}>
+                        <button
+                          type="button"
                           onClick={() => switchTo(s.id)}
                           disabled={switching !== null}
                           style={{
@@ -315,6 +337,21 @@ export default function DistrictOverviewRollups() {
           onClose={() => setEditing(null)}
           onSaved={() => {
             setEditing(null);
+            void reload();
+          }}
+        />
+      )}
+      {changingPlan && (
+        <ChangePlanModal
+          school={{
+            id: changingPlan.id,
+            name: changingPlan.name,
+            planId: changingPlan.planId,
+            planLabel: changingPlan.planLabel,
+          }}
+          onClose={() => setChangingPlan(null)}
+          onSaved={() => {
+            setChangingPlan(null);
             void reload();
           }}
         />

@@ -4,6 +4,7 @@ import {
   staffTable,
   districtsTable,
   schoolsTable,
+  plansTable,
   studentsTable,
   hallPassesTable,
   pbisEntriesTable,
@@ -252,6 +253,18 @@ router.get("/district-admin/overview", async (req, res) => {
 
   const schoolIds = schools.map((s) => s.id);
 
+  // Plan label per school: one bulk lookup, joined client-side via Map.
+  // Plans table is tiny (handful of rows); pulling them all is cheaper
+  // than a join per school and avoids an N+1 if planId is null.
+  const planRows = await db
+    .select({
+      id: plansTable.id,
+      key: plansTable.key,
+      label: plansTable.label,
+    })
+    .from(plansTable);
+  const planById = new Map(planRows.map((p) => [p.id, p] as const));
+
   // ISO 8601 cutoff for "last 7 days". ISO strings sort lexicographically,
   // so plain >= comparisons against the TEXT createdAt columns work.
   const sevenDaysAgoIso = new Date(
@@ -358,6 +371,9 @@ router.get("/district-admin/overview", async (req, res) => {
       stateSchoolCode: s.stateSchoolCode,
       isPrimary: s.isPrimary,
       active: s.active,
+      planId: s.planId ?? null,
+      planKey: s.planId != null ? planById.get(s.planId)?.key ?? null : null,
+      planLabel: s.planId != null ? planById.get(s.planId)?.label ?? null : null,
       studentCount: stu,
       staffCount: stf,
       pbisPoints7d: pbisPts.get(s.id) ?? 0,

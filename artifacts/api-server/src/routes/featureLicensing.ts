@@ -27,6 +27,31 @@ import {
   listFeatureLicensingAudit,
   listSchoolsNearQuota,
 } from "../lib/featureLicensing.js";
+import { getDistrictIdForSchool } from "../lib/scope.js";
+
+// Cross-district guard for per-school licensing mutations. SuperUser is
+// district-scoped by default; the env gate ALLOW_CROSS_DISTRICT_SUPERUSER=1
+// (same gate the tenancy admin routes use) unlocks reach to other
+// districts for the demo/control tier. Without this guard a SuperUser in
+// District A could mutate plan/overrides on any school in District B by
+// supplying its id — matching scope to the rest of tenancy.ts closes that
+// gap and keeps the multi-tenant boundary consistent.
+async function assertSchoolInCallerDistrict(
+  callerSchoolId: number,
+  targetSchoolId: number,
+  res: Response,
+): Promise<boolean> {
+  if (process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1") return true;
+  const callerDistrictId = await getDistrictIdForSchool(callerSchoolId);
+  const targetDistrictId = await getDistrictIdForSchool(targetSchoolId);
+  if (callerDistrictId === null || callerDistrictId !== targetDistrictId) {
+    res.status(403).json({
+      error: "Cannot manage licensing on a school in another district",
+    });
+    return false;
+  }
+  return true;
+}
 
 const router: IRouter = Router();
 
@@ -159,7 +184,8 @@ router.post("/feature-licensing/plans", async (req, res, next) => {
 
 router.patch("/feature-licensing/plans/:id", async (req, res, next) => {
   try {
-    if (!(await requireSuperUser(req, res))) return;
+    const actor = await requireSuperUser(req, res);
+    if (!actor) return;
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
       res.status(400).json({ error: "invalid_id" });
@@ -187,16 +213,38 @@ router.patch("/feature-licensing/plans/:id", async (req, res, next) => {
     // Wrap the entire fan-out in one tx so a mid-loop failure can't
     // leave half the schools on old flags and half on new — plan edits
     // are rare enough that the wider lock window is acceptable.
-    const schoolsOnPlan = await db
-      .select({ id: schoolsTable.id })
+    //
+    // Cross-district scoping: by default a district-scoped SuperUser
+    // can only propagate plan edits into their OWN district's schools,
+    // even though plans themselves are global rows. Without this filter
+    // a SuperUser in District A who edits a plan that District B also
+    // uses would silently rewrite B's super_feature_* booleans. The
+    // ALLOW_CROSS_DISTRICT_SUPERUSER=1 env gate (same one tenancy.ts
+    // uses) restores the platform-wide reach for the demo/control tier.
+    const crossDistrict =
+      process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+    const callerDistrictId = crossDistrict
+      ? null
+      : await getDistrictIdForSchool(actor.schoolId);
+    const allSchoolsOnPlan = await db
+      .select({ id: schoolsTable.id, districtId: schoolsTable.districtId })
       .from(schoolsTable)
       .where(eq(schoolsTable.planId, id));
+    const schoolsOnPlan = crossDistrict
+      ? allSchoolsOnPlan
+      : allSchoolsOnPlan.filter((s) => s.districtId === callerDistrictId);
+    const skippedCrossDistrictCount =
+      allSchoolsOnPlan.length - schoolsOnPlan.length;
     await db.transaction(async (tx) => {
       for (const s of schoolsOnPlan) {
         await reapplyLicensingToSchool(s.id, tx);
       }
     });
-    res.json({ plan: updated, reappliedSchoolCount: schoolsOnPlan.length });
+    res.json({
+      plan: updated,
+      reappliedSchoolCount: schoolsOnPlan.length,
+      skippedCrossDistrictCount,
+    });
   } catch (err) {
     next(err);
   }
@@ -241,12 +289,15 @@ router.patch(
   "/feature-licensing/schools/:id/plan",
   async (req, res, next) => {
     try {
-      if (!(await requireSuperUser(req, res))) return;
+      const actor = await requireSuperUser(req, res);
+      if (!actor) return;
       const schoolId = Number(req.params.id);
       if (!Number.isFinite(schoolId)) {
         res.status(400).json({ error: "invalid_id" });
         return;
       }
+      if (!(await assertSchoolInCallerDistrict(actor.schoolId, schoolId, res)))
+        return;
       const { planId } = req.body ?? {};
       const planIdNum =
         planId === null || planId === undefined ? null : Number(planId);
@@ -318,6 +369,8 @@ router.post(
         res.status(400).json({ error: "invalid_id" });
         return;
       }
+      if (!(await assertSchoolInCallerDistrict(actor.schoolId, schoolId, res)))
+        return;
       const {
         featureKey,
         enabled,
@@ -403,13 +456,16 @@ router.delete(
   "/feature-licensing/schools/:id/overrides/:overrideId",
   async (req, res, next) => {
     try {
-      if (!(await requireSuperUser(req, res))) return;
+      const actor = await requireSuperUser(req, res);
+      if (!actor) return;
       const schoolId = Number(req.params.id);
       const overrideId = Number(req.params.overrideId);
       if (!Number.isFinite(schoolId) || !Number.isFinite(overrideId)) {
         res.status(400).json({ error: "invalid_id" });
         return;
       }
+      if (!(await assertSchoolInCallerDistrict(actor.schoolId, schoolId, res)))
+        return;
       // Delete + reapply atomically so the runtime booleans can't be
       // left reflecting the dead override.
       await db.transaction(async (tx) => {

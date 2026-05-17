@@ -418,6 +418,7 @@ router.post("/tenancy/onboard-district", async (req, res) => {
     adminEmail?: unknown;
     adminFirstName?: unknown;
     adminLastName?: unknown;
+    planKey?: unknown;
   };
 
   // ---- Validate (all strings, trimmed, required vs. optional). ------------
@@ -514,11 +515,22 @@ router.post("/tenancy/onboard-district", async (req, res) => {
   }
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-  // ---- Look up the default plan to assign to the new school. --------------
-  const [enterprisePlan] = await db
+  // ---- Look up the plan to assign to the new school. Caller may pass
+  //      `planKey` to override; defaults to "enterprise" for back-compat
+  //      with the original wizard. Unknown key → 400 so the SuperUser
+  //      doesn't silently land on the default. -----------------------------
+  const planKey =
+    typeof body.planKey === "string" && body.planKey.trim()
+      ? body.planKey.trim()
+      : "enterprise";
+  const [selectedPlan] = await db
     .select()
     .from(plansTable)
-    .where(eq(plansTable.key, "enterprise"));
+    .where(eq(plansTable.key, planKey));
+  if (!selectedPlan && planKey !== "enterprise") {
+    res.status(400).json({ error: `Unknown plan key "${planKey}"` });
+    return;
+  }
 
   // ---- Transactional create: district → school → settings → admin. -------
   try {
@@ -551,10 +563,11 @@ router.post("/tenancy/onboard-district", async (req, res) => {
         .insert(schoolSettingsTable)
         .values({ schoolId: school.id });
 
-      // Assign the enterprise plan (if seeded) so all superFeature_* flags
-      // are explicitly true. Wrapped in the same tx for atomicity.
-      if (enterprisePlan) {
-        await applyPlanToSchool(school.id, enterprisePlan.id, tx);
+      // Assign the chosen plan (if seeded) so all superFeature_* flags
+      // are explicitly set from the plan's features map. Wrapped in the
+      // same tx for atomicity.
+      if (selectedPlan) {
+        await applyPlanToSchool(school.id, selectedPlan.id, tx);
       }
 
       const [admin] = await tx
@@ -640,6 +653,7 @@ router.post("/tenancy/onboard-school", async (req, res) => {
     adminEmail?: unknown;
     adminFirstName?: unknown;
     adminLastName?: unknown;
+    planKey?: unknown;
   };
 
   const districtId =
@@ -729,10 +743,20 @@ router.post("/tenancy/onboard-school", async (req, res) => {
   }
   const passwordHash = await bcrypt.hash(tempPassword, 10);
 
-  const [enterprisePlan] = await db
+  // Same plan-pick contract as onboard-district: caller can override the
+  // default "enterprise" with `planKey`; unknown key 400s.
+  const planKey =
+    typeof body.planKey === "string" && body.planKey.trim()
+      ? body.planKey.trim()
+      : "enterprise";
+  const [selectedPlan] = await db
     .select()
     .from(plansTable)
-    .where(eq(plansTable.key, "enterprise"));
+    .where(eq(plansTable.key, planKey));
+  if (!selectedPlan && planKey !== "enterprise") {
+    res.status(400).json({ error: `Unknown plan key "${planKey}"` });
+    return;
+  }
 
   try {
     const result = await db.transaction(async (tx) => {
@@ -753,8 +777,8 @@ router.post("/tenancy/onboard-school", async (req, res) => {
 
       await tx.insert(schoolSettingsTable).values({ schoolId: school.id });
 
-      if (enterprisePlan) {
-        await applyPlanToSchool(school.id, enterprisePlan.id, tx);
+      if (selectedPlan) {
+        await applyPlanToSchool(school.id, selectedPlan.id, tx);
       }
 
       const [admin] = await tx
@@ -950,6 +974,141 @@ router.patch("/tenancy/schools/:id", async (req, res) => {
     }
     req.log?.error?.({ err, schoolId }, "patch-school failed");
     res.status(500).json({ error: "Failed to update school" });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// PATCH /api/tenancy/districts/:id
+//   SuperUser-only. Edits a district's editable metadata + soft-delete
+//   via `active`. Mirrors PATCH /tenancy/schools/:id. Hard-delete is
+//   intentionally not offered — districts own every downstream row.
+//
+//   Guardrails:
+//     * Cross-district: same env gate as the rest of this file.
+//     * Slug rewrite goes through 23505 → 409 (districts.slug is unique).
+// ---------------------------------------------------------------------------
+router.patch("/tenancy/districts/:id", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const districtId = Number(req.params.id);
+  if (!Number.isInteger(districtId) || districtId <= 0) {
+    res.status(400).json({ error: "district id must be a positive integer" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    name?: unknown;
+    slug?: unknown;
+    stateDistrictCode?: unknown;
+    timezone?: unknown;
+    active?: unknown;
+  };
+
+  const patch: {
+    name?: string;
+    slug?: string;
+    stateDistrictCode?: string | null;
+    timezone?: string;
+    active?: boolean;
+  } = {};
+
+  if (body.name !== undefined) {
+    if (typeof body.name !== "string" || !body.name.trim()) {
+      res.status(400).json({ error: "name must be a non-empty string" });
+      return;
+    }
+    patch.name = body.name.trim();
+  }
+  if (body.slug !== undefined) {
+    if (typeof body.slug !== "string" || !body.slug.trim()) {
+      res.status(400).json({ error: "slug must be a non-empty string" });
+      return;
+    }
+    const slug = body.slug.trim().toLowerCase();
+    if (!/^[a-z0-9-]+$/.test(slug)) {
+      res
+        .status(400)
+        .json({ error: "slug must be lowercase letters, digits, or hyphens" });
+      return;
+    }
+    patch.slug = slug;
+  }
+  if (body.stateDistrictCode !== undefined) {
+    if (body.stateDistrictCode === null || body.stateDistrictCode === "") {
+      patch.stateDistrictCode = null;
+    } else if (typeof body.stateDistrictCode === "string") {
+      patch.stateDistrictCode = body.stateDistrictCode.trim() || null;
+    } else {
+      res
+        .status(400)
+        .json({ error: "stateDistrictCode must be a string or null" });
+      return;
+    }
+  }
+  if (body.timezone !== undefined) {
+    if (typeof body.timezone !== "string" || !body.timezone.trim()) {
+      res.status(400).json({ error: "timezone must be a non-empty string" });
+      return;
+    }
+    patch.timezone = body.timezone.trim();
+  }
+  if (body.active !== undefined) {
+    if (typeof body.active !== "boolean") {
+      res.status(400).json({ error: "active must be a boolean" });
+      return;
+    }
+    patch.active = body.active;
+  }
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: "no editable fields supplied" });
+    return;
+  }
+
+  // Pre-flight: district must exist; caller must own it unless cross-
+  // district gate is open.
+  const [district] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId));
+  if (!district) {
+    res.status(404).json({ error: `District ${districtId} not found` });
+    return;
+  }
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const callerDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (callerDistrictId === null || callerDistrictId !== districtId) {
+      res.status(403).json({ error: "Cannot edit another district" });
+      return;
+    }
+  }
+
+  try {
+    const [updated] = await db
+      .update(districtsTable)
+      .set(patch)
+      .where(eq(districtsTable.id, districtId))
+      .returning();
+    res.json({
+      district: {
+        id: updated.id,
+        name: updated.name,
+        slug: updated.slug,
+        stateDistrictCode: updated.stateDistrictCode,
+        timezone: updated.timezone,
+        active: updated.active,
+      },
+    });
+  } catch (err: any) {
+    if (err?.code === "23505") {
+      res
+        .status(409)
+        .json({ error: "A district with that slug already exists." });
+      return;
+    }
+    req.log?.error?.({ err, districtId }, "patch-district failed");
+    res.status(500).json({ error: "Failed to update district" });
   }
 });
 

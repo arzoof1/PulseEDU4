@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import { authFetch } from "../../lib/authToken";
+import { usePlans } from "./usePlans";
 
 type Props = {
   onClose: () => void;
@@ -52,6 +53,8 @@ export default function OnboardDistrictModal({ onClose, onCreated }: Props) {
   const [adminEmail, setAdminEmail] = useState("");
   const [adminFirstName, setAdminFirstName] = useState("");
   const [adminLastName, setAdminLastName] = useState("");
+  const [planKey, setPlanKey] = useState("enterprise");
+  const { plans, error: plansError } = usePlans();
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +79,7 @@ export default function OnboardDistrictModal({ onClose, onCreated }: Props) {
           adminEmail,
           adminFirstName,
           adminLastName,
+          planKey,
         }),
       });
       if (!res.ok) {
@@ -322,6 +326,48 @@ export default function OnboardDistrictModal({ onClose, onCreated }: Props) {
               setStateSchoolCode,
               { placeholder: "0271" },
             )}
+
+            <label style={{ display: "block", marginBottom: "0.75rem" }}>
+              <span
+                style={{
+                  display: "block",
+                  fontSize: "0.8rem",
+                  fontWeight: 600,
+                  marginBottom: 4,
+                }}
+              >
+                Plan
+              </span>
+              <select
+                value={planKey}
+                onChange={(e) => setPlanKey(e.target.value)}
+                disabled={plans === null}
+                style={{
+                  width: "100%",
+                  padding: "0.5rem 0.6rem",
+                  border: "1px solid var(--border, #e2e8f0)",
+                  borderRadius: 6,
+                  font: "inherit",
+                  boxSizing: "border-box",
+                  background: "var(--surface, #fff)",
+                }}
+              >
+                {plans === null ? (
+                  <option value="enterprise">Loading…</option>
+                ) : (
+                  plans.map((p) => (
+                    <option key={p.id} value={p.key}>
+                      {p.label} ({p.key})
+                    </option>
+                  ))
+                )}
+              </select>
+              {plansError && (
+                <span style={{ fontSize: "0.7rem", color: "#b91c1c" }}>
+                  Could not load plans: {plansError}
+                </span>
+              )}
+            </label>
 
             <h3 style={{ marginTop: "1.25rem", marginBottom: "0.5rem" }}>
               First Admin

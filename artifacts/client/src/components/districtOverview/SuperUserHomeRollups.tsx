@@ -13,6 +13,7 @@ import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "../../lib/authToken";
 import OnboardDistrictModal from "./OnboardDistrictModal";
 import OnboardSchoolModal from "./OnboardSchoolModal";
+import EditDistrictModal from "./EditDistrictModal";
 
 type DistrictSummary = {
   id: number;
@@ -84,6 +85,8 @@ export default function SuperUserHomeRollups() {
   const [addSchoolFor, setAddSchoolFor] = useState<
     { id: number; name: string } | null
   >(null);
+  const [editing, setEditing] = useState<DistrictSummary | null>(null);
+  const [togglingActive, setTogglingActive] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -99,6 +102,36 @@ export default function SuperUserHomeRollups() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  async function toggleActive(d: DistrictSummary) {
+    const next = !d.active;
+    if (
+      !window.confirm(
+        `${next ? "Reactivate" : "Deactivate"} ${d.name}?\n\n` +
+          (next
+            ? "It will reappear as a working tenant."
+            : "All schools in this district will be hidden from rollups and locked out of the app. Existing data is preserved."),
+      )
+    )
+      return;
+    setTogglingActive(d.id);
+    try {
+      const res = await authFetch(`/api/tenancy/districts/${d.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTogglingActive(null);
+    }
+  }
 
   if (error) {
     return (
@@ -270,21 +303,44 @@ export default function SuperUserHomeRollups() {
                 >
                   Last activity: {formatLastActivity(d.lastActivityAt)}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setAddSchoolFor({ id: d.id, name: d.name })}
-                  style={{
-                    padding: "0.3rem 0.6rem",
-                    fontSize: "0.75rem",
-                    border: "1px solid var(--border, #e2e8f0)",
-                    borderRadius: 6,
-                    background: "var(--surface, #fff)",
-                    cursor: "pointer",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  + Add school
-                </button>
+                <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                  <button
+                    type="button"
+                    onClick={() => setEditing(d)}
+                    style={cardBtn}
+                  >
+                    Edit
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void toggleActive(d)}
+                    disabled={togglingActive !== null}
+                    style={{
+                      ...cardBtn,
+                      color: d.active ? "#b91c1c" : "#15803d",
+                      opacity: togglingActive === d.id ? 0.6 : 1,
+                    }}
+                  >
+                    {togglingActive === d.id
+                      ? "…"
+                      : d.active
+                        ? "Deactivate"
+                        : "Reactivate"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAddSchoolFor({ id: d.id, name: d.name })}
+                    disabled={!d.active}
+                    title={!d.active ? "Reactivate the district first" : undefined}
+                    style={{
+                      ...cardBtn,
+                      opacity: d.active ? 1 : 0.4,
+                      cursor: d.active ? "pointer" : "not-allowed",
+                    }}
+                  >
+                    + Add school
+                  </button>
+                </div>
               </div>
             </div>
           ))}
@@ -310,6 +366,26 @@ export default function SuperUserHomeRollups() {
           }}
         />
       )}
+      {editing && (
+        <EditDistrictModal
+          district={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void reload();
+          }}
+        />
+      )}
     </div>
   );
 }
+
+const cardBtn: React.CSSProperties = {
+  padding: "0.3rem 0.6rem",
+  fontSize: "0.75rem",
+  border: "1px solid var(--border, #e2e8f0)",
+  borderRadius: 6,
+  background: "var(--surface, #fff)",
+  cursor: "pointer",
+  whiteSpace: "nowrap",
+};

@@ -6,7 +6,7 @@ import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
 import { logger } from "./lib/logger";
 import { verifyAuthToken } from "./lib/authToken";
-import { db, staffTable, schoolsTable } from "@workspace/db";
+import { db, staffTable, schoolsTable, districtsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
 declare global {
@@ -223,17 +223,29 @@ app.use(async (req, _res, next) => {
         // requests inside the Replit preview iframe — where session cookies
         // are blocked — keep the SuperUser's switch active across reloads.
         const override = staff.activeSchoolOverride ?? null;
-        // Confirm the staff's home school is still active before honoring
-        // any school context. Soft-deactivated (active=false) schools
-        // must not be able to act as the request's tenant; otherwise
-        // existing sessions keep reading/writing under a "retired"
-        // school. We let the request through with req.schoolId=null;
-        // downstream route guards already 4xx on missing school.
+        // Confirm the staff's home school AND its district are still
+        // active before honoring any school context. Soft-deactivated
+        // (active=false) schools or districts must not be able to act
+        // as the request's tenant; otherwise existing sessions keep
+        // reading/writing under a "retired" tenant. We let the request
+        // through with req.schoolId=null; downstream route guards
+        // already 4xx on missing school.
         const [homeSchoolActive] = await db
-          .select({ active: schoolsTable.active })
+          .select({
+            schoolActive: schoolsTable.active,
+            districtActive: districtsTable.active,
+          })
           .from(schoolsTable)
+          .leftJoin(
+            districtsTable,
+            eq(districtsTable.id, schoolsTable.districtId),
+          )
           .where(eq(schoolsTable.id, staff.schoolId));
-        if (!homeSchoolActive || !homeSchoolActive.active) {
+        if (
+          !homeSchoolActive ||
+          !homeSchoolActive.schoolActive ||
+          !homeSchoolActive.districtActive
+        ) {
           req.schoolId = null;
           next();
           return;

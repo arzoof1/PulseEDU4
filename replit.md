@@ -71,6 +71,41 @@ _Populate as you build_
 
 ### Recently shipped (reference only — no remaining action)
 
+- **Per-school plan editor + plan picker on onboarding.**
+  Server: `POST /api/tenancy/onboard-district` and `POST
+  /api/tenancy/onboard-school` now accept optional `planKey`
+  (defaults to `enterprise`; unknown key 400s before tx; plan
+  lookup + `applyPlanToSchool` happen inside the same tx as
+  school creation, no partial state on failure).
+  `/api/district-admin/overview` SchoolRow now exposes
+  `planId`/`planKey`/`planLabel` via a single bulk `plansTable`
+  read joined in a `Map` (no N+1). Client: `usePlans` hook,
+  `ChangePlanModal` (reuses existing `PATCH
+  /api/feature-licensing/schools/:id/plan`), plan `<select>` in
+  both onboard modals, new "Plan" column + per-row "Plan" button
+  in `DistrictOverviewRollups` (SuperUser-gated column, colSpan
+  bumped 3→4). Security: added `assertSchoolInCallerDistrict`
+  helper (mirrors tenancy.ts `ALLOW_CROSS_DISTRICT_SUPERUSER`
+  env gate) to all three per-school licensing writes: `PATCH
+  /feature-licensing/schools/:id/plan`, `POST
+  /feature-licensing/schools/:id/overrides`, `DELETE
+  /feature-licensing/schools/:id/overrides/:overrideId`. Also
+  scoped the `PATCH /feature-licensing/plans/:id` reapply
+  fan-out to caller-district schools only (returns
+  `skippedCrossDistrictCount`). Known follow-up below.
+
+- **Edit + soft-delete districts.** `PATCH /api/tenancy/districts/:id`
+  in `routes/tenancy.ts` — SuperUser-only, same cross-district env
+  gate. Partial patch over `name`, `slug` (validated `^[a-z0-9-]+$`),
+  `stateDistrictCode`, `timezone`, `active`. 23505 → 409 on slug
+  collision. Soft-delete enforced in `app.ts`: the home-school
+  lookup is now a leftJoin to `districts` and the request-context
+  guard requires BOTH `school.active` and `district.active`; either
+  false clears `req.schoolId`. Client `EditDistrictModal.tsx` +
+  per-card Edit / Deactivate-Reactivate buttons in
+  `SuperUserHomeRollups`. "+ Add school" disabled with tooltip on
+  inactive districts.
+
 - **Edit + soft-delete schools.** `PATCH /api/tenancy/schools/:id`
   in `routes/tenancy.ts` — SuperUser-only, same cross-district env
   gate as onboard-school. Partial patch over `name`, `shortName`,
@@ -173,6 +208,19 @@ _Populate as you build_
   `5 0 1 7 *` ET, tx + advisory-lock idempotent.
 
 ### Open work
+
+- **Global plan CRUD — cross-district scoping.** Plan rows are
+  global, but `POST/PATCH/DELETE /api/feature-licensing/plans`
+  are currently `requireSuperUser`-only with no district gate.
+  A district-scoped SuperUser editing a shared plan row mutates
+  global metadata used by other districts (though the reapply
+  fan-out is now scoped to the caller's district). Fix: either
+  gate global plan CRUD behind `ALLOW_CROSS_DISTRICT_SUPERUSER=1`
+  outright, OR introduce a real `isCrossDistrictSuperUser` staff
+  flag (the same flag the tenancy/audit routes will need when
+  the platform-tier role lands) and require it on these endpoints.
+  Per-school plan assignment + overrides are already scoped
+  correctly via `assertSchoolInCallerDistrict`.
 
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
   (1) Register a "Review Consistency Check guardrails" step in
