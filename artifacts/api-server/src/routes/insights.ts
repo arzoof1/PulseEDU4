@@ -2932,12 +2932,62 @@ function classifySubArchetype(rec: TrajectoryStudentRec): string {
 
 // Build the per-cohort trajectory record set. Shared between the summary
 // endpoint and the drill-in endpoint so the two stay in sync.
+// Parse the trajectory grade filter. Accepts either:
+//   ?grades=3,4,5   (preferred, multi-select)
+//   ?grade=5        (legacy single-select)
+//   ?grade=all      (no filter)
+// Returns null for "no filter" or an array of valid grade ints (K=0, 1..12).
+function parseTrajectoryGradeFilter(req: {
+  query: Record<string, unknown>;
+}): { gradeInts: number[] | null; gradeLabel: string | null } {
+  const toInt = (raw: string): number | null => {
+    const s = raw.trim();
+    if (!s) return null;
+    if (s.toUpperCase() === "K") return 0;
+    const n = Number.parseInt(s, 10);
+    if (Number.isInteger(n) && n >= 0 && n <= 12) return n;
+    return null;
+  };
+  const gradesRaw =
+    typeof req.query.grades === "string" ? req.query.grades : "";
+  if (gradesRaw) {
+    const ints: number[] = [];
+    for (const part of gradesRaw.split(",")) {
+      const v = toInt(part);
+      if (v !== null && !ints.includes(v)) ints.push(v);
+    }
+    if (ints.length === 0) return { gradeInts: null, gradeLabel: null };
+    const label =
+      ints.length === 1
+        ? ints[0] === 0
+          ? "K"
+          : String(ints[0])
+        : `${ints.length} grades`;
+    return { gradeInts: ints, gradeLabel: label };
+  }
+  const gradeRaw =
+    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+  if (!gradeRaw || gradeRaw.toLowerCase() === "all") {
+    return { gradeInts: null, gradeLabel: null };
+  }
+  const v = toInt(gradeRaw);
+  if (v === null) return { gradeInts: null, gradeLabel: null };
+  return { gradeInts: [v], gradeLabel: gradeRaw };
+}
+
 async function loadTrajectoryRecs(
   schoolId: number,
   subject: "ela" | "math",
-  gradeInt: number | null,
+  gradeInts: number[] | null,
   filters: ReturnType<typeof parseInsightsFilters>,
 ): Promise<TrajectoryStudentRec[]> {
+  // gradeInts === null  → "all grades"
+  // gradeInts.length === 0 → caller passed grades but none parsed → also all
+  // gradeInts.length >= 1 → restrict to that set
+  const gradeFilterSql =
+    gradeInts && gradeInts.length > 0
+      ? inArray(studentsTable.grade, gradeInts)
+      : sql`true`;
   let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
@@ -2949,7 +2999,7 @@ async function loadTrajectoryRecs(
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql,
       ),
     );
 
@@ -3058,22 +3108,10 @@ router.get("/insights/academics/trajectory", async (req, res) => {
       : "";
   const subject: "ela" | "math" = subjectRaw === "math" ? "math" : "ela";
 
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel } = parseTrajectoryGradeFilter(req);
   const filters = parseInsightsFilters(req);
 
-  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInt, filters);
+  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInts, filters);
 
   const matrix: Record<TrajectoryBand, Record<TrajectoryBand, number>> = {
     above: { above: 0, below: 0, well: 0, na: 0 },
@@ -3108,7 +3146,8 @@ router.get("/insights/academics/trajectory", async (req, res) => {
 
   res.json({
     subject,
-    grade: gradeFilter,
+    grade: gradeLabel,
+    grades: gradeInts,
     total: recs.length,
     bandOrder: TRAJ_BAND_ORDER,
     matrix,
@@ -3168,22 +3207,10 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       ? req.query.subKey.trim()
       : null;
 
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts } = parseTrajectoryGradeFilter(req);
   const filters = parseInsightsFilters(req);
 
-  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInt, filters);
+  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInts, filters);
 
   type Hit = {
     studentId: string;

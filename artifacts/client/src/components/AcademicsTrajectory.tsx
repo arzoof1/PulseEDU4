@@ -365,16 +365,22 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-const GRADE_OPTIONS: { value: string; label: string }[] = [
-  { value: "", label: "All grades" },
-  { value: "3", label: "Grade 3" },
-  { value: "4", label: "Grade 4" },
-  { value: "5", label: "Grade 5" },
-  { value: "6", label: "Grade 6" },
-  { value: "7", label: "Grade 7" },
-  { value: "8", label: "Grade 8" },
-  { value: "9", label: "Grade 9" },
-  { value: "10", label: "Grade 10" },
+// Multi-select grade chips. "" = special "All grades" pseudo-value, kept
+// separate from the Set so it stays the canonical "no filter" state.
+const GRADE_CHIPS: { value: string; label: string }[] = [
+  { value: "K", label: "K" },
+  { value: "1", label: "1" },
+  { value: "2", label: "2" },
+  { value: "3", label: "3" },
+  { value: "4", label: "4" },
+  { value: "5", label: "5" },
+  { value: "6", label: "6" },
+  { value: "7", label: "7" },
+  { value: "8", label: "8" },
+  { value: "9", label: "9" },
+  { value: "10", label: "10" },
+  { value: "11", label: "11" },
+  { value: "12", label: "12" },
 ];
 
 // =============================================================================
@@ -383,7 +389,8 @@ const GRADE_OPTIONS: { value: string; label: string }[] = [
 
 export default function AcademicsTrajectory({ onOpenProfile }: Props) {
   const [subject, setSubject] = useState<Subject>("ela");
-  const [grade, setGrade] = useState("");
+  // Empty set = "all grades". Order is preserved in the query string.
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [drillKey, setDrillKey] = useState<ArchetypeKey | null>(null);
 
@@ -405,9 +412,23 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
   function buildQuery(): URLSearchParams {
     const qs = filtersToQuery(filters);
     qs.set("subject", subject);
-    if (grade) qs.set("grade", grade);
+    if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
     return qs;
   }
+
+  const toggleGrade = (v: string) => {
+    setSelectedGrades((prev) =>
+      prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v],
+    );
+  };
+  const clearGrades = () => setSelectedGrades([]);
+
+  const gradeLabel =
+    selectedGrades.length === 0
+      ? "All grades"
+      : selectedGrades.length === 1
+      ? `Grade ${selectedGrades[0]}`
+      : `${selectedGrades.length} grades`;
 
   useEffect(() => {
     let cancelled = false;
@@ -436,13 +457,13 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subject, grade, filters]);
+  }, [subject, selectedGrades, filters]);
 
   // Switching subject/grade should drop the drill state — counts will
   // shift and the open archetype may end up empty.
   useEffect(() => {
     setDrillKey(null);
-  }, [subject, grade, filters]);
+  }, [subject, selectedGrades, filters]);
 
   // Dev-only invariants: parent counts must sum to total; sub counts
   // within each parent must sum to that parent's count. If either ever
@@ -586,17 +607,19 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
             icon={Calculator}
             label="Math"
           />
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            style={selectStyle}
-          >
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
+          <GradeChip
+            active={selectedGrades.length === 0}
+            onClick={clearGrades}
+            label="All grades"
+          />
+          {GRADE_CHIPS.map((g) => (
+            <GradeChip
+              key={g.value}
+              active={selectedGrades.includes(g.value)}
+              onClick={() => toggleGrade(g.value)}
+              label={g.label}
+            />
+          ))}
         </div>
       </div>
 
@@ -648,12 +671,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
               <span style={{ color: "#94a3b8", margin: "0 4px" }}>·</span>
               <span>
                 {subject === "ela" ? "FAST aReading" : "FAST aMath"}
-                {grade
-                  ? ` · ${
-                      GRADE_OPTIONS.find((g) => g.value === grade)?.label ??
-                      grade
-                    }`
-                  : ""}
+                {selectedGrades.length > 0 ? ` · ${gradeLabel}` : ""}
               </span>
             </div>
             <div
@@ -1019,6 +1037,30 @@ function SubjectChip({
   );
 }
 
+function GradeChip({
+  active,
+  onClick,
+  label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  label: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`inline-flex items-center justify-center rounded-full px-2.5 py-1 text-xs font-semibold border transition-colors min-w-[34px] ${
+        active
+          ? "bg-slate-900 text-white border-slate-900"
+          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
+      }`}
+    >
+      {label}
+    </button>
+  );
+}
+
 function Stat({
   label,
   value,
@@ -1058,11 +1100,3 @@ function Stat({
   );
 }
 
-const selectStyle: React.CSSProperties = {
-  padding: "0.4rem 0.6rem",
-  border: "1px solid #cbd5e1",
-  borderRadius: 6,
-  background: "white",
-  font: "inherit",
-  fontSize: 13,
-};
