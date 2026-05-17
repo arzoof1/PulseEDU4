@@ -1184,6 +1184,56 @@ function AuthorizationsAdminPage() {
     setMsg(res.ok ? "Dismissal mode updated" : (data.error ?? "Failed"));
   };
 
+  // Stream a tag PDF response to the browser as a download. Uses
+  // authFetch so the school-scoped session cookie rides along —
+  // window.open() would skip it inside the Replit iframe and 401.
+  const downloadPdf = async (url: string, filename: string) => {
+    setMsg(null);
+    try {
+      const res = await authFetch(url);
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setMsg(b.error ?? `PDF failed (${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = objectUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+    } catch (err) {
+      setMsg(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const printOne = (a: AuthRow) =>
+    downloadPdf(
+      `/api/pickup/authorizations/${a.id}/tag.pdf`,
+      `pickup-tag-${a.pickupNumber}.pdf`,
+    );
+
+  const printActiveForStudent = () => {
+    const ids = auths.filter((a) => a.active).map((a) => a.id);
+    if (ids.length === 0) {
+      setMsg("No active authorizations to print for this student.");
+      return;
+    }
+    return downloadPdf(
+      `/api/pickup/tags.pdf?ids=${ids.join(",")}`,
+      `pickup-tags-student-${studentDbId}.pdf`,
+    );
+  };
+
+  const printAllActive = () =>
+    downloadPdf(
+      `/api/pickup/tags.pdf`,
+      `pickup-tags-all-${new Date().toISOString().slice(0, 10)}.pdf`,
+    );
+
   return (
     <div style={pageStyle}>
       <Header title="Pickup Numbers — Admin" subtitle="" />
@@ -1199,6 +1249,13 @@ function AuthorizationsAdminPage() {
         </label>
         <button onClick={loadStudent} style={primaryBtn}>
           Load
+        </button>
+        <button
+          onClick={printAllActive}
+          style={secondaryBtn}
+          title="Print one PDF containing every active pickup tag at this school."
+        >
+          Print all active tags (school-wide)
         </button>
       </div>
       {msg && <div style={infoBox}>{msg}</div>}
@@ -1223,7 +1280,23 @@ function AuthorizationsAdminPage() {
             </button>
           </div>
 
-          <h3 style={{ marginTop: 24 }}>Active authorizations</h3>
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              marginTop: 24,
+            }}
+          >
+            <h3 style={{ margin: 0 }}>Active authorizations</h3>
+            <button
+              onClick={printActiveForStudent}
+              style={secondaryBtn}
+              title="Print all active tags for this student in one PDF."
+            >
+              Print all for this student
+            </button>
+          </div>
           <table style={tableStyle}>
             <thead>
               <tr>
@@ -1257,6 +1330,13 @@ function AuthorizationsAdminPage() {
                       style={{ ...smallBtn, marginLeft: 6 }}
                     >
                       {a.active ? "Deactivate" : "Reactivate"}
+                    </button>
+                    <button
+                      onClick={() => printOne(a)}
+                      style={{ ...smallBtn, marginLeft: 6 }}
+                      title="Download a single-tag PDF (reprint)."
+                    >
+                      Print tag
                     </button>
                   </td>
                 </tr>
