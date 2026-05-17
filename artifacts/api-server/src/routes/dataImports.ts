@@ -1613,6 +1613,14 @@ interface KindConfig<T = unknown> {
     jobId: number,
     schoolId: number,
   ) => Promise<number>;
+  // Optional: augment the preview response with kind-specific extras.
+  // Called after parsing once we know which rows are valid, so the hook
+  // can inspect parsed values + cross-reference school-scoped state
+  // (e.g. matching CSV house_name against houses.name). Must not mutate.
+  previewExtras?: (
+    parsedValues: T[],
+    schoolId: number,
+  ) => Promise<Record<string, unknown>>;
 }
 
 // Same shape as autoMapHeaders but reads its synonym table from the
@@ -1842,6 +1850,44 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         ese: optionalFlag("ese"),
         is504: optionalFlag("is_504"),
         houseName: optional("house_name"),
+      },
+    };
+  },
+  // Roster preview surfaces house_name values the importer could not
+  // match to one of this school's houses. These rows still commit (they
+  // fall back to the smallest-house rotation in insertChunk), but the
+  // banner gives admins a chance to fix typos like "Pheonix" vs
+  // "Phoenix" before they silently land as rebalanced.
+  async previewExtras(parsed, schoolId) {
+    const withHouse = parsed.filter(
+      (p): p is ParsedRoster & { houseName: string } =>
+        typeof p.houseName === "string" && p.houseName.trim().length > 0,
+    );
+    if (withHouse.length === 0) return {};
+    const houseRows = await db
+      .select({ name: housesTable.name })
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, schoolId));
+    const known = new Set(
+      houseRows.map((h) => h.name.trim().toLowerCase()),
+    );
+    let count = 0;
+    const distinct = new Map<string, string>();
+    for (const p of withHouse) {
+      const trimmed = p.houseName.trim();
+      if (known.has(trimmed.toLowerCase())) continue;
+      count++;
+      if (!distinct.has(trimmed.toLowerCase())) {
+        distinct.set(trimmed.toLowerCase(), trimmed);
+      }
+    }
+    if (count === 0) return {};
+    const samples = Array.from(distinct.values()).slice(0, 10);
+    return {
+      unrecognizedHouseNames: {
+        rowCount: count,
+        distinctCount: distinct.size,
+        samples,
       },
     };
   },
@@ -2757,17 +2803,23 @@ function makePreviewHandler(kind: string, config: KindConfig) {
     const sample: unknown[] = [];
     const mappingOk =
       validateMappingForConfig(mapping, headers, config) === null;
+    const allValid: unknown[] = [];
     if (mappingOk) {
       for (let i = 0; i < rows.length; i++) {
         const parsed = config.parseRow(rows[i], mapping);
         if (parsed.ok) {
           valid++;
+          allValid.push(parsed.value);
           if (sample.length < 10) sample.push(parsed.value);
         } else if (errors.length < 50) {
           errors.push({ row: i + 2, message: parsed.message });
         }
       }
     }
+    const extras: Record<string, unknown> =
+      mappingOk && config.previewExtras && allValid.length > 0
+        ? await config.previewExtras(allValid, schoolId)
+        : {};
     res.json({
       kind,
       headers,
@@ -2784,6 +2836,7 @@ function makePreviewHandler(kind: string, config: KindConfig) {
         config.requiredFields.every((f) =>
           Object.values(mapping).includes(f),
         ),
+      ...extras,
     });
   };
 }

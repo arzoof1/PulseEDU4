@@ -49,6 +49,15 @@ type PreviewResponse = {
   // District-scope preview only.
   perSchool?: Array<{ schoolId: number; schoolName: string; rows: number }>;
   districtSchoolCount?: number;
+  // Roster-scope preview only. Present when one or more CSV rows have
+  // a house_name we couldn't match to this school's houses. Non-blocking
+  // — those rows still commit, falling back to the smallest-house
+  // rotation.
+  unrecognizedHouseNames?: {
+    rowCount: number;
+    distinctCount: number;
+    samples: string[];
+  };
 };
 
 type ImportTemplate = {
@@ -2316,6 +2325,54 @@ export default function DataImports({
                       />
                     )}
                   </div>
+
+                  {/* Roster-only: non-blocking warning when one or more
+                      house_name cells didn't match a configured house.
+                      Those rows still commit (smallest-house fallback in
+                      insertChunk), but admins deserve a heads-up so they
+                      can fix typos before the data lands rebalanced. */}
+                  {kind === "rosters" && preview.unrecognizedHouseNames && (
+                    <div
+                      style={{
+                        padding: "0.6rem 0.75rem",
+                        background: "rgba(245, 158, 11, 0.08)",
+                        border: "1px solid #f59e0b",
+                        borderRadius: 6,
+                        fontSize: 13,
+                        marginBottom: "1rem",
+                      }}
+                    >
+                      <div style={{ marginBottom: 4 }}>
+                        <strong>
+                          {preview.unrecognizedHouseNames.rowCount} row
+                          {preview.unrecognizedHouseNames.rowCount === 1
+                            ? ""
+                            : "s"}{" "}
+                          had a house name we didn't recognize;
+                        </strong>{" "}
+                        they will use the smallest-house default.
+                      </div>
+                      <div style={{ color: "var(--text-subtle)" }}>
+                        Unrecognized:{" "}
+                        {preview.unrecognizedHouseNames.samples
+                          .map((s) => `"${s}"`)
+                          .join(", ")}
+                        {preview.unrecognizedHouseNames.distinctCount >
+                          preview.unrecognizedHouseNames.samples.length && (
+                          <>
+                            {" "}
+                            +{" "}
+                            {preview.unrecognizedHouseNames.distinctCount -
+                              preview.unrecognizedHouseNames.samples
+                                .length}{" "}
+                            more
+                          </>
+                        )}
+                        . Check spelling, or add the house in PBIS Hub →
+                        Houses before committing.
+                      </div>
+                    </div>
+                  )}
 
                   {/* Roster-only reassurance: upsert semantics mean the
                       commit will only touch student_ids that appear in
