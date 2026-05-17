@@ -134,6 +134,23 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     return;
   }
 
+  // When the caller passed an explicit ID list, refuse silent partial
+  // success: any ID that wasn't in this school (or doesn't exist) means
+  // the request was wrong (typo, stale tab, cross-school injection
+  // attempt). Surface that as a 404 with the offending IDs so the UI
+  // can tell the admin instead of printing a half-correct batch.
+  if (!all) {
+    const foundIds = new Set(students.map((s) => s.id));
+    const missing = studentIds.filter((id) => !foundIds.has(id));
+    if (missing.length > 0) {
+      res.status(404).json({
+        error: "Some student IDs are not in your school",
+        missingStudentIds: missing,
+      });
+      return;
+    }
+  }
+
   const [school] = await db
     .select({ name: schoolsTable.name })
     .from(schoolsTable)

@@ -3788,6 +3788,13 @@ export async function seedIfEmpty() {
     CREATE UNIQUE INDEX IF NOT EXISTS bell_schedules_school_default_idx
     ON bell_schedules (school_id) WHERE is_default = true
   `);
+  // Per-period "counts toward parent on-time streak" toggle. Defaults
+  // TRUE so existing schedules keep behaving (every period counted)
+  // until a Core Team member opts a period out (e.g. lunch, passing).
+  await db.execute(sql`
+    ALTER TABLE bell_schedule_periods
+    ADD COLUMN IF NOT EXISTS included_in_on_time_streak BOOLEAN NOT NULL DEFAULT TRUE
+  `);
 
   // ---- Marker check that survives a partial / crashed prior seed.
   // Earlier versions used "is school_accommodations empty?" — that

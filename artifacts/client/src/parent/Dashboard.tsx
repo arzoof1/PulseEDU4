@@ -83,7 +83,12 @@ interface Snapshot {
       ytd: { presentDays: number; totalDays: number; pct: number } | null;
       last30: { presentDays: number; totalDays: number; pct: number } | null;
     };
-    onTimeStreak: { current: number; longestYtd: number };
+    onTimeStreak: {
+      current: number;
+      longestYtd: number;
+      pctYtd: number | null;
+      countedPeriods: number;
+    } | null;
     recent: Array<{
       id: number;
       entryType: string;
@@ -640,15 +645,17 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           title="Attendance"
           icon={<Calendar className="h-4 w-4 text-orange-600" />}
         >
-          {/* Aggregate tiles: attendance % (YTD + last 30) and on-time
-              streak (current + longest YTD). Hidden entirely when the
-              school hasn't loaded any attendance-day data for this
-              student yet, so a brand-new SIS feed doesn't show four
-              empty cards. */}
+          {/* Aggregate tiles. Attendance % (YTD + 30d) shows whenever
+              any attendance-day data exists. On-time streak tiles only
+              appear when the school has a default bell schedule with
+              at least one counted period AND the student has logged
+              attendance days to back the calculation. Hides cleanly
+              when nothing has been recorded yet so a new SIS feed
+              doesn't render placeholder tiles. */}
           {(snapshot.attendance.pct.ytd ||
             snapshot.attendance.pct.last30 ||
-            snapshot.attendance.onTimeStreak.longestYtd > 0) && (
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+            snapshot.attendance.onTimeStreak) && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 mb-4">
               <AttendanceTile
                 label="Attendance · YTD"
                 value={
@@ -675,26 +682,40 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
                     : "no data yet"
                 }
               />
-              <AttendanceTile
-                label="On-time streak"
-                value={`${snapshot.attendance.onTimeStreak.current}`}
-                sub={
-                  snapshot.attendance.onTimeStreak.current === 1
-                    ? "day in a row"
-                    : "days in a row"
-                }
-                accent="emerald"
-              />
-              <AttendanceTile
-                label="Longest streak · YTD"
-                value={`${snapshot.attendance.onTimeStreak.longestYtd}`}
-                sub={
-                  snapshot.attendance.onTimeStreak.longestYtd === 1
-                    ? "day"
-                    : "days"
-                }
-                accent="emerald"
-              />
+              {snapshot.attendance.onTimeStreak && (
+                <>
+                  <AttendanceTile
+                    label="On-time streak"
+                    value={`${snapshot.attendance.onTimeStreak.current}`}
+                    sub={
+                      snapshot.attendance.onTimeStreak.current === 1
+                        ? "period in a row"
+                        : "periods in a row"
+                    }
+                    accent="emerald"
+                  />
+                  <AttendanceTile
+                    label="Longest streak · YTD"
+                    value={`${snapshot.attendance.onTimeStreak.longestYtd}`}
+                    sub={
+                      snapshot.attendance.onTimeStreak.longestYtd === 1
+                        ? "period"
+                        : "periods"
+                    }
+                    accent="emerald"
+                  />
+                  <AttendanceTile
+                    label="On-time · YTD"
+                    value={
+                      snapshot.attendance.onTimeStreak.pctYtd != null
+                        ? `${snapshot.attendance.onTimeStreak.pctYtd}%`
+                        : "—"
+                    }
+                    sub={`${snapshot.attendance.onTimeStreak.countedPeriods} periods`}
+                    accent="emerald"
+                  />
+                </>
+              )}
             </div>
           )}
           {snapshot.attendance.recent.length === 0 ? (

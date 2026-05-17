@@ -64,6 +64,9 @@ interface PeriodInput {
   name: string;
   startTime: string;
   endTime: string;
+  // Defaults TRUE so legacy bodies that don't send the flag keep
+  // counting every period (matches DB column default).
+  includedInOnTimeStreak: boolean;
 }
 
 function parsePeriods(raw: unknown): PeriodInput[] | string {
@@ -88,7 +91,10 @@ function parsePeriods(raw: unknown): PeriodInput[] | string {
       return `periods[${i}].startTime must be HH:MM (24h)`;
     if (!TIME_RE.test(endTime))
       return `periods[${i}].endTime must be HH:MM (24h)`;
-    out.push({ periodNumber, name, startTime, endTime });
+    // Accept anything explicitly `false` as opt-out; treat missing /
+    // anything else as `true` so legacy bodies keep working.
+    const includedInOnTimeStreak = p.includedInOnTimeStreak === false ? false : true;
+    out.push({ periodNumber, name, startTime, endTime, includedInOnTimeStreak });
   }
   return out;
 }
@@ -166,6 +172,7 @@ router.get(
           name: bellSchedulePeriodsTable.name,
           startTime: bellSchedulePeriodsTable.startTime,
           endTime: bellSchedulePeriodsTable.endTime,
+          includedInOnTimeStreak: bellSchedulePeriodsTable.includedInOnTimeStreak,
         })
         .from(bellSchedulePeriodsTable)
         .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id))

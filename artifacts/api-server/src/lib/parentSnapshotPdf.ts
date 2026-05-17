@@ -317,16 +317,29 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: s.attendance.pct.last30 ? `${s.attendance.pct.last30.pct}%` : "—",
       color: COLORS.accent,
     });
-    stats.push({
-      label: "On-time streak",
-      value: String(s.attendance.onTimeStreak.current),
-      color: COLORS.positive,
-    });
-    stats.push({
-      label: "Longest streak (YTD)",
-      value: String(s.attendance.onTimeStreak.longestYtd),
-      color: COLORS.positive,
-    });
+    // Period-level on-time streak — only when the school has a default
+    // bell schedule configured (otherwise `onTimeStreak` is null and we
+    // skip the streak tiles entirely, matching the parent dashboard).
+    if (s.attendance.onTimeStreak) {
+      stats.push({
+        label: "On-time streak",
+        value: `${s.attendance.onTimeStreak.current} pds`,
+        color: COLORS.positive,
+      });
+      stats.push({
+        label: "Longest (YTD)",
+        value: `${s.attendance.onTimeStreak.longestYtd} pds`,
+        color: COLORS.positive,
+      });
+      stats.push({
+        label: "On-time % (YTD)",
+        value:
+          s.attendance.onTimeStreak.pctYtd != null
+            ? `${s.attendance.onTimeStreak.pctYtd}%`
+            : "—",
+        color: COLORS.positive,
+      });
+    }
   }
   if (s.sectionsAvailable.hallPasses) {
     stats.push({

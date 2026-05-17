@@ -3,6 +3,39 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Kiosk Phase 3 — printable Student ID badges (Letter PDF, QR to
+  `/kiosk?signin=<studentId>`, house ribbon via shared
+  `pdfColors.normalizeHex`); real "Sign in to class" arrival flow
+  with school-specific welcome card (Mustache-style template with
+  `{firstName}/{lastName}/{house}/{grade}`, per-house JSONB override
+  map on `school_settings`, 5-second auto-dismiss); append-only
+  `class_signins` ledger (composite indexes on `school_id, signed_in_at`
+  and per-student); `POST /api/kiosk/class-signin` (kiosk-session auth,
+  school-scoped student lookup, in-memory rate-limit 40/min per
+  activation); `GET /api/students/id-badges.pdf` (admin-gated; now
+  hard-rejects mixed cross-school ID lists with `missingStudentIds`
+  in the body instead of silent partial success); `PATCH
+  /api/school-settings` extended with hard 240-char limit on template +
+  per-house overrides (was silently truncating); `KioskWelcomePanel`
+  editor with live preview; in-browser `CameraScanner` using
+  `BarcodeDetector` with `@zxing/browser` fallback wired into both the
+  pass-creation field and the sign-in tab; admin "Print badges"
+  surfaces on `StudentBadgesPanel` (bulk) + `StudentProfile` (per
+  student).
+
+- Parent HeartBEAT period-level on-time streak — attendance % YTD +
+  last-30d tiles plus three streak tiles (current / longest YTD /
+  on-time % YTD) backed by `bell_schedule_periods.included_in_on_time_streak`
+  (per-period checkbox in Bell Schedules so lunch / advisory / passing
+  can opt out). Walks YTD attendance days, skips excused/unexcused, and
+  resets the run on any tardy in a counted period. Tardy period match
+  normalizes "1" / "01" / "P1" to integer 1 so SIS-variant rows count
+  correctly. Whole streak block returns `null` when the school has no
+  active default bell schedule (UI hides the three tiles); a default
+  schedule with zero counted periods still returns a non-null
+  zero-filled block so "not set up" and "everything opted out" are
+  distinguishable. PDF parity in `parentSnapshotPdf`.
+
 - AST district-wide bank: `balanceQuarterHoursForDistrict(staffId,
   districtId)` SUMs ledger rows only for schools in the caller's
   district (intra-district transfers carry the bank; cross-district

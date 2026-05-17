@@ -47,6 +47,13 @@ export const bellSchedulePeriodsTable = pgTable(
     name: text("name").notNull(),
     startTime: text("start_time").notNull(),
     endTime: text("end_time").notNull(),
+    // Whether this period counts toward the parent-portal on-time
+    // streak. Schools toggle off lunch / advisory / passing periods so
+    // an "on-time streak" only counts academic periods. Defaults TRUE
+    // so existing schedules keep working without re-editing.
+    includedInOnTimeStreak: boolean("included_in_on_time_streak")
+      .notNull()
+      .default(true),
   },
   (t) => ({
     schedulePeriodIdx: uniqueIndex("bell_schedule_periods_schedule_period_idx").on(

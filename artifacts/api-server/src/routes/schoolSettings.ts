@@ -474,9 +474,18 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         .json({ error: "kioskWelcomeTemplate must be a string" });
       return;
     }
-    const trimmed = kioskWelcomeTemplate.slice(0, 240);
+    // Hard-reject overlong templates instead of silently truncating so
+    // the editor surfaces the issue (truncation hid mistakes in the
+    // per-house preview).
+    if (kioskWelcomeTemplate.length > 240) {
+      res.status(400).json({
+        error: "kioskWelcomeTemplate must be 240 characters or fewer",
+      });
+      return;
+    }
+    const cleaned = kioskWelcomeTemplate.trim();
     updates.kioskWelcomeTemplate =
-      trimmed.trim().length === 0 ? "Welcome, {firstName}!" : trimmed;
+      cleaned.length === 0 ? "Welcome, {firstName}!" : cleaned;
   }
   if (kioskWelcomeMessages !== undefined) {
     if (
@@ -498,7 +507,15 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         kioskWelcomeMessages as Record<string, unknown>,
       )) {
         if (typeof v !== "string") continue;
-        const cleaned = v.slice(0, 240).trim();
+        // Same hard-reject as the default template — surface mistakes
+        // rather than silently truncating per-house overrides.
+        if (v.length > 240) {
+          res.status(400).json({
+            error: `kioskWelcomeMessages[${k}] must be 240 characters or fewer`,
+          });
+          return;
+        }
+        const cleaned = v.trim();
         if (cleaned.length === 0) continue;
         // House id key is stringified integer; ignore anything else.
         if (!/^\d+$/.test(k)) continue;

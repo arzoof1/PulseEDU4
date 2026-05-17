@@ -26,6 +26,8 @@ import {
   ossLogDaysTable,
   studentRetentionsTable,
   studentAttendanceDayTable,
+  bellSchedulesTable,
+  bellSchedulePeriodsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 
@@ -106,12 +108,23 @@ export interface ParentSnapshot {
       ytd: { presentDays: number; totalDays: number; pct: number } | null;
       last30: { presentDays: number; totalDays: number; pct: number } | null;
     };
-    // Consecutive on-time days. "On-time" = status='present' (a tardy
-    // breaks the streak). `current` walks back from the most recent
-    // logged day; `longestYtd` is the longest run inside this school
-    // year. Both are zero (not null) when the student has no logged
-    // attendance days at all.
-    onTimeStreak: { current: number; longestYtd: number };
+    // Period-level on-time streak. "On-time" = student was present
+    // that day AND not marked tardy for that counted period (counted =
+    // included_in_on_time_streak=true on the school's default bell
+    // schedule). Absent days (excused or unexcused) are skipped — they
+    // neither add to nor reset the streak. A tardy in any counted
+    // period resets `current` to 0; `longestYtd` is the longest run
+    // inside this school year. `pctYtd` is on-time counted periods /
+    // total counted periods the student was present for (null when
+    // the denominator is 0). The whole block is `null` when the school
+    // hasn't configured a default bell schedule yet — required setup,
+    // hides the tiles entirely on the parent surface.
+    onTimeStreak: {
+      current: number;
+      longestYtd: number;
+      pctYtd: number | null;
+      countedPeriods: number;
+    } | null;
     recent: Array<{
       id: number;
       entryType: string;
@@ -428,24 +441,118 @@ export async function buildParentSnapshot(
     last30: pctBucket(last30Rows),
   };
 
-  // On-time streak: walk attendance_day rows in date order. "On-time"
-  // is status==='present' (a tardy breaks the streak; absent days do
-  // too). `current` is the run that ends on the most recent row.
-  let currentStreak = 0;
-  let longestStreak = 0;
-  let run = 0;
-  for (const r of attendanceDayRows) {
-    if (r.status === "present") {
-      run += 1;
-      if (run > longestStreak) longestStreak = run;
-    } else {
-      run = 0;
+  // ----- Period-level on-time streak -----
+  // Pulls the school's default bell schedule (required setup; the
+  // snapshot exposes `null` when missing so the parent UI hides the
+  // tiles entirely). Then walks YTD attendance days in date order:
+  //   - excused / unexcused absences: skip (don't add, don't reset)
+  //   - present / tardy day: for each counted period in periodNumber
+  //     order, check the tardies table for a (day, period) match. A
+  //     match resets the streak to 0; no match increments it.
+  // We also tally on-time vs total counted periods to produce
+  // `pctYtd` (the year-to-date on-time percentage).
+  let onTimeStreak: ParentSnapshot["attendance"]["onTimeStreak"] = null;
+  if (sectionsAvailable.attendance) {
+    // First confirm the school has a default active bell schedule at
+    // all. The spec says the whole block is null ONLY when no default
+    // schedule exists; "default schedule present but all periods opted
+    // out" still returns a non-null (zero-filled) block so the UI can
+    // distinguish "school hasn't set this up" from "school set it up
+    // but nothing counts toward the streak right now."
+    const [defaultSchedule] = await db
+      .select({ id: bellSchedulesTable.id })
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, student.schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+
+    if (defaultSchedule) {
+      const countedPeriods = await db
+        .select({
+          periodNumber: bellSchedulePeriodsTable.periodNumber,
+        })
+        .from(bellSchedulePeriodsTable)
+        .where(
+          and(
+            eq(bellSchedulePeriodsTable.scheduleId, defaultSchedule.id),
+            eq(bellSchedulePeriodsTable.includedInOnTimeStreak, true),
+          ),
+        )
+        .orderBy(bellSchedulePeriodsTable.periodNumber);
+
+      // Pull YTD tardies for the student. We query the tardies table
+      // directly (the existing `tardyRows` is capped at 50, too narrow
+      // for a year-long streak scan).
+      const ytdTardies =
+        countedPeriods.length > 0
+          ? await db
+              .select({
+                createdAt: tardiesTable.createdAt,
+                period: tardiesTable.period,
+              })
+              .from(tardiesTable)
+              .where(
+                and(
+                  eq(tardiesTable.schoolId, student.schoolId),
+                  eq(tardiesTable.studentId, student.studentId),
+                  eq(tardiesTable.entryType, "tardy"),
+                  // tardies.createdAt is TEXT (ISO); lexicographic
+                  // comparison against YYYY-MM-DD works because ISO sorts.
+                  gte(tardiesTable.createdAt, syStartIso),
+                  lt(tardiesTable.createdAt, syEndIso),
+                ),
+              )
+          : [];
+      const tardySet = new Set<string>();
+      for (const t of ytdTardies) {
+        // tardies.period varies across SISes ("3", "03", "P3"). Extract
+        // digits and parse as a number so the comparison against
+        // schedule period numbers is canonical (matches "1" / "01" /
+        // "P1" all to period 1).
+        const m = t.period.match(/\d+/);
+        if (!m) continue;
+        const periodNum = Number(m[0]);
+        if (!Number.isFinite(periodNum)) continue;
+        const day = t.createdAt.slice(0, 10);
+        tardySet.add(`${day}|${periodNum}`);
+      }
+
+      let run = 0;
+      let longest = 0;
+      let onTimeCount = 0;
+      let totalCount = 0;
+      for (const r of attendanceDayRows) {
+        if (r.status === "excused" || r.status === "unexcused") continue;
+        for (const cp of countedPeriods) {
+          totalCount += 1;
+          // `cp.periodNumber` is already a number; coerced to string by
+          // template literal, matching the numeric form we put in
+          // `tardySet`.
+          const key = `${r.day}|${cp.periodNumber}`;
+          if (tardySet.has(key)) {
+            run = 0;
+          } else {
+            run += 1;
+            onTimeCount += 1;
+            if (run > longest) longest = run;
+          }
+        }
+      }
+      onTimeStreak = {
+        current: run,
+        longestYtd: longest,
+        pctYtd:
+          totalCount > 0
+            ? Math.max(0, Math.min(100, Math.round((onTimeCount / totalCount) * 1000) / 10))
+            : null,
+        countedPeriods: totalCount,
+      };
     }
   }
-  // `run` after the loop is the trailing run = current streak (rows
-  // are ASC by day, so the loop ends on the latest day).
-  currentStreak = run;
-  const onTimeStreak = { current: currentStreak, longestYtd: longestStreak };
 
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
