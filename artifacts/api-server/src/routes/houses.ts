@@ -932,10 +932,11 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
     .orderBy(desc(studentHouseChangesTable.changedAt))
     .limit(200);
 
-  if (rows.length === 0) {
-    res.json({ rows: [], houses: [], staff: [], students: [] });
-    return;
-  }
+  // We deliberately do NOT short-circuit on rows.length === 0 here:
+  // the page also needs `undoable` (so the "Undo last sort" banner
+  // shows even when the audit feed is filtered to an empty house)
+  // and the lookup tables, which are cheap. The empty-row payload
+  // is finalized below alongside the populated case.
   const studentIds = [...new Set(rows.map((r) => r.studentDbId))];
   const houseIds = [
     ...new Set(

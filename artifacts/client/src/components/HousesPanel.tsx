@@ -34,7 +34,10 @@ type ChangesResp = {
     id: number;
     studentDbId: number;
     fromHouseId: number | null;
-    toHouseId: number;
+    // Nullable: the schema allows clearing a student's house, which
+    // emits an audit row with toHouseId=null. The UI renders that as
+    // "(none)" — see the lookups.house.get(r.toHouseId) ?? null path.
+    toHouseId: number | null;
     reason: string;
     source: "manual" | "bulk_sort" | "undo";
     sortJobId: number | null;
@@ -582,7 +585,10 @@ function AuditTab(): React.ReactElement {
                 r.fromHouseId == null
                   ? null
                   : (lookups.house.get(r.fromHouseId) ?? null);
-              const to = lookups.house.get(r.toHouseId) ?? null;
+              const to =
+                r.toHouseId == null
+                  ? null
+                  : (lookups.house.get(r.toHouseId) ?? null);
               const by = lookups.staff.get(r.changedByStaffId) ?? "—";
               return (
                 <tr key={r.id} style={{ borderTop: "1px solid #e5e7eb" }}>
