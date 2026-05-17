@@ -620,6 +620,28 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
     includeAssigned,
     keepSiblings,
   );
+  // Resolve student display fields for the moves we're about to
+  // return so the admin can spot-check who is moving where without
+  // a follow-up round-trip. Only fetch the rows that actually
+  // appear in the plan (eligible set, capped by school).
+  const studentDbIds = [...new Set(plan.moves.map((m) => m.studentDbId))];
+  const students =
+    studentDbIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: studentsTable.id,
+            studentId: studentsTable.studentId,
+            firstName: studentsTable.firstName,
+            lastName: studentsTable.lastName,
+          })
+          .from(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              inArray(studentsTable.id, studentDbIds),
+            ),
+          );
   res.json({
     ok: true,
     includeAssigned,
@@ -627,6 +649,12 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
     houses: plan.houses,
     currentCounts: plan.currentCounts,
     proposedCounts: plan.proposedCounts,
+    // Per-student proposed assignments. Spec requirement — gives
+    // the admin a row-level preview before they commit. The audit
+    // already snapshots these on commit, but the dry-run needs to
+    // surface them too.
+    moves: plan.moves,
+    students,
     totalEligible: plan.totalEligible,
     totalChanged: plan.totalChanged,
   });

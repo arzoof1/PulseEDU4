@@ -64,15 +64,15 @@ export default function ChangeHouseModal({
 
   // Smallest active house = the recommended pick. Ties broken by
   // lowest id so the suggestion is deterministic across refreshes
-  // and matches the server-side recommendNextHouse heuristic. We
-  // skip the student's current house from the comparison — moving
-  // to "where you already are" isn't a real recommendation.
+  // and matches the server-side `recommendNextHouse` heuristic
+  // exactly — we do NOT exclude the student's current house, even
+  // if that means the recommendation can be "stay put". That
+  // matches what the importer would pick for a freshly-inserted
+  // student today.
   const recommendedId: number | null = (() => {
     if (!houses || houses.length === 0) return null;
-    const eligible = houses.filter((h) => h.id !== currentHouseId);
-    if (eligible.length === 0) return null;
-    let best = eligible[0];
-    for (const h of eligible) {
+    let best = houses[0];
+    for (const h of houses) {
       const bc = best.memberCount ?? 0;
       const hc = h.memberCount ?? 0;
       if (hc < bc || (hc === bc && h.id < best.id)) best = h;

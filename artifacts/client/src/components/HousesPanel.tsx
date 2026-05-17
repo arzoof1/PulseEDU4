@@ -25,6 +25,21 @@ type PreviewResp = {
   houses: House[];
   currentCounts: Record<string, number>;
   proposedCounts: Record<string, number>;
+  // Per-student proposed assignment list. Already returned by the
+  // server; surfaced here so the admin can spot-check who is moving
+  // where before they commit. `fromHouseId` is null for currently
+  // unplaced students.
+  moves: Array<{
+    studentDbId: number;
+    fromHouseId: number | null;
+    toHouseId: number;
+  }>;
+  students?: Array<{
+    id: number;
+    studentId: string;
+    firstName: string;
+    lastName: string;
+  }>;
   totalEligible: number;
   totalChanged: number;
 };
@@ -360,6 +375,96 @@ function SortTab(): React.ReactElement {
               </tbody>
             </table>
           )}
+          {/* Per-student proposed moves. Shown only for rows that
+              actually change house — students whose target equals
+              their current house are omitted to keep the list
+              scannable. Capped at 200 rows; we surface a count if
+              the plan is larger. */}
+          {preview.moves.length > 0 && (() => {
+            const studentLookup = new Map(
+              (preview.students ?? []).map((s) => [s.id, s]),
+            );
+            const houseLookup = new Map(
+              preview.houses.map((h) => [h.id, h]),
+            );
+            const changed = preview.moves.filter(
+              (m) => m.fromHouseId !== m.toHouseId,
+            );
+            const shown = changed.slice(0, 200);
+            return (
+              <div style={{ marginTop: "1rem", maxWidth: 720 }}>
+                <h4 style={{ marginBottom: "0.5rem" }}>
+                  Proposed assignments
+                  {changed.length > shown.length
+                    ? ` (showing first ${shown.length} of ${changed.length})`
+                    : ""}
+                </h4>
+                <div
+                  style={{
+                    maxHeight: 320,
+                    overflowY: "auto",
+                    border: "1px solid #e5e7eb",
+                    borderRadius: 6,
+                  }}
+                >
+                  <table style={{ borderCollapse: "collapse", width: "100%" }}>
+                    <thead
+                      style={{
+                        position: "sticky",
+                        top: 0,
+                        background: "#f8fafc",
+                      }}
+                    >
+                      <tr style={{ textAlign: "left", color: "#475569" }}>
+                        <th style={{ padding: "4px 8px" }}>Student</th>
+                        <th style={{ padding: "4px 8px" }}>From</th>
+                        <th style={{ padding: "4px 8px" }}>To</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {shown.map((m) => {
+                        const stu = studentLookup.get(m.studentDbId);
+                        const from =
+                          m.fromHouseId == null
+                            ? null
+                            : (houseLookup.get(m.fromHouseId) ?? null);
+                        const to = houseLookup.get(m.toHouseId) ?? null;
+                        return (
+                          <tr
+                            key={m.studentDbId}
+                            style={{ borderTop: "1px solid #e5e7eb" }}
+                          >
+                            <td style={{ padding: "4px 8px" }}>
+                              {stu
+                                ? `${stu.lastName}, ${stu.firstName} (${stu.studentId})`
+                                : `#${m.studentDbId}`}
+                            </td>
+                            <td
+                              style={{
+                                padding: "4px 8px",
+                                color: from ? "#0f172a" : "#94a3b8",
+                              }}
+                            >
+                              {from ? from.name : "—"}
+                            </td>
+                            <td
+                              style={{
+                                padding: "4px 8px",
+                                fontWeight: 600,
+                                color: to?.color ?? "#0f172a",
+                              }}
+                            >
+                              {to ? to.name : "—"}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
         </div>
       )}
     </div>
