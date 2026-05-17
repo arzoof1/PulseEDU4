@@ -181,11 +181,11 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     role: "tech",
     label: "Initial Data Import",
     hint: "Use the Data Importer to upload your roster (students + sections), assessment scores (FAST, iReady, MAP), and any prior behavior data. Upload one CSV at a time — the importer auto-detects columns and shows a preview before commit.",
-    route: { kind: "settings", target: "data-imports" },
+    route: { kind: "settings", target: "data-management" },
     autoCheck: (db, schoolId) =>
       countGt0(
         db,
-        sql`SELECT COUNT(*)::int AS c FROM imports WHERE school_id = ${schoolId}`,
+        sql`SELECT COUNT(*)::int AS c FROM import_jobs WHERE school_id = ${schoolId}`,
       ),
   },
   {
