@@ -29,7 +29,7 @@ interface Module {
 }
 
 const MODULES: Module[] = [
-  { title: "Hall Pass",            blurb: "Live queue, per-teacher allowlists, period-aware auto-reset, signage tile." },
+  { title: "Hall Pass + Tardy",    blurb: "Live queue, per-teacher allowlists, period-aware auto-reset, tardy-pass creation, signage tile." },
   { title: "Digital Signage",      blurb: "Per-TV playlists: media + live tiles (house standings, hall passes, Heartbeat)." },
   { title: "PBIS Hub + Stores",    blurb: "Point tracking, Spotlight reveal, Classroom Store + school-wide School Store." },
   { title: "Safety Plans",         blurb: "Per-student behavioral / physical checklists with library, audit log, role gating." },
@@ -79,6 +79,36 @@ const contentW = pageW - ML - MR;
 const HEADER_H = 90;
 doc.save().rect(0, 0, pageW, HEADER_H).fillColor(C.brandDark).fill().restore();
 doc.fillColor("#ffffff").font(F_BOLD).fontSize(34).text("PulseEDU", ML, 22);
+
+// EKG / heartbeat line under the wordmark — a flat baseline with a
+// single QRS spike, drawn to the right of the wordmark and across the
+// header band. Evokes the "Pulse" in the name.
+{
+  const wordmarkWidth = doc.widthOfString("PulseEDU");
+  const baselineY = 44;
+  const startX = ML + wordmarkWidth + 14;
+  const endX = pageW - MR;
+  // Pre-spike flat: short dip-bump (P wave), then QRS spike, then T wave, then flat.
+  const spikeStart = startX + (endX - startX) * 0.25;
+  const pts: Array<[number, number]> = [
+    [startX, baselineY],
+    [spikeStart - 40, baselineY],
+    [spikeStart - 32, baselineY - 4],   // P
+    [spikeStart - 24, baselineY],
+    [spikeStart - 6, baselineY + 4],    // Q
+    [spikeStart, baselineY - 22],       // R (spike up)
+    [spikeStart + 6, baselineY + 8],    // S
+    [spikeStart + 18, baselineY],
+    [spikeStart + 38, baselineY - 6],   // T
+    [spikeStart + 58, baselineY],
+    [endX, baselineY],
+  ];
+  doc.save()
+    .moveTo(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) doc.lineTo(pts[i][0], pts[i][1]);
+  doc.lineWidth(2).strokeColor("#7dd3fc").stroke().restore();
+}
+
 doc.fillColor("#cbd5e1").font(F_BODY).fontSize(12)
   .text("One school operations app — running every part of the building", ML, 60);
 
