@@ -387,7 +387,14 @@ async function computeSortPlan(
     };
   }
   const allStudents = await db
-    .select({ id: studentsTable.id, houseId: studentsTable.houseId })
+    .select({
+      id: studentsTable.id,
+      houseId: studentsTable.houseId,
+      // Needed by sibling-pin to prefer the OLDEST sibling's house
+      // when keepSiblings is on. Grade is the closest age proxy we
+      // have (students schema has no DOB column).
+      grade: studentsTable.grade,
+    })
     .from(studentsTable)
     .where(eq(studentsTable.schoolId, schoolId));
 
@@ -432,6 +439,15 @@ async function computeSortPlan(
   const houseIds = houseRows.map((h) => h.id);
   const fromMap = new Map<number, number | null>(
     allStudents.map((s) => [s.id, s.houseId]),
+  );
+  // Per-student grade + id, used to pick the "oldest sibling" when
+  // pinning a sibling group's house. We don't track DOB in the
+  // students schema (see lib/db/src/schema/students.ts), so grade
+  // level is the closest available proxy for age; ties (twins,
+  // same-grade siblings) are broken by lowest students.id for
+  // determinism so the plan is stable across previews.
+  const gradeById = new Map<number, number>(
+    allStudents.map((s) => [s.id, s.grade]),
   );
   let groups: number[][];
   const groupPin = new Map<number, number>(); // group-index → pinned houseId
@@ -481,7 +497,10 @@ async function computeSortPlan(
     // we never touch.
     const eligibleSet = new Set(eligible.map((s) => s.id));
     const compEligible = new Map<number, number[]>();
-    const compAssignedHouses = new Map<number, number[]>();
+    const compAssignedHouses = new Map<
+      number,
+      Array<{ studentDbId: number; houseId: number }>
+    >();
     for (const s of allStudents) {
       const r = find(s.id);
       if (eligibleSet.has(s.id)) {
@@ -489,9 +508,13 @@ async function computeSortPlan(
         arr.push(s.id);
         compEligible.set(r, arr);
       }
+      // Track every already-assigned sibling (id + house) so the pin
+      // can prefer the OLDEST sibling's house, not just the most
+      // common one. This matters when a legacy roster splits a
+      // family across houses — the eldest's placement wins.
       if (!includeAssigned && s.houseId !== null) {
         const arr = compAssignedHouses.get(r) ?? [];
-        arr.push(s.houseId);
+        arr.push({ studentDbId: s.id, houseId: s.houseId });
         compAssignedHouses.set(r, arr);
       }
     }
@@ -499,20 +522,27 @@ async function computeSortPlan(
     for (const [root, ids] of compEligible) {
       const idx = groups.length;
       groups.push(ids);
-      const houses = compAssignedHouses.get(root);
-      if (houses && houses.length > 0) {
-        // Pin to the most common assigned house; ties by smallest id.
-        const tally = new Map<number, number>();
-        for (const h of houses) tally.set(h, (tally.get(h) ?? 0) + 1);
-        let pinHouse = houses[0];
-        let pinScore = -1;
-        for (const [h, c] of tally) {
-          if (c > pinScore || (c === pinScore && h < pinHouse)) {
-            pinHouse = h;
-            pinScore = c;
+      const assigned = compAssignedHouses.get(root);
+      if (assigned && assigned.length > 0) {
+        // Pin to the OLDEST already-placed sibling's house. We use
+        // grade level as the age proxy (no DOB in schema; see
+        // gradeById comment above). Ties on grade fall to lowest
+        // students.id so the plan is deterministic across reruns.
+        let elder = assigned[0];
+        let elderGrade = gradeById.get(elder.studentDbId) ?? -1;
+        for (const a of assigned) {
+          const g = gradeById.get(a.studentDbId) ?? -1;
+          if (
+            g > elderGrade ||
+            (g === elderGrade && a.studentDbId < elder.studentDbId)
+          ) {
+            elder = a;
+            elderGrade = g;
           }
         }
-        if (houseIds.includes(pinHouse)) groupPin.set(idx, pinHouse);
+        if (houseIds.includes(elder.houseId)) {
+          groupPin.set(idx, elder.houseId);
+        }
       }
     }
   } else {
