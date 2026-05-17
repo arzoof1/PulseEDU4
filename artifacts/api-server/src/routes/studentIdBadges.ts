@@ -8,7 +8,11 @@ import {
 } from "@workspace/db";
 import { and, asc, eq, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
-import { renderStudentBadgesPdf, type StudentBadgeInput } from "../lib/studentIdBadgesPdf";
+import {
+  renderStudentBadgesPdf,
+  type BadgeSize,
+  type StudentBadgeInput,
+} from "../lib/studentIdBadgesPdf";
 
 const router: IRouter = Router();
 
@@ -55,7 +59,15 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
 
-  const body = (req.body ?? {}) as { all?: boolean; studentIds?: number[] };
+  const body = (req.body ?? {}) as {
+    all?: boolean;
+    studentIds?: number[];
+    size?: string;
+  };
+  // Badge physical size — "lanyard" (default, portrait 3.375"×4.25")
+  // or "cr80" (landscape 3.375"×2.125", standard credit-card ID).
+  const sizeRaw = body.size ?? req.query.size;
+  const size: BadgeSize = sizeRaw === "cr80" ? "cr80" : "lanyard";
   const all =
     body.all === true || req.query.all === "1" || req.query.all === "true";
   const bodyIds = Array.isArray(body.studentIds)
@@ -150,7 +162,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
         : null,
   }));
 
-  const pdf = await renderStudentBadgesPdf(badges);
+  const pdf = await renderStudentBadgesPdf(badges, size);
   res.setHeader("Content-Type", "application/pdf");
   res.setHeader(
     "Content-Disposition",

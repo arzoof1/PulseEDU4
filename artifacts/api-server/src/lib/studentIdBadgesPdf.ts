@@ -1,24 +1,26 @@
-// Per-student printable ID badges (Phase 3). Sized as a portrait
-// lanyard ID badge — 3.375" × 4.25" (243 × 306 pt). Schools can run
-// these on perforated badge stock or print on letter paper and trim.
-// One badge per page. Contents:
-//   - Colored house ribbon across the top (if assigned)
-//   - School name + "Student ID" tag
-//   - Initials bubble (placeholder for the deferred Student Photos work)
-//   - Name + grade
-//   - QR encoding `${baseUrl}?signin=<studentId>` — kiosk reads this and
-//     pre-fills the sign-in flow
-//   - Code 128 of the raw studentId for hardware laser/CCD scanners
-//   - Student ID number
+// Per-student printable ID badges (Phase 3). Two physical sizes:
+//   - "lanyard" (default): portrait 3.375" × 4.25" — the common
+//     school-issued lanyard ID card. Big initials bubble, centered
+//     QR, barcode strip, ID number.
+//   - "cr80": standard credit-card ID 3.375" × 2.125", landscape.
+//     Two-column layout (left = ribbon/identity, right = QR + barcode)
+//     so the smaller canvas still carries every required element.
+// One badge per page; the school picks the size when printing.
 
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import bwipjs from "bwip-js";
 import { normalizeHex } from "./pdfColors";
 
-// Portrait lanyard ID badge — 3.375" × 4.25" at 72dpi
-const BADGE_WIDTH = 243;
-const BADGE_HEIGHT = 306;
+export type BadgeSize = "lanyard" | "cr80";
+
+// Portrait lanyard ID — 3.375" × 4.25" at 72dpi
+const LANYARD_W = 243;
+const LANYARD_H = 306;
+// Landscape CR80 — 3.375" × 2.125" at 72dpi
+const CR80_W = 243;
+const CR80_H = 153;
+
 const PAGE_MARGIN = 10;
 
 export interface StudentBadgeInput {
@@ -39,9 +41,11 @@ export interface StudentBadgeInput {
 
 export async function renderStudentBadgesPdf(
   badges: StudentBadgeInput[],
+  size: BadgeSize = "lanyard",
 ): Promise<Buffer> {
+  const [W, H] = size === "cr80" ? [CR80_W, CR80_H] : [LANYARD_W, LANYARD_H];
   const doc = new PDFDocument({
-    size: [BADGE_WIDTH, BADGE_HEIGHT],
+    size: [W, H],
     margins: {
       top: PAGE_MARGIN,
       bottom: PAGE_MARGIN,
@@ -58,23 +62,25 @@ export async function renderStudentBadgesPdf(
   });
 
   for (let i = 0; i < badges.length; i++) {
-    if (i > 0) doc.addPage({ size: [BADGE_WIDTH, BADGE_HEIGHT] });
-    await renderOneBadge(doc, badges[i]);
+    if (i > 0) doc.addPage({ size: [W, H] });
+    if (size === "cr80") {
+      await renderCr80Badge(doc, badges[i]);
+    } else {
+      await renderLanyardBadge(doc, badges[i]);
+    }
   }
 
   doc.end();
   return done;
 }
 
-async function renderOneBadge(
+async function renderLanyardBadge(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
 ) {
-  const W = BADGE_WIDTH;
-  const H = BADGE_HEIGHT;
+  const W = LANYARD_W;
+  const H = LANYARD_H;
 
-  // Outer card border so a trimmer has a guideline when printing on
-  // plain paper.
   doc
     .save()
     .lineWidth(0.5)
@@ -83,8 +89,6 @@ async function renderOneBadge(
     .stroke()
     .restore();
 
-  // House ribbon across the top — colored band with the house name.
-  // Falls back to a neutral header when the student has no house.
   const ribbonH = 36;
   const ribbonColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
   doc
@@ -93,8 +97,6 @@ async function renderOneBadge(
     .roundedRect(2, 2, W - 4, ribbonH, 8)
     .fill()
     .restore();
-  // Square off the bottom of the rounded ribbon so it sits flush
-  // against the rest of the card.
   doc
     .save()
     .fillColor(ribbonColor)
@@ -131,7 +133,6 @@ async function renderOneBadge(
       });
   }
 
-  // School name under the ribbon
   doc
     .fillColor("#475569")
     .fontSize(8)
@@ -141,7 +142,6 @@ async function renderOneBadge(
       lineBreak: false,
     });
 
-  // Initials bubble — centered, colored to the house when present.
   const bubbleSize = 72;
   const bubbleX = (W - bubbleSize) / 2;
   const bubbleY = ribbonH + 22;
@@ -154,9 +154,7 @@ async function renderOneBadge(
     .circle(bubbleX + bubbleSize / 2, bubbleY + bubbleSize / 2, bubbleSize / 2)
     .fill()
     .restore();
-  const initials =
-    `${(badge.firstName[0] ?? "").toUpperCase()}${(badge.lastName[0] ?? "").toUpperCase()}` ||
-    "?";
+  const initials = computeInitials(badge);
   doc
     .fillColor("#ffffff")
     .fontSize(30)
@@ -166,8 +164,6 @@ async function renderOneBadge(
       lineBreak: false,
     });
 
-  // Name + grade — centered, truncates with width-clipping rather than
-  // wrapping to a third line so the card never breaks layout.
   const nameY = bubbleY + bubbleSize + 8;
   doc
     .fillColor("#111827")
@@ -189,38 +185,19 @@ async function renderOneBadge(
       });
   }
 
-  // QR code — kiosk reads `?signin=<id>` from this URL and lands the
-  // student straight on the welcome screen.
-  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.studentId)}`;
-  const qrDataUrl = await QRCode.toDataURL(qrUrl, {
-    margin: 1,
-    width: 200,
-    errorCorrectionLevel: "M",
-  });
-  const qrBuf = Buffer.from(qrDataUrl.split(",")[1], "base64");
+  const qrBuf = await renderQrBuffer(badge);
   const qrSize = 78;
   const qrX = (W - qrSize) / 2;
   const qrY = nameY + 36;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
-  // Code 128 for hardware scanners — narrow strip beneath the QR.
-  const barcodePng = await bwipjs.toBuffer({
-    bcid: "code128",
-    text: badge.studentId,
-    scale: 2,
-    height: 12,
-    includetext: false,
-    paddingwidth: 4,
-    paddingheight: 4,
-    backgroundcolor: "FFFFFF",
-  });
+  const barcodePng = await renderBarcodeBuffer(badge.studentId);
   const bcW = W - PAGE_MARGIN * 2 - 30;
   const bcH = 22;
   const bcX = (W - bcW) / 2;
   const bcY = qrY + qrSize + 4;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
 
-  // Student ID number — bottom strip
   doc
     .fillColor("#111827")
     .fontSize(9)
@@ -229,4 +206,164 @@ async function renderOneBadge(
       align: "center",
       lineBreak: false,
     });
+}
+
+async function renderCr80Badge(
+  doc: PDFKit.PDFDocument,
+  badge: StudentBadgeInput,
+) {
+  const W = CR80_W;
+  const H = CR80_H;
+  const leftColW = 138;
+  const rightColX = leftColW + 4;
+  const rightColW = W - rightColX - 4;
+
+  // Card outline
+  doc
+    .save()
+    .lineWidth(0.5)
+    .strokeColor("#cbd5e1")
+    .roundedRect(2, 2, W - 4, H - 4, 6)
+    .stroke()
+    .restore();
+
+  // Colored left band — house color or neutral.
+  const bandColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
+  doc
+    .save()
+    .fillColor(bandColor)
+    .roundedRect(2, 2, leftColW, H - 4, 6)
+    .fill()
+    .restore();
+  // Square the right edge of the band so it butts against the right
+  // column cleanly.
+  doc
+    .save()
+    .fillColor(bandColor)
+    .rect(leftColW - 4, 2, 6, H - 4)
+    .fill()
+    .restore();
+
+  // Initials bubble (top-left of band)
+  const bubbleSize = 40;
+  const bubbleX = 10;
+  const bubbleY = 10;
+  doc
+    .save()
+    .fillColor("#ffffff")
+    .circle(bubbleX + bubbleSize / 2, bubbleY + bubbleSize / 2, bubbleSize / 2)
+    .fill()
+    .restore();
+  const initials = computeInitials(badge);
+  doc
+    .fillColor(bandColor)
+    .fontSize(18)
+    .text(initials, bubbleX, bubbleY + bubbleSize / 2 - 9, {
+      width: bubbleSize,
+      align: "center",
+      lineBreak: false,
+    });
+
+  // House label beside bubble
+  if (badge.house) {
+    doc
+      .fillColor("#ffffff")
+      .fontSize(8)
+      .text(`${badge.house.name} House`, bubbleX + bubbleSize + 6, bubbleY + 4, {
+        width: leftColW - (bubbleX + bubbleSize + 10),
+        lineBreak: false,
+      });
+  }
+  doc
+    .fillColor("rgba(255,255,255,0.85)")
+    .fontSize(7)
+    .text(
+      badge.schoolName,
+      bubbleX + bubbleSize + 6,
+      bubbleY + (badge.house ? 16 : 8),
+      {
+        width: leftColW - (bubbleX + bubbleSize + 10),
+        lineBreak: false,
+      },
+    );
+
+  // Name + grade beneath the bubble row
+  const nameY = bubbleY + bubbleSize + 8;
+  doc
+    .fillColor("#ffffff")
+    .fontSize(12)
+    .text(`${badge.firstName} ${badge.lastName}`, 8, nameY, {
+      width: leftColW - 12,
+      ellipsis: true,
+      height: 16,
+    });
+  if (badge.grade !== null) {
+    doc
+      .fillColor("rgba(255,255,255,0.85)")
+      .fontSize(8)
+      .text(`Grade ${badge.grade}`, 8, nameY + 16, {
+        width: leftColW - 12,
+        lineBreak: false,
+      });
+  }
+  doc
+    .fillColor("rgba(255,255,255,0.85)")
+    .fontSize(7)
+    .text(`ID ${badge.studentId}`, 8, H - 14, {
+      width: leftColW - 12,
+      lineBreak: false,
+    });
+
+  // Right column — QR on top, Code 128 below.
+  const qrBuf = await renderQrBuffer(badge);
+  const qrSize = 70;
+  const qrX = rightColX + (rightColW - qrSize) / 2;
+  const qrY = 8;
+  doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
+
+  const barcodePng = await renderBarcodeBuffer(badge.studentId);
+  const bcW = rightColW - 6;
+  const bcH = 28;
+  const bcX = rightColX + (rightColW - bcW) / 2;
+  const bcY = qrY + qrSize + 4;
+  doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
+
+  doc
+    .fillColor("#475569")
+    .fontSize(6)
+    .text("Scan to sign in", rightColX, bcY + bcH + 2, {
+      width: rightColW,
+      align: "center",
+      lineBreak: false,
+    });
+}
+
+function computeInitials(badge: StudentBadgeInput): string {
+  return (
+    `${(badge.firstName[0] ?? "").toUpperCase()}${(badge.lastName[0] ?? "").toUpperCase()}` ||
+    "?"
+  );
+}
+
+async function renderQrBuffer(badge: StudentBadgeInput): Promise<Buffer> {
+  const qrUrl = `${badge.baseUrl}?signin=${encodeURIComponent(badge.studentId)}`;
+  const qrDataUrl = await QRCode.toDataURL(qrUrl, {
+    margin: 1,
+    width: 200,
+    errorCorrectionLevel: "M",
+  });
+  return Buffer.from(qrDataUrl.split(",")[1], "base64");
+}
+
+async function renderBarcodeBuffer(studentId: string): Promise<Buffer> {
+  return bwipjs.toBuffer({
+    bcid: "code128",
+    text: studentId,
+    scale: 2,
+    height: 12,
+    includetext: false,
+    paddingwidth: 4,
+    paddingheight: 4,
+    backgroundcolor: "FFFFFF",
+  });
 }

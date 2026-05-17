@@ -11,10 +11,16 @@ import { authFetch } from "../lib/authToken";
 //   - "Print a specific list" — paste a comma-separated student
 //     student_id list (the visible one printed on the badge), we
 //     resolve internal ids server-side
+type BadgeSize = "lanyard" | "cr80";
+
 export function StudentBadgesPanel() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [idList, setIdList] = useState("");
+  // Default to lanyard — most schools issue these on lanyards. CR80
+  // is the standard credit-card / hard-plastic-ID size for printers
+  // that take blank CR80 cards.
+  const [size, setSize] = useState<BadgeSize>("lanyard");
 
   async function download(payload: { all: true } | { studentIds: number[] }) {
     setBusy(true);
@@ -22,7 +28,7 @@ export function StudentBadgesPanel() {
     try {
       const res = await authFetch("/api/students/id-badges.pdf", {
         method: "POST",
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, size }),
       });
       if (!res.ok) {
         const b = await res.json().catch(() => ({}));
@@ -69,6 +75,60 @@ export function StudentBadgesPanel() {
         ribbon, and a QR + Code 128 of their student ID. Students scan
         these at the kiosk to sign in to class or create a hall pass.
       </p>
+
+      <fieldset
+        style={{
+          border: "1px solid var(--border, rgba(0,0,0,0.15))",
+          borderRadius: 6,
+          padding: "0.5rem 0.75rem",
+          margin: "0 0 0.75rem 0",
+        }}
+      >
+        <legend style={{ fontSize: "0.85rem", padding: "0 0.35rem" }}>
+          Badge size
+        </legend>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            marginRight: "1rem",
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="radio"
+            name="badge-size"
+            value="lanyard"
+            checked={size === "lanyard"}
+            onChange={() => setSize("lanyard")}
+            disabled={busy}
+          />
+          <span>
+            Lanyard <span style={{ opacity: 0.65 }}>(3⅜″ × 4¼″, portrait)</span>
+          </span>
+        </label>
+        <label
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: 6,
+            cursor: "pointer",
+          }}
+        >
+          <input
+            type="radio"
+            name="badge-size"
+            value="cr80"
+            checked={size === "cr80"}
+            onChange={() => setSize("cr80")}
+            disabled={busy}
+          />
+          <span>
+            CR80 card <span style={{ opacity: 0.65 }}>(3⅜″ × 2⅛″, landscape)</span>
+          </span>
+        </label>
+      </fieldset>
 
       {error && (
         <div
