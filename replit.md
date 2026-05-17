@@ -71,6 +71,38 @@ _Populate as you build_
 
 ### Recently shipped (reference only — no remaining action)
 
+- **Bulk feature picker + admin "reset to temp password".**
+  (1) `FeaturePickerModal` in `FeatureLicensingAdminPage.tsx`
+  — per-school "Pick features…" button opens a 2-col checkbox
+  grid pre-checked to current effective state (override else plan
+  default), All on / All off shortcuts, optional reason, serial
+  POSTs to existing `/api/feature-licensing/schools/:id/overrides`
+  for every feature (preserves existing `showUpsell`). Fixes the
+  field UX gap where Overrides drawer required N manual disable
+  rows to get "only these features live for this school."
+  (2) Shared CSPRNG helper `lib/tempPassword.ts`
+  (`generateAndHashTempPassword`) — tenancy onboard-district +
+  onboard-school both switched over; identical alphabet/length/cost.
+  (3) `POST /admin/staff/:id/reset-temp-password` in `adminStaff.ts`
+  — generates fresh temp password, returns it ONCE in response.
+  Mirrors every gate from `/admin/staff/:id/password` (Admin/Super
+  only, non-self, same-school for admin / district for super,
+  cannot reset Super/DA unless caller is Super, active only).
+  Surfaced as "Reset to temp" button in `StaffRolesMatrix` with
+  confirm + one-time reveal modal (copy button, monospace, "you
+  won't see it again" warning). Use cases: lost first-login
+  credential, resend invite. No email-invite table yet — that's
+  the long-term path (see Open work).
+
+- **Two-tier feature flag AND fix.** `loadEffectiveFeatures` in
+  `lib/featureLicensing.ts` now ANDs admin `feature_*` with
+  `super_feature_*` (derives admin key by stripping "super"
+  prefix; defaults true if admin column absent for AST-style
+  features). Closes the bug where Parrott Middle SuperUser
+  toggled overrides but teachers still saw every feature
+  (Enterprise plan defaults all-on, overrides only set the
+  super tier — admin tier remained true, so AND was redundant).
+
 - **Per-school plan editor + plan picker on onboarding.**
   Server: `POST /api/tenancy/onboard-district` and `POST
   /api/tenancy/onboard-school` now accept optional `planKey`

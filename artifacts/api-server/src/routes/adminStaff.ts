@@ -13,6 +13,7 @@ import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
 } from "../lib/scope";
+import { generateAndHashTempPassword } from "../lib/tempPassword";
 
 const router: IRouter = Router();
 
@@ -547,6 +548,109 @@ router.post(
       .where(eq(staffTable.id, targetId));
 
     res.json({ ok: true });
+  },
+);
+
+// Admin / SuperUser regenerates a CSPRNG temp password for another staff
+// member and gets it back ONCE in the response — same shape as the
+// "we created your first admin" panel from the onboard-district wizard.
+// Use case: staff member lost their temp password before first sign-in,
+// or admin needs to "reinvite" a new hire who never logged in. We don't
+// have an email-invite table yet (see Open work in replit.md); until
+// then this read-it-once-and-paste-it-to-the-user flow is the smallest
+// path to ship the punch-list item without growing a new schema.
+//
+// Reuses every gate from POST /admin/staff/:id/password above:
+//   - Admin/SuperUser only (not cap_staff_roles).
+//   - Non-self (self must use /auth/change-password).
+//   - Same-school for non-SuperUser, district-scoped for SuperUser.
+//   - Cannot reset SuperUser/District-Admin unless caller is SuperUser.
+//   - Cannot reset inactive accounts.
+router.post(
+  "/admin/staff/:id/reset-temp-password",
+  requireAdminOrSuper(),
+  async (req: Request, res: Response) => {
+    const actor = (req as Request & { staff: StaffRow }).staff;
+    if (!actor.isAdmin && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only Admin or SuperUser can reset passwords." });
+      return;
+    }
+
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId)) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+
+    if (targetId === actor.id) {
+      res.status(409).json({
+        error: "Use Change Password to update your own password.",
+      });
+      return;
+    }
+
+    const actorDistrictSchoolIds = actor.isSuperUser
+      ? await (async () => {
+          const did = await getDistrictIdForSchool(actor.schoolId);
+          return did !== null ? await getSchoolIdsForDistrict(did) : [];
+        })()
+      : null;
+
+    const [target] = await db
+      .select()
+      .from(staffTable)
+      .where(
+        actor.isSuperUser
+          ? and(
+              eq(staffTable.id, targetId),
+              actorDistrictSchoolIds && actorDistrictSchoolIds.length > 0
+                ? inArray(staffTable.schoolId, actorDistrictSchoolIds)
+                : sql`false`,
+            )
+          : and(
+              eq(staffTable.id, targetId),
+              eq(staffTable.schoolId, actor.schoolId),
+            ),
+      );
+    if (!target) {
+      res.status(404).json({ error: "Staff not found" });
+      return;
+    }
+
+    if (!target.active) {
+      res.status(409).json({
+        error: "Reactivate this account before resetting its password.",
+      });
+      return;
+    }
+
+    if (target.isSuperUser && !actor.isSuperUser) {
+      res
+        .status(403)
+        .json({ error: "Only a SuperUser can reset a SuperUser's password." });
+      return;
+    }
+    if (target.isDistrictAdmin && !actor.isSuperUser) {
+      res.status(403).json({
+        error: "Only a SuperUser can reset a District Admin's password.",
+      });
+      return;
+    }
+
+    const { tempPassword, passwordHash } = await generateAndHashTempPassword();
+    await db
+      .update(staffTable)
+      .set({ passwordHash })
+      .where(eq(staffTable.id, targetId));
+
+    res.json({
+      ok: true,
+      tempPassword,
+      displayName: target.displayName,
+      email: target.email,
+    });
   },
 );
 

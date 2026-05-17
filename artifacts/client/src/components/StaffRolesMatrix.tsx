@@ -205,11 +205,59 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const [pwResetTarget, setPwResetTarget] = useState<StaffRow | null>(null);
   const [pwResetValue, setPwResetValue] = useState("");
   const [pwResetBusy, setPwResetBusy] = useState(false);
+  const [tempPwTarget, setTempPwTarget] = useState<StaffRow | null>(null);
+  const [tempPwBusy, setTempPwBusy] = useState(false);
+  const [tempPwResult, setTempPwResult] = useState<{
+    tempPassword: string;
+    displayName: string;
+    email: string;
+  } | null>(null);
 
   const canManageRoles =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.capManageRoles);
   const canResetPasswords =
     Boolean(currentUser.isSuperUser) || Boolean(currentUser.isAdmin);
+
+  async function generateTempPw(target: StaffRow) {
+    // Confirm here (not on click) so the modal can stay simple, and so
+    // mis-clicks on the row button don't immediately invalidate the
+    // target's existing password.
+    if (
+      !window.confirm(
+        `Generate a new temporary password for ${target.displayName}? ` +
+          `Their current password will stop working immediately.`,
+      )
+    ) {
+      return;
+    }
+    setTempPwBusy(true);
+    setError("");
+    try {
+      const res = await authFetch(
+        `/api/admin/staff/${target.id}/reset-temp-password`,
+        { method: "POST" },
+      );
+      const j = (await res.json().catch(() => ({}))) as {
+        tempPassword?: string;
+        displayName?: string;
+        email?: string;
+        error?: string;
+      };
+      if (!res.ok || !j.tempPassword) {
+        throw new Error(j.error || `Reset failed (${res.status})`);
+      }
+      setTempPwResult({
+        tempPassword: j.tempPassword,
+        displayName: j.displayName ?? target.displayName,
+        email: j.email ?? target.email,
+      });
+      setTempPwTarget(null);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTempPwBusy(false);
+    }
+  }
 
   async function submitPwReset() {
     if (!pwResetTarget) return;
@@ -487,21 +535,36 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       s.active &&
                       // Non-SuperUser can't reset a SuperUser's password.
                       (!Boolean(s.isSuperUser) || currentUser.isSuperUser) && (
-                        <button
-                          type="button"
-                          className="ghost"
-                          onClick={() => {
-                            setPwResetTarget(s);
-                            setPwResetValue("");
-                          }}
+                        <div
                           style={{
                             marginTop: 4,
-                            fontSize: 11,
-                            padding: "2px 6px",
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 4,
                           }}
                         >
-                          Reset password
-                        </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => {
+                              setPwResetTarget(s);
+                              setPwResetValue("");
+                            }}
+                            style={{ fontSize: 11, padding: "2px 6px" }}
+                          >
+                            Reset password
+                          </button>
+                          <button
+                            type="button"
+                            className="ghost"
+                            title="Generate a fresh CSPRNG temp password and show it once — for resending invites or recovering lost first-login credentials."
+                            disabled={tempPwBusy}
+                            onClick={() => generateTempPw(s)}
+                            style={{ fontSize: 11, padding: "2px 6px" }}
+                          >
+                            {tempPwBusy ? "…" : "Reset to temp"}
+                          </button>
+                        </div>
                       )}
                   </td>
                   <td
@@ -685,6 +748,82 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 onClick={submitPwReset}
               >
                 {pwResetBusy ? "Saving…" : "Set password"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {tempPwResult && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0,0,0,0.4)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 50,
+          }}
+          onClick={() => setTempPwResult(null)}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: "white",
+              padding: 16,
+              borderRadius: 8,
+              minWidth: 360,
+              maxWidth: "90vw",
+            }}
+          >
+            <h3 style={{ marginTop: 0 }}>Temporary password generated</h3>
+            <p style={{ margin: "4px 0 12px", fontSize: 13 }}>
+              Copy this password and send it to{" "}
+              <strong>{tempPwResult.displayName}</strong> (
+              {tempPwResult.email}) over a trusted channel. They should
+              change it on first sign-in.{" "}
+              <strong>You won't be able to see it again.</strong>
+            </p>
+            <div
+              style={{
+                display: "flex",
+                gap: 8,
+                alignItems: "center",
+                background: "#f8fafc",
+                border: "1px solid #e2e8f0",
+                borderRadius: 6,
+                padding: "8px 10px",
+                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                fontSize: 15,
+                userSelect: "all",
+                wordBreak: "break-all",
+              }}
+            >
+              {tempPwResult.tempPassword}
+            </div>
+            <div
+              style={{
+                marginTop: 12,
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => {
+                  void navigator.clipboard
+                    ?.writeText(tempPwResult.tempPassword)
+                    .catch(() => {});
+                }}
+              >
+                Copy
+              </button>
+              <button type="button" onClick={() => setTempPwResult(null)}>
+                Done
               </button>
             </div>
           </div>

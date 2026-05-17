@@ -9,9 +9,8 @@ import {
 } from "@workspace/db";
 import { eq, asc, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
-import bcrypt from "bcryptjs";
-import { randomInt } from "node:crypto";
 import { getDistrictIdForSchool } from "../lib/scope";
+import { generateAndHashTempPassword } from "../lib/tempPassword";
 import { applyPlanToSchool } from "../lib/featureLicensing";
 
 const router: IRouter = Router();
@@ -503,17 +502,9 @@ router.post("/tenancy/onboard-district", async (req, res) => {
   }
 
   // ---- Generate temp password BEFORE the tx (bcrypt is slow). -------------
-  // 16 url-safe chars from a constrained alphabet so it's both unguessable
-  // and easy to copy out of the success modal. Uses node:crypto's CSPRNG —
-  // Math.random is biased AND predictable; never acceptable for credential
-  // material.
-  const ALPHABET =
-    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  let tempPassword = "";
-  for (let i = 0; i < 16; i++) {
-    tempPassword += ALPHABET[randomInt(0, ALPHABET.length)];
-  }
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  // Shared CSPRNG helper (lib/tempPassword.ts) — see that file for the
+  // alphabet rationale.
+  const { tempPassword, passwordHash } = await generateAndHashTempPassword();
 
   // ---- Look up the plan to assign to the new school. Caller may pass
   //      `planKey` to override; defaults to "enterprise" for back-compat
@@ -734,14 +725,8 @@ router.post("/tenancy/onboard-school", async (req, res) => {
     return;
   }
 
-  // Temp password (CSPRNG, same alphabet as onboard-district).
-  const ALPHABET =
-    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
-  let tempPassword = "";
-  for (let i = 0; i < 16; i++) {
-    tempPassword += ALPHABET[randomInt(0, ALPHABET.length)];
-  }
-  const passwordHash = await bcrypt.hash(tempPassword, 10);
+  // Temp password — shared helper, same shape as onboard-district.
+  const { tempPassword, passwordHash } = await generateAndHashTempPassword();
 
   // Same plan-pick contract as onboard-district: caller can override the
   // default "enterprise" with `planKey`; unknown key 400s.
