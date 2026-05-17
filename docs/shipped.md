@@ -3,6 +3,20 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- AST district-wide bank: `balanceQuarterHoursForDistrict(staffId,
+  districtId)` SUMs ledger rows only for schools in the caller's
+  district (intra-district transfers carry the bank; cross-district
+  transfers start fresh). Wired into `/ast/me`, soft submit check,
+  and approval hard check. New admin-gated `GET
+  /api/ast/staff/:id/ledger` returns the per-staff ledger drilldown
+  with originating school name (innerJoin schools + district filter
+  so cross-district rows can't leak). Race fixes on
+  `/ast/use/:id/decide`: `FOR UPDATE` lock on staff row is now by
+  `staff.id` only (was scoped to current schoolId — broke
+  serialization after intra-district transfer); UPDATE is
+  compare-and-swap on `state='pending_preapproval'` so a concurrent
+  second approver gets 409 instead of double-debiting.
+
 - Packet A follow-ups: witness statement formatted-ID surfacing
   (PlayerDrawer pill + StatementDetailsModal header `formattedCaseId`
   + audit payloads on reminded/requested/edited/completed + one-shot

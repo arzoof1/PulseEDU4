@@ -17,6 +17,7 @@ import {
 import {
   db,
   staffTable,
+  schoolsTable,
   staffAstRequestsTable,
   staffAstLedgerTable,
   isAstCategory,
@@ -115,11 +116,29 @@ function parseQuarterHours(v: unknown): number | null {
   return n;
 }
 
-// Compute live balance for a staff member from the append-only ledger.
-// Cheap — single SUM over an indexed slice.
-async function balanceQuarterHours(
-  schoolId: number,
+// Compute live balance for a staff member from the append-only ledger,
+// restricted to schools in the caller's district. Cheap — single SUM
+// over an indexed slice with a subquery against the schools table.
+//
+// District-wide bank: per HCTA negotiation + product decision (May
+// 2026), a staff member's AST balance follows them across schools
+// WITHIN the same district. Cross-district transfers (rare — e.g.
+// staff moving between Hillsborough and Pinellas) do NOT carry the
+// bank: the new district starts a fresh ledger. Ledger rows keep
+// their originating `school_id` so the audit trail of WHERE hours
+// were earned/used is preserved.
+//
+// `districtId` is derived from the caller's `req.schoolId` at the
+// call site (the caller's school IS in their district by construction,
+// so we cheaply join through schoolsTable). Reads via `db` rather
+// than a passed-in tx are correct: the approval path holds a
+// `FOR UPDATE` lock on the staff row, which serializes every other
+// approver behind the same lock before THEY can read the ledger,
+// so a concurrent ledger INSERT cannot interleave between this SUM
+// and the subsequent debit insert.
+async function balanceQuarterHoursForDistrict(
   staffId: number,
+  districtId: number,
 ): Promise<number> {
   const [row] = await db
     .select({
@@ -128,11 +147,24 @@ async function balanceQuarterHours(
     .from(staffAstLedgerTable)
     .where(
       and(
-        eq(staffAstLedgerTable.schoolId, schoolId),
         eq(staffAstLedgerTable.staffId, staffId),
+        sql`${staffAstLedgerTable.schoolId} IN (SELECT ${schoolsTable.id} FROM ${schoolsTable} WHERE ${schoolsTable.districtId} = ${districtId})`,
       ),
     );
   return Number(row?.total ?? 0);
+}
+
+// Helper: look up the district id for the caller's school. Cached
+// nowhere — the row is one PK lookup against an indexed table and
+// every AST route already does multiple DB calls.
+async function districtIdForSchool(
+  schoolId: number,
+): Promise<number | null> {
+  const [row] = await db
+    .select({ districtId: schoolsTable.districtId })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  return row ? Number(row.districtId) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -146,8 +178,13 @@ router.get(
     if (!schoolId) return;
     const me = getStaff(req);
 
+    const districtId = await districtIdForSchool(schoolId);
+    if (districtId == null) {
+      res.status(500).json({ error: "School has no district" });
+      return;
+    }
     const [balance, requests] = await Promise.all([
-      balanceQuarterHours(schoolId, me.id),
+      balanceQuarterHoursForDistrict(me.id, districtId),
       db
         .select()
         .from(staffAstRequestsTable)
@@ -270,6 +307,93 @@ router.get(
         ),
       );
     res.json({ count: Number(row?.n ?? 0) });
+  },
+);
+
+// ---------------------------------------------------------------------------
+// READ — per-staff ledger drilldown (admin)
+// ---------------------------------------------------------------------------
+// Admin-only drilldown for balance disputes, year-end audits, and
+// bargaining-unit reports. Returns every ledger entry for the target
+// staff member ACROSS ALL SCHOOLS in the district (the bank is
+// district-wide; this is the surface where the originating school is
+// surfaced so an admin can see "earned 12 hrs at Lincoln before
+// transferring, used 4 hrs here"). Capped to 500 rows so a long
+// career doesn't blow up the modal.
+//
+// Tenant guard: caller must be an approver, AND the target staff row
+// must be visible from the caller's current school (i.e. the staff
+// member is currently posted here). This prevents an admin from
+// fishing for ledger data on staff who never transferred to their
+// school. The originating-school name on each row is still shown so
+// the admin can see WHERE hours were earned — that's the whole point.
+router.get(
+  "/ast/staff/:id/ledger",
+  requireApprover,
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const targetId = Number(req.params.id);
+    if (!Number.isFinite(targetId) || targetId <= 0) {
+      res.status(400).json({ error: "Invalid staff id" });
+      return;
+    }
+    // Tenant guard — staff must currently belong to caller's school.
+    const [target] = await db
+      .select({ id: staffTable.id, displayName: staffTable.displayName })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.id, targetId),
+          eq(staffTable.schoolId, schoolId),
+        ),
+      );
+    if (!target) {
+      res.status(404).json({ error: "Staff not found in this school" });
+      return;
+    }
+
+    // District scope. The bank is per-(staff, district); ledger rows
+    // from other districts must NOT leak into this drilldown even if
+    // the same staff record was reused after a cross-district transfer
+    // (rare but possible — staff PK is global).
+    const districtId = await districtIdForSchool(schoolId);
+    if (districtId == null) {
+      res.status(500).json({ error: "School has no district" });
+      return;
+    }
+
+    const rows = await db
+      .select({
+        id: staffAstLedgerTable.id,
+        deltaQuarterHours: staffAstLedgerTable.deltaQuarterHours,
+        kind: staffAstLedgerTable.kind,
+        note: staffAstLedgerTable.note,
+        createdAt: staffAstLedgerTable.createdAt,
+        schoolId: staffAstLedgerTable.schoolId,
+        schoolName: schoolsTable.name,
+        requestId: staffAstLedgerTable.requestId,
+      })
+      .from(staffAstLedgerTable)
+      .innerJoin(
+        schoolsTable,
+        eq(schoolsTable.id, staffAstLedgerTable.schoolId),
+      )
+      .where(
+        and(
+          eq(staffAstLedgerTable.staffId, targetId),
+          eq(schoolsTable.districtId, districtId),
+        ),
+      )
+      .orderBy(desc(staffAstLedgerTable.createdAt))
+      .limit(500);
+
+    const balance = await balanceQuarterHoursForDistrict(targetId, districtId);
+    res.json({
+      staff: { id: target.id, displayName: target.displayName },
+      balanceQuarterHours: balance,
+      entries: rows,
+    });
   },
 );
 
@@ -676,7 +800,12 @@ router.post(
     // Soft balance hint at submit time. The hard check happens at admin
     // approval (so the admin sees the live balance, not a stale snapshot
     // from when the staff first submitted).
-    const balance = await balanceQuarterHours(schoolId, me.id);
+    const districtId = await districtIdForSchool(schoolId);
+    if (districtId == null) {
+      res.status(500).json({ error: "School has no district" });
+      return;
+    }
+    const balance = await balanceQuarterHoursForDistrict(me.id, districtId);
     if (qh > balance) {
       res.status(400).json({
         error: `You only have ${(balance / 4).toFixed(2)} hr in your bank — request a smaller window or earn more first`,
@@ -765,30 +894,34 @@ router.patch(
       // separate USE requests for the same teacher will now queue
       // through this lock instead of both reading the same stale
       // balance and double-spending.
+      //
+      // The lock is BY staff_id ONLY — do NOT add a schoolId filter.
+      // The staff row's school_id can change on a mid-year transfer
+      // and the bank is district-wide; the lock must follow the
+      // person regardless of which school they currently sit at,
+      // otherwise the SELECT FOR UPDATE matches zero rows and the
+      // serialization silently disappears.
       if (decision === "approve") {
         await tx
           .select({ id: staffTable.id })
           .from(staffTable)
-          .where(
-            and(
-              eq(staffTable.id, existing.staffId),
-              eq(staffTable.schoolId, schoolId),
-            ),
-          )
+          .where(eq(staffTable.id, existing.staffId))
           .for("update");
 
-        const [bRow] = await tx
-          .select({
-            total: sql<number>`COALESCE(SUM(${staffAstLedgerTable.deltaQuarterHours}), 0)::int`,
-          })
-          .from(staffAstLedgerTable)
-          .where(
-            and(
-              eq(staffAstLedgerTable.schoolId, schoolId),
-              eq(staffAstLedgerTable.staffId, existing.staffId),
-            ),
-          );
-        const live = Number(bRow?.total ?? 0);
+        // District-scoped bank check — see balanceQuarterHoursForDistrict
+        // comment. The hard double-spend check must reflect the same
+        // total the staff member sees on /ast/me.
+        const districtId = await districtIdForSchool(schoolId);
+        if (districtId == null) {
+          return {
+            http: 500,
+            body: { error: "School has no district" },
+          };
+        }
+        const live = await balanceQuarterHoursForDistrict(
+          existing.staffId,
+          districtId,
+        );
         if (existing.quarterHoursRequested > live) {
           return {
             http: 409,
@@ -799,8 +932,13 @@ router.patch(
         }
       }
 
+      // Compare-and-swap on state: only flip the row if it is STILL
+      // pending_preapproval. Two admins clicking Approve on the same
+      // request within milliseconds of each other will now see the
+      // second update affect zero rows; we abort that loser with a
+      // 409 rather than double-applying the debit below.
       const now = new Date();
-      const [updated] = await tx
+      const updatedRows = await tx
         .update(staffAstRequestsTable)
         .set(
           decision === "approve"
@@ -818,8 +956,22 @@ router.patch(
                 denyNote: note,
               },
         )
-        .where(eq(staffAstRequestsTable.id, id))
+        .where(
+          and(
+            eq(staffAstRequestsTable.id, id),
+            eq(staffAstRequestsTable.state, "pending_preapproval"),
+          ),
+        )
         .returning();
+      if (updatedRows.length === 0) {
+        return {
+          http: 409,
+          body: {
+            error: "Another approver decided this request first — refresh the queue",
+          },
+        };
+      }
+      const updated = updatedRows[0];
 
       if (decision === "approve") {
         await tx.insert(staffAstLedgerTable).values({
