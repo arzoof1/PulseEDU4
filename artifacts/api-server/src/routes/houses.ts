@@ -975,21 +975,36 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
   ];
   const staffIds = [...new Set(rows.map((r) => r.changedByStaffId))];
 
+  // Defensive empty-array guards on every inArray() lookup below: on
+  // a brand-new school (zero audit rows) or a heavily-filtered feed,
+  // these ID arrays can be empty. Some Drizzle drivers emit invalid
+  // SQL on `IN ()` rather than returning no rows, so short-circuit
+  // with Promise.resolve([]) — same pattern the houses lookup
+  // already used.
   const [studentRows, houseRows, staffRows, latestJob] = await Promise.all([
-    db
-      .select({
-        id: studentsTable.id,
-        studentId: studentsTable.studentId,
-        firstName: studentsTable.firstName,
-        lastName: studentsTable.lastName,
-      })
-      .from(studentsTable)
-      .where(
-        and(
-          eq(studentsTable.schoolId, schoolId),
-          inArray(studentsTable.id, studentIds),
+    studentIds.length > 0
+      ? db
+          .select({
+            id: studentsTable.id,
+            studentId: studentsTable.studentId,
+            firstName: studentsTable.firstName,
+            lastName: studentsTable.lastName,
+          })
+          .from(studentsTable)
+          .where(
+            and(
+              eq(studentsTable.schoolId, schoolId),
+              inArray(studentsTable.id, studentIds),
+            ),
+          )
+      : Promise.resolve(
+          [] as Array<{
+            id: number;
+            studentId: string;
+            firstName: string;
+            lastName: string;
+          }>,
         ),
-      ),
     houseIds.length > 0
       ? db
           .select({
@@ -1005,18 +1020,22 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
             ),
           )
       : Promise.resolve([] as Array<{ id: number; name: string; color: string }>),
-    db
-      .select({
-        id: staffTable.id,
-        displayName: staffTable.displayName,
-      })
-      .from(staffTable)
-      .where(
-        and(
-          eq(staffTable.schoolId, schoolId),
-          inArray(staffTable.id, staffIds),
+    staffIds.length > 0
+      ? db
+          .select({
+            id: staffTable.id,
+            displayName: staffTable.displayName,
+          })
+          .from(staffTable)
+          .where(
+            and(
+              eq(staffTable.schoolId, schoolId),
+              inArray(staffTable.id, staffIds),
+            ),
+          )
+      : Promise.resolve(
+          [] as Array<{ id: number; displayName: string }>,
         ),
-      ),
     // Surface the most recent undo-eligible job so the panel can show
     // a single, top-of-page "Undo last sort" button rather than per-row.
     db
