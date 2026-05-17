@@ -22,6 +22,7 @@ export default function TeacherAllowlistAdmin({
   const [errorFor, setErrorFor] = useState<{ name: string; msg: string } | null>(
     null,
   );
+  const [bulkBusy, setBulkBusy] = useState<string | null>(null);
 
   const sortedStaff = useMemo(
     () =>
@@ -68,6 +69,49 @@ export default function TeacherAllowlistAdmin({
     if (current.has(destination)) current.delete(destination);
     else current.add(destination);
     save(staffName, Array.from(current));
+  };
+
+  const bulkToggleColumn = async (destination: string, turnOn: boolean) => {
+    setBulkBusy(destination);
+    setErrorFor(null);
+    const next: Record<string, string[]> = { ...allowlistMap };
+    const failures: string[] = [];
+    // Sequential to avoid hammering; the staff list per school is small.
+    for (const staffName of sortedStaff) {
+      const current = new Set(allowlistMap[staffName] ?? []);
+      const has = current.has(destination);
+      if (turnOn && has) continue;
+      if (!turnOn && !has) continue;
+      if (turnOn) current.add(destination);
+      else current.delete(destination);
+      const destinations = Array.from(current).sort();
+      try {
+        const res = await authFetch(
+          `/api/teacher-allowlist/${encodeURIComponent(staffName)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ destinations }),
+          },
+        );
+        if (!res.ok) throw new Error(await res.text());
+        if (destinations.length === 0) {
+          delete next[staffName];
+        } else {
+          next[staffName] = destinations;
+        }
+      } catch (e) {
+        failures.push(staffName);
+        if (failures.length === 1) {
+          setErrorFor({
+            name: staffName,
+            msg: e instanceof Error ? e.message : "Save failed.",
+          });
+        }
+      }
+    }
+    onChange(next);
+    setBulkBusy(null);
   };
 
   return (
@@ -174,21 +218,58 @@ export default function TeacherAllowlistAdmin({
               >
                 Teacher
               </th>
-              {allDestinations.map((d) => (
-                <th
-                  key={d}
-                  style={{
-                    textAlign: "center",
-                    padding: "0.4rem 0.5rem",
-                    borderBottom: "1px solid #e2e8f0",
-                    fontWeight: 500,
-                    color: "var(--text-muted)",
-                    whiteSpace: "nowrap",
-                  }}
-                >
-                  {d}
-                </th>
-              ))}
+              {allDestinations.map((d) => {
+                const allChecked =
+                  sortedStaff.length > 0 &&
+                  sortedStaff.every((name) =>
+                    (allowlistMap[name] ?? []).includes(d),
+                  );
+                return (
+                  <th
+                    key={d}
+                    style={{
+                      textAlign: "center",
+                      padding: "0.4rem 0.5rem",
+                      borderBottom: "1px solid #e2e8f0",
+                      fontWeight: 500,
+                      color: "var(--text-muted)",
+                      whiteSpace: "nowrap",
+                      verticalAlign: "bottom",
+                    }}
+                  >
+                    <div>{d}</div>
+                    <label
+                      style={{
+                        display: "inline-flex",
+                        alignItems: "center",
+                        gap: 4,
+                        marginTop: 4,
+                        fontSize: "0.7rem",
+                        color: "var(--text-subtle)",
+                        fontWeight: 400,
+                        cursor: bulkBusy ? "wait" : "pointer",
+                      }}
+                      title={
+                        allChecked
+                          ? `Uncheck "${d}" for every visible teacher`
+                          : `Check "${d}" for every visible teacher`
+                      }
+                    >
+                      <input
+                        type="checkbox"
+                        checked={allChecked}
+                        disabled={
+                          bulkBusy !== null || sortedStaff.length === 0
+                        }
+                        onChange={(e) =>
+                          bulkToggleColumn(d, e.target.checked)
+                        }
+                      />
+                      {bulkBusy === d ? "saving…" : "all"}
+                    </label>
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
@@ -243,7 +324,7 @@ export default function TeacherAllowlistAdmin({
                       <input
                         type="checkbox"
                         checked={allowed.has(d)}
-                        disabled={savingFor === name}
+                        disabled={savingFor === name || bulkBusy !== null}
                         onChange={() => toggle(name, d)}
                       />
                     </td>
