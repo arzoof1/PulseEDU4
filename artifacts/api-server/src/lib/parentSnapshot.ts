@@ -25,6 +25,7 @@ import {
   ossLogsTable,
   ossLogDaysTable,
   studentRetentionsTable,
+  studentAttendanceDayTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 
@@ -96,6 +97,21 @@ export interface ParentSnapshot {
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    // Aggregated attendance %. `null` when the window has zero logged
+    // school days for the student (avoids showing a meaningless "0%").
+    // `present` counts attendance_day rows with status='present' OR
+    // 'tardy' (tardy still counts as in-attendance, matching FLDOE
+    // reporting). `total` is every logged day in the window.
+    pct: {
+      ytd: { presentDays: number; totalDays: number; pct: number } | null;
+      last30: { presentDays: number; totalDays: number; pct: number } | null;
+    };
+    // Consecutive on-time days. "On-time" = status='present' (a tardy
+    // breaks the streak). `current` walks back from the most recent
+    // logged day; `longestYtd` is the longest run inside this school
+    // year. Both are zero (not null) when the student has no logged
+    // attendance days at all.
+    onTimeStreak: { current: number; longestYtd: number };
     recent: Array<{
       id: number;
       entryType: string;
@@ -355,6 +371,82 @@ export async function buildParentSnapshot(
       isWithinDays(r.createdAt, 7),
   ).length;
 
+  // ----- Attendance % + on-time streak -----
+  // Uses studentAttendanceDayTable as the source of truth for daily
+  // status. Rows are typically inserted by the SIS importer with one
+  // of {present, tardy, excused, unexcused}; missing rows (e.g.
+  // weekends, school-closed days) are not present in the table at
+  // all so they neither help nor hurt the denominator. We pull only
+  // the current school year (Aug 1 → next Aug 1) so the SUM is
+  // bounded; the last-30 window is then derived in-memory by date
+  // string comparison.
+  const { startIso: syStartIso, endExclusiveIso: syEndIso } = schoolYearBounds();
+  // YYYY-MM-DD for "30 days ago" in server-local time. We compare as
+  // strings against attendance_day.day (also a YYYY-MM-DD date). Build
+  // the string from local Date getters — do NOT use toISOString(),
+  // which serializes in UTC and silently shifts the cutoff by a day
+  // near midnight depending on server timezone.
+  const thirtyAgo = new Date();
+  thirtyAgo.setDate(thirtyAgo.getDate() - 30);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const thirtyAgoIso = `${thirtyAgo.getFullYear()}-${pad(thirtyAgo.getMonth() + 1)}-${pad(thirtyAgo.getDate())}`;
+
+  const attendanceDayRows = sectionsAvailable.attendance
+    ? await db
+        .select({
+          day: studentAttendanceDayTable.day,
+          status: studentAttendanceDayTable.status,
+        })
+        .from(studentAttendanceDayTable)
+        .where(
+          and(
+            eq(studentAttendanceDayTable.schoolId, student.schoolId),
+            eq(studentAttendanceDayTable.studentId, student.studentId),
+            gte(studentAttendanceDayTable.day, syStartIso),
+            lt(studentAttendanceDayTable.day, syEndIso),
+          ),
+        )
+        .orderBy(studentAttendanceDayTable.day)
+    : [];
+
+  function pctBucket(rows: typeof attendanceDayRows) {
+    if (rows.length === 0) return null;
+    const present = rows.filter(
+      (r) => r.status === "present" || r.status === "tardy",
+    ).length;
+    return {
+      presentDays: present,
+      totalDays: rows.length,
+      // One decimal, e.g. 96.4. Clamp to [0, 100] for paranoia.
+      pct: Math.max(0, Math.min(100, Math.round((present / rows.length) * 1000) / 10)),
+    };
+  }
+  const ytdRows = attendanceDayRows; // already bounded by query
+  const last30Rows = attendanceDayRows.filter((r) => r.day >= thirtyAgoIso);
+  const attendancePct = {
+    ytd: pctBucket(ytdRows),
+    last30: pctBucket(last30Rows),
+  };
+
+  // On-time streak: walk attendance_day rows in date order. "On-time"
+  // is status==='present' (a tardy breaks the streak; absent days do
+  // too). `current` is the run that ends on the most recent row.
+  let currentStreak = 0;
+  let longestStreak = 0;
+  let run = 0;
+  for (const r of attendanceDayRows) {
+    if (r.status === "present") {
+      run += 1;
+      if (run > longestStreak) longestStreak = run;
+    } else {
+      run = 0;
+    }
+  }
+  // `run` after the loop is the trailing run = current streak (rows
+  // are ASC by day, so the loop ends on the latest day).
+  currentStreak = run;
+  const onTimeStreak = { current: currentStreak, longestYtd: longestStreak };
+
   // ----- Accommodations -----
   let accommodations: Array<{ id: number; name: string; category: string }> = [];
   if (sectionsAvailable.accommodations) {
@@ -563,6 +655,8 @@ export async function buildParentSnapshot(
       attendance: {
         tardiesThisWeek: tardyThisWeek,
         checkInsThisWeek: checkInThisWeek,
+        pct: attendancePct,
+        onTimeStreak,
         recent: tardyRows.slice(0, 10).map((r) => ({
           id: r.id,
           entryType: r.entryType,

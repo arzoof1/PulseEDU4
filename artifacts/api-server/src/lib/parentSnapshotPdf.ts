@@ -304,6 +304,29 @@ function drawAttendanceBlock(doc: PDFKit.PDFDocument, s: ParentSnapshot) {
       value: String(s.attendance.checkInsThisWeek),
       color: COLORS.muted,
     });
+    // Aggregate attendance metrics mirroring the parent Dashboard.
+    // Render dashes when the school hasn't loaded any attendance-day
+    // data yet so the PDF doesn't pretend to know a 0% rate.
+    stats.push({
+      label: "Attendance (YTD)",
+      value: s.attendance.pct.ytd ? `${s.attendance.pct.ytd.pct}%` : "—",
+      color: COLORS.accent,
+    });
+    stats.push({
+      label: "Attendance (30d)",
+      value: s.attendance.pct.last30 ? `${s.attendance.pct.last30.pct}%` : "—",
+      color: COLORS.accent,
+    });
+    stats.push({
+      label: "On-time streak",
+      value: String(s.attendance.onTimeStreak.current),
+      color: COLORS.positive,
+    });
+    stats.push({
+      label: "Longest streak (YTD)",
+      value: String(s.attendance.onTimeStreak.longestYtd),
+      color: COLORS.positive,
+    });
   }
   if (s.sectionsAvailable.hallPasses) {
     stats.push({

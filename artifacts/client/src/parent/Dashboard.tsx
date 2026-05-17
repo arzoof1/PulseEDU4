@@ -79,6 +79,11 @@ interface Snapshot {
   attendance: {
     tardiesThisWeek: number;
     checkInsThisWeek: number;
+    pct: {
+      ytd: { presentDays: number; totalDays: number; pct: number } | null;
+      last30: { presentDays: number; totalDays: number; pct: number } | null;
+    };
+    onTimeStreak: { current: number; longestYtd: number };
     recent: Array<{
       id: number;
       entryType: string;
@@ -635,6 +640,63 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           title="Attendance"
           icon={<Calendar className="h-4 w-4 text-orange-600" />}
         >
+          {/* Aggregate tiles: attendance % (YTD + last 30) and on-time
+              streak (current + longest YTD). Hidden entirely when the
+              school hasn't loaded any attendance-day data for this
+              student yet, so a brand-new SIS feed doesn't show four
+              empty cards. */}
+          {(snapshot.attendance.pct.ytd ||
+            snapshot.attendance.pct.last30 ||
+            snapshot.attendance.onTimeStreak.longestYtd > 0) && (
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 mb-4">
+              <AttendanceTile
+                label="Attendance · YTD"
+                value={
+                  snapshot.attendance.pct.ytd
+                    ? `${snapshot.attendance.pct.ytd.pct}%`
+                    : "—"
+                }
+                sub={
+                  snapshot.attendance.pct.ytd
+                    ? `${snapshot.attendance.pct.ytd.presentDays} / ${snapshot.attendance.pct.ytd.totalDays} days`
+                    : "no data yet"
+                }
+              />
+              <AttendanceTile
+                label="Attendance · 30d"
+                value={
+                  snapshot.attendance.pct.last30
+                    ? `${snapshot.attendance.pct.last30.pct}%`
+                    : "—"
+                }
+                sub={
+                  snapshot.attendance.pct.last30
+                    ? `${snapshot.attendance.pct.last30.presentDays} / ${snapshot.attendance.pct.last30.totalDays} days`
+                    : "no data yet"
+                }
+              />
+              <AttendanceTile
+                label="On-time streak"
+                value={`${snapshot.attendance.onTimeStreak.current}`}
+                sub={
+                  snapshot.attendance.onTimeStreak.current === 1
+                    ? "day in a row"
+                    : "days in a row"
+                }
+                accent="emerald"
+              />
+              <AttendanceTile
+                label="Longest streak · YTD"
+                value={`${snapshot.attendance.onTimeStreak.longestYtd}`}
+                sub={
+                  snapshot.attendance.onTimeStreak.longestYtd === 1
+                    ? "day"
+                    : "days"
+                }
+                accent="emerald"
+              />
+            </div>
+          )}
           {snapshot.attendance.recent.length === 0 ? (
             <Empty text="No tardies or check-ins recorded." />
           ) : (
@@ -1095,6 +1157,36 @@ function Section({
 
 function Empty({ text }: { text: string }) {
   return <p className="text-sm text-slate-400 italic">{text}</p>;
+}
+
+// Small stat tile used by the Attendance section to surface attendance
+// % (YTD + last 30) and on-time streak (current + longest). Two
+// accents: default slate for attendance %, emerald for streaks so the
+// "good news" metric pops visually.
+function AttendanceTile({
+  label,
+  value,
+  sub,
+  accent = "slate",
+}: {
+  label: string;
+  value: string;
+  sub: string;
+  accent?: "slate" | "emerald";
+}) {
+  const valueClass =
+    accent === "emerald" ? "text-emerald-700" : "text-slate-800";
+  return (
+    <div className="bg-slate-50 rounded-lg border border-slate-100 p-3">
+      <div className="text-[10px] uppercase tracking-wide text-slate-500">
+        {label}
+      </div>
+      <div className={`text-xl font-bold tabular-nums ${valueClass}`}>
+        {value}
+      </div>
+      <div className="text-[11px] text-slate-500">{sub}</div>
+    </div>
+  );
 }
 
 // FastScoreCard — one tile per subject (ELA / Math). Renders the three
