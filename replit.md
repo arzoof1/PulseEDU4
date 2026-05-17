@@ -71,6 +71,21 @@ _Populate as you build_
 
 ### Recently shipped (reference only — no remaining action)
 
+- **SuperUser Audit & Health panel.** `GET /api/superuser/audit-health`
+  in `routes/districtOverview.ts` returns per-district health
+  (schools active/inactive, active staff, audit events in last 7d
+  across `feature_licensing_audit_log` + `iss_admin_log_audit` +
+  `interaction_audit_log`) plus a merged recent-activity timeline
+  (last 25 events, joined to district via `schoolsTable`, missing
+  actor names backfilled from `staffTable` in one bulk lookup —
+  no N+1). Scope reuses the `ALLOW_CROSS_DISTRICT_SUPERUSER` env
+  gate from `/superuser/overview`. Client component
+  `components/districtOverview/AuditHealthPanel.tsx` mounts below
+  `<SuperUserHomeRollups />`. Schema unchanged; no "login activity"
+  or "error rates" surfaced (no source data — drop or add new
+  schema later). 7-day count uses fully parameterized `sql.join`
+  for school IDs (no `sql.raw` string assembly).
+
 - **SuperUser + District Overview landing rollups + Onboard-a-District
   wizard.** `routes/districtOverview.ts` (GET `/api/superuser/overview`,
   GET `/api/district-admin/overview`) + POST

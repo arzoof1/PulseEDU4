@@ -8,8 +8,11 @@ import {
   hallPassesTable,
   pbisEntriesTable,
   issAttendanceDayTable,
+  featureLicensingAuditLogTable,
+  issAdminLogAuditTable,
+  interactionAuditLogTable,
 } from "@workspace/db";
-import { eq, and, inArray, sql, isNull } from "drizzle-orm";
+import { eq, and, inArray, sql, isNull, desc } from "drizzle-orm";
 import { canActAsDistrict } from "../lib/scope";
 import { getDistrictIdForSchool } from "../lib/scope";
 
@@ -379,6 +382,249 @@ router.get("/district-admin/overview", async (req, res) => {
       isSuperUser: !!staff.isSuperUser,
     },
   });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/superuser/audit-health
+//   Tenant-health + recent-admin-activity panel for the SuperUser Home.
+//   Two payload halves:
+//     * `perDistrict`: rolled-up health snapshot per district —
+//         schools (active/inactive), active staff, audit-event count
+//         in the last 7d across the three audit tables we own.
+//     * `recentEvents`: last 25 audit events across all in-scope
+//         districts, projected into a uniform shape with district and
+//         school context for the timeline. Reads three existing audit
+//         tables (no new schema).
+//
+//   Scope follows /superuser/overview: defaults to the caller's
+//   district; flip ALLOW_CROSS_DISTRICT_SUPERUSER=1 to expand reach.
+// ---------------------------------------------------------------------------
+router.get("/superuser/audit-health", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "SuperUser access required" });
+    return;
+  }
+
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  const actorDistrictId = crossDistrict
+    ? null
+    : await getDistrictIdForSchool(staff.schoolId);
+  if (!crossDistrict && actorDistrictId === null) {
+    res.status(403).json({ error: "Caller has no resolvable district" });
+    return;
+  }
+
+  // Districts + schools in scope. Inactive schools are INCLUDED here so
+  // the health tile can surface the active-vs-inactive ratio.
+  const districts = await db
+    .select()
+    .from(districtsTable)
+    .where(
+      crossDistrict ? sql`TRUE` : eq(districtsTable.id, actorDistrictId!),
+    )
+    .orderBy(districtsTable.id);
+  const districtIds = districts.map((d) => d.id);
+  if (districtIds.length === 0) {
+    res.json({ perDistrict: [], recentEvents: [] });
+    return;
+  }
+
+  const schools = await db
+    .select()
+    .from(schoolsTable)
+    .where(inArray(schoolsTable.districtId, districtIds))
+    .orderBy(schoolsTable.districtId, schoolsTable.id);
+  const schoolIds = schools.map((s) => s.id);
+  const districtBySchool = new Map<number, number>();
+  const schoolNameById = new Map<number, string>();
+  for (const s of schools) {
+    districtBySchool.set(s.id, s.districtId);
+    schoolNameById.set(s.id, s.name);
+  }
+
+  // Active staff per school (single grouped query).
+  const staffRows = schoolIds.length
+    ? await db
+        .select({
+          schoolId: staffTable.schoolId,
+          n: sql<number>`COUNT(*)::int`.as("n"),
+        })
+        .from(staffTable)
+        .where(
+          and(
+            inArray(staffTable.schoolId, schoolIds),
+            eq(staffTable.active, true),
+          ),
+        )
+        .groupBy(staffTable.schoolId)
+    : [];
+  const staffBySchool = new Map<number, number>();
+  for (const r of staffRows) staffBySchool.set(r.schoolId, r.n);
+
+  // 7-day audit event count per school across all three audit tables.
+  const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+  const auditRows = schoolIds.length
+    ? ((
+        await db.execute(sql`
+          SELECT school_id, COUNT(*)::int AS n FROM (
+            SELECT school_id, created_at FROM feature_licensing_audit_log
+            UNION ALL
+            SELECT school_id, created_at FROM iss_admin_log_audit
+            UNION ALL
+            SELECT school_id, created_at FROM interaction_audit_log
+          ) x
+          WHERE school_id IN (${sql.join(
+            schoolIds.map((id) => sql`${id}`),
+            sql`, `,
+          )})
+            AND created_at >= ${sevenDaysAgo}
+          GROUP BY school_id
+        `)
+      ).rows as Array<{ school_id: number; n: number }>)
+    : [];
+  const auditBySchool = new Map<number, number>();
+  for (const r of auditRows) auditBySchool.set(Number(r.school_id), Number(r.n));
+
+  // Roll up per-district.
+  const perDistrict = districts.map((d) => {
+    const dSchools = schools.filter((s) => s.districtId === d.id);
+    let active = 0;
+    let inactive = 0;
+    let staffCount = 0;
+    let events = 0;
+    for (const s of dSchools) {
+      if (s.active) active++;
+      else inactive++;
+      staffCount += staffBySchool.get(s.id) ?? 0;
+      events += auditBySchool.get(s.id) ?? 0;
+    }
+    return {
+      districtId: d.id,
+      name: d.name,
+      schoolsActive: active,
+      schoolsInactive: inactive,
+      staffActive: staffCount,
+      auditEvents7d: events,
+    };
+  });
+
+  // Recent activity timeline: top 25 across the three audit tables.
+  // Each branch projects into a uniform shape, then we sort + slice in
+  // memory (3 × 25 rows is trivial).
+  const TIMELINE_LIMIT = 25;
+  const [flRows, issRows, interactionRows] = schoolIds.length
+    ? await Promise.all([
+        db
+          .select({
+            createdAt: featureLicensingAuditLogTable.createdAt,
+            schoolId: featureLicensingAuditLogTable.schoolId,
+            action: featureLicensingAuditLogTable.action,
+            actorStaffId: featureLicensingAuditLogTable.actorStaffId,
+            actorName: featureLicensingAuditLogTable.actorName,
+          })
+          .from(featureLicensingAuditLogTable)
+          .where(inArray(featureLicensingAuditLogTable.schoolId, schoolIds))
+          .orderBy(desc(featureLicensingAuditLogTable.createdAt))
+          .limit(TIMELINE_LIMIT),
+        db
+          .select({
+            createdAt: issAdminLogAuditTable.createdAt,
+            schoolId: issAdminLogAuditTable.schoolId,
+            action: issAdminLogAuditTable.action,
+            actorStaffId: issAdminLogAuditTable.actorStaffId,
+            actorName: issAdminLogAuditTable.actorDisplayName,
+          })
+          .from(issAdminLogAuditTable)
+          .where(inArray(issAdminLogAuditTable.schoolId, schoolIds))
+          .orderBy(desc(issAdminLogAuditTable.createdAt))
+          .limit(TIMELINE_LIMIT),
+        db
+          .select({
+            createdAt: interactionAuditLogTable.createdAt,
+            schoolId: interactionAuditLogTable.schoolId,
+            action: interactionAuditLogTable.action,
+            actorStaffId: interactionAuditLogTable.actorStaffId,
+            actorName: sql<string | null>`NULL`.as("actor_name"),
+          })
+          .from(interactionAuditLogTable)
+          .where(inArray(interactionAuditLogTable.schoolId, schoolIds))
+          .orderBy(desc(interactionAuditLogTable.createdAt))
+          .limit(TIMELINE_LIMIT),
+      ])
+    : [[], [], []];
+
+  type Event = {
+    at: string;
+    source: "feature_licensing" | "iss_admin" | "interaction";
+    action: string;
+    schoolId: number;
+    schoolName: string | null;
+    districtId: number | null;
+    districtName: string | null;
+    actorStaffId: number | null;
+    actorName: string | null;
+  };
+  const districtNameById = new Map<number, string>();
+  for (const d of districts) districtNameById.set(d.id, d.name);
+  const tag = (
+    source: Event["source"],
+    rows: Array<{
+      createdAt: Date;
+      schoolId: number;
+      action: string;
+      actorStaffId: number | null;
+      actorName: string | null;
+    }>,
+  ): Event[] =>
+    rows.map((r) => {
+      const dId = districtBySchool.get(r.schoolId) ?? null;
+      return {
+        at: r.createdAt.toISOString(),
+        source,
+        action: r.action,
+        schoolId: r.schoolId,
+        schoolName: schoolNameById.get(r.schoolId) ?? null,
+        districtId: dId,
+        districtName: dId !== null ? (districtNameById.get(dId) ?? null) : null,
+        actorStaffId: r.actorStaffId,
+        actorName: r.actorName,
+      };
+    });
+
+  const merged: Event[] = [
+    ...tag("feature_licensing", flRows),
+    ...tag("iss_admin", issRows),
+    ...tag("interaction", interactionRows),
+  ]
+    .sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))
+    .slice(0, TIMELINE_LIMIT);
+
+  // Backfill missing actor names with the staff display name (one bulk
+  // lookup for the merged set so we don't N+1 across the timeline).
+  const missingActorIds = Array.from(
+    new Set(
+      merged
+        .filter((e) => !e.actorName && e.actorStaffId !== null)
+        .map((e) => e.actorStaffId as number),
+    ),
+  );
+  if (missingActorIds.length > 0) {
+    const actorRows = await db
+      .select({ id: staffTable.id, displayName: staffTable.displayName })
+      .from(staffTable)
+      .where(inArray(staffTable.id, missingActorIds));
+    const nameById = new Map<number, string>();
+    for (const r of actorRows) nameById.set(r.id, r.displayName);
+    for (const e of merged) {
+      if (!e.actorName && e.actorStaffId !== null) {
+        e.actorName = nameById.get(e.actorStaffId) ?? null;
+      }
+    }
+  }
+
+  res.json({ perDistrict, recentEvents: merged });
 });
 
 export default router;

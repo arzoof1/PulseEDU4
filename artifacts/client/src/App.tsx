@@ -36,6 +36,7 @@ import AstSidebarBadge from "./components/AstSidebarBadge";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
+import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
 import {
   initFeatures,
   useFeatureVisible,
@@ -19915,6 +19916,7 @@ function App() {
             </RoleSection>
           </HowToUseHelp>
           <SuperUserHomeRollups />
+          <AuditHealthPanel />
           <details style={{ marginTop: "1.5rem" }}>
             <summary
               style={{
