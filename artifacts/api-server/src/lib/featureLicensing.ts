@@ -311,16 +311,30 @@ export async function loadEffectiveFeatures(
 
   const map: EffectiveFeatureMap = {};
   for (const spec of FEATURE_KEYS) {
-    // Runtime enable: prefer the existing super_feature_* boolean if
-    // present, otherwise fall back to the plan's `features[key]`. If
-    // neither says yes, the feature is off.
+    // Runtime enable: a feature is live when BOTH switches are on:
+    //   super_feature_* (SuperUser / billing-tier "available to school")
+    //   feature_*       (Admin "do we want it on right now?")
+    // This mirrors the two-tier contract documented in
+    // lib/db/src/schema/schoolSettings.ts. Reading super_feature_* alone
+    // bypasses the admin Off switch — a teacher would then see features
+    // their principal explicitly turned off in School Settings, which
+    // is exactly the bug we hit at Parrott Middle.
+    //
+    // Derive the admin key by stripping the "super" prefix:
+    // `superFeatureHallPasses` → `featureHallPasses`.
     let enabled = false;
     if (spec.schoolSettingsKey && settings) {
-      enabled = Boolean(
-        (settings as unknown as Record<string, unknown>)[
-          spec.schoolSettingsKey
-        ],
-      );
+      const row = settings as unknown as Record<string, unknown>;
+      const superKey = spec.schoolSettingsKey;
+      const adminKey =
+        "feature" + superKey.slice("superFeature".length);
+      const superOn = Boolean(row[superKey]);
+      // Admin key may not exist for newer features (e.g. AST shipped
+      // without a paired feature_* column). Default to TRUE so absence
+      // of the admin toggle behaves the same as "admin has not chosen
+      // to turn it off."
+      const adminOn = adminKey in row ? Boolean(row[adminKey]) : true;
+      enabled = superOn && adminOn;
     } else if (planRow?.features?.[spec.key]) {
       enabled = true;
     }
