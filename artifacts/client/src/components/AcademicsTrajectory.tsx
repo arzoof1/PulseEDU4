@@ -416,17 +416,42 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
     return qs;
   }
 
-  function downloadCsv() {
+  async function downloadCsv() {
     const qs = buildQuery();
-    // Plain anchor click — the server response sets
-    // Content-Disposition: attachment so the browser saves the file.
+    // Must go through authFetch so the Bearer token is attached —
+    // a plain <a href> click in the Replit preview iframe loses the
+    // session cookie and the API returns "Sign-in required".
     const url = `/api/insights/academics/trajectory/export.csv?${qs.toString()}`;
-    const a = document.createElement("a");
-    a.href = url;
-    a.rel = "noopener";
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
+    try {
+      const res = await authFetch(url);
+      if (!res.ok) {
+        const body = await res.text().catch(() => "");
+        alert(`Download failed (${res.status}): ${body || res.statusText}`);
+        return;
+      }
+      const blob = await res.blob();
+      const objUrl = URL.createObjectURL(blob);
+      // Filename comes from the server's Content-Disposition; if absent,
+      // synthesize one from current filters.
+      const dispo = res.headers.get("content-disposition") || "";
+      const match = /filename="?([^"]+)"?/i.exec(dispo);
+      const filename =
+        match?.[1] ||
+        `trajectory_${subject}_${
+          selectedGrades.length > 0
+            ? selectedGrades.join("-")
+            : "all-grades"
+        }_${new Date().toISOString().slice(0, 10)}.csv`;
+      const a = document.createElement("a");
+      a.href = objUrl;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(objUrl);
+    } catch (e) {
+      alert(`Download failed: ${String((e as Error)?.message ?? e)}`);
+    }
   }
 
   // Drawer CSV: generate client-side from the already-loaded subset so
