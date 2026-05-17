@@ -20,6 +20,7 @@ import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
+import PickupTagsPanel from "./components/PickupTagsPanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
@@ -4496,6 +4497,7 @@ function App() {
     | "ast"
     | "astAdmin"
     | "astInsights"
+    | "pickupTags"
   >("hallPasses");
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
@@ -7916,6 +7918,24 @@ function App() {
     isAdmin ||
     authUser?.isDistrictAdmin === true ||
     authUser?.isSuperUser === true;
+  // Pickup-tag management gate — mirrors canManagePickup() in
+  // lib/coreTeam.ts. Admin / Core Team (BS, MTSS, school psych,
+  // district admin, super) / counselor (school OR guidance) /
+  // front-office secretary (capManageDismissal) / confidential
+  // secretary (canApproveAst). Teachers excluded by design.
+  // Used to gate the in-app "Pickup Tags" nav item so office staff
+  // and Core Team can reprint without remembering the /pickup/admin URL.
+  const canManagePickupTags =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCounselor === true ||
+    authUser?.isGuidanceCounselor === true ||
+    authUser?.capManageDismissal === true ||
+    authUser?.canApproveAst === true;
   // Fetch onboarding progress whenever the admin lands on the Settings
   // hub (and after each return from a tile — settingsTile flipping from
   // a value back to null retriggers the effect). This is what powers the
@@ -9189,6 +9209,18 @@ function App() {
               <span className="nav-icon">🚗</span>
               Pickup Line Viewer
             </a>
+            {/* Pickup Tags — in-app printing surface for office staff
+                and Core Team. Server gate is canManagePickup() in
+                lib/coreTeam.ts; canManagePickupTags above mirrors that
+                so teachers don't see this entry. Lives in the main app
+                shell (not /pickup/admin) so non-admins don't need to
+                bookmark a separate URL. */}
+            {canManagePickupTags &&
+              renderNavItem({
+                key: "pickupTags",
+                label: "Pickup Tags",
+                icon: "🖨️",
+              })}
             {/* Spotlight — anchored at the bottom of Quick Access by user
                 request so it reads as the "fun bonus" tool sitting under
                 the workhorse items. Custom standout button (not a regular
@@ -19578,6 +19610,10 @@ function App() {
           initialAnchor={pendingCaseAnchor}
           onAnchorConsumed={() => setPendingCaseAnchor(null)}
         />
+      )}
+
+      {activeSection === "pickupTags" && canManagePickupTags && (
+        <PickupTagsPanel />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "iss-settings" && (
