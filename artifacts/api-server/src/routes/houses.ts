@@ -706,6 +706,57 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
     pinnedByHouse[g.houseId] =
       (pinnedByHouse[g.houseId] ?? 0) + g.studentDbIds.length;
   }
+  // Sibling-pin skew detector. "Keep siblings together" can quietly
+  // push one house well above parity when a handful of large families
+  // happen to be anchored there. We flag a soft warning when the
+  // heaviest house's pin count is meaningfully out of line with its
+  // peers, so the admin can decide whether to keep the toggle on
+  // without us silently blocking the commit.
+  //
+  // Thresholds (tune here — the UI just renders what we return):
+  //   - SKEW_MIN_PINS: ignore tiny pin sets; a 3-vs-1 split is noise.
+  //   - SKEW_HOUSE_SHARE: heaviest house's pins make up more than this
+  //     fraction of its own proposed inflow → that house is being
+  //     stuffed with siblings rather than balanced.
+  //   - SKEW_RATIO: heaviest house has strictly more than this multiple
+  //     of the lightest house's pins. Lightest is min across ALL
+  //     houses, but clamped to 1 in the denominator so a zero-pin
+  //     house doesn't trip on a single pin elsewhere — the ratio is
+  //     effectively gated by SKEW_MIN_PINS in that case.
+  // Either condition trips the warning; both must clear SKEW_MIN_PINS.
+  const SKEW_MIN_PINS = 4;
+  const SKEW_HOUSE_SHARE = 0.25;
+  const SKEW_RATIO = 2;
+  let heaviestHouseId: number | null = null;
+  let heaviestCount = 0;
+  let lightestHouseId: number | null = null;
+  let lightestCount = Number.POSITIVE_INFINITY;
+  for (const h of plan.houses) {
+    const c = pinnedByHouse[h.id] ?? 0;
+    if (c > heaviestCount) {
+      heaviestCount = c;
+      heaviestHouseId = h.id;
+    }
+    if (c < lightestCount) {
+      lightestCount = c;
+      lightestHouseId = h.id;
+    }
+  }
+  if (!Number.isFinite(lightestCount)) lightestCount = 0;
+  const heaviestProposed =
+    heaviestHouseId !== null
+      ? (plan.proposedCounts[heaviestHouseId] ?? 0)
+      : 0;
+  const shareTrips =
+    heaviestCount >= SKEW_MIN_PINS &&
+    heaviestProposed > 0 &&
+    heaviestCount / heaviestProposed > SKEW_HOUSE_SHARE;
+  const ratioTrips =
+    heaviestCount >= SKEW_MIN_PINS &&
+    plan.houses.length >= 2 &&
+    heaviestCount > SKEW_RATIO * Math.max(lightestCount, 1) &&
+    heaviestCount > lightestCount;
+  const skewLopsided = shareTrips || ratioTrips;
   // Per-pinned-student lookup of the anchoring elder. The same elder
   // is shared by every member of a sibling group, so we flatten the
   // groups into a {pinned -> elder} map for cheap O(1) sample
@@ -774,6 +825,20 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
       // any API consumer reconstruct the family→house mapping
       // beyond the ~10 names surfaced in `samples`.
       groups: plan.pinnedGroups,
+      // Soft-warning payload. `lopsided=true` means at least one of
+      // the thresholds above tripped — the client renders a yellow
+      // notice naming the heaviest/lightest house. `null` heaviest
+      // means no pins at all (nothing to warn about).
+      skew: {
+        lopsided: skewLopsided,
+        heaviestHouseId,
+        heaviestCount,
+        lightestHouseId,
+        lightestCount,
+        minPins: SKEW_MIN_PINS,
+        houseShare: SKEW_HOUSE_SHARE,
+        ratio: SKEW_RATIO,
+      },
     },
   });
 });

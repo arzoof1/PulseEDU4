@@ -70,6 +70,21 @@ type PreviewResp = {
         houseId: number;
       } | null;
     }>;
+    // Soft-warning payload computed by the server. When `lopsided`
+    // is true, the UI surfaces a yellow inline notice naming the
+    // heaviest and lightest pinned houses so the admin can decide
+    // whether to keep "Keep siblings together" on. Optional for
+    // forward-compat with older server builds.
+    skew?: {
+      lopsided: boolean;
+      heaviestHouseId: number | null;
+      heaviestCount: number;
+      lightestHouseId: number | null;
+      lightestCount: number;
+      minPins: number;
+      houseShare: number;
+      ratio: number;
+    };
   };
 };
 
@@ -388,6 +403,47 @@ function SortTab({
             {preview.totalChanged === 1 ? "" : "s"} out of{" "}
             {preview.totalEligible} eligible
           </h4>
+          {preview.siblingPins?.skew?.lopsided && (() => {
+            const sk = preview.siblingPins!.skew!;
+            const houseLookup = new Map(preview.houses.map((h) => [h.id, h]));
+            const heavy =
+              sk.heaviestHouseId !== null
+                ? houseLookup.get(sk.heaviestHouseId)
+                : undefined;
+            const light =
+              sk.lightestHouseId !== null
+                ? houseLookup.get(sk.lightestHouseId)
+                : undefined;
+            if (!heavy) return null;
+            return (
+              <div
+                role="status"
+                style={{
+                  margin: "0.25rem 0 0.75rem",
+                  background: "#fef9c3",
+                  border: "1px solid #fde68a",
+                  color: "#713f12",
+                  borderRadius: 6,
+                  padding: "0.5rem 0.75rem",
+                  maxWidth: 520,
+                  fontSize: "0.88rem",
+                  lineHeight: 1.4,
+                }}
+              >
+                Sibling pinning is sending {sk.heaviestCount} student
+                {sk.heaviestCount === 1 ? "" : "s"} to{" "}
+                <span style={pillStyle(heavy.color)}>{heavy.name}</span>
+                {light && light.id !== heavy.id ? (
+                  <>
+                    {" "}vs.{" "}{sk.lightestCount}{" to "}
+                    <span style={pillStyle(light.color)}>{light.name}</span>
+                  </>
+                ) : null}
+                . Consider whether to keep "Keep siblings together" on for
+                this sort.
+              </div>
+            );
+          })()}
           {preview.siblingPins && preview.siblingPins.studentCount > 0 && (() => {
             const sp = preview.siblingPins!;
             const houseLookup = new Map(preview.houses.map((h) => [h.id, h]));
