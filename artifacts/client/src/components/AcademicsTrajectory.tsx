@@ -1119,15 +1119,28 @@ function SubjectChip({
   icon: React.ComponentType<{ className?: string }>;
   label: string;
 }) {
+  // Same tinted palette as GradeChip so every "selected" affordance on
+  // the trajectory page reads the same — blue fill + soft glow ring.
   return (
     <button
       type="button"
       onClick={onClick}
-      className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold border transition-colors ${
-        active
-          ? "bg-slate-900 text-white border-slate-900"
-          : "bg-white text-slate-700 border-slate-300 hover:bg-slate-100"
-      }`}
+      aria-pressed={active}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        padding: "6px 14px",
+        borderRadius: 999,
+        fontSize: 13,
+        fontWeight: 600,
+        cursor: "pointer",
+        transition: "background-color 120ms, color 120ms, border-color 120ms",
+        border: active ? "1px solid #2563eb" : "1px solid #cbd5e1",
+        background: active ? "#2563eb" : "white",
+        color: active ? "white" : "#334155",
+        boxShadow: active ? "0 0 0 2px rgba(37,99,235,0.18)" : "none",
+      }}
     >
       <Icon className="h-4 w-4" />
       {label}
