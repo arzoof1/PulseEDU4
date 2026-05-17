@@ -1,8 +1,18 @@
 import { Router, type IRouter } from "express";
-import { db, staffTable, districtsTable, schoolsTable } from "@workspace/db";
+import {
+  db,
+  staffTable,
+  districtsTable,
+  schoolsTable,
+  schoolSettingsTable,
+  plansTable,
+} from "@workspace/db";
 import { eq, asc, and } from "drizzle-orm";
 import { sql } from "drizzle-orm";
+import bcrypt from "bcryptjs";
+import { randomInt } from "node:crypto";
 import { getDistrictIdForSchool } from "../lib/scope";
+import { applyPlanToSchool } from "../lib/featureLicensing";
 
 const router: IRouter = Router();
 
@@ -379,6 +389,232 @@ router.get("/tenancy/status", async (req, res) => {
     totalOrphans,
     perSchoolBreakdownAvailable: true,
   });
+});
+
+// ---------------------------------------------------------------------------
+// POST /api/tenancy/onboard-district
+//   SuperUser-only. End-to-end "stand up a new district" wizard target:
+//   creates the district row, its first (primary) school, the school's
+//   default settings row, applies the default `enterprise` plan to it,
+//   and creates the first school-admin staff member. All inside a single
+//   transaction so a partial failure leaves no orphan rows.
+//
+//   Returns the IDs of all three created rows plus a one-time temporary
+//   password for the admin so the SuperUser can hand it off in band. The
+//   admin can change it on first login (existing flow).
+// ---------------------------------------------------------------------------
+router.post("/tenancy/onboard-district", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const body = (req.body ?? {}) as {
+    districtName?: unknown;
+    districtSlug?: unknown;
+    stateDistrictCode?: unknown;
+    timezone?: unknown;
+    schoolName?: unknown;
+    schoolShortName?: unknown;
+    stateSchoolCode?: unknown;
+    adminEmail?: unknown;
+    adminFirstName?: unknown;
+    adminLastName?: unknown;
+  };
+
+  // ---- Validate (all strings, trimmed, required vs. optional). ------------
+  const districtName =
+    typeof body.districtName === "string" ? body.districtName.trim() : "";
+  const districtSlug =
+    typeof body.districtSlug === "string" ? body.districtSlug.trim() : "";
+  const schoolName =
+    typeof body.schoolName === "string" ? body.schoolName.trim() : "";
+  const adminEmail =
+    typeof body.adminEmail === "string" ? body.adminEmail.trim().toLowerCase() : "";
+  const adminFirstName =
+    typeof body.adminFirstName === "string" ? body.adminFirstName.trim() : "";
+  const adminLastName =
+    typeof body.adminLastName === "string" ? body.adminLastName.trim() : "";
+
+  const missing: string[] = [];
+  if (!districtName) missing.push("districtName");
+  if (!districtSlug) missing.push("districtSlug");
+  if (!schoolName) missing.push("schoolName");
+  if (!adminEmail) missing.push("adminEmail");
+  if (!adminFirstName) missing.push("adminFirstName");
+  if (!adminLastName) missing.push("adminLastName");
+  if (missing.length > 0) {
+    res
+      .status(400)
+      .json({ error: `Missing required fields: ${missing.join(", ")}` });
+    return;
+  }
+
+  // Slug shape: lowercase letters + digits + hyphens only. Matches the
+  // existing seed convention and keeps URLs predictable.
+  if (!/^[a-z0-9-]+$/.test(districtSlug)) {
+    res.status(400).json({
+      error:
+        "districtSlug must contain only lowercase letters, digits, and hyphens",
+    });
+    return;
+  }
+  if (!/^\S+@\S+\.\S+$/.test(adminEmail)) {
+    res.status(400).json({ error: "adminEmail is not a valid email" });
+    return;
+  }
+
+  const stateDistrictCode =
+    typeof body.stateDistrictCode === "string" && body.stateDistrictCode.trim()
+      ? body.stateDistrictCode.trim()
+      : null;
+  const timezone =
+    typeof body.timezone === "string" && body.timezone.trim()
+      ? body.timezone.trim()
+      : "America/New_York";
+  const schoolShortName =
+    typeof body.schoolShortName === "string" && body.schoolShortName.trim()
+      ? body.schoolShortName.trim()
+      : null;
+  const stateSchoolCode =
+    typeof body.stateSchoolCode === "string" && body.stateSchoolCode.trim()
+      ? body.stateSchoolCode.trim()
+      : null;
+
+  // ---- Pre-flight uniqueness checks (outside tx for friendlier errors). ---
+  const [slugClash] = await db
+    .select()
+    .from(districtsTable)
+    .where(eq(districtsTable.slug, districtSlug));
+  if (slugClash) {
+    res.status(409).json({
+      error: `District slug "${districtSlug}" is already taken`,
+    });
+    return;
+  }
+  const [emailClash] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.email, adminEmail));
+  if (emailClash) {
+    res.status(409).json({
+      error: `A staff member with email ${adminEmail} already exists`,
+    });
+    return;
+  }
+
+  // ---- Generate temp password BEFORE the tx (bcrypt is slow). -------------
+  // 16 url-safe chars from a constrained alphabet so it's both unguessable
+  // and easy to copy out of the success modal. Uses node:crypto's CSPRNG —
+  // Math.random is biased AND predictable; never acceptable for credential
+  // material.
+  const ALPHABET =
+    "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghjkmnpqrstuvwxyz23456789";
+  let tempPassword = "";
+  for (let i = 0; i < 16; i++) {
+    tempPassword += ALPHABET[randomInt(0, ALPHABET.length)];
+  }
+  const passwordHash = await bcrypt.hash(tempPassword, 10);
+
+  // ---- Look up the default plan to assign to the new school. --------------
+  const [enterprisePlan] = await db
+    .select()
+    .from(plansTable)
+    .where(eq(plansTable.key, "enterprise"));
+
+  // ---- Transactional create: district → school → settings → admin. -------
+  try {
+    const result = await db.transaction(async (tx) => {
+      const [district] = await tx
+        .insert(districtsTable)
+        .values({
+          name: districtName,
+          slug: districtSlug,
+          stateDistrictCode,
+          timezone,
+        })
+        .returning();
+
+      const [school] = await tx
+        .insert(schoolsTable)
+        .values({
+          districtId: district.id,
+          name: schoolName,
+          shortName: schoolShortName,
+          stateSchoolCode,
+          isPrimary: true,
+          active: true,
+        })
+        .returning();
+
+      // Settings row uses every column's DB default — same shape every
+      // school in the system starts with.
+      await tx
+        .insert(schoolSettingsTable)
+        .values({ schoolId: school.id });
+
+      // Assign the enterprise plan (if seeded) so all superFeature_* flags
+      // are explicitly true. Wrapped in the same tx for atomicity.
+      if (enterprisePlan) {
+        await applyPlanToSchool(school.id, enterprisePlan.id, tx);
+      }
+
+      const [admin] = await tx
+        .insert(staffTable)
+        .values({
+          schoolId: school.id,
+          email: adminEmail,
+          passwordHash,
+          displayName: `${adminFirstName} ${adminLastName}`,
+          isAdmin: true,
+          active: true,
+        })
+        .returning();
+
+      return { district, school, admin };
+    });
+
+    res.status(201).json({
+      district: {
+        id: result.district.id,
+        name: result.district.name,
+        slug: result.district.slug,
+      },
+      school: {
+        id: result.school.id,
+        name: result.school.name,
+        shortName: result.school.shortName,
+      },
+      admin: {
+        id: result.admin.id,
+        email: result.admin.email,
+        displayName: result.admin.displayName,
+      },
+      // One-time. Not stored anywhere on the server beyond the bcrypt
+      // hash. The SuperUser must capture it from the response.
+      tempPassword,
+    });
+  } catch (err: any) {
+    // Map race-condition unique-violations back to a deterministic 409
+    // so the operator sees the same friendly message the pre-flight
+    // check produces. Postgres error code 23505 = unique_violation.
+    const pgCode = err?.cause?.code ?? err?.code;
+    if (pgCode === "23505") {
+      const detail: string = err?.cause?.detail ?? err?.detail ?? "";
+      const isSlug = /districts.*slug/i.test(detail);
+      const isEmail = /staff.*email/i.test(detail);
+      res.status(409).json({
+        error: isSlug
+          ? `District slug "${districtSlug}" is already taken`
+          : isEmail
+            ? `A staff member with email ${adminEmail} already exists`
+            : "A row with this identifier already exists",
+      });
+      return;
+    }
+    req.log?.error?.({ err }, "onboard-district failed");
+    res
+      .status(500)
+      .json({ error: "Failed to onboard district — see server logs" });
+  }
 });
 
 export default router;

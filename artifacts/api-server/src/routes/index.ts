@@ -85,6 +85,7 @@ import pickupRouter from "./pickup";
 import astRouter from "./ast";
 import featureLicensingRouter from "./featureLicensing";
 import fastCoverageRouter from "./fastCoverage";
+import districtOverviewRouter from "./districtOverview";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -228,5 +229,6 @@ router.use(pickupRouter);
 router.use(astRouter);
 router.use(featureLicensingRouter);
 router.use(fastCoverageRouter);
+router.use(districtOverviewRouter);
 
 export default router;

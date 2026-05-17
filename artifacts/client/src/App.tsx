@@ -34,6 +34,8 @@ import InterventionsBell from "./components/InterventionsBell";
 import AstNotificationBell from "./components/AstNotificationBell";
 import AstSidebarBadge from "./components/AstSidebarBadge";
 import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLicensingAdminPage";
+import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
+import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
 import {
   initFeatures,
   useFeatureVisible,
@@ -19912,18 +19914,30 @@ function App() {
               is logged in the audit trail of any action you take.
             </RoleSection>
           </HowToUseHelp>
-          <div
-            style={{
-              display: "grid",
-              gap: "0.75rem",
-              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-              marginTop: "1rem",
-            }}
-          >
-            {SUPER_USER_HOME_CARDS.map((c) => (
-              <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
-            ))}
-          </div>
+          <SuperUserHomeRollups />
+          <details style={{ marginTop: "1.5rem" }}>
+            <summary
+              style={{
+                cursor: "pointer",
+                color: "var(--text-subtle)",
+                fontSize: "0.85rem",
+              }}
+            >
+              Roadmap — coming in later phases
+            </summary>
+            <div
+              style={{
+                display: "grid",
+                gap: "0.75rem",
+                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                marginTop: "0.75rem",
+              }}
+            >
+              {SUPER_USER_HOME_CARDS.map((c) => (
+                <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
+              ))}
+            </div>
+          </details>
         </div>
       )}
 
@@ -20183,18 +20197,30 @@ function App() {
               in the dropdown.
             </RoleSection>
           </HowToUseHelp>
-          <div
-            style={{
-              display: "grid",
-              gap: "0.75rem",
-              gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-              marginTop: "1rem",
-            }}
-          >
-            {DISTRICT_ADMIN_CARDS.map((c) => (
-              <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
-            ))}
-          </div>
+          <DistrictOverviewRollups />
+          <details style={{ marginTop: "1.5rem" }}>
+            <summary
+              style={{
+                cursor: "pointer",
+                color: "var(--text-subtle)",
+                fontSize: "0.85rem",
+              }}
+            >
+              Roadmap — coming in later phases
+            </summary>
+            <div
+              style={{
+                display: "grid",
+                gap: "0.75rem",
+                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
+                marginTop: "0.75rem",
+              }}
+            >
+              {DISTRICT_ADMIN_CARDS.map((c) => (
+                <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
+              ))}
+            </div>
+          </details>
         </div>
       )}
 
