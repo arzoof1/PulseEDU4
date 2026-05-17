@@ -855,6 +855,26 @@ function OverridesDrawer({
     }
   }
 
+  async function resetAll() {
+    if (rows.length === 0) return;
+    const confirmed = window.confirm(
+      `Reset ${schoolName} back to pure plan defaults?\n\n` +
+        `This will delete all ${rows.length} override row${
+          rows.length === 1 ? "" : "s"
+        } for this school. The school will then inherit every feature from its plan, and future plan changes will flow through automatically.`,
+    );
+    if (!confirmed) return;
+    try {
+      await deleteRequest(
+        `/api/feature-licensing/schools/${schoolId}/overrides`,
+      );
+      await reload();
+      await onChanged();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    }
+  }
+
   return (
     <ModalShell title={`Overrides — ${schoolName}`} onClose={onClose}>
       <p style={{ color: "var(--text-subtle, #555)" }}>
@@ -914,7 +934,28 @@ function OverridesDrawer({
           })}
         </tbody>
       </table>
-      <div style={{ textAlign: "right", marginTop: 12 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "center",
+          marginTop: 12,
+          gap: 8,
+        }}
+      >
+        <button
+          type="button"
+          onClick={resetAll}
+          disabled={rows.length === 0}
+          title={
+            rows.length === 0
+              ? "No overrides to clear"
+              : "Delete every override row and re-inherit from the plan"
+          }
+        >
+          Reset to plan defaults
+          {rows.length > 0 ? ` (${rows.length})` : ""}
+        </button>
         <button onClick={onClose}>Close</button>
       </div>
     </ModalShell>
@@ -994,32 +1035,53 @@ function FeaturePickerModal({
     setSelected(next);
   }
 
+  // Diff-based save (changed Apr 2026 after the demo footgun: previously
+  // this wrote 19 override rows on every Save regardless of selection,
+  // pinning the school's entire feature set as overrides and breaking
+  // plan inheritance forever — even an unchanged Save bumped the
+  // override count to 19). New behavior:
+  //   - selected matches plan default → DELETE the existing override
+  //     (if any) so the feature re-inherits from the plan.
+  //   - selected differs from plan default → POST upsert.
+  //   - no existing override and selection matches plan → no-op.
+  // Net effect: overrideCount reflects only real deviations.
   async function save() {
     if (!selected) return;
     setSaving(true);
     try {
-      // Pre-existing showUpsell values should be preserved so the picker
-      // doesn't accidentally clobber an upsell setting the admin set in
-      // the Overrides drawer.
       const showUpsellByKey = new Map(
         existingOverrides.map((o) => [o.featureKey, o.showUpsell]),
       );
+      const overrideByKey = new Map(
+        existingOverrides.map((o) => [o.featureKey, o]),
+      );
       const cleanedReason = reason.trim() || undefined;
-      // Serial POSTs — each upsert opens a tx + reapplies licensing to
-      // school_settings; running them in parallel risks lock contention
-      // on the same row and out-of-order super_feature_* writes. 19
-      // features is fast enough to do sequentially.
+      // Serial — each write opens a tx + reapplies licensing; parallel
+      // would risk lock contention + out-of-order super_feature_* writes.
       for (const f of features) {
-        await sendJson(
-          `/api/feature-licensing/schools/${schoolId}/overrides`,
-          "POST",
-          {
-            featureKey: f.key,
-            enabled: Boolean(selected[f.key]),
-            showUpsell: showUpsellByKey.get(f.key) ?? false,
-            reason: cleanedReason,
-          },
-        );
+        const want = Boolean(selected[f.key]);
+        const planDefault = Boolean(plan?.features?.[f.key]);
+        const existing = overrideByKey.get(f.key);
+        if (want === planDefault) {
+          // Should re-inherit from plan. Drop any existing override row.
+          if (existing) {
+            await deleteRequest(
+              `/api/feature-licensing/schools/${schoolId}/overrides/${existing.id}`,
+            );
+          }
+        } else {
+          // Genuine deviation — upsert.
+          await sendJson(
+            `/api/feature-licensing/schools/${schoolId}/overrides`,
+            "POST",
+            {
+              featureKey: f.key,
+              enabled: want,
+              showUpsell: showUpsellByKey.get(f.key) ?? false,
+              reason: cleanedReason,
+            },
+          );
+        }
       }
       await onSaved();
     } catch (e) {
@@ -1039,12 +1101,12 @@ function FeaturePickerModal({
       onClose={saving ? () => {} : onClose}
     >
       <p style={{ color: "var(--text-subtle, #555)", marginTop: 0 }}>
-        Check the features that should be live for this school. Saving
-        writes a per-school override for every feature with the state
-        you picked, so the result is independent of the plan (
-        {plan ? <code>{plan.key}</code> : "no plan"}). To go back to
-        plan defaults, use the <em>Overrides…</em> drawer and click
-        Clear on each row.
+        Check the features that should be live for this school. We only
+        save the boxes that <em>differ</em> from the plan (
+        {plan ? <code>{plan.key}</code> : "no plan"}) — anything that
+        matches the plan default stays inherited, so flipping a default
+        in the plan still flows through. The override count on the
+        Schools list will reflect just your real deviations.
       </p>
 
       {selected === null ? (
@@ -1144,7 +1206,7 @@ function FeaturePickerModal({
               Cancel
             </button>
             <button type="button" onClick={save} disabled={saving}>
-              {saving ? "Saving…" : `Save (${features.length} overrides)`}
+              {saving ? "Saving…" : "Save"}
             </button>
           </div>
         </>

@@ -485,6 +485,39 @@ router.post(
   },
 );
 
+// Reset a school back to pure-plan: delete every override row in one tx
+// + reapply the plan so the runtime super_feature_* booleans land on the
+// plan's defaults. This is the inverse of the early Pick-features
+// behavior that wrote 19 override rows on every Save; gives admins a
+// one-click "make this school inherit cleanly" recovery path.
+router.delete(
+  "/feature-licensing/schools/:id/overrides",
+  async (req, res, next) => {
+    try {
+      const actor = await requireSuperUser(req, res);
+      if (!actor) return;
+      const schoolId = Number(req.params.id);
+      if (!Number.isFinite(schoolId)) {
+        res.status(400).json({ error: "invalid_id" });
+        return;
+      }
+      if (!(await assertSchoolInCallerDistrict(actor.schoolId, schoolId, res)))
+        return;
+      const deleted = await db.transaction(async (tx) => {
+        const removed = await tx
+          .delete(schoolFeatureOverridesTable)
+          .where(eq(schoolFeatureOverridesTable.schoolId, schoolId))
+          .returning({ id: schoolFeatureOverridesTable.id });
+        await reapplyLicensingToSchool(schoolId, tx);
+        return removed.length;
+      });
+      res.json({ ok: true, deleted });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
 router.delete(
   "/feature-licensing/schools/:id/overrides/:overrideId",
   async (req, res, next) => {
