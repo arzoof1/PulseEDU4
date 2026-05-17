@@ -21004,7 +21004,17 @@ function App() {
             for (const arr of Object.values(effectiveDestinationsByRoom)) {
               for (const d of arr) set.add(d);
             }
-            return Array.from(set).sort((a, b) => a.localeCompare(b));
+            const RESTROOM_RE = /(restroom|bathroom|\brr\b|\bwc\b)/i;
+            const collator = new Intl.Collator(undefined, {
+              numeric: true,
+              sensitivity: "base",
+            });
+            return Array.from(set).sort((a, b) => {
+              const ar = RESTROOM_RE.test(a) ? 0 : 1;
+              const br = RESTROOM_RE.test(b) ? 0 : 1;
+              if (ar !== br) return ar - br;
+              return collator.compare(a, b);
+            });
           })()}
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}

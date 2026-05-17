@@ -24,6 +24,13 @@ export default function TeacherAllowlistAdmin({
   );
   const [bulkBusy, setBulkBusy] = useState<string | null>(null);
 
+  const RESTROOM_RE = /(restroom|bathroom|\brr\b|\bwc\b)/i;
+  const isRestroom = (name: string) => RESTROOM_RE.test(name);
+  const restroomCount = useMemo(
+    () => allDestinations.filter(isRestroom).length,
+    [allDestinations],
+  );
+
   const sortedStaff = useMemo(
     () =>
       [...staffUsers]
@@ -247,12 +254,15 @@ export default function TeacherAllowlistAdmin({
               >
                 Teacher
               </th>
-              {allDestinations.map((d) => {
+              {allDestinations.map((d, idx) => {
                 const allChecked =
                   sortedStaff.length > 0 &&
                   sortedStaff.every((name) =>
                     (allowlistMap[name] ?? []).includes(d),
                   );
+                const rr = isRestroom(d);
+                const isLastRestroom =
+                  rr && restroomCount > 0 && idx === restroomCount - 1;
                 return (
                   <th
                     key={d}
@@ -260,8 +270,12 @@ export default function TeacherAllowlistAdmin({
                       textAlign: "center",
                       padding: "0.4rem 0.5rem",
                       borderBottom: "1px solid #e2e8f0",
-                      fontWeight: 500,
-                      color: "var(--text-muted)",
+                      borderRight: isLastRestroom
+                        ? "2px solid #cbd5e1"
+                        : undefined,
+                      background: rr ? "#f0f9ff" : undefined,
+                      fontWeight: rr ? 600 : 500,
+                      color: rr ? "#0369a1" : "var(--text-muted)",
                       whiteSpace: "nowrap",
                       verticalAlign: "bottom",
                     }}
@@ -341,13 +355,21 @@ export default function TeacherAllowlistAdmin({
                       </div>
                     )}
                   </td>
-                  {allDestinations.map((d) => (
+                  {allDestinations.map((d, idx) => {
+                    const rr = isRestroom(d);
+                    const isLastRestroom =
+                      rr && restroomCount > 0 && idx === restroomCount - 1;
+                    return (
                     <td
                       key={d}
                       style={{
                         textAlign: "center",
                         padding: "0.3rem 0.5rem",
                         borderBottom: "1px solid #f1f5f9",
+                        borderRight: isLastRestroom
+                          ? "2px solid #cbd5e1"
+                          : undefined,
+                        background: rr ? "#f0f9ff" : undefined,
                       }}
                     >
                       <input
@@ -357,7 +379,8 @@ export default function TeacherAllowlistAdmin({
                         onChange={() => toggle(name, d)}
                       />
                     </td>
-                  ))}
+                    );
+                  })}
                 </tr>
               );
             })}
