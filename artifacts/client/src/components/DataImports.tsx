@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, DragEvent } from "react";
+import type { CSSProperties, DragEvent, ReactNode } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
@@ -88,7 +88,13 @@ type ImportJob = {
   totalRows: number;
   successRows: number;
   errorRows: number;
-  errorLog: Array<{ row: number; message: string }>;
+  errorLog: Array<{
+    row: number;
+    message: string;
+    raw?: Record<string, string>;
+    code?: string;
+    bucket?: string;
+  }>;
   mapping: Record<string, string>;
   committedAt: string | null;
   rolledBackAt: string | null;
@@ -2934,6 +2940,8 @@ export default function DataImports({
                             >
                               {j.errorRows}
                             </summary>
+                            {j.kind === "rosters" &&
+                              renderSkippedHousesSection(j)}
                             <ul
                               style={{
                                 margin: "0.25rem 0 0 1rem",
@@ -2988,6 +2996,154 @@ export default function DataImports({
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+// Renders the per-job "Skipped due to unrecognized house" panel under
+// the History tab's errors cell. We group by distinct house name so an
+// admin with 47 skipped rows across 3 typos sees "Hawks: 20", "Falconz:
+// 15", "Phoenex: 12" instead of a flat row list, plus a CSV download
+// that re-emits just those rows with the original headers for quick
+// fix-and-reupload in their SIS.
+// Download the skipped-houses CSV via authFetch + blob so the request
+// carries the bearer token (a bare <a download> would 401 in
+// token-only sessions). Filename hint comes from Content-Disposition
+// the server already sets; we fall back to a deterministic name.
+async function downloadSkippedHousesCsv(job: ImportJob): Promise<void> {
+  try {
+    const res = await authFetch(
+      `/api/data-imports/jobs/${job.id}/skipped-houses.csv`,
+    );
+    if (!res.ok) {
+      alert(`Download failed (${res.status})`);
+      return;
+    }
+    const blob = await res.blob();
+    const cd = res.headers.get("Content-Disposition") ?? "";
+    const m = /filename="?([^"]+)"?/i.exec(cd);
+    const filename = m?.[1] ?? `skipped-houses_job${job.id}.csv`;
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    alert(`Download failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
+}
+
+function renderSkippedHousesSection(job: ImportJob): ReactNode {
+  const skipped = job.errorLog.filter(
+    (e) => e.code === "unrecognized_house" && e.raw,
+  );
+  if (skipped.length === 0) return null;
+  // student_id lives under whatever CSV column the mapping aimed at
+  // student_id. Fall back to common synonyms if the mapping isn't on
+  // the job (shouldn't happen for fresh imports, but defensive).
+  const studentIdCol =
+    Object.entries(job.mapping ?? {}).find(([, t]) => t === "student_id")?.[0] ??
+    null;
+  const byHouse = new Map<
+    string,
+    Array<{ row: number; studentId: string }>
+  >();
+  for (const e of skipped) {
+    const key = e.bucket ?? "(blank)";
+    const sid = studentIdCol
+      ? String(e.raw?.[studentIdCol] ?? "").trim()
+      : "";
+    const arr = byHouse.get(key) ?? [];
+    arr.push({ row: e.row, studentId: sid });
+    byHouse.set(key, arr);
+  }
+  const groups = Array.from(byHouse.entries()).sort(
+    (a, b) => b[1].length - a[1].length,
+  );
+  return (
+    <div
+      style={{
+        margin: "0.5rem 0",
+        padding: "0.5rem 0.75rem",
+        background: "rgba(245, 158, 11, 0.08)",
+        border: "1px solid rgba(245, 158, 11, 0.4)",
+        borderRadius: 4,
+        fontSize: 12,
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          marginBottom: 6,
+        }}
+      >
+        <strong style={{ color: "#b45309" }}>
+          Skipped due to unrecognized house ({skipped.length})
+        </strong>
+        <button
+          type="button"
+          onClick={() => downloadSkippedHousesCsv(job)}
+          style={{
+            padding: "0.2rem 0.5rem",
+            border: "1px solid #b45309",
+            borderRadius: 4,
+            color: "#b45309",
+            background: "transparent",
+            font: "inherit",
+            fontSize: 11,
+            fontWeight: 600,
+            cursor: "pointer",
+          }}
+        >
+          Download skipped rows as CSV
+        </button>
+      </div>
+      {groups.map(([house, rows]) => (
+        <details key={house} style={{ marginTop: 4 }}>
+          <summary style={{ cursor: "pointer" }}>
+            <code>{house}</code> — {rows.length} row
+            {rows.length === 1 ? "" : "s"}
+          </summary>
+          <table
+            style={{
+              marginTop: 4,
+              borderCollapse: "collapse",
+              fontSize: 11,
+              fontFamily: "monospace",
+            }}
+          >
+            <thead>
+              <tr style={{ textAlign: "left" }}>
+                <th style={{ padding: "2px 8px 2px 0" }}>Row</th>
+                <th style={{ padding: "2px 8px 2px 0" }}>student_id</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 50).map((r, i) => (
+                <tr key={i}>
+                  <td style={{ padding: "1px 8px 1px 0" }}>{r.row}</td>
+                  <td style={{ padding: "1px 8px 1px 0" }}>
+                    {r.studentId || "—"}
+                  </td>
+                </tr>
+              ))}
+              {rows.length > 50 && (
+                <tr>
+                  <td colSpan={2} style={{ padding: "2px 0", opacity: 0.7 }}>
+                    + {rows.length - 50} more — download CSV for the full list
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </details>
+      ))}
     </div>
   );
 }

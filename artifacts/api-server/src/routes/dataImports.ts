@@ -1577,6 +1577,99 @@ router.post(
 );
 
 // ---------------------------------------------------------------------------
+// GET /api/data-imports/jobs/:id/skipped-houses.csv
+//   Re-emits the rows the roster importer rejected for strict
+//   house-name matching as a CSV with the original CSV columns. The
+//   admin can fix the bad house_name values in their SIS (or directly
+//   in the file) and re-upload. Only roster jobs and only rejections
+//   tagged code === "unrecognized_house" are included.
+// ---------------------------------------------------------------------------
+router.get(
+  "/data-imports/jobs/:id/skipped-houses.csv",
+  requireImporter(),
+  async (req, res) => {
+    const id = parseInt(String(req.params.id), 10);
+    if (!Number.isFinite(id) || id <= 0) {
+      res.status(400).json({ error: "Invalid job id" });
+      return;
+    }
+    const [job] = await db
+      .select()
+      .from(importJobsTable)
+      .where(eq(importJobsTable.id, id));
+    if (!job) {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    // Same scope check as rollback: school-scope jobs require same
+    // school. Roster imports are school-only today, but mirror the
+    // rollback shape so this stays correct if that ever changes.
+    if (job.schoolId != null) {
+      const schoolId = requireSchool(req, res);
+      if (!schoolId) return;
+      if (job.schoolId !== schoolId) {
+        res.status(404).json({ error: "Job not found" });
+        return;
+      }
+    } else {
+      res.status(404).json({ error: "Job not found" });
+      return;
+    }
+    if (job.kind !== "rosters") {
+      res
+        .status(400)
+        .json({ error: "Skipped-house export is only available for roster imports" });
+      return;
+    }
+    const log = Array.isArray(job.errorLog)
+      ? (job.errorLog as Array<{
+          row: number;
+          message: string;
+          raw?: Record<string, string>;
+          code?: string;
+          bucket?: string;
+        }>)
+      : [];
+    const skipped = log.filter(
+      (e) => e.code === "unrecognized_house" && e.raw && typeof e.raw === "object",
+    );
+    // Recover the original CSV header order from the union of raw row
+    // keys. Papa.parse preserves insertion order per row, so iterating
+    // entries in seen order gives us the original column order for the
+    // first row, plus any columns that only appear in later rows.
+    const headerOrder: string[] = [];
+    const seenHeader = new Set<string>();
+    for (const e of skipped) {
+      for (const k of Object.keys(e.raw!)) {
+        if (!seenHeader.has(k)) {
+          seenHeader.add(k);
+          headerOrder.push(k);
+        }
+      }
+    }
+    const rowsOut = skipped.map((e) => {
+      const out: Record<string, string> = {};
+      for (const h of headerOrder) out[h] = e.raw![h] ?? "";
+      return out;
+    });
+    const csv =
+      headerOrder.length === 0
+        ? ""
+        : Papa.unparse({ fields: headerOrder, data: rowsOut }, { quotes: true });
+    const safeName = String(job.filename || "roster")
+      .replace(/\.csv$/i, "")
+      .replace(/[^A-Za-z0-9._-]+/g, "_")
+      .slice(0, 80);
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="skipped-houses_${safeName}_job${job.id}.csv"`,
+    );
+    res.send(csv);
+  },
+);
+
+// ---------------------------------------------------------------------------
 // ===========================================================================
 // Multi-kind importer registry. Adds rosters + behavior on top of the
 // existing assessments importer. Each kind plugs in its own targets,
@@ -1631,11 +1724,23 @@ interface KindConfig<T = unknown> {
   // 1-based CSV row number so rejections get the same `row` field
   // parseRow-produced errors do.
   precommitValidate?: (
-    items: Array<{ rowIndex: number; value: T }>,
+    items: Array<{ rowIndex: number; value: T; raw: Record<string, string> }>,
     schoolId: number,
   ) => Promise<{
     kept: T[];
-    rejected: Array<{ row: number; message: string }>;
+    rejected: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+      // Machine-readable rejection reason. Lets the UI surface a
+      // dedicated "skipped due to unrecognized house" section and a
+      // fixup CSV download. Optional so other future rejection
+      // categories can stay generic.
+      code?: string;
+      // Distinct value that triggered the rejection (e.g. the
+      // unrecognized house name) — used for grouping in the UI.
+      bucket?: string;
+    }>;
   }>;
 }
 
@@ -1944,13 +2049,26 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
       houseRows.map((h) => h.name.trim().toLowerCase()),
     );
     const kept: ParsedRoster[] = [];
-    const rejected: Array<{ row: number; message: string }> = [];
-    for (const { rowIndex, value } of items) {
+    const rejected: Array<{
+      row: number;
+      message: string;
+      raw?: Record<string, string>;
+      code?: string;
+      bucket?: string;
+    }> = [];
+    for (const { rowIndex, value, raw } of items) {
       const hn = value.houseName?.trim();
       if (hn && !known.has(hn.toLowerCase())) {
         rejected.push({
           row: rowIndex,
           message: `Unrecognized house_name "${hn}" (strict house-name matching is on). Fix the spelling or add the house in PBIS Hub → Houses.`,
+          // Persist the original CSV row + a machine-readable code so the
+          // History tab can group the skipped rows by house and offer a
+          // "Download skipped rows as CSV" fixup export. Without `raw`
+          // the admin would have to hand-rebuild each row in their SIS.
+          raw,
+          code: "unrecognized_house",
+          bucket: hn,
         });
         continue;
       }
@@ -2942,16 +3060,22 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
       res.status(400).json({ error: mappingError });
       return;
     }
-    const validIndexed: Array<{ rowIndex: number; value: T }> = [];
+    const validIndexed: Array<{
+      rowIndex: number;
+      value: T;
+      raw: Record<string, string>;
+    }> = [];
     const errors: Array<{
       row: number;
       message: string;
       raw?: Record<string, string>;
+      code?: string;
+      bucket?: string;
     }> = [];
     for (let i = 0; i < rows.length; i++) {
       const parsed = config.parseRow(rows[i], mapping);
       if (parsed.ok) {
-        validIndexed.push({ rowIndex: i + 2, value: parsed.value });
+        validIndexed.push({ rowIndex: i + 2, value: parsed.value, raw: rows[i] });
       } else if (errors.length < 500) {
         errors.push({ row: i + 2, message: parsed.message, raw: rows[i] });
       }
@@ -2959,14 +3083,22 @@ function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
     // Post-parse, pre-insert filter (kind-aware). Used by the roster
     // importer's strict house-name mode to surface unmatched house
     // names as per-row errors instead of silently routing them through
-    // the smallest-house fallback.
+    // the smallest-house fallback. We preserve `raw` + `code` so the
+    // History tab can group these rejections by their trigger value
+    // and emit a fixup CSV download.
     let valid: T[];
     if (config.precommitValidate) {
       const r = await config.precommitValidate(validIndexed, schoolId);
       valid = r.kept;
       for (const rej of r.rejected) {
         if (errors.length >= 500) break;
-        errors.push({ row: rej.row, message: rej.message });
+        errors.push({
+          row: rej.row,
+          message: rej.message,
+          raw: rej.raw,
+          code: rej.code,
+          bucket: rej.bucket,
+        });
       }
     } else {
       valid = validIndexed.map((v) => v.value);
