@@ -3246,6 +3246,110 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// GET /insights/academics/trajectory/export.csv
+//
+// Per-student CSV export of the trajectory dataset honoring the same
+// filters (subject, grades, insights filters) as the summary endpoint.
+// One row per student with their FAST PMs, bands, archetype, and
+// sub-archetype so coordinators can pull the data into Excel/Sheets.
+// ---------------------------------------------------------------------------
+router.get(
+  "/insights/academics/trajectory/export.csv",
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId == null) return;
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!isCoreTeam(staff)) {
+      res
+        .status(403)
+        .json({ error: "Academics trajectory is core-team only" });
+      return;
+    }
+
+    const subjectRaw =
+      typeof req.query.subject === "string"
+        ? req.query.subject.toLowerCase()
+        : "";
+    const subject: "ela" | "math" = subjectRaw === "math" ? "math" : "ela";
+
+    const { gradeInts, gradeLabel } = parseTrajectoryGradeFilter(req);
+    const filters = parseInsightsFilters(req);
+    const recs = await loadTrajectoryRecs(schoolId, subject, gradeInts, filters);
+
+    const ARCHETYPE_LABEL: Record<TrajectoryArchetype, string> = {
+      climbed: "Climbing",
+      stayedHi: "Soaring",
+      slipped: "Sliding",
+      stuck: "Plateauing",
+      stayedLo: "Stuck-Low",
+      untested: "New Data",
+    };
+    const BAND_LABEL: Record<TrajectoryBand, string> = {
+      above: "Above",
+      below: "Below",
+      well: "Well Below",
+      na: "N/A",
+    };
+
+    // Escape per RFC 4180: wrap in quotes if value contains ", , or \n.
+    const esc = (v: string | number | null | undefined): string => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = [
+      "student_id",
+      "student_name",
+      "grade",
+      "subject",
+      "pm1",
+      "pm2",
+      "pm3",
+      "pm1_band",
+      "pm3_band",
+      "archetype",
+      "sub_archetype",
+    ];
+    const sorted = [...recs].sort((a, b) =>
+      a.studentName.localeCompare(b.studentName),
+    );
+    const lines: string[] = [header.join(",")];
+    for (const r of sorted) {
+      lines.push(
+        [
+          esc(r.studentId),
+          esc(r.studentName),
+          esc(r.grade === 0 ? "K" : r.grade),
+          esc(subject),
+          esc(r.pm1),
+          esc(r.pm2),
+          esc(r.pm3),
+          esc(BAND_LABEL[r.pm1Band]),
+          esc(BAND_LABEL[r.pm3Band]),
+          esc(ARCHETYPE_LABEL[classifyArchetype(r)]),
+          esc(classifySubArchetype(r)),
+        ].join(","),
+      );
+    }
+    const csv = lines.join("\r\n") + "\r\n";
+
+    const today = new Date().toISOString().slice(0, 10);
+    const gradeSlug = gradeLabel
+      ? gradeLabel.replace(/\s+/g, "")
+      : "all-grades";
+    const filename = `trajectory_${subject}_${gradeSlug}_${today}.csv`;
+
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader(
+      "Content-Disposition",
+      `attachment; filename="${filename}"`,
+    );
+    res.send(csv);
+  },
+);
+
+// ---------------------------------------------------------------------------
 // GET /insights/sebsel — Social-Emotional / Behavioral whole-school view.
 //
 // Item #4 in the eduCLIMBER Phase Queue. Mirrors the engagement / behavior /

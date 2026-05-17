@@ -35,6 +35,10 @@ interface Props {
   // Optional column config for the score table — defaults to ELA/Math
   // PM3 columns. Different dashboards can pass different columns.
   scoreColumns?: { key: "pm1" | "pm3"; label: string }[];
+  // Optional CSV download button rendered in the drawer header. Caller
+  // generates the CSV (client- or server-side) and triggers the download
+  // — drawer just exposes the button slot so it stays generic.
+  onDownloadCsv?: () => void;
 }
 
 const DEFAULT_COLUMNS: { key: "pm1" | "pm3"; label: string }[] = [
@@ -54,6 +58,7 @@ export default function BandStudentsDrawer({
   onClose,
   onOpenProfile,
   scoreColumns = DEFAULT_COLUMNS,
+  onDownloadCsv,
 }: Props) {
   useEffect(() => {
     if (!open) return;
@@ -92,14 +97,38 @@ export default function BandStudentsDrawer({
               </p>
             )}
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            style={closeBtnStyle}
-          >
-            ×
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+            {onDownloadCsv && students.length > 0 && (
+              <button
+                type="button"
+                onClick={onDownloadCsv}
+                title="Download these students as CSV"
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 4,
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 700,
+                  cursor: "pointer",
+                  border: "1px solid #047857",
+                  background: "#059669",
+                  color: "white",
+                }}
+              >
+                ⬇ CSV
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              style={closeBtnStyle}
+            >
+              ×
+            </button>
+          </div>
         </div>
 
         <div style={bodyStyle}>

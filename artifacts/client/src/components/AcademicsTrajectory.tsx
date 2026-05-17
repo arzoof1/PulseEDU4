@@ -416,6 +416,53 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
     return qs;
   }
 
+  function downloadCsv() {
+    const qs = buildQuery();
+    // Plain anchor click — the server response sets
+    // Content-Disposition: attachment so the browser saves the file.
+    const url = `/api/insights/academics/trajectory/export.csv?${qs.toString()}`;
+    const a = document.createElement("a");
+    a.href = url;
+    a.rel = "noopener";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  // Drawer CSV: generate client-side from the already-loaded subset so
+  // we don't need a second server endpoint for the drill-in.
+  function downloadDrawerCsv() {
+    if (!drawerData || drawerData.students.length === 0) return;
+    const esc = (v: string | number | null | undefined): string => {
+      if (v == null) return "";
+      const s = String(v);
+      return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const header = ["student_id", "student_name", "grade", "pm1", "pm3"];
+    const rows = drawerData.students.map((s) =>
+      [
+        esc(s.studentId),
+        esc(s.studentName),
+        esc(s.grade == null ? "" : s.grade === 0 ? "K" : s.grade),
+        esc(s.pm1 ?? ""),
+        esc(s.pm3 ?? ""),
+      ].join(","),
+    );
+    const csv = [header.join(","), ...rows].join("\r\n") + "\r\n";
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const today = new Date().toISOString().slice(0, 10);
+    const arch = drawerArchetype ?? "students";
+    const sub = drawerSubKey ? `_${drawerSubKey}` : "";
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `trajectory_${subject}_${arch}${sub}_${today}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  }
+
   const toggleGrade = (v: string) => {
     setSelectedGrades((prev) =>
       prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v],
@@ -620,6 +667,31 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
               label={g.label}
             />
           ))}
+          <button
+            type="button"
+            onClick={downloadCsv}
+            disabled={loading || !data || data.total === 0}
+            title="Download per-student CSV (opens in Excel)"
+            style={{
+              marginLeft: 8,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              padding: "5px 12px",
+              borderRadius: 999,
+              fontSize: 12,
+              fontWeight: 700,
+              cursor:
+                loading || !data || data.total === 0 ? "not-allowed" : "pointer",
+              border: "1px solid #047857",
+              background:
+                loading || !data || data.total === 0 ? "#94a3b8" : "#059669",
+              color: "white",
+              opacity: loading || !data || data.total === 0 ? 0.6 : 1,
+            }}
+          >
+            ⬇ CSV
+          </button>
         </div>
       </div>
 
@@ -771,6 +843,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
           setDrawerOpen(false);
           onOpenProfile(id);
         }}
+        onDownloadCsv={downloadDrawerCsv}
       />
     </div>
   );
