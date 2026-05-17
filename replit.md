@@ -69,236 +69,121 @@ _Populate as you build_
 
 ## Future work
 
-- **FAST scale-score coverage — SHIPPED.**
-  - **SHIPPED — 3rd-grade bucket fallback (Option B).** 3rd graders
-    now place PM3 on the G3 chart and compute the bucket from there.
-    `bucketTarget` no longer suppresses grade 3.
-  - **SHIPPED — EOC scaffolding + cut-score data.** `Subject` union
-    extended to `"ela" | "math" | "algebra1" | "geometry"`.
-    `chartFor()` routes EOC subjects to their own charts
-    (grade-agnostic). `ALGEBRA1_EOC` + `GEOMETRY_EOC` populated
-    from FL DOE FAST Table 8. Subject literal widening done in
-    `dataImports.ts` (FAST_SCORES_CONFIG + FAST_PRIOR_YEAR_CONFIG
-    accept algebra1/geometry + aliases) and the insights export
-    filter — full typecheck clean.
-  - **SHIPPED — FAST Coverage telemetry tile** (Settings →
-    "📊 FAST Coverage", admin-gated). Backed by
-    `GET /api/insights/fast-coverage` in `routes/fastCoverage.ts`.
-    Per-(subject, grade) status: Complete / Partial PM3 / Missing
-    PM3 / No chart.
+### Recently shipped (reference only — no remaining action)
 
+- **FAST scale-score coverage.** 3rd-grade bucket fallback;
+  EOC scaffolding + `ALGEBRA1_EOC` / `GEOMETRY_EOC` cut scores from
+  FL DOE Table 8; `Subject` union widened to
+  `"ela" | "math" | "algebra1" | "geometry"`; admin FAST Coverage
+  telemetry tile.
+- **AI Consistency Check runtime.** Header pill, side panel,
+  per-row dot, dismiss-with-justification, "What the AI saw" drawer.
+- **Admin Hub ISS log — view + edit/delete with audit guardrails.**
+  `IssLogDetailDrawer` (Detail + History), `iss_admin_log_audit`
+  table, all mutation handlers tx-locked via `SELECT ... FOR UPDATE`
+  on parent + day rows. Helpers: `isDayServed()` (server) mirrored
+  by client `isServed()` — keep these two in sync. OSS edit/delete
+  intentionally not implemented.
+- **Parent Pick-Up Module.** Curb keypad, walker gate with photo
+  rendering, curb-page photo verification, tag management
+  (bulk-assign + reissue + PDF + capacity warn), classroom signage
+  tile, Admin Hub "Still on campus" reconciliation. QR scan dropped
+  as a product decision.
+- **Feature licensing Phases 1–3.** Plans + per-school Overrides
+  (expiration + audit), SuperUser admin UI, AST + Parent Portal
+  gated end-to-end, page-level `<FeatureGate>` + nav HIDE for
+  off-no-upsell features, daily expired-override sweep cron
+  (`cron/featureLicensingOverrideSweep.ts`, 02:15 UTC, idempotent
+  via partial unique index on the audit table), two quota consumers
+  (`parentPortal.maxParentAccounts` in `routes/parentInvites.ts`,
+  `displays.maxPlaylists` in `routes/displays.ts` POST + PATCH
+  re-activation), SuperUser audit-log viewer, schools-near-quota
+  telemetry tile (walks `KNOWN_SEAT_QUOTAS` in
+  `lib/featureLicensing.ts` — adding a third quota is a one-line
+  append). All quota helpers: undefined / non-positive = unlimited.
+- **Witness statement chronological numbering — data layer.**
+  `witness_statements.ws_seq` + composite numbering via
+  `assignWitnessSeqForInteraction()` in `lib/witnessStatementId.ts`,
+  wired into promote-to-case and PATCH-interaction-caseId paths
+  under tx lock. Format helper `formatWitnessStatementId({...})`
+  returns `CASE-26-27-0042-WS-03`. UI surfacing still open (below).
+- **AST (Alternate Schedule Time) MVP + year-end lapse cron.**
+  `staff_ast_requests` + `staff_ast_ledger` (quarter-hours as INT,
+  no float drift), full earn/use state machine, `canApproveAst`
+  flag (admin OR confidential secretary), Admin Hub "AST: N" tile,
+  bell-only notifications. Lapse cron: `cron/astLapse.ts`,
+  `5 0 1 7 *` ET, tx + advisory-lock idempotent.
+
+### Open work
 
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
-  Phase 3 shipped the runtime feature (header pill, side panel,
-  per-row dot, dismiss-with-justification, "What the AI saw"
-  drawer). Two follow-ups remain from the original session plan:
-  - Add a "Review Consistency Check guardrails" step in the
-    Behavior & PBIS onboarding phase. This is server-side step
-    registration in `artifacts/api-server/src/lib/onboardingSteps.ts`
-    plus an "I understand" school setting marker. Informational
-    only — closes by acknowledging that Core Team is the only
-    audience and that dismissals are persistent suppressions.
-  - Add a Settings tile "Consistency Check — this month" with
-    a small ConsistencyTelemetryPage showing runs, open findings,
-    dismissed findings, and total tokens spent. Backed by a new
-    `GET /api/watchlist/consistency-telemetry` aggregate route
-    (admin-gated). Cheap COUNT/SUM over the runs + findings tables
-    grouped by current month.
+  (1) Register a "Review Consistency Check guardrails" step in
+  `lib/onboardingSteps.ts` (Behavior & PBIS phase) with an
+  "I understand" school-setting marker — informational only,
+  Core Team is the sole audience. (2) Add Settings tile
+  "Consistency Check — this month" backed by
+  `GET /api/watchlist/consistency-telemetry` (admin-gated;
+  cheap COUNT/SUM grouped by current month over runs + findings).
 
 - **School-local timezone — per-school IANA column.** Canonical
-  `America/New_York` (`DEFAULT_SCHOOL_TZ` in `lib/schoolYear.ts`) is
-  used by `schoolYearLabelFor`, seed case backfill, AST insights, and
-  the lapse cron. Before onboarding the first non-Eastern school, swap
-  the constant for a per-school IANA column and thread it through all
-  four callers.
+  `America/New_York` (`DEFAULT_SCHOOL_TZ` in `lib/schoolYear.ts`)
+  is used by `schoolYearLabelFor`, seed case backfill, AST
+  insights, and the lapse cron. Before onboarding the first
+  non-Eastern school, swap the constant for a per-school IANA
+  column and thread it through all four callers.
 
-- **Refresh Core Team "How this works" / directions copy after the 4-phase
-  case enhancement suite ships.** Mention tagging, video evidence panel,
-  AI consistency check, and Case Insights dashboard each need a blurb in
-  the Core Team-facing help/directions panels. Do as a single pass after
-  Phase 4 — piecemeal invites drift.
+- **Refresh Core Team "How this works" copy after Phase 4 case
+  enhancements ship.** Tagging, video evidence panel, AI consistency
+  check, and Case Insights dashboard each need a blurb in the Core
+  Team-facing help/directions panels. Do as a single pass after
+  Phase 4 — piecemeal edits drift.
 
-- **Admin Hub ISS log: view detail + edit/delete with audit guardrails — SHIPPED.**
-  Click an ISS row in the Admin Hub recent feed to open
-  `IssLogDetailDrawer` with Detail + History tabs. Backend audit
-  table `iss_admin_log_audit` (created by `ensureAdminHubSchema` in
-  `seed.ts`) captures every mutation with `actor_staff_id`,
-  `actor_display_name`, `action` enum (`edit_reason` |
-  `edit_notes` | `edit_dates` | `trim_days` |
-  `delete_assignment`), `before_json`, `after_json`,
-  `edit_reason TEXT NOT NULL` (min 5 chars enforced
-  client + server), and `created_at`. Routes added to
-  `routes/adminHub.ts`:
-  - `GET /admin-hub/iss-logs/:id` (log + day rows)
-  - `GET /admin-hub/iss-logs/:id/audit`
-  - `PATCH /admin-hub/iss-logs/:id` (edit reason and/or notes)
-  - `PATCH /admin-hub/iss-logs/:id/dates` (add and/or trim day rows
-    via diff; emits `edit_dates` for adds and `trim_days` for
-    removes — both can fire in one diff)
-  - `DELETE /admin-hub/iss-logs/:id` (gated to zero-served days)
+- **Pickup module — small follow-ups.** (1) 5-digit expansion path:
+  4-digit range (1001–9999, 8999 slots/school) is plenty until a
+  tenant exceeds ~7200 active tags (80% warn). When that fires, bump
+  `NUMBER_RANGE_MAX` in `routes/pickup.ts` to 99999, narrow the PDF
+  tag font, accept 4-or-5-digit input on the curb keypad. Schema
+  already TEXT — no migration. (2) Open design question: in-app
+  chime when a car is "added to line." Leaning visual-only since
+  high-volume schools (30 cars/min) would have overlapping chimes.
 
-  All three mutation handlers run validation **inside** the tx via
-  `SELECT ... FOR UPDATE` on both the parent log and its day rows
-  (concurrency-safe: prevents the "served-between-check-and-delete"
-  TOCTOU). `.returning()` on the day insert/delete means audit rows
-  reflect the *actual* post-mutation DB state, not intent — important
-  because `onConflictDoNothing` on the (school, student, day)
-  unique index can lose a write to a parallel ISS Teacher walk-in.
+- **Student Photos — prerequisite for walker verification + useful
+  app-wide.** Today walker page renders placeholders. Storage:
+  re-use `/api/storage/*` via `bindObjectToSchool`, new
+  `students.photo_object_key TEXT NULLABLE` column, school-scoped
+  staff-only ACL (no parent-portal exposure). Two ingestion paths:
+  (a) bulk yearbook ZIP named by `student_id` (or CSV mapping) via
+  the data-importer pattern; (b) per-student "Take photo" using
+  `getUserMedia`, cropped to square. Surface in student profile,
+  PBIS Hub cards, teacher roster avatars, Spotlight reveal, pickup
+  curb confirmation, walker gate, safety-plan picker. Fallback:
+  existing initials bubble when null. Privacy: `students.photo_consent
+  BOOL DEFAULT true` — when false, render initials regardless;
+  don't delete the file (schools flip the toggle back).
 
-  Served-day check helper `isDayServed()` lives in `adminHub.ts`
-  and is mirrored exactly by client-side `isServed()` in
-  `IssLogDetailDrawer.tsx` (present periods non-empty OR
-  `marked_served` true OR `rolled_from_date` non-null) — keep these
-  two in sync if the servedness signals ever change.
+- **Witness statement numbering — UI surfacing.** Data layer
+  shipped. Still TODO: surface the formatted ID in PlayerDrawer
+  header, Case Detail statements list, witness statement PDF/print,
+  and the audit log payload (copy-on-click). Backfill existing
+  attached statements once at deploy time using `created_at ASC`
+  per case.
 
-  OSS edit/delete intentionally NOT implemented yet — only ISS per
-  the original spec. OSS rows in the recent feed remain non-clickable.
+- **AST follow-ups.** (1) Voluntary mid-year transfer zero-out
+  hook: ledger is keyed to `staff_id`, not `(school_id, staff_id)`,
+  so the bank silently follows on transfer. Enforce a
+  `transfer_out` ledger entry in the staff-transfer admin path and
+  add a current-school filter in `/api/ast/me`. (2) Optional weekly
+  Friday digest email (per-school `ast_email_digest_enabled`,
+  default OFF; uses existing Resend integration). (3) Per-staff
+  ledger drilldown: `GET /api/ast/staff/:id/ledger` (admin-gated)
+  + modal from Staff & Roles for balance disputes / bargaining-unit
+  reports.
 
-- **Parent Pick-Up Module — remaining work.** Tag-management
-  (bulk-assign, reissue, single + batch PDF, capacity warn),
-  walker-gate photo rendering, and **curb-page photo verification on
-  the lookup matches** all shipped. QR scan is **dropped** as a
-  product decision — typed numbers only, and the disabled "Scan QR"
-  button stays as-is until/unless we revive it. Remaining items:
-  - **5-digit expansion path.** 4-digit range (1001–9999 = 8999
-    slots/school) is plenty until a tenant exceeds ~7200 active
-    tags (80% warn). When that fires for the first real tenant,
-    bump `NUMBER_RANGE_MAX` in `routes/pickup.ts` to 99999, widen
-    the PDF tag font down a notch, and have the curb keypad accept
-    4 OR 5 digit input. Schema is already TEXT so no migration.
-  - **Open design question (deferred).** Whether "added to line"
-    should ping the classroom with an in-app chime or stay
-    visual-only. Lean visual-only — schools with 30 cars/min in the
-    queue would have chimes overlapping nonstop.
-
-- **Feature licensing — Phase 2 SHIPPED. Phase 3+ open.** Phase 1
-  shipped: Plans table, per-school Overrides with expiration + audit,
-  SuperUser admin UI, AST + Parent Portal gated end-to-end, and
-  page-level `<FeatureGate>` wraps for MTSS Plans, ISS Dashboard,
-  Displays, and House Rankings. Phase 2 shipped:
-  - Nav-item HIDE for off+no-upsell features (MTSS Plans, ISS
-    Dashboard, Displays — wraps `renderGatedNavItem` in App.tsx).
-  - Daily expired-override sweep cron + append-only
-    `feature_licensing_audit_log` table with a partial unique index
-    on `override_id WHERE action='override_expired_sweep'` for
-    idempotency (`cron/featureLicensingOverrideSweep.ts`, scheduled
-    at 02:15 UTC; override via `FEATURE_LICENSING_SWEEP_CRON`).
-  - First quota consumer wired:
-    `parentPortal.maxParentAccounts` enforced in
-    `routes/parentInvites.ts` on both single (`/send-one`) and bulk
-    (`/send`) paths via `checkParentAccountQuota` +
-    `enforceParentAccountQuota` in `lib/featureLicensing.ts`.
-    Quota count = accepted parents + live pending invites. Single
-    returns 403 `quota_exceeded`; bulk emits per-row
-    `skipped/quota_exceeded` so partial batches still succeed
-    cleanly. Undefined / non-positive quotas treated as unlimited.
-
-  Phase 3 SHIPPED:
-  - **Second quota consumer wired** — `displays.maxPlaylists`
-    enforced in `routes/displays.ts` POST `/displays/playlists`
-    via `checkDisplayPlaylistQuota` + `enforceDisplayPlaylistQuota`
-    in `lib/featureLicensing.ts`. Quota count = active=true
-    playlists (inactive/kill-switched rows do NOT consume a slot).
-    Returns 403 `quota_exceeded` with the same shape parent
-    invites use so the client toast is uniform. Undefined /
-    non-positive quotas = unlimited.
-  - **Audit-log viewer** — `GET /api/feature-licensing/audit`
-    (recent across all schools) + `GET /api/feature-licensing/schools/:id/audit`
-    (per-school filter), both SuperUser-gated. Surfaced as a new
-    "Audit log" section at the bottom of `FeatureLicensingAdminPage.tsx`
-    with school/action/feature/actor/payload columns and a
-    25/50/100/250 row-limit selector. Read-only.
-  - **Schools-near-quota telemetry tile** —
-    `GET /api/feature-licensing/quota-telemetry?threshold=0.8`
-    walks every school × every entry in `KNOWN_SEAT_QUOTAS`
-    (today: parentPortal/maxParentAccounts +
-    displays/maxPlaylists) and returns rows where usage ≥ the
-    threshold. Renders as the top section of the SuperUser
-    admin page with a 50/70/80/90/100% threshold selector and
-    color coding (≥90% bold amber, ≥100% red). Sorted worst-first
-    so the loudest schools surface immediately. Adding a third
-    seat-style quota in the future is a one-line append to
-    `KNOWN_SEAT_QUOTAS`.
-
-- **Student Photos — prerequisite for walker verification, also useful
-  app-wide.** New work item, separate from the pickup module but
-  required before the walker gate's photo-verification UX is real
-  (today the walker page would render placeholders).
-  - **Storage**: re-use existing object storage routes
-    (`/api/storage/*`), bound to school via `bindObjectToSchool`.
-    New `students.photo_object_key TEXT NULLABLE` column. ACL:
-    school-scoped, staff-only read, no parent-portal exposure (a
-    parent should not see other students' photos).
-  - **Two ingestion paths**:
-    1. **Bulk yearbook upload** — admin page that accepts a ZIP of
-       photos named by `student_id` (most yearbook companies export
-       this format), or a CSV mapping filename → student_id for
-       legacy exports. Preview + commit + rollback, mirroring the
-       existing data importer pattern.
-    2. **Staff snapshot** — per-student "Take photo" button on the
-       student profile page that opens the device camera (use
-       `getUserMedia`, no library), crops to a square, uploads.
-       Useful for new mid-year transfers before the next yearbook
-       cycle.
-  - **Surface in**: student profile page (primary), PBIS Hub student
-    cards, teacher roster row avatars, Spotlight reveal card,
-    pickup curb confirmation card, walker gate row, safety plan
-    student picker.
-  - **Fallback**: when `photo_object_key` is null, render the
-    existing initials-bubble component already used elsewhere — no
-    broken-image icons.
-  - **Privacy/consent**: add a `students.photo_consent BOOL DEFAULT
-    true` column with an admin-side toggle. When false, all
-    rendering paths show initials regardless of whether a photo is
-    on file. Photo data stays on disk (don't delete on consent
-    revocation — schools sometimes flip it back) but is gated at
-    render time. Document this in the school-settings privacy page.
-
-- **Witness statement chronological numbering — UI surfacing.**
-  Data layer shipped: `witness_statements.ws_seq` column + composite
-  numbering via `assignWitnessSeqForInteraction()` in
-  `lib/witnessStatementId.ts`, wired into both promote-to-case and
-  PATCH-interaction-caseId paths under tx lock. Format helper
-  `formatWitnessStatementId({yearLabel, caseNumber, wsSeq})` returns
-  `CASE-26-27-0042-WS-03`. Still TODO: surface the formatted ID in
-  the PlayerDrawer header, Case Detail statements list, witness
-  statement PDF/print, and the audit log payload (make it
-  copy-on-click). Also backfill existing already-attached statements
-  once at deploy time using `created_at ASC` order within each case.
-
-- **AST (Alternate Schedule Time) — follow-ups after MVP ship.**
-  Phase 1 shipped: `staff_ast_requests` + `staff_ast_ledger` schema
-  with quarter-hours stored as INT (no float drift), full earn/use
-  state machine in `routes/ast.ts` with tx-locked balance checks,
-  `canApproveAst` per-staff flag (any admin OR confidential
-  secretary), `StaffAstPage` + `AdminAstQueuePage`, top-level "AST"
-  nav for staff + "AST Approvals" admin nav, Admin Hub "AST: N"
-  tile deep-linking to the queue. Bell-only notifications via
-  `/api/ast/admin-pending-count` polling — no email dispatch.
-  Year-end lapse cron shipped (`cron/astLapse.ts`, `5 0 1 7 *` ET,
-  tx + advisory-lock idempotent; env overrides `AST_LAPSE_CRON` /
-  `AST_LAPSE_TZ`). What remains:
-  - **Voluntary mid-year transfer zero-out hook.** When a staff
-    record is moved to a different school (or marked inactive),
-    the AST bank should be zeroed at the source school with a
-    `transfer_out` ledger entry. Currently the bank silently
-    "follows" the row because the ledger is keyed to `staff_id`,
-    not `(school_id, staff_id)`. Fix by enforcing zero-out in the
-    staff-transfer admin path and adding a guard in
-    `/api/ast/me` that filters by current school.
-  - **Optional weekly email digest for admins.** Bell-only is the
-    primary notification channel, but a weekly Friday-morning
-    "5 pending AST approvals" email is cheap insurance for admins
-    who don't open the Admin Hub daily. Gate behind a per-school
-    `ast_email_digest_enabled` setting (default OFF). Re-uses the
-    existing Resend integration.
-  - **Per-staff ledger drilldown.** Today the staff page shows
-    request history; admins have no way to audit a specific
-    staffer's full ledger (credits, debits, lapses) in one view.
-    Add `GET /api/ast/staff/:id/ledger` (admin-gated) and a small
-    drilldown modal accessible from the Staff & Roles page.
-    Useful when a teacher disputes their balance or when prepping
-    end-of-year reports for the bargaining unit.
+- **Feature licensing Phase 4 candidates.** (1) Wire a third quota
+  consumer to keep `KNOWN_SEAT_QUOTAS` honest (good candidate:
+  `mtss.maxActivePlans` or `displays.maxConcurrentSchedules`).
+  (2) Per-feature usage charts in the SuperUser admin page (sparkline
+  over 30 days, fed by the existing audit log).
 
 ## Gotchas
 
