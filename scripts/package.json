@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "hello": "tsx ./src/hello.ts",
+    "demo-guide": "tsx ./src/generateDemoGuide.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {

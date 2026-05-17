@@ -198,3 +198,9 @@ id = "apZDwSO7DEUrV6eFHyowL"
 uri = "file://attached_assets/PulseEDU_Core_Team_User_Guide.pdf"
 type = "pdf"
 title = "PulseEDU Core Team User Guide"
+
+[[outputs]]
+id = "8uSJwEkWxXaWTTlxIS9mJ"
+uri = "file://attached_assets/PulseEDU_Demo_Guide.pdf"
+type = "pdf"
+title = "PulseEDU Demo Guide"
