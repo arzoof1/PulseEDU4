@@ -329,7 +329,7 @@ export async function ensureHousesSchema() {
       school_id INTEGER NOT NULL,
       student_db_id INTEGER NOT NULL,
       from_house_id INTEGER,
-      to_house_id INTEGER NOT NULL,
+      to_house_id INTEGER,
       reason TEXT NOT NULL,
       changed_by_staff_id INTEGER NOT NULL,
       source TEXT NOT NULL DEFAULT 'manual',
@@ -341,6 +341,12 @@ export async function ensureHousesSchema() {
     CREATE INDEX IF NOT EXISTS student_house_changes_by_school
       ON student_house_changes (school_id, changed_at)
   `);
+  // Drop the legacy NOT NULL on to_house_id so admin "clear back to
+  // unassigned" moves can be audited too. Safe on tables created
+  // before this column was nullable.
+  await db.execute(
+    sql`ALTER TABLE student_house_changes ALTER COLUMN to_house_id DROP NOT NULL`,
+  );
   await db.execute(sql`
     CREATE INDEX IF NOT EXISTS student_house_changes_by_student
       ON student_house_changes (student_db_id)

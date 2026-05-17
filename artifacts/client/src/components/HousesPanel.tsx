@@ -325,12 +325,23 @@ function AuditTab(): React.ReactElement {
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
   const [undoing, setUndoing] = useState(false);
+  // Recent-changes filter: empty string = "All houses". Server-side
+  // ?houseId=X narrows to bulk + manual moves that landed in that
+  // house; "All" returns the unfiltered 200-row feed.
+  const [houseFilter, setHouseFilter] = useState<string>("");
+  // Snapshot of all houses for the filter dropdown. Loaded once
+  // from /api/houses (separate from /houses/changes, which only
+  // returns the houses referenced by the visible rows).
+  const [houseOptions, setHouseOptions] = useState<House[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
-      const res = await authFetch("/api/houses/changes");
+      const url = houseFilter
+        ? `/api/houses/changes?houseId=${encodeURIComponent(houseFilter)}`
+        : "/api/houses/changes";
+      const res = await authFetch(url);
       const body = (await res.json()) as ChangesResp & { error?: string };
       if (!res.ok) {
         setErr(body.error ?? `Load failed (${res.status})`);
@@ -342,11 +353,29 @@ function AuditTab(): React.ReactElement {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [houseFilter]);
 
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Load the full house list once for the filter dropdown.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authFetch("/api/houses");
+        if (!res.ok) return;
+        const body = (await res.json()) as { houses?: House[] };
+        if (!cancelled && body.houses) setHouseOptions(body.houses);
+      } catch {
+        // non-fatal — filter just won't render
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const lookups = useMemo(() => {
     if (!data) {
@@ -439,6 +468,35 @@ function AuditTab(): React.ReactElement {
             entered by the editor; bulk sorts are tagged with the sort
             job they belong to.
           </p>
+          {houseOptions.length > 0 && (
+            <label
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: "0.5rem",
+                fontSize: "0.875rem",
+                color: "#475569",
+              }}
+            >
+              Filter by house:
+              <select
+                value={houseFilter}
+                onChange={(e) => setHouseFilter(e.target.value)}
+                style={{
+                  padding: "4px 8px",
+                  border: "1px solid #cbd5e1",
+                  borderRadius: 4,
+                }}
+              >
+                <option value="">All houses</option>
+                {houseOptions.map((h) => (
+                  <option key={h.id} value={String(h.id)}>
+                    {h.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
         </div>
         {data.undoable && (
           <button

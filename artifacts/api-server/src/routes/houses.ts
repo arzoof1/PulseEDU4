@@ -17,7 +17,7 @@ import {
 } from "@workspace/db";
 import { eq, and, gte, isNull, inArray, sql, desc } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
-import { isAdminOrSuperUser } from "../lib/coreTeam.js";
+import { isCoreTeam } from "../lib/coreTeam.js";
 import { requireSchool } from "../lib/scope.js";
 
 type StaffRow = typeof staffTable.$inferSelect;
@@ -269,14 +269,20 @@ router.get("/houses/with-staff-counts", async (req, res) => {
 // =============================================================================
 export async function recommendNextHouse(
   schoolId: number,
+  // Optional db/tx handle. Pass the active drizzle transaction when
+  // calling from a write path (e.g. roster importer commit) so the
+  // count reflects uncommitted inserts and successive calls inside
+  // the same chunk rotate through houses instead of all picking the
+  // same "smallest" bucket.
+  conn: Pick<typeof db, "select"> = db,
 ): Promise<number | null> {
-  const houses = await db
+  const houses = await conn
     .select({ id: housesTable.id })
     .from(housesTable)
     .where(eq(housesTable.schoolId, schoolId))
     .orderBy(housesTable.id);
   if (houses.length === 0) return null;
-  const counts = await db
+  const counts = await conn
     .select({
       houseId: studentsTable.houseId,
       count: sql<number>`COUNT(*)::int`,
@@ -326,8 +332,12 @@ function requireHouseAdmin() {
       res.status(401).json({ error: "Sign-in required" });
       return;
     }
-    if (!isAdminOrSuperUser(staff)) {
-      res.status(403).json({ error: "Admin only" });
+    // Per spec ("same gate as Staff & Roles"): Admin / SuperUser /
+    // District Admin plus Core Team (Behavior Specialist, MTSS
+    // Coordinator, School Psychologist). isCoreTeam already includes
+    // the admin tier.
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Admin or Core Team only" });
       return;
     }
     (req as Request & { staff: StaffRow }).staff = staff;
@@ -805,24 +815,20 @@ router.post(
         })
         .from(studentHouseChangesTable)
         .where(eq(studentHouseChangesTable.sortJobId, jobId));
-      const postByStudent = new Map<number, number>(
+      const postByStudent = new Map<number, number | null>(
         originals.map((o) => [o.studentDbId, o.toHouseId]),
       );
-      // toHouseId on the audit table is NOT NULL — we can only audit
-      // restores back to a real house. Rows whose prior value was NULL
-      // (unassigned) are restored on the students table but skipped
-      // in the audit feed; the sort job's undoneAt timestamp is the
-      // record-of-truth that they were rolled back.
+      // toHouseId on the audit table is nullable, so we can fully
+      // mirror the reverse direction — including restores back to
+      // "unassigned" (fromHouseId === null in the snapshot). The
+      // sort job's undoneAt timestamp remains the record-of-truth
+      // for the batch.
       const auditRows = snap
-        .filter(
-          (row): row is { studentDbId: number; fromHouseId: number } =>
-            row.fromHouseId !== null &&
-            postByStudent.has(row.studentDbId),
-        )
+        .filter((row) => postByStudent.has(row.studentDbId))
         .map((row) => ({
           schoolId,
           studentDbId: row.studentDbId,
-          fromHouseId: postByStudent.get(row.studentDbId)!,
+          fromHouseId: postByStudent.get(row.studentDbId) ?? null,
           toHouseId: row.fromHouseId,
           reason: "Undo bulk sort",
           changedByStaffId: staff.id,

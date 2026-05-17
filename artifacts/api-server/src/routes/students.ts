@@ -20,6 +20,7 @@ import { requireSchool } from "../lib/scope.js";
 import {
   canManageStudentPhoto,
   isAdminOrSuperUser,
+  isCoreTeam,
 } from "../lib/coreTeam.js";
 import { bindObjectToSchool } from "./storage.js";
 
@@ -315,8 +316,11 @@ router.patch(
     if (!schoolId) return;
     const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
       .staff;
-    if (!isAdminOrSuperUser(staff)) {
-      res.status(403).json({ error: "Admin only" });
+    // Per spec ("same gate as Staff & Roles"): Admin / SuperUser /
+    // District Admin plus Core Team (Behavior Specialist, MTSS
+    // Coordinator, School Psychologist).
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Admin or Core Team only" });
       return;
     }
     const studentIdParam = String(req.params.studentId ?? "");
@@ -382,10 +386,10 @@ router.patch(
       res.json({ ok: true, unchanged: true });
       return;
     }
-    // The audit table requires a non-null toHouseId; clearing a
-    // student's house ("— None —") is a legitimate operation on the
-    // students row but we don't generate an audit row for it. The
-    // record-of-truth is the student row itself in that case.
+    // Every direction is audited — including clearing a student
+    // back to "— None —". The audit table's to_house_id column is
+    // nullable specifically so this end-of-transition still leaves
+    // a defensible row.
     await db.transaction(async (tx) => {
       await tx
         .update(studentsTable)
@@ -396,17 +400,15 @@ router.patch(
             eq(studentsTable.schoolId, schoolId),
           ),
         );
-      if (newHouseId !== null) {
-        await tx.insert(studentHouseChangesTable).values({
-          schoolId,
-          studentDbId: student.id,
-          fromHouseId: student.houseId,
-          toHouseId: newHouseId,
-          reason,
-          changedByStaffId: staff.id,
-          source: "manual",
-        });
-      }
+      await tx.insert(studentHouseChangesTable).values({
+        schoolId,
+        studentDbId: student.id,
+        fromHouseId: student.houseId,
+        toHouseId: newHouseId,
+        reason,
+        changedByStaffId: staff.id,
+        source: "manual",
+      });
     });
     res.json({ ok: true, houseId: newHouseId });
   },

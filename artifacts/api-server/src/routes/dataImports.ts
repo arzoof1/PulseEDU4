@@ -35,6 +35,7 @@ import {
   schoolSettingsTable,
   housesTable,
 } from "@workspace/db";
+import { recommendNextHouse } from "./houses.js";
 import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike } from "drizzle-orm";
 import {
   requireSchool,
@@ -1872,41 +1873,14 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     const houseByName = new Map(
       houseRows.map((h) => [h.name.trim().toLowerCase(), h.id]),
     );
-    // Local running count so successive inserts in the same chunk
-    // rotate through houses instead of all landing on the same one
-    // (the unbumped DB count). Seeded from the live per-house total.
-    const liveCounts: Record<number, number> = {};
-    for (const h of houseRows) liveCounts[h.id] = 0;
-    if (houseRows.length > 0) {
-      const cnt = await tx
-        .select({
-          houseId: studentsTable.houseId,
-          count: sql<number>`COUNT(*)::int`,
-        })
-        .from(studentsTable)
-        .where(eq(studentsTable.schoolId, schoolId))
-        .groupBy(studentsTable.houseId);
-      for (const r of cnt) {
-        if (r.houseId !== null && liveCounts[r.houseId] !== undefined) {
-          liveCounts[r.houseId] = r.count;
-        }
-      }
-    }
-    const orderedHouseIds = houseRows
-      .map((h) => h.id)
-      .sort((a, b) => a - b);
-    const pickRotatingHouseId = (): number | null => {
-      if (orderedHouseIds.length === 0) return null;
-      let pick = orderedHouseIds[0];
-      let best = liveCounts[pick];
-      for (const hid of orderedHouseIds) {
-        if (liveCounts[hid] < best) {
-          pick = hid;
-          best = liveCounts[hid];
-        }
-      }
-      liveCounts[pick] += 1;
-      return pick;
+    // Delegate fallback house selection to the shared
+    // recommendNextHouse helper from routes/houses.ts. We pass the
+    // active transaction so each successive insert sees the
+    // uncommitted row count and rotates through houses naturally —
+    // the helper picks the smallest house, ties broken by id.
+    const pickRecommendedHouseId = async (): Promise<number | null> => {
+      if (houseRows.length === 0) return null;
+      return await recommendNextHouse(schoolId, tx);
     };
 
     let touched = 0;
@@ -1938,13 +1912,12 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
           const hid = houseByName.get(p.houseName.trim().toLowerCase());
           if (hid !== undefined) {
             insertRow.houseId = hid;
-            liveCounts[hid] = (liveCounts[hid] ?? 0) + 1;
           } else {
-            const fallback = pickRotatingHouseId();
+            const fallback = await pickRecommendedHouseId();
             if (fallback !== null) insertRow.houseId = fallback;
           }
         } else {
-          const fallback = pickRotatingHouseId();
+          const fallback = await pickRecommendedHouseId();
           if (fallback !== null) insertRow.houseId = fallback;
         }
         // Race: another concurrent commit may have inserted this

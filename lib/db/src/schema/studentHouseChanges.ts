@@ -14,7 +14,10 @@ import {
 // the API layer so admins must justify the move; NULLABLE here only so
 // older rows (none today, but defensive) can survive a future schema
 // tweak without a backfill. fromHouseId is nullable for the
-// "previously unassigned" case.
+// "previously unassigned" case. toHouseId is ALSO nullable so an
+// admin clearing a student back to "unassigned" (via the Change
+// House modal) still leaves an audit row — the move is auditable
+// regardless of direction.
 export const studentHouseChangesTable = pgTable(
   "student_house_changes",
   {
@@ -22,7 +25,7 @@ export const studentHouseChangesTable = pgTable(
     schoolId: integer("school_id").notNull(),
     studentDbId: integer("student_db_id").notNull(),
     fromHouseId: integer("from_house_id"),
-    toHouseId: integer("to_house_id").notNull(),
+    toHouseId: integer("to_house_id"),
     reason: text("reason").notNull(),
     changedByStaffId: integer("changed_by_staff_id").notNull(),
     // Source of the change — "manual" (Change House modal), "bulk_sort"
