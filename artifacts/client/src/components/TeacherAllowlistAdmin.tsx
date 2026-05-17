@@ -74,9 +74,12 @@ export default function TeacherAllowlistAdmin({
   const bulkToggleColumn = async (destination: string, turnOn: boolean) => {
     setBulkBusy(destination);
     setErrorFor(null);
-    const next: Record<string, string[]> = { ...allowlistMap };
-    const failures: string[] = [];
-    // Sequential to avoid hammering; the staff list per school is small.
+
+    // Compute the new state synchronously and apply it optimistically so the
+    // grid updates immediately. Then fire all PUTs in parallel and roll back
+    // any rows whose save failed.
+    const changes: { staffName: string; destinations: string[] }[] = [];
+    const optimistic: Record<string, string[]> = { ...allowlistMap };
     for (const staffName of sortedStaff) {
       const current = new Set(allowlistMap[staffName] ?? []);
       const has = current.has(destination);
@@ -85,32 +88,58 @@ export default function TeacherAllowlistAdmin({
       if (turnOn) current.add(destination);
       else current.delete(destination);
       const destinations = Array.from(current).sort();
-      try {
-        const res = await authFetch(
-          `/api/teacher-allowlist/${encodeURIComponent(staffName)}`,
-          {
-            method: "PUT",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ destinations }),
-          },
-        );
-        if (!res.ok) throw new Error(await res.text());
-        if (destinations.length === 0) {
-          delete next[staffName];
-        } else {
-          next[staffName] = destinations;
-        }
-      } catch (e) {
-        failures.push(staffName);
-        if (failures.length === 1) {
-          setErrorFor({
-            name: staffName,
-            msg: e instanceof Error ? e.message : "Save failed.",
-          });
-        }
-      }
+      changes.push({ staffName, destinations });
+      if (destinations.length === 0) delete optimistic[staffName];
+      else optimistic[staffName] = destinations;
     }
-    onChange(next);
+    if (changes.length === 0) {
+      setBulkBusy(null);
+      return;
+    }
+    onChange(optimistic);
+
+    const results = await Promise.all(
+      changes.map(async ({ staffName, destinations }) => {
+        try {
+          const res = await authFetch(
+            `/api/teacher-allowlist/${encodeURIComponent(staffName)}`,
+            {
+              method: "PUT",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ destinations }),
+            },
+          );
+          if (!res.ok) throw new Error(await res.text());
+          return { staffName, ok: true as const };
+        } catch (e) {
+          return {
+            staffName,
+            ok: false as const,
+            msg: e instanceof Error ? e.message : "Save failed.",
+          };
+        }
+      }),
+    );
+
+    const failed = results.filter((r) => !r.ok);
+    if (failed.length > 0) {
+      // Roll back failed rows to their pre-bulk values.
+      const rolled: Record<string, string[]> = { ...optimistic };
+      for (const f of failed) {
+        const prev = allowlistMap[f.staffName] ?? [];
+        if (prev.length === 0) delete rolled[f.staffName];
+        else rolled[f.staffName] = prev;
+      }
+      onChange(rolled);
+      const first = failed[0];
+      setErrorFor({
+        name: first.staffName,
+        msg:
+          failed.length === 1
+            ? (first as { msg: string }).msg
+            : `${failed.length} rows failed to save (first: ${first.staffName}).`,
+      });
+    }
     setBulkBusy(null);
   };
 
