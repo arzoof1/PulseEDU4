@@ -37,6 +37,12 @@ export interface StudentBadgeInput {
     color: string;
     iconKey: string | null;
   } | null;
+  // Optional rectangular photo bytes — when present we render a
+  // rectangle photo in place of the initials bubble (Phase 4 — the
+  // user explicitly approved rectangle photos on the ID badge only;
+  // every other surface keeps the circular avatar). Null/undefined =
+  // fall back to initials bubble.
+  photoBytes?: Buffer | null;
 }
 
 export async function renderStudentBadgesPdf(
@@ -142,29 +148,41 @@ async function renderLanyardBadge(
       lineBreak: false,
     });
 
-  const bubbleSize = 72;
-  const bubbleX = (W - bubbleSize) / 2;
-  const bubbleY = ribbonH + 22;
-  const bubbleColor = badge.house
-    ? normalizeHex(badge.house.color)
-    : "#475569";
-  doc
-    .save()
-    .fillColor(bubbleColor)
-    .circle(bubbleX + bubbleSize / 2, bubbleY + bubbleSize / 2, bubbleSize / 2)
-    .fill()
-    .restore();
-  const initials = computeInitials(badge);
-  doc
-    .fillColor("#ffffff")
-    .fontSize(30)
-    .text(initials, bubbleX, bubbleY + bubbleSize / 2 - 17, {
-      width: bubbleSize,
-      align: "center",
-      lineBreak: false,
-    });
+  // Photo slot — rectangle (user explicitly approved rectangle on
+  // the ID badge in Phase 4). Falls back to a colored initials bubble
+  // when no photo bytes are available.
+  const photoW = 90;
+  const photoH = 108;
+  const photoX = (W - photoW) / 2;
+  const photoY = ribbonH + 18;
+  if (badge.photoBytes) {
+    // Border frame in house color so the badge still reads as
+    // "belonging to this house" even without the bubble.
+    const frame = badge.house ? normalizeHex(badge.house.color) : "#475569";
+    doc
+      .save()
+      .lineWidth(2)
+      .strokeColor(frame)
+      .roundedRect(photoX - 1, photoY - 1, photoW + 2, photoH + 2, 4)
+      .stroke()
+      .restore();
+    try {
+      doc.image(badge.photoBytes, photoX, photoY, {
+        width: photoW,
+        height: photoH,
+        cover: [photoW, photoH],
+        align: "center",
+        valign: "center",
+      });
+    } catch {
+      // Corrupt image — fall back silently to the initials bubble.
+      drawInitialsBubble(doc, badge, photoX, photoY, photoW, photoH);
+    }
+  } else {
+    drawInitialsBubble(doc, badge, photoX, photoY, photoW, photoH);
+  }
 
-  const nameY = bubbleY + bubbleSize + 8;
+  const nameY = photoY + photoH + 8;
   doc
     .fillColor("#111827")
     .fontSize(14)
@@ -336,6 +354,45 @@ async function renderCr80Badge(
       align: "center",
       lineBreak: false,
     });
+}
+
+// Lanyard-only initials-bubble fallback. Draws a circle inside the
+// reserved photo slot so the layout below it doesn't shift whether
+// or not a photo is present.
+function drawInitialsBubble(
+  doc: PDFKit.PDFDocument,
+  badge: StudentBadgeInput,
+  slotX: number,
+  slotY: number,
+  slotW: number,
+  slotH: number,
+): void {
+  const bubbleSize = Math.min(slotW, slotH);
+  const bubbleX = slotX + (slotW - bubbleSize) / 2;
+  const bubbleY = slotY + (slotH - bubbleSize) / 2;
+  const bubbleColor = badge.house
+    ? normalizeHex(badge.house.color)
+    : "#475569";
+  doc
+    .save()
+    .fillColor(bubbleColor)
+    .circle(bubbleX + bubbleSize / 2, bubbleY + bubbleSize / 2, bubbleSize / 2)
+    .fill()
+    .restore();
+  const initials = computeInitials(badge);
+  doc
+    .fillColor("#ffffff")
+    .fontSize(Math.min(36, bubbleSize / 2.4))
+    .text(
+      initials,
+      bubbleX,
+      bubbleY + bubbleSize / 2 - Math.min(20, bubbleSize / 4),
+      {
+        width: bubbleSize,
+        align: "center",
+        lineBreak: false,
+      },
+    );
 }
 
 function computeInitials(badge: StudentBadgeInput): string {

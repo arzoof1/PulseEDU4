@@ -5735,3 +5735,31 @@ export async function ensureKioskWelcomeSchema(): Promise<void> {
     sql`CREATE INDEX IF NOT EXISTS class_signins_student_idx ON class_signins(school_id, student_id, signed_in_at)`,
   );
 }
+
+// -----------------------------------------------------------------------------
+// Badge print event audit ledger (Phase 4 — badge reissue audit).
+//
+// One row per student per batch when an admin generates a badges PDF.
+// Lets admins spot lost-badge / reissue patterns and provides a
+// chain-of-custody for the printed credential.
+// -----------------------------------------------------------------------------
+export async function ensureBadgePrintEventsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS badge_print_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      printed_by_staff_id INTEGER,
+      size TEXT NOT NULL,
+      reason TEXT,
+      batch_size INTEGER NOT NULL DEFAULT 1,
+      printed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS badge_print_events_school_printed_at_idx ON badge_print_events(school_id, printed_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS badge_print_events_student_idx ON badge_print_events(school_id, student_id, printed_at)`,
+  );
+}

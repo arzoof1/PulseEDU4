@@ -30,6 +30,7 @@ export type SettingsTileId =
   | "fast-coverage"
   | "kiosk-welcome"
   | "student-id-badges"
+  | "class-signins-today"
   | "onboarding";
 
 export type SettingsGroupId =

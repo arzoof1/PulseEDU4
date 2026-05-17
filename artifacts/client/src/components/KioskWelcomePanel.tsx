@@ -19,7 +19,8 @@ interface House {
 // Self-fetches current values from GET /api/school-settings so the
 // settings tile can mount without threading state from App.tsx.
 
-const PLACEHOLDER_HELP = "{firstName} · {lastName} · {house} · {grade}";
+const PLACEHOLDER_HELP =
+  "{firstName} · {lastName} · {house} · {grade} · {teacher} · {period}";
 const MAX_LEN = 240;
 const DEFAULT_TEMPLATE = "Welcome, {firstName}!";
 
@@ -69,6 +70,8 @@ export function KioskWelcomePanel() {
       lastName: "Rivera",
       house: houses[0]?.name ?? "Phoenix",
       grade: "7",
+      teacher: "Ms. Carter",
+      period: "Period 3",
     }),
     [houses],
   );

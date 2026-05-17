@@ -28,6 +28,7 @@ import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
 import { KioskWelcomePanel } from "./components/KioskWelcomePanel";
 import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
+import { RollCallPanel } from "./components/RollCallPanel";
 import SpotlightPanel from "./components/SpotlightPanel";
 import SpotlightLaunchButton from "./components/SpotlightLaunchButton";
 import LogTardyModal from "./components/LogTardyModal";
@@ -19471,6 +19472,10 @@ function App() {
         <StudentBadgesPanel />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "class-signins-today" && (
+        <RollCallPanel />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "pickup" && (
         <PickupSettingsPage />
       )}
@@ -19522,7 +19527,15 @@ function App() {
                 icon: "🪪",
                 title: "Student ID Badges",
                 subtitle:
-                  "Printable PDF badges with QR + house ribbon — students scan to sign in.",
+                  "Printable PDF badges with photo, QR + house ribbon — students scan to sign in.",
+                group: "hall-pass-ops",
+              },
+              {
+                id: "class-signins-today",
+                icon: "✅",
+                title: "Class Sign-Ins — Today",
+                subtitle:
+                  "Roll-call view of every student who signed in to class on a kiosk today.",
                 group: "hall-pass-ops",
               },
               {

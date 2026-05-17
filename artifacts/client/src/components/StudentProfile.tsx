@@ -535,6 +535,76 @@ interface Props {
 // Bytes flow through the existing /api/storage/* presigned-PUT pipeline,
 // then we POST the resulting objectPath to /api/students/:id/photo.
 // The admin-only consent toggle calls PATCH /photo-consent.
+// Phase 4 — admin-only roster-inline "Print badge" button. POSTs a
+// single-student request to the same lanyard-PDF endpoint the
+// settings panel uses; reason is captured for the audit ledger.
+function InlinePrintBadgeButton({ studentRecordId }: { studentRecordId: number }) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  async function go() {
+    setBusy(true);
+    setErr("");
+    try {
+      const reason = window.prompt(
+        "Reason for printing this badge? (optional — e.g. lost, damaged, new student)",
+        "",
+      );
+      // Cancel cleanly without firing the print.
+      if (reason === null) {
+        setBusy(false);
+        return;
+      }
+      const res = await authFetch("/api/students/id-badges.pdf", {
+        method: "POST",
+        body: JSON.stringify({
+          studentIds: [studentRecordId],
+          size: "lanyard",
+          reason: reason.trim() || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.error ?? `Print failed (${res.status})`);
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener");
+      setTimeout(() => URL.revokeObjectURL(url), 30_000);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+  return (
+    <div style={{ marginTop: "0.4rem" }}>
+      <button
+        type="button"
+        onClick={go}
+        disabled={busy}
+        style={{
+          background: "#0f766e",
+          color: "#fff",
+          border: "none",
+          borderRadius: 6,
+          padding: "0.45rem 0.8rem",
+          fontWeight: 600,
+          fontSize: "0.85rem",
+          cursor: busy ? "not-allowed" : "pointer",
+          opacity: busy ? 0.7 : 1,
+        }}
+      >
+        🪪 {busy ? "Generating…" : "Print ID badge"}
+      </button>
+      {err && (
+        <span style={{ color: "#b91c1c", marginLeft: "0.5rem", fontSize: "0.85rem" }}>
+          {err}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function StudentPhotoManager({
   studentId,
   firstName,
@@ -2154,6 +2224,9 @@ export default function StudentProfile({
                 lastName={data.header.lastName}
                 isAdmin={isAdmin}
               />
+            )}
+            {isAdmin && data?.header && (
+              <InlinePrintBadgeButton studentRecordId={data.header.studentDbId} />
             )}
             {canEditSafetyPlan && (
               <div style={{ marginTop: "0.6rem" }}>

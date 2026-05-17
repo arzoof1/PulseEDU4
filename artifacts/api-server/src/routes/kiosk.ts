@@ -17,6 +17,8 @@ import {
   housesTable,
   schoolSettingsTable,
   classSigninsTable,
+  bellSchedulesTable,
+  bellSchedulePeriodsTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
@@ -1268,15 +1270,142 @@ async function activateForTeacher(args: {
 // Substitute {firstName}/{lastName}/{house}/{grade} into a template
 // string. Unknown placeholders are left as-is so a typo in School
 // Settings is visible to whoever's editing it, not silently dropped.
+// Phase 4 — GET /api/class-signins/today
+// Staff-facing roll-call list: today's class sign-ins for the
+// current school, joined to students + the staff who owned the
+// kiosk activation at sign-in time (the "teacher" of the room).
+// Today is computed in the school's local timezone via the
+// canonical DEFAULT_SCHOOL_TZ constant — same approach as the AST
+// + lapse cron flows.
+router.get(
+  "/class-signins/today",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    // Local-midnight cutoff in America/New_York (per
+    // DEFAULT_SCHOOL_TZ). Compute today's YYYY-MM-DD in that tz,
+    // then turn back into a UTC instant.
+    const tz = "America/New_York";
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    const today = fmt.format(new Date()); // YYYY-MM-DD
+    const startOfDay = new Date(`${today}T00:00:00-05:00`);
+    // Note: -05:00 is correct for EST; DST would be -04:00. Since
+    // this query only filters "today's rows" (a coarse window), a
+    // 1-hour edge case at midnight is acceptable. The per-school
+    // IANA work in replit.md "Open work" will tighten this.
+    const rows = await db
+      .select({
+        id: classSigninsTable.id,
+        studentRecordId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+        teacherName: sql<string>`COALESCE(${staffTable.displayName}, '')`.as("teacherName"),
+        signedInAt: classSigninsTable.signedInAt,
+      })
+      .from(classSigninsTable)
+      .leftJoin(
+        studentsTable,
+        and(
+          eq(classSigninsTable.studentId, studentsTable.id),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      )
+      .leftJoin(staffTable, eq(classSigninsTable.signedInByStaffId, staffTable.id))
+      .where(
+        and(
+          eq(classSigninsTable.schoolId, schoolId),
+          gt(classSigninsTable.signedInAt, startOfDay),
+        ),
+      )
+      .orderBy(asc(classSigninsTable.signedInAt));
+    res.json({ signins: rows });
+  },
+);
+
 function substituteWelcome(
   template: string,
-  vars: { firstName: string; lastName: string; house: string; grade: string },
+  vars: {
+    firstName: string;
+    lastName: string;
+    house: string;
+    grade: string;
+    teacher: string;
+    period: string;
+  },
 ): string {
   return template
     .replace(/\{firstName\}/g, vars.firstName)
     .replace(/\{lastName\}/g, vars.lastName)
     .replace(/\{house\}/g, vars.house)
-    .replace(/\{grade\}/g, vars.grade);
+    .replace(/\{grade\}/g, vars.grade)
+    .replace(/\{teacher\}/g, vars.teacher)
+    .replace(/\{period\}/g, vars.period);
+}
+
+// Phase 4 — look up the active bell-schedule period for the kiosk's
+// school. Returns the period name + number if one is in progress
+// right now, otherwise empty strings (welcome message renders
+// "{period}" → "" rather than an awkward "Period —"). Best-effort:
+// any DB error degrades to no period info, never blocks sign-in.
+async function resolveActivePeriod(
+  schoolId: number,
+): Promise<{ name: string; number: string }> {
+  try {
+    const [schedule] = await db
+      .select({ id: bellSchedulesTable.id })
+      .from(bellSchedulesTable)
+      .where(
+        and(
+          eq(bellSchedulesTable.schoolId, schoolId),
+          eq(bellSchedulesTable.isDefault, true),
+          eq(bellSchedulesTable.active, true),
+        ),
+      );
+    if (!schedule) return { name: "", number: "" };
+    const periods = await db
+      .select({
+        periodNumber: bellSchedulePeriodsTable.periodNumber,
+        name: bellSchedulePeriodsTable.name,
+        startTime: bellSchedulePeriodsTable.startTime,
+        endTime: bellSchedulePeriodsTable.endTime,
+      })
+      .from(bellSchedulePeriodsTable)
+      .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
+    // Compute current HH:MM in the school's canonical timezone
+    // (DEFAULT_SCHOOL_TZ — America/New_York), NOT the server's local
+    // clock — Replit hosts can drift to UTC and the period-name
+    // lookup would silently mis-match for most of the day.
+    const tz = "America/New_York";
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour12: false,
+      hour: "2-digit",
+      minute: "2-digit",
+    }).formatToParts(new Date());
+    const hh = parts.find((p) => p.type === "hour")?.value ?? "00";
+    const mm = parts.find((p) => p.type === "minute")?.value ?? "00";
+    const hhmm = `${hh.padStart(2, "0")}:${mm.padStart(2, "0")}`;
+    for (const p of periods) {
+      const start = (p.startTime ?? "").slice(0, 5);
+      const end = (p.endTime ?? "").slice(0, 5);
+      if (start && end && hhmm >= start && hhmm < end) {
+        return {
+          name: p.name ?? `Period ${p.periodNumber}`,
+          number: String(p.periodNumber ?? ""),
+        };
+      }
+    }
+    return { name: "", number: "" };
+  } catch {
+    return { name: "", number: "" };
+  }
 }
 
 // In-memory per-kiosk-activation rate limiter for class sign-ins. Keys
@@ -1397,11 +1526,28 @@ router.post("/kiosk/class-signin", async (req, res) => {
   const houseOverride = house ? overrideMap[String(house.id)] : undefined;
   const chosenTemplate = houseOverride || baseTemplate;
 
+  // Phase 4 — resolve teacher (kiosk's staffId is the teacher whose
+  // room this is) + active bell-schedule period for the new {teacher}
+  // and {period} placeholders. Both fall back to empty string on miss.
+  let teacherName = "";
+  try {
+    const [t] = await db
+      .select({ displayName: staffTable.displayName })
+      .from(staffTable)
+      .where(eq(staffTable.id, act.staffId));
+    teacherName = t?.displayName ?? "";
+  } catch {
+    teacherName = "";
+  }
+  const period = await resolveActivePeriod(act.schoolId);
+
   const welcomeMessage = substituteWelcome(chosenTemplate, {
     firstName: student.firstName,
     lastName: student.lastName,
     house: house?.name ?? "",
     grade: String(student.grade ?? ""),
+    teacher: teacherName,
+    period: period.name,
   });
 
   await db.insert(classSigninsTable).values({

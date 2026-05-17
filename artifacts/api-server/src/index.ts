@@ -29,6 +29,7 @@ import {
   ensureAstSchema,
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
+  ensureBadgePrintEventsSchema,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -177,6 +178,8 @@ async function runSeed(): Promise<void> {
   // Phase 3 — Kiosk "Sign in to class" welcome messages + class_signins
   // append-only ledger. Idempotent.
   await ensureKioskWelcomeSchema();
+  // Phase 4 — Badge print event audit ledger. Idempotent.
+  await ensureBadgePrintEventsSchema();
 }
 
 // In production we MUST open the port within the platform's health-check

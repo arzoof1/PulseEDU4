@@ -57,6 +57,7 @@ export * from "./studentFastScores";
 export * from "./parents";
 export * from "./houses";
 export * from "./classSignins";
+export * from "./badgePrintEvents";
 export * from "./teacherWatchlistEntries";
 export * from "./teacherWatchlistGroups";
 export * from "./displayPlaylists";

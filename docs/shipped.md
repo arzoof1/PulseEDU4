@@ -3,6 +3,17 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Kiosk Phase 4 packet: rectangle student photos on lanyard badges
+  (with house-color frame + initials-bubble fallback), roster-inline
+  admin "Print badge" button on StudentProfile, student picker
+  (replaces pasted-ID textarea) + recent-prints audit table in
+  StudentBadgesPanel, sign-in roll-call settings tile reading
+  `class_signins` via new admin-gated `GET /api/class-signins/today`
+  (school-TZ aware), `{teacher}` + `{period}` welcome-message
+  variables (period resolved from default bell schedule in school
+  TZ), and new `badge_print_events` audit table with append-only
+  per-print logging.
+
 - **Kiosk Phase 3 — printable student ID badges + class sign-in +
   per-school welcome messages + in-browser camera scanning.**
   Four kiosk gaps closed: (1) `GET/POST /api/students/id-badges.pdf`

@@ -5,14 +5,43 @@ import {
   staffTable,
   schoolsTable,
   housesTable,
+  badgePrintEventsTable,
 } from "@workspace/db";
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   renderStudentBadgesPdf,
   type BadgeSize,
   type StudentBadgeInput,
 } from "../lib/studentIdBadgesPdf";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "../lib/objectStorage.js";
+
+const objectStorage = new ObjectStorageService();
+
+// Fetch the raw bytes of a stored object so we can embed it in the
+// generated PDF. Returns null on any failure (missing object, ACL
+// mismatch handled at upstream bind time, network glitch) — the
+// renderer falls back to the initials bubble silently. We bypass
+// `downloadObject` (which writes to an Express response) and pipe
+// the GCS readStream directly into a buffer.
+async function fetchObjectBytes(objectPath: string): Promise<Buffer | null> {
+  try {
+    const file = await objectStorage.getObjectEntityFile(objectPath);
+    return await new Promise<Buffer | null>((resolve) => {
+      const chunks: Buffer[] = [];
+      const stream = file.createReadStream();
+      stream.on("data", (c: Buffer) => chunks.push(c));
+      stream.on("end", () => resolve(Buffer.concat(chunks)));
+      stream.on("error", () => resolve(null));
+    });
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) return null;
+    return null;
+  }
+}
 
 const router: IRouter = Router();
 
@@ -63,6 +92,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     all?: boolean;
     studentIds?: number[];
     size?: string;
+    reason?: string;
   };
   // Badge physical size — "lanyard" (default, portrait 3.375"×4.25")
   // or "cr80" (landscape 3.375"×2.125", standard credit-card ID).
@@ -149,6 +179,33 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   }
 
   const baseUrl = kioskBaseUrl(req);
+  // Fetch all referenced photos in parallel. Consent toggle hides
+  // the photo even when bytes are on disk (matches the rest of the
+  // app's render gating).
+  const photoByStudent = new Map<number, Buffer>();
+  // Bounded-concurrency photo fetch. A "print all" for a 2000-student
+  // school would otherwise open 2000 simultaneous GCS streams and
+  // hold every photo in memory at once — easy OOM. We cap to 6 in
+  // flight and skip any image > 4MB (a sane upper bound for a badge
+  // thumbnail — anything bigger is almost certainly an unscaled
+  // upload that would bloat the PDF and slow rendering to a crawl).
+  const MAX_PHOTO_BYTES = 4 * 1024 * 1024;
+  const CONCURRENCY = 6;
+  const candidates = students.filter(
+    (s) => s.photoConsent && s.photoObjectKey,
+  );
+  for (let i = 0; i < candidates.length; i += CONCURRENCY) {
+    const slice = candidates.slice(i, i + CONCURRENCY);
+    await Promise.all(
+      slice.map(async (s) => {
+        const bytes = await fetchObjectBytes(s.photoObjectKey as string);
+        if (bytes && bytes.length <= MAX_PHOTO_BYTES) {
+          photoByStudent.set(s.id, bytes);
+        }
+      }),
+    );
+  }
+
   const badges: StudentBadgeInput[] = students.map((s) => ({
     studentId: s.studentId,
     firstName: s.firstName,
@@ -160,7 +217,32 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
       s.houseId !== null && s.houseId !== undefined
         ? houseById.get(s.houseId) ?? null
         : null,
+    photoBytes: photoByStudent.get(s.id) ?? null,
   }));
+
+  // Audit ledger — one row per student per batch. Optional reason
+  // is pulled from the request body so the admin can label a
+  // single-student reprint ("lost", "damaged", etc.). Don't let
+  // logging failures block the actual PDF delivery.
+  const reason =
+    typeof body.reason === "string" && body.reason.trim()
+      ? body.reason.trim().slice(0, 120)
+      : null;
+  try {
+    const printedBy = req.staffId ?? null;
+    await db.insert(badgePrintEventsTable).values(
+      students.map((s) => ({
+        schoolId,
+        studentId: s.id,
+        printedByStaffId: printedBy,
+        size,
+        reason,
+        batchSize: students.length,
+      })),
+    );
+  } catch {
+    // Audit is best-effort; never block a print.
+  }
 
   const pdf = await renderStudentBadgesPdf(badges, size);
   res.setHeader("Content-Type", "application/pdf");
@@ -170,6 +252,48 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   );
   res.send(pdf);
 }
+
+// GET /api/students/badge-print-events?limit=50
+// Recent badge prints for the school, newest first. Joined to
+// students so the UI can render names without a second roundtrip.
+router.get(
+  "/students/badge-print-events",
+  requireAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const limitRaw = Number(req.query.limit ?? 50);
+    const limit = Math.max(1, Math.min(200, Number.isFinite(limitRaw) ? limitRaw : 50));
+    const rows = await db
+      .select({
+        id: badgePrintEventsTable.id,
+        studentId: badgePrintEventsTable.studentId,
+        studentRecordId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+        printedByStaffId: badgePrintEventsTable.printedByStaffId,
+        printedByName: sql<string>`COALESCE(${staffTable.displayName}, '')`.as("printedByName"),
+        size: badgePrintEventsTable.size,
+        reason: badgePrintEventsTable.reason,
+        batchSize: badgePrintEventsTable.batchSize,
+        printedAt: badgePrintEventsTable.printedAt,
+      })
+      .from(badgePrintEventsTable)
+      .leftJoin(
+        studentsTable,
+        and(
+          eq(badgePrintEventsTable.studentId, studentsTable.id),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      )
+      .leftJoin(staffTable, eq(badgePrintEventsTable.printedByStaffId, staffTable.id))
+      .where(eq(badgePrintEventsTable.schoolId, schoolId))
+      .orderBy(desc(badgePrintEventsTable.printedAt))
+      .limit(limit);
+    res.json({ events: rows });
+  },
+);
 
 router.post("/students/id-badges.pdf", requireAdmin, handleBadges);
 router.get("/students/id-badges.pdf", requireAdmin, handleBadges);
