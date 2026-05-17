@@ -524,6 +524,171 @@ router.delete(
 );
 
 // ----------------------------------------------------------------------------
+// POST /api/feature-licensing/bulk-overrides  (Phase 5 Global Feature Flags)
+//   Apply a single override to many schools in one atomic write.
+//   Body: {
+//     scope: "platform" | "district",
+//     districtId?: number,        // required when scope = "district"
+//     featureKey: string,
+//     enabled: boolean,
+//     showUpsell?: boolean,
+//     expiresAt?: string | null,
+//     reason?: string | null,
+//   }
+//   Returns: { applied: number, schoolIds: number[], skipped: number }
+//
+//   Scoping:
+//     - "platform": affects every active school in every district. Requires
+//       requireCrossDistrictSuperUser (ALLOW_CROSS_DISTRICT_SUPERUSER=1).
+//     - "district": affects every active school in the given district.
+//       Caller must be a cross-district SuperUser OR the district must be
+//       the caller's own district. Same gate as the per-school endpoint.
+//
+//   Implementation: re-uses the per-school upsert + reapplyLicensingToSchool
+//   path inside a single tx so partial fan-outs don't leave the runtime
+//   booleans in an inconsistent state.
+// ----------------------------------------------------------------------------
+router.post("/feature-licensing/bulk-overrides", async (req, res, next) => {
+  try {
+    const actor = await requireSuperUser(req, res);
+    if (!actor) return;
+    const body = (req.body ?? {}) as {
+      scope?: unknown;
+      districtId?: unknown;
+      featureKey?: unknown;
+      enabled?: unknown;
+      showUpsell?: unknown;
+      expiresAt?: unknown;
+      reason?: unknown;
+    };
+    const scope = body.scope;
+    if (scope !== "platform" && scope !== "district") {
+      res.status(400).json({ error: "invalid_scope" });
+      return;
+    }
+    if (typeof body.featureKey !== "string" || !isKnownFeatureKey(body.featureKey)) {
+      res.status(400).json({ error: "invalid_feature_key" });
+      return;
+    }
+    if (typeof body.enabled !== "boolean") {
+      res.status(400).json({ error: "invalid_enabled" });
+      return;
+    }
+    const featureKey = body.featureKey;
+    const enabled = body.enabled;
+    const showUpsell = Boolean(body.showUpsell);
+    const reason =
+      typeof body.reason === "string" && body.reason.trim()
+        ? body.reason.trim()
+        : null;
+    const expiresAt =
+      typeof body.expiresAt === "string" && body.expiresAt
+        ? new Date(body.expiresAt)
+        : null;
+
+    // Resolve target school list under the right scope guard.
+    let targetSchoolIds: number[] = [];
+    if (scope === "platform") {
+      // Platform-wide writes hit every district; only cross-district
+      // SuperUser may issue them.
+      if (!(await requireCrossDistrictSuperUser(req, res))) return;
+      const rows = await db
+        .select({ id: schoolsTable.id })
+        .from(schoolsTable)
+        .where(eq(schoolsTable.active, true));
+      targetSchoolIds = rows.map((r) => r.id);
+    } else {
+      // scope === "district"
+      const districtId = Number(body.districtId);
+      if (!Number.isInteger(districtId) || districtId <= 0) {
+        res.status(400).json({ error: "invalid_district_id" });
+        return;
+      }
+      // District scope: cross-district SuperUser may target any district;
+      // otherwise the caller's home district only.
+      const crossDistrict =
+        process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+      if (!crossDistrict) {
+        const callerDistrictId = await getDistrictIdForSchool(actor.schoolId);
+        if (callerDistrictId === null || callerDistrictId !== districtId) {
+          res.status(403).json({
+            error: "Cannot bulk-apply to a district outside your own",
+          });
+          return;
+        }
+      }
+      const rows = await db
+        .select({ id: schoolsTable.id })
+        .from(schoolsTable)
+        .where(
+          and(
+            eq(schoolsTable.active, true),
+            eq(schoolsTable.districtId, districtId),
+          ),
+        );
+      targetSchoolIds = rows.map((r) => r.id);
+    }
+
+    if (targetSchoolIds.length === 0) {
+      res.json({ applied: 0, schoolIds: [], skipped: 0 });
+      return;
+    }
+
+    // Fan out the per-school upsert + reapply inside one tx. Same write
+    // shape as POST /feature-licensing/schools/:id/overrides so the audit
+    // / runtime invariants stay identical.
+    const appliedIds: number[] = [];
+    await db.transaction(async (tx) => {
+      for (const schoolId of targetSchoolIds) {
+        const [existing] = await tx
+          .select()
+          .from(schoolFeatureOverridesTable)
+          .where(
+            and(
+              eq(schoolFeatureOverridesTable.schoolId, schoolId),
+              eq(schoolFeatureOverridesTable.featureKey, featureKey),
+            ),
+          )
+          .limit(1);
+        if (existing) {
+          await tx
+            .update(schoolFeatureOverridesTable)
+            .set({
+              enabled,
+              showUpsell,
+              expiresAt,
+              reason,
+              grantedByStaffId: actor.id,
+            })
+            .where(eq(schoolFeatureOverridesTable.id, existing.id));
+        } else {
+          await tx.insert(schoolFeatureOverridesTable).values({
+            schoolId,
+            featureKey,
+            enabled,
+            showUpsell,
+            quotas: {},
+            expiresAt,
+            reason,
+            grantedByStaffId: actor.id,
+          });
+        }
+        await reapplyLicensingToSchool(schoolId, tx);
+        appliedIds.push(schoolId);
+      }
+    });
+
+    res.json({
+      applied: appliedIds.length,
+      schoolIds: appliedIds,
+      skipped: 0,
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ----------------------------------------------------------------------------
 // Audit log (Phase 3) — read-only viewer for the SuperUser surface.
 // The expired-override sweep cron writes here on every run; admins
 // previously had no UI to see what was swept.

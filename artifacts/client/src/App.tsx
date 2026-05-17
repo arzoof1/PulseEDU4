@@ -37,6 +37,8 @@ import FeatureLicensingAdminPage from "./components/featureLicensing/FeatureLice
 import SuperUserHomeRollups from "./components/districtOverview/SuperUserHomeRollups";
 import DistrictOverviewRollups from "./components/districtOverview/DistrictOverviewRollups";
 import AuditHealthPanel from "./components/districtOverview/AuditHealthPanel";
+import CrossDistrictReports from "./components/districtOverview/CrossDistrictReports";
+import BulkOverridesPanel from "./components/districtOverview/BulkOverridesPanel";
 import {
   initFeatures,
   useFeatureVisible,
@@ -3833,34 +3835,6 @@ function StudentCombobox({
 // branches stay tidy and so we can extend or reorder without touching
 // the App component body.
 type LandingCard = { title: string; body: string; phase: string };
-
-const SUPER_USER_HOME_CARDS: LandingCard[] = [
-  {
-    title: "District Switcher",
-    body: "Hop between every district you administer. Today: switch school within district from Settings → Tenancy.",
-    phase: "Phase 5",
-  },
-  {
-    title: "Cross-District Reports",
-    body: "Roll up Insights, PBIS, and intervention metrics across every district you operate.",
-    phase: "Phase 5",
-  },
-  {
-    title: "Onboard a District",
-    body: "Stand up a new district + first school + first SuperUser without a SQL session.",
-    phase: "Phase 3",
-  },
-  {
-    title: "Global Feature Flags",
-    body: "Flip a feature on for one district, a school, or the whole platform.",
-    phase: "Phase 5",
-  },
-  {
-    title: "Audit & Health",
-    body: "See login activity, error rates, and tenant health for every district.",
-    phase: "Phase 4",
-  },
-];
 
 const DISTRICT_ADMIN_CARDS: LandingCard[] = [
   {
@@ -19898,48 +19872,32 @@ function App() {
         <div className="card" style={{ marginBottom: "1rem" }}>
           <h2 style={{ marginTop: 0 }}>SuperUser Home</h2>
           <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
-            Cross-district control surface. The full toolset lands in
-            Phases 3–5; this page lists what's coming so you have a single
-            place to bookmark.
+            Cross-district control surface. Phases 3–5 are now live:
+            onboard a district, see audit + health, switch districts,
+            roll up cross-district reports, and flip feature flags in
+            bulk.
           </p>
           <HowToUseHelp title="How to use SuperUser Home">
             <HowToSection title="What lives here">
               The cross-district control surface — only SuperUsers
-              see this. As Phases 3–5 ship, the placeholder cards
-              fill in with cross-district importers, audit log
-              search, and the role / SSO config.
+              see this. Headline tiles + per-district cards show the
+              live state. The school switcher in the header doubles
+              as a district switcher when the cross-district env
+              flag is on. Cross-District Reports rolls up 7-day
+              activity for every district. Global Feature Flags
+              flips one feature on or off for a whole district or
+              the whole platform in a single audited write.
             </HowToSection>
             <RoleSection for="superUser" title="Tip">
-              Use the school-switcher in the header to drop into any
+              Use the school switcher in the header to drop into any
               school as that school's admin. The previewed identity
               is logged in the audit trail of any action you take.
             </RoleSection>
           </HowToUseHelp>
           <SuperUserHomeRollups />
+          <CrossDistrictReports />
+          <BulkOverridesPanel />
           <AuditHealthPanel />
-          <details style={{ marginTop: "1.5rem" }}>
-            <summary
-              style={{
-                cursor: "pointer",
-                color: "var(--text-subtle)",
-                fontSize: "0.85rem",
-              }}
-            >
-              Roadmap — coming in later phases
-            </summary>
-            <div
-              style={{
-                display: "grid",
-                gap: "0.75rem",
-                gridTemplateColumns: "repeat(auto-fill, minmax(260px, 1fr))",
-                marginTop: "0.75rem",
-              }}
-            >
-              {SUPER_USER_HOME_CARDS.map((c) => (
-                <PlaceholderCard key={c.title} title={c.title} body={c.body} phase={c.phase} />
-              ))}
-            </div>
-          </details>
         </div>
       )}
 

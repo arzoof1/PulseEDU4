@@ -57,19 +57,36 @@ router.get("/tenancy/schools", async (req, res) => {
   if (!staff) return;
 
   const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+  // Phase 5 District Switcher: when ALLOW_CROSS_DISTRICT_SUPERUSER=1, a
+  // SuperUser sees ALL active schools across every district (grouped by
+  // district in the UI). Same env gate used by tenancy mutations,
+  // featureLicensing CRUD, and the superuser overview rollup.
+  const crossDistrict =
+    staff.isSuperUser && process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
 
   const all = await db
-    .select()
+    .select({
+      id: schoolsTable.id,
+      districtId: schoolsTable.districtId,
+      name: schoolsTable.name,
+      shortName: schoolsTable.shortName,
+      stateSchoolCode: schoolsTable.stateSchoolCode,
+      isPrimary: schoolsTable.isPrimary,
+      districtName: districtsTable.name,
+    })
     .from(schoolsTable)
+    .leftJoin(districtsTable, eq(districtsTable.id, schoolsTable.districtId))
     .where(
       and(
         eq(schoolsTable.active, true),
-        // For SuperUsers, restrict to their own district. For everyone else
-        // we still pull the row so the badge can render their home school's
-        // name; the .filter below narrows to exactly that one row.
-        actorDistrictId !== null
-          ? eq(schoolsTable.districtId, actorDistrictId)
-          : sql`false`,
+        // SuperUser + cross-district env flag = see every district.
+        // Otherwise restrict to caller's own district. Non-staff with
+        // no resolvable district see nothing (false).
+        crossDistrict
+          ? sql`true`
+          : actorDistrictId !== null
+            ? eq(schoolsTable.districtId, actorDistrictId)
+            : sql`false`,
       ),
     )
     .orderBy(asc(schoolsTable.districtId), asc(schoolsTable.id));
@@ -83,9 +100,11 @@ router.get("/tenancy/schools", async (req, res) => {
     activeSchoolId: req.schoolId ?? staff.schoolId,
     isSwitched: !!req.isSchoolSwitched,
     canSwitch: !!staff.isSuperUser,
+    crossDistrict,
     schools: visible.map((s) => ({
       id: s.id,
       districtId: s.districtId,
+      districtName: s.districtName,
       name: s.name,
       shortName: s.shortName,
       stateSchoolCode: s.stateSchoolCode,
@@ -130,27 +149,42 @@ router.post("/tenancy/switch-school", async (req, res) => {
     return;
   }
 
+  // Architect-flagged (Phase 5): we previously only validated the school
+  // was active, not the district. With cross-district switching enabled
+  // that gap meant a SuperUser could land in a school whose district was
+  // soft-deactivated. Join districts and require both rows active.
   const [school] = await db
-    .select()
+    .select({
+      id: schoolsTable.id,
+      name: schoolsTable.name,
+      districtId: schoolsTable.districtId,
+      schoolActive: schoolsTable.active,
+      districtActive: districtsTable.active,
+    })
     .from(schoolsTable)
-    .where(and(eq(schoolsTable.id, schoolId), eq(schoolsTable.active, true)));
-  if (!school) {
+    .leftJoin(districtsTable, eq(districtsTable.id, schoolsTable.districtId))
+    .where(eq(schoolsTable.id, schoolId));
+  if (!school || !school.schoolActive || !school.districtActive) {
     res.status(404).json({ error: "School not found or inactive" });
     return;
   }
 
-  // Cross-district switching is rejected. A Hernando SuperUser switching
-  // into a Pasco school would resolve req.schoolId to a Pasco school for
-  // the rest of the session — the scope sweeps from D3-D5 only enforced
-  // *school* scoping, so cross-district reach via the switcher would
-  // expose Pasco data to Hernando. If we ever want a true cross-district
-  // SuperUser, that's a separate flag (e.g. `isCrossDistrictSuperUser`).
-  const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
-  if (actorDistrictId === null || school.districtId !== actorDistrictId) {
-    res
-      .status(403)
-      .json({ error: "Cannot switch into a school in another district" });
-    return;
+  // Cross-district switching is the Phase 5 District Switcher. Gated by
+  // ALLOW_CROSS_DISTRICT_SUPERUSER=1 — same env flag tenancy mutations
+  // and featureLicensing CRUD already use. Without the flag, a Hernando
+  // SuperUser switching into a Pasco school would resolve req.schoolId
+  // to a Pasco school for the rest of the session, exposing Pasco data
+  // to a Hernando staff. With the flag, the operator has explicitly
+  // opted into the cross-district control tier.
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const actorDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (actorDistrictId === null || school.districtId !== actorDistrictId) {
+      res
+        .status(403)
+        .json({ error: "Cannot switch into a school in another district" });
+      return;
+    }
   }
 
   // schoolId === staff.schoolId means the SuperUser picked their own home

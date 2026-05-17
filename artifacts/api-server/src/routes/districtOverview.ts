@@ -12,6 +12,7 @@ import {
   featureLicensingAuditLogTable,
   issAdminLogAuditTable,
   interactionAuditLogTable,
+  interventionEntriesTable,
 } from "@workspace/db";
 import { eq, and, inArray, sql, isNull, desc } from "drizzle-orm";
 import { canActAsDistrict } from "../lib/scope";
@@ -646,6 +647,176 @@ router.get("/superuser/audit-health", async (req, res) => {
   }
 
   res.json({ perDistrict, recentEvents: merged });
+});
+
+// ---------------------------------------------------------------------------
+// GET /api/superuser/cross-district-reports  (Phase 5)
+//   Per-district 7-day activity rollup for the SuperUser cross-district
+//   surface. Surfaces "what's actually happening across every silo I
+//   operate" in one table:
+//     - PBIS points (sum, last 7d)
+//     - hall passes (count, last 7d)
+//     - ISS days (count, last 7d)
+//     - active intervention entries (count, last 7d)
+//
+//   Cross-district reach gated by ALLOW_CROSS_DISTRICT_SUPERUSER=1; without
+//   it the route falls back to the caller's own district (still useful as
+//   a single-district report, mirrors the /superuser/overview pattern).
+//
+//   Each metric is ONE grouped SQL query keyed on school_id — no N+1.
+//   The handler rolls schools up to districts in memory.
+// ---------------------------------------------------------------------------
+router.get("/superuser/cross-district-reports", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "SuperUser access required" });
+    return;
+  }
+
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  const actorDistrictId = crossDistrict
+    ? null
+    : await getDistrictIdForSchool(staff.schoolId);
+  if (!crossDistrict && actorDistrictId === null) {
+    res.status(403).json({ error: "Caller has no resolvable district" });
+    return;
+  }
+
+  const districts = await db
+    .select()
+    .from(districtsTable)
+    .where(crossDistrict ? sql`TRUE` : eq(districtsTable.id, actorDistrictId!))
+    .orderBy(districtsTable.id);
+  const schools = await db
+    .select()
+    .from(schoolsTable)
+    .where(
+      and(
+        eq(schoolsTable.active, true),
+        crossDistrict
+          ? sql`TRUE`
+          : eq(schoolsTable.districtId, actorDistrictId!),
+      ),
+    )
+    .orderBy(schoolsTable.districtId, schoolsTable.id);
+
+  if (schools.length === 0) {
+    res.json({
+      windowDays: 7,
+      crossDistrict,
+      perDistrict: districts.map((d) => ({
+        id: d.id,
+        name: d.name,
+        schoolCount: 0,
+        pbisPoints7d: 0,
+        hallPasses7d: 0,
+        issDays7d: 0,
+        interventions7d: 0,
+      })),
+    });
+    return;
+  }
+
+  const schoolIds = schools.map((s) => s.id);
+  const sevenDaysAgoIso = new Date(
+    Date.now() - 7 * 24 * 60 * 60 * 1000,
+  ).toISOString();
+  const sevenDaysAgoDate = sevenDaysAgoIso.slice(0, 10);
+
+  // 4 grouped queries, one per metric. Each filtered to the schools we
+  // care about so cross-district scope mirrors the /superuser/overview
+  // contract — no per-school N+1.
+  const [pbisRows, hallRows, issRows, intvRows] = await Promise.all([
+    db
+      .select({
+        schoolId: pbisEntriesTable.schoolId,
+        pts: sql<number>`COALESCE(SUM(${pbisEntriesTable.points}), 0)::int`.as(
+          "pts",
+        ),
+      })
+      .from(pbisEntriesTable)
+      .where(
+        and(
+          inArray(pbisEntriesTable.schoolId, schoolIds),
+          sql`${pbisEntriesTable.createdAt} >= ${sevenDaysAgoIso}`,
+        ),
+      )
+      .groupBy(pbisEntriesTable.schoolId),
+    db
+      .select({
+        schoolId: hallPassesTable.schoolId,
+        n: sql<number>`COUNT(*)::int`.as("n"),
+      })
+      .from(hallPassesTable)
+      .where(
+        and(
+          inArray(hallPassesTable.schoolId, schoolIds),
+          sql`${hallPassesTable.createdAt} >= ${sevenDaysAgoIso}`,
+        ),
+      )
+      .groupBy(hallPassesTable.schoolId),
+    db
+      .select({
+        schoolId: issAttendanceDayTable.schoolId,
+        n: sql<number>`COUNT(*)::int`.as("n"),
+      })
+      .from(issAttendanceDayTable)
+      .where(
+        and(
+          inArray(issAttendanceDayTable.schoolId, schoolIds),
+          sql`${issAttendanceDayTable.day} >= ${sevenDaysAgoDate}`,
+        ),
+      )
+      .groupBy(issAttendanceDayTable.schoolId),
+    db
+      .select({
+        schoolId: interventionEntriesTable.schoolId,
+        n: sql<number>`COUNT(*)::int`.as("n"),
+      })
+      .from(interventionEntriesTable)
+      .where(
+        and(
+          inArray(interventionEntriesTable.schoolId, schoolIds),
+          sql`${interventionEntriesTable.createdAt} >= ${sevenDaysAgoIso}`,
+        ),
+      )
+      .groupBy(interventionEntriesTable.schoolId),
+  ]);
+
+  const pbisBySchool = new Map<number, number>();
+  for (const r of pbisRows) pbisBySchool.set(r.schoolId, r.pts);
+  const hallBySchool = new Map<number, number>();
+  for (const r of hallRows) hallBySchool.set(r.schoolId, r.n);
+  const issBySchool = new Map<number, number>();
+  for (const r of issRows) issBySchool.set(r.schoolId, r.n);
+  const intvBySchool = new Map<number, number>();
+  for (const r of intvRows) intvBySchool.set(r.schoolId, r.n);
+
+  const perDistrict = districts.map((d) => {
+    const schoolsInDistrict = schools.filter((s) => s.districtId === d.id);
+    let pts = 0;
+    let halls = 0;
+    let iss = 0;
+    let intv = 0;
+    for (const s of schoolsInDistrict) {
+      pts += pbisBySchool.get(s.id) ?? 0;
+      halls += hallBySchool.get(s.id) ?? 0;
+      iss += issBySchool.get(s.id) ?? 0;
+      intv += intvBySchool.get(s.id) ?? 0;
+    }
+    return {
+      id: d.id,
+      name: d.name,
+      schoolCount: schoolsInDistrict.length,
+      pbisPoints7d: pts,
+      hallPasses7d: halls,
+      issDays7d: iss,
+      interventions7d: intv,
+    };
+  });
+
+  res.json({ windowDays: 7, crossDistrict, perDistrict });
 });
 
 export default router;

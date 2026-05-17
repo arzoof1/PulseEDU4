@@ -251,36 +251,51 @@ app.use(async (req, _res, next) => {
           return;
         }
         if (staff.isSuperUser && override && override !== staff.schoolId) {
-          // D6 defense-in-depth: even if a stale pre-D6 override points
-          // at a school in another district, refuse to honor it. Only
-          // requires an extra DB hop on the rare requests where an
-          // override is actually present, and prevents a Hernando
-          // SuperUser whose row already has activeSchoolOverride = some
-          // Pasco school from quietly reading Pasco data on the next
-          // request. switch-school now refuses to *set* such an
-          // override, but old data may still exist.
+          // D6 defense-in-depth: validate the override still points at an
+          // active school. Phase 5 District Switcher: when
+          // ALLOW_CROSS_DISTRICT_SUPERUSER=1 a cross-district override is
+          // permitted (the operator has opted into the cross-district
+          // control tier). Without the flag we still hard-refuse cross-
+          // district overrides — even a stale row in activeSchoolOverride
+          // from before the gate landed must not silently leak data.
+          const crossDistrict =
+            process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+          // Architect-flagged (Phase 5): previously this only validated
+          // the override school was active, not its district. Mirror the
+          // home-school check above and require districts.active=true on
+          // the override target before honoring it.
           const [overrideSchool] = await db
             .select({
               districtId: schoolsTable.districtId,
-              active: schoolsTable.active,
+              schoolActive: schoolsTable.active,
+              districtActive: districtsTable.active,
             })
             .from(schoolsTable)
+            .leftJoin(
+              districtsTable,
+              eq(districtsTable.id, schoolsTable.districtId),
+            )
             .where(eq(schoolsTable.id, override));
           const [homeSchool] = await db
             .select({ districtId: schoolsTable.districtId })
             .from(schoolsTable)
             .where(eq(schoolsTable.id, staff.schoolId));
+          const sameDistrict =
+            overrideSchool &&
+            homeSchool &&
+            overrideSchool.districtId === homeSchool.districtId;
           if (
             overrideSchool &&
-            overrideSchool.active &&
-            homeSchool &&
-            overrideSchool.districtId === homeSchool.districtId
+            overrideSchool.schoolActive &&
+            overrideSchool.districtActive &&
+            (sameDistrict || crossDistrict)
           ) {
             req.schoolId = override;
             req.isSchoolSwitched = true;
           } else {
-            // Stale, cross-district, or inactive override — fall back to
-            // home school. (Home school is already known active here.)
+            // Stale, cross-district (when gate off), or inactive override
+            // — fall back to home school. (Home school is already known
+            // active here.)
             req.schoolId = staff.schoolId;
           }
         } else {

@@ -3,6 +3,34 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **SuperUser Home Phase 5 trio + roadmap cleanup.**
+  Three roadmap cards (District Switcher, Cross-District Reports,
+  Global Feature Flags) all promoted from placeholder to live, and
+  the two stale cards (Onboard a District, Audit & Health — both
+  already shipped above the dropdown) removed. (1) **District
+  Switcher**: when `ALLOW_CROSS_DISTRICT_SUPERUSER=1` the
+  `GET /api/tenancy/schools` response spans every district, the
+  switcher popover groups by district, and the active pill prefixes
+  the district name. `POST /api/tenancy/switch-school` + the
+  `app.ts` override-resolution middleware both honor cross-district
+  switches under the same env flag; without the flag they keep
+  refusing cross-district reach (defense-in-depth preserved).
+  (2) **Cross-District Reports** (`GET /api/superuser/cross-district-reports`):
+  per-district 7-day rollup of PBIS points / hall passes / ISS days
+  / intervention entries, four grouped queries (no N+1), env-gated
+  cross-district reach with safe fallback to single-district view.
+  Rendered as `CrossDistrictReports.tsx` table on SuperUser Home.
+  (3) **Global Feature Flags** (`POST /api/feature-licensing/bulk-overrides`):
+  scope = "platform" | "district", fans out the existing per-school
+  override upsert + `reapplyLicensingToSchool` inside one tx so
+  partial fan-outs can't desync the runtime booleans. Platform
+  scope requires `requireCrossDistrictSuperUser`; district scope
+  allows caller's own district without the env flag. Rendered as
+  `BulkOverridesPanel.tsx` (scope + district + feature + on/off +
+  expiration + reason). The placeholder `SUPER_USER_HOME_CARDS`
+  const + `<details>` roadmap dropdown are gone — the page now
+  leads with live tiles end-to-end.
+
 - **Bulk feature picker + admin "reset to temp password".**
   (1) `FeaturePickerModal` in `FeatureLicensingAdminPage.tsx`
   — per-school "Pick features…" button opens a 2-col checkbox
