@@ -18,11 +18,17 @@
 import { useEffect, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
-import InsightsFilterBar, {
+import {
   EMPTY_FILTERS,
   filtersToQuery,
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
+import InsightsPicker, {
+  csvFilename,
+  downloadCsv,
+  extractTopLists,
+  topListsToCsv,
+} from "./InsightsPicker";
 
 // ------------------------- API contract types ------------------------------
 
@@ -121,15 +127,6 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-const GRADE_OPTIONS = [
-  { value: "", label: "All grades" },
-  { value: "K", label: "K" },
-  ...Array.from({ length: 12 }, (_, i) => ({
-    value: String(i + 1),
-    label: `Grade ${i + 1}`,
-  })),
-];
-
 // Palette: distinct from the prior four dashboards (which used violet/blue/red).
 //   - teal     = demographic counts (neutral cohort makeup)
 //   - amber    = secondary headline (flag count)
@@ -192,7 +189,7 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
   // _ retained in props signature for future drill-in (matches sibling
   // dashboards' Props shape so App.tsx wiring stays uniform), but the v1
   // equity view is aggregate-only — no per-student lists yet.
-  const [grade, setGrade] = useState("");
+  const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [data, setData] = useState<EquityResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -203,7 +200,7 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
     setLoading(true);
     setError("");
     const qs = new URLSearchParams();
-    if (grade) qs.set("grade", grade);
+    if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
     for (const [k, v] of filtersToQuery(filters)) qs.set(k, v);
     authFetch(`/api/insights/equity?${qs.toString()}`)
       .then(async (r) => {
@@ -226,7 +223,7 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [grade, filters]);
+  }, [selectedGrades, filters]);
 
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
@@ -247,29 +244,22 @@ export default function EquityDashboard({ onOpenProfile: _ }: Props) {
             disparity widens.
           </p>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <select
-            value={grade}
-            onChange={(e) => setGrade(e.target.value)}
-            style={selectStyle}
-          >
-            {GRADE_OPTIONS.map((g) => (
-              <option key={g.value} value={g.value}>
-                {g.label}
-              </option>
-            ))}
-          </select>
-        </div>
       </div>
 
-      <InsightsFilterBar value={filters} onChange={setFilters} />
+      <InsightsPicker
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={() => {
+          if (!data) return;
+          downloadCsv(
+            csvFilename("equity", selectedGrades),
+            topListsToCsv(extractTopLists(data)),
+          );
+        }}
+        csvDisabled={!data}
+      />
 
       <HowToUseHelp title="How to use Equity">
         <HowToSection title="What this dashboard is">

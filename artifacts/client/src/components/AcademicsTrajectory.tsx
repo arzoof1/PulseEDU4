@@ -18,18 +18,16 @@ import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowTo
 import {
   ArrowLeft,
   ArrowRight,
-  BookOpen,
-  Calculator,
-  Filter,
   Info,
   TrendingUp,
 } from "lucide-react";
 import { authFetch } from "../lib/authToken";
-import InsightsFilterBar, {
+import {
   EMPTY_FILTERS,
   filtersToQuery,
   type InsightsFilterValue,
 } from "./InsightsFilterBar";
+import InsightsPicker from "./InsightsPicker";
 import BandStudentsDrawer from "./BandStudentsDrawer";
 
 // =============================================================================
@@ -365,23 +363,8 @@ interface Props {
   onOpenProfile: (studentId: string) => void;
 }
 
-// Multi-select grade chips. "" = special "All grades" pseudo-value, kept
-// separate from the Set so it stays the canonical "no filter" state.
-const GRADE_CHIPS: { value: string; label: string }[] = [
-  { value: "K", label: "K" },
-  { value: "1", label: "1" },
-  { value: "2", label: "2" },
-  { value: "3", label: "3" },
-  { value: "4", label: "4" },
-  { value: "5", label: "5" },
-  { value: "6", label: "6" },
-  { value: "7", label: "7" },
-  { value: "8", label: "8" },
-  { value: "9", label: "9" },
-  { value: "10", label: "10" },
-  { value: "11", label: "11" },
-  { value: "12", label: "12" },
-];
+// (Grade + Subject chip definitions live in InsightsPicker.tsx — the
+// trajectory page was the canonical source and is now a consumer.)
 
 // =============================================================================
 // Main component
@@ -394,18 +377,6 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
   const [subjects, setSubjects] = useState<Subject[]>(["ela"]);
   // Empty set = "all grades". Order is preserved in the query string.
   const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
-
-  const toggleSubject = (s: Subject) => {
-    setSubjects((prev) => {
-      if (prev.includes(s)) {
-        if (prev.length === 1) return prev;
-        return prev.filter((x) => x !== s);
-      }
-      // Keep canonical order (ela first) so labels are stable.
-      const next = [...prev, s];
-      return (["ela", "math"] as Subject[]).filter((x) => next.includes(x));
-    });
-  };
 
   const subjectLabel =
     subjects.length === 2
@@ -509,13 +480,6 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
     a.remove();
     URL.revokeObjectURL(url);
   }
-
-  const toggleGrade = (v: string) => {
-    setSelectedGrades((prev) =>
-      prev.includes(v) ? prev.filter((x) => x !== v) : [...prev, v],
-    );
-  };
-  const clearGrades = () => setSelectedGrades([]);
 
   const gradeLabel =
     selectedGrades.length === 0
@@ -667,82 +631,18 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
             </RoleSection>
           </HowToUseHelp>
         </div>
-        <div
-          style={{
-            display: "flex",
-            gap: "0.5rem",
-            alignItems: "center",
-            flexWrap: "wrap",
-          }}
-        >
-          <div
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              fontSize: 11,
-              fontWeight: 700,
-              color: "#64748b",
-              marginRight: 4,
-            }}
-          >
-            <Filter style={{ width: 14, height: 14 }} />
-            FILTERS
-          </div>
-          <SubjectChip
-            active={subjects.includes("ela")}
-            onClick={() => toggleSubject("ela")}
-            icon={BookOpen}
-            label="ELA"
-          />
-          <SubjectChip
-            active={subjects.includes("math")}
-            onClick={() => toggleSubject("math")}
-            icon={Calculator}
-            label="Math"
-          />
-          <GradeChip
-            active={selectedGrades.length === 0}
-            onClick={clearGrades}
-            label="All grades"
-          />
-          {GRADE_CHIPS.map((g) => (
-            <GradeChip
-              key={g.value}
-              active={selectedGrades.includes(g.value)}
-              onClick={() => toggleGrade(g.value)}
-              label={g.label}
-            />
-          ))}
-          <button
-            type="button"
-            onClick={downloadCsv}
-            disabled={loading || !data || data.total === 0}
-            title="Download per-student CSV (opens in Excel)"
-            style={{
-              marginLeft: 8,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-              padding: "5px 12px",
-              borderRadius: 999,
-              fontSize: 12,
-              fontWeight: 700,
-              cursor:
-                loading || !data || data.total === 0 ? "not-allowed" : "pointer",
-              border: "1px solid #047857",
-              background:
-                loading || !data || data.total === 0 ? "#94a3b8" : "#059669",
-              color: "white",
-              opacity: loading || !data || data.total === 0 ? 0.6 : 1,
-            }}
-          >
-            ⬇ CSV
-          </button>
-        </div>
       </div>
 
-      <InsightsFilterBar value={filters} onChange={setFilters} />
+      <InsightsPicker
+        subjects={subjects}
+        onSubjectsChange={setSubjects}
+        grades={selectedGrades}
+        onGradesChange={setSelectedGrades}
+        filters={filters}
+        onFiltersChange={setFilters}
+        onDownloadCsv={downloadCsv}
+        csvDisabled={loading || !data || data.total === 0}
+      />
 
       {loading && (
         <p style={{ color: "var(--text-subtle)", marginTop: "1rem" }}>
@@ -1131,84 +1031,6 @@ function SubTile({
 // =============================================================================
 // Small UI helpers
 // =============================================================================
-
-function SubjectChip({
-  active,
-  onClick,
-  icon: Icon,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  icon: React.ComponentType<{ className?: string }>;
-  label: string;
-}) {
-  // Same tinted palette as GradeChip so every "selected" affordance on
-  // the trajectory page reads the same — blue fill + soft glow ring.
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        padding: "6px 14px",
-        borderRadius: 999,
-        fontSize: 13,
-        fontWeight: 600,
-        cursor: "pointer",
-        transition: "background-color 120ms, color 120ms, border-color 120ms",
-        border: active ? "1px solid #2563eb" : "1px solid #cbd5e1",
-        background: active ? "#2563eb" : "white",
-        color: active ? "white" : "#334155",
-        boxShadow: active ? "0 0 0 2px rgba(37,99,235,0.18)" : "none",
-      }}
-    >
-      <Icon className="h-4 w-4" />
-      {label}
-    </button>
-  );
-}
-
-function GradeChip({
-  active,
-  onClick,
-  label,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-}) {
-  // Match InsightsFilterBar's selected-chip palette (#2563eb / white)
-  // so multi-select feels native to the rest of the insights screens.
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 34,
-        padding: "4px 10px",
-        borderRadius: 999,
-        fontSize: 12,
-        fontWeight: 600,
-        cursor: "pointer",
-        transition: "background-color 120ms, color 120ms, border-color 120ms",
-        border: active ? "1px solid #2563eb" : "1px solid #cbd5e1",
-        background: active ? "#2563eb" : "white",
-        color: active ? "white" : "#334155",
-        boxShadow: active ? "0 0 0 2px rgba(37,99,235,0.18)" : "none",
-      }}
-    >
-      {label}
-    </button>
-  );
-}
 
 function Stat({
   label,

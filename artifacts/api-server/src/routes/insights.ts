@@ -1643,32 +1643,22 @@ router.get("/insights/engagement", async (req, res) => {
   // We parse to int defensively — anything we can't map to 0-12 silently
   // becomes "no filter" rather than crashing the route on a type mismatch
   // or silently returning zero results.
-  const gradeRaw = typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Pull the grade-cohort student id set up front so every per-source
   // query can use the same filter without re-joining studentsTable. When
   // no cohort filter is set (or input was unparseable), leave
   // studentIds = null (full school).
   let studentIds: string[] | null = null;
-  if (gradeInt !== null) {
+  if (gradeInts && gradeInts.length > 0) {
     const rows = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
       .where(
         and(
           eq(studentsTable.schoolId, schoolId),
-          eq(studentsTable.grade, gradeInt),
+          inArray(studentsTable.grade, gradeInts),
         ),
       );
     studentIds = rows.map((r) => r.studentId);
@@ -1998,28 +1988,18 @@ router.get("/insights/behavior", async (req, res) => {
 
   // Same defensive grade parsing as /insights/engagement — see that handler
   // for the rationale (students.grade is integer; UI sends "K" as text).
-  const gradeRaw = typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   let studentIds: string[] | null = null;
-  if (gradeInt !== null) {
+  if (gradeInts && gradeInts.length > 0) {
     const rows = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
       .where(
         and(
           eq(studentsTable.schoolId, schoolId),
-          eq(studentsTable.grade, gradeInt),
+          inArray(studentsTable.grade, gradeInts),
         ),
       );
     studentIds = rows.map((r) => r.studentId);
@@ -2313,19 +2293,8 @@ router.get("/insights/academics", async (req, res) => {
   // students.grade is INTEGER; the UI sends "K" for kindergarten and numeric
   // strings 1..12 otherwise. Anything we can't map silently becomes "no
   // filter" rather than crashing the route.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Optional cross-cutting filters (teacher/period/ESE/504/tier/BQ).
   // Parsed once and applied right after the grade-narrowed cohort is
@@ -2348,7 +2317,7 @@ router.get("/insights/academics", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -2560,7 +2529,7 @@ router.get("/insights/academics", async (req, res) => {
   async function sourceCount(source: string): Promise<number> {
     const [{ c }] = (
       await db.execute(
-        gradeInt !== null
+        studentIds !== null
           ? sql`SELECT COUNT(*)::int AS c FROM assessments
                 WHERE school_id = ${schoolId}
                   AND source = ${source}
@@ -2690,19 +2659,8 @@ router.get("/insights/academics/band", async (req, res) => {
   }
 
   // Same grade parsing as the parent route.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   const filters = parseInsightsFilters(req);
 
@@ -2717,7 +2675,7 @@ router.get("/insights/academics/band", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -2959,12 +2917,15 @@ function parseTrajectorySubjects(req: {
   return ordered;
 }
 
-// Parse the trajectory grade filter. Accepts either:
+// Parse a grade filter from query. Accepts either:
 //   ?grades=3,4,5   (preferred, multi-select)
 //   ?grade=5        (legacy single-select)
 //   ?grade=all      (no filter)
 // Returns null for "no filter" or an array of valid grade ints (K=0, 1..12).
-function parseTrajectoryGradeFilter(req: {
+//
+// Used by every insights route. Trajectory has its own alias kept for
+// readability at call sites.
+export function parseInsightsGradesParam(req: {
   query: Record<string, unknown>;
 }): { gradeInts: number[] | null; gradeLabel: string | null } {
   const toInt = (raw: string): number | null => {
@@ -3000,6 +2961,19 @@ function parseTrajectoryGradeFilter(req: {
   const v = toInt(gradeRaw);
   if (v === null) return { gradeInts: null, gradeLabel: null };
   return { gradeInts: [v], gradeLabel: gradeRaw };
+}
+
+// Back-compat alias: trajectory callers used this name. Keeping it
+// keeps the diff at those sites quiet.
+const parseTrajectoryGradeFilter = parseInsightsGradesParam;
+
+// Build a Drizzle SQL clause that filters students.grade to a (possibly
+// multi-select) cohort. Returns `sql\`true\`` when no grade filter is
+// active so it can be dropped straight into an `and(...)` block.
+function gradeFilterSql(gradeInts: number[] | null) {
+  return gradeInts && gradeInts.length > 0
+    ? inArray(studentsTable.grade, gradeInts)
+    : sql`true`;
 }
 
 async function loadTrajectoryRecs(
@@ -3420,19 +3394,8 @@ router.get("/insights/sebsel", async (req, res) => {
   // Same defensive grade parsing as the prior three dashboards. students.grade
   // is INTEGER; UI sends "K" for kindergarten and numeric strings 1..12.
   // Anything we can't map silently becomes "no filter" rather than crashing.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Build the cohort: every student at the school, optionally narrowed
   // to one grade.
@@ -3450,7 +3413,7 @@ router.get("/insights/sebsel", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -3851,19 +3814,8 @@ router.get("/insights/equity", async (req, res) => {
   }
 
   // Same defensive grade parsing pattern as the prior four dashboards.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
 
   // Cohort + demographic flags.
   let studentRows = await db
@@ -3881,7 +3833,7 @@ router.get("/insights/equity", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -4468,19 +4420,12 @@ router.get("/insights/early-warning", async (req, res) => {
   }
 
   // Defensive grade parsing — same pattern as equity / academics / behavior.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
+  // Cross-cutting filter parsing (teacher/period/ELL/IEP/504/tier/BQ).
+  // Applied via narrowCohort() once the grade cohort is built so every
+  // downstream count and top-N list inherits the same denominator.
+  const filters = parseInsightsFilters(req);
 
   type Band = "low" | "watch" | "moderate" | "high" | "critical";
   const bandOf = (score: number): Band => {
@@ -4528,7 +4473,7 @@ router.get("/insights/early-warning", async (req, res) => {
 
   // Cohort. Pull names/grade so the leaderboard can render rich rows
   // without a second query.
-  const studentRows = await db
+  let studentRows = await db
     .select({
       studentId: studentsTable.studentId,
       firstName: studentsTable.firstName,
@@ -4539,7 +4484,7 @@ router.get("/insights/early-warning", async (req, res) => {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        gradeInt !== null ? eq(studentsTable.grade, gradeInt) : sql`true`,
+        gradeFilterSql(gradeInts),
       ),
     );
 
@@ -4548,7 +4493,23 @@ router.get("/insights/early-warning", async (req, res) => {
     return;
   }
 
-  const studentIds = studentRows.map((r) => r.studentId);
+  // Apply cross-cutting filters (teacher/period/ELL/IEP/504/tier/BQ) by
+  // narrowing the grade cohort to the filter-matching subset, then
+  // dropping any studentRows whose id no longer survives. Everything
+  // downstream — counts, top-risk, source sums — keys off studentIds.
+  const narrowed = await narrowCohort(
+    schoolId,
+    studentRows.map((r) => r.studentId),
+    filters,
+  );
+  // baseIds was non-null, so narrowCohort always returns string[] here.
+  const studentIds: string[] = narrowed.ids ?? [];
+  if (studentIds.length === 0) {
+    res.json(emptyEnvelope(0));
+    return;
+  }
+  const allowed = new Set(studentIds);
+  studentRows = studentRows.filter((r) => allowed.has(r.studentId));
 
   const now = Date.now();
   const windowDays = 30;
@@ -4898,20 +4859,8 @@ router.get("/insights/attendance", async (req, res) => {
   const toDateOnly = toIso.slice(0, 10);
 
   // Same defensive grade parsing as /insights/engagement.
-  const gradeRaw =
-    typeof req.query.grade === "string" ? req.query.grade.trim() : "";
-  const gradeFilter: string | null =
-    gradeRaw && gradeRaw.toLowerCase() !== "all" ? gradeRaw : null;
-  let gradeInt: number | null = null;
-  if (gradeFilter) {
-    if (gradeFilter.toUpperCase() === "K") {
-      gradeInt = 0;
-    } else {
-      const n = Number.parseInt(gradeFilter, 10);
-      if (Number.isInteger(n) && n >= 0 && n <= 12) gradeInt = n;
-    }
-  }
-
+  const { gradeInts, gradeLabel: gradeFilter } =
+    parseInsightsGradesParam(req);
   // Empty cohort response shape — used by both the grade fast-path and
   // the cross-cutting filter narrow.
   function emptyResponse() {
@@ -4943,14 +4892,14 @@ router.get("/insights/attendance", async (req, res) => {
   }
 
   let studentIds: string[] | null = null;
-  if (gradeInt !== null) {
+  if (gradeInts && gradeInts.length > 0) {
     const rows = await db
       .select({ studentId: studentsTable.studentId })
       .from(studentsTable)
       .where(
         and(
           eq(studentsTable.schoolId, schoolId),
-          eq(studentsTable.grade, gradeInt),
+          inArray(studentsTable.grade, gradeInts),
         ),
       );
     studentIds = rows.map((r) => r.studentId);
