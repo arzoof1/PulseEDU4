@@ -14,6 +14,7 @@ import {
   adminNotificationsTable,
   studentsTable,
   schoolsTable,
+  housesTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
@@ -1818,6 +1819,44 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
     }
   }
 
+  // Pull each teacher's house affiliation (if any) so the printed card
+  // shows the colored ribbon + house name. One small query keyed by
+  // schoolId + the set of teacher.house_id values (filtered Nullable).
+  const houseIds = Array.from(
+    new Set(
+      teachers
+        .map((t) => (t as { houseId: number | null }).houseId)
+        .filter((id): id is number => typeof id === "number"),
+    ),
+  );
+  const houseById = new Map<
+    number,
+    { name: string; color: string; iconKey: string | null }
+  >();
+  if (houseIds.length) {
+    const rows = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+        color: housesTable.color,
+        iconKey: housesTable.iconKey,
+      })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.schoolId, schoolId),
+          sql`${housesTable.id} = ANY(${houseIds})`,
+        ),
+      );
+    for (const r of rows) {
+      houseById.set(r.id, {
+        name: r.name,
+        color: r.color,
+        iconKey: r.iconKey,
+      });
+    }
+  }
+
   const cards: Array<{
     teacherName: string;
     room: string | null;
@@ -1825,6 +1864,11 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
     enrollToken: string;
     pin: string;
     baseUrl: string;
+    house: {
+      name: string;
+      color: string;
+      iconKey: string | null;
+    } | null;
   }> = [];
   const baseUrl = kioskBaseUrl(req);
   const bulkContext = `print:${randomBytes(6).toString("hex")}`;
@@ -1837,6 +1881,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
       reason: "card_print",
       bulkContext,
     });
+    const teacherHouseId = (t as { houseId: number | null }).houseId;
     cards.push({
       teacherName: t.displayName,
       room: roomByStaffId.get(t.id) ?? null,
@@ -1844,6 +1889,10 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
       enrollToken: rawToken,
       pin: rawPin,
       baseUrl,
+      house:
+        teacherHouseId !== null && teacherHouseId !== undefined
+          ? houseById.get(teacherHouseId) ?? null
+          : null,
     });
   }
 

@@ -28,6 +28,18 @@ export interface KioskCardInput {
   // type the QR contents into a focused input field will still see the
   // URL — the kiosk page detects pasted-URL input too.
   baseUrl: string;
+  // Optional PBIS house affiliation. When set, we render a colored
+  // ribbon across the top of the card so teachers see their house at a
+  // glance and so the badge doubles as visible house identification on
+  // spirit days. `iconKey` is a Lucide-style icon name (e.g. "Crown",
+  // "Flame"); we don't render the actual SVG (pdfkit has no Lucide
+  // support) — instead we use the first letter of the name as a
+  // built-in fallback emblem, which prints reliably on any printer.
+  house?: {
+    name: string;
+    color: string; // hex like "#3b82f6"
+    iconKey: string | null;
+  } | null;
 }
 
 export async function renderKioskCardsPdf(
@@ -63,17 +75,62 @@ async function renderOneCard(
   const width =
     doc.page.width - doc.page.margins.left - doc.page.margins.right;
 
+  // House ribbon across the very top of the card (only when the
+  // teacher has a house assignment). Colored bar + circular emblem +
+  // house name. Doubles as visible team ID on spirit days and shifts
+  // the rest of the card down by `ribbonH` so nothing overlaps.
+  let topOffset = 0;
+  if (card.house) {
+    const ribbonH = 48;
+    const ribbonY = top - 28; // pull up into the margin a bit
+    const color = normalizeHex(card.house.color);
+    doc
+      .save()
+      .fillColor(color)
+      .rect(left - 20, ribbonY, width + 40, ribbonH)
+      .fill()
+      .restore();
+    // Emblem (white circle + first letter of house name)
+    const emblemCx = left + 12;
+    const emblemCy = ribbonY + ribbonH / 2;
+    doc
+      .save()
+      .fillColor("#ffffff")
+      .circle(emblemCx, emblemCy, 16)
+      .fill()
+      .restore();
+    const letter = (card.house.name.charAt(0) || "H").toUpperCase();
+    doc
+      .fillColor(color)
+      .fontSize(18)
+      .text(letter, emblemCx - 6, emblemCy - 9, { lineBreak: false });
+    // House name (right of emblem, vertically centered)
+    doc
+      .fillColor("#ffffff")
+      .fontSize(16)
+      .text(
+        `${card.house.name} House`,
+        emblemCx + 24,
+        emblemCy - 8,
+        { width: width - 60, lineBreak: false },
+      );
+    topOffset = ribbonH - 14;
+  }
+
   // School name (small, top, gray)
   doc
     .fillColor("#6b7280")
     .fontSize(12)
-    .text(card.schoolName, left, top, { width, align: "center" });
+    .text(card.schoolName, left, top + topOffset, {
+      width,
+      align: "center",
+    });
 
   // Big title
   doc
     .fillColor("#111827")
     .fontSize(28)
-    .text("Hall Pass Kiosk Activation", left, top + 22, {
+    .text("Hall Pass Kiosk Activation", left, top + 22 + topOffset, {
       width,
       align: "center",
     });
@@ -82,12 +139,15 @@ async function renderOneCard(
   doc
     .fillColor("#111827")
     .fontSize(22)
-    .text(card.teacherName, left, top + 70, { width, align: "center" });
+    .text(card.teacherName, left, top + 70 + topOffset, {
+      width,
+      align: "center",
+    });
   if (card.room) {
     doc
       .fillColor("#374151")
       .fontSize(16)
-      .text(`Room ${card.room}`, left, top + 100, {
+      .text(`Room ${card.room}`, left, top + 100 + topOffset, {
         width,
         align: "center",
       });
@@ -103,7 +163,7 @@ async function renderOneCard(
   const qrBuf = Buffer.from(qrDataUrl.split(",")[1], "base64");
   const qrSize = 220;
   const qrX = left + 20;
-  const qrY = top + 160;
+  const qrY = top + 160 + topOffset;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
   doc
     .fillColor("#374151")
@@ -169,4 +229,16 @@ async function renderOneCard(
       footY,
       { width: width - 60, align: "center" },
     );
+}
+
+// Defensive: pdfkit accepts a "#RRGGBB" or "RRGGBB" string but throws on
+// anything else (e.g. "rebeccapurple" or "rgb(...)"). Fall back to a
+// neutral slate if we get something we don't recognize so a bad house
+// color never blocks a print job.
+function normalizeHex(raw: string): string {
+  const trimmed = (raw ?? "").trim();
+  if (/^#?[0-9a-fA-F]{6}$/.test(trimmed)) {
+    return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
+  }
+  return "#475569";
 }

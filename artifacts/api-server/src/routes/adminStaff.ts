@@ -6,7 +6,7 @@ import {
   type NextFunction,
 } from "express";
 import bcrypt from "bcryptjs";
-import { db, staffTable } from "@workspace/db";
+import { db, staffTable, housesTable } from "@workspace/db";
 import { and, eq, asc, inArray, sql } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 import {
@@ -157,6 +157,7 @@ const STAFF_SELECT = {
   capCarRiderMonitor: staffTable.capCarRiderMonitor,
   capManageDismissal: staffTable.capManageDismissal,
   defaultRoom: staffTable.defaultRoom,
+  houseId: staffTable.houseId,
   schoolId: staffTable.schoolId,
 } as const;
 
@@ -215,6 +216,25 @@ router.patch(
         updates.defaultRoom = v.trim();
       } else {
         res.status(400).json({ error: "defaultRoom must be a string or null" });
+        return;
+      }
+    }
+    // houseId: nullable FK to houses.id. Null clears it. Server-side
+    // same-school validation happens AFTER we look up `target` (a few
+    // lines below) — that's the only place we know the target's
+    // school_id. We do NOT trust the UI ("picker only loads its school's
+    // houses") as the security boundary, since a direct API call could
+    // bypass it.
+    if ("houseId" in body) {
+      const v = body.houseId;
+      if (v === null) {
+        updates.houseId = null;
+      } else if (typeof v === "number" && Number.isInteger(v) && v > 0) {
+        updates.houseId = v;
+      } else {
+        res
+          .status(400)
+          .json({ error: "houseId must be a positive integer or null" });
         return;
       }
     }
@@ -325,6 +345,33 @@ router.patch(
     if (!target) {
       res.status(404).json({ error: "Staff not found" });
       return;
+    }
+
+    // Cross-tenant guard: a non-null houseId must belong to the same
+    // school as the target staff member. Without this, an admin (or
+    // any direct API caller) could attach School A's staff to School
+    // B's house, silently corrupting multi-tenant data. The check fires
+    // only when houseId is being set to a non-null value.
+    if (
+      "houseId" in updates &&
+      typeof updates.houseId === "number"
+    ) {
+      const [house] = await db
+        .select({ id: housesTable.id })
+        .from(housesTable)
+        .where(
+          and(
+            eq(housesTable.id, updates.houseId),
+            eq(housesTable.schoolId, target.schoolId),
+          ),
+        );
+      if (!house) {
+        res.status(400).json({
+          error:
+            "House does not exist or belongs to a different school than this staff member.",
+        });
+        return;
+      }
     }
 
     const [updated] = await db

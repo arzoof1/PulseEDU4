@@ -4,8 +4,10 @@ import {
   housesTable,
   studentsTable,
   pbisEntriesTable,
+  staffTable,
 } from "@workspace/db";
 import { eq, and, gte, isNull, inArray, sql } from "drizzle-orm";
+import { verifyAuthToken } from "../lib/authToken.js";
 
 // =============================================================================
 // HOUSES — PBIS team standings for the houses signage screen.
@@ -151,6 +153,94 @@ router.get("/houses", async (req, res) => {
     res.json({ schoolId, windowDays, houses: enriched });
   } catch (_err) {
     // Avoid leaking SQL/stack to anonymous callers.
+    res.status(500).json({ error: "Failed to load houses" });
+  }
+});
+
+// GET /api/houses/with-staff-counts
+// Admin endpoint used by the Staff & Roles house picker. For every
+// house in the *authenticated staff member's* school, returns its
+// student count + assigned-staff count so admins can pick the smallest
+// house when assigning a new staff member.
+//
+// Auth: we deliberately do NOT use the signage-friendly resolveSchoolId
+// fallback (which would accept `?schoolId=N` from unauthenticated
+// signage kiosks). Staffing distribution is internal data, so this
+// route requires a real authenticated staff session and ignores any
+// `?schoolId=` query parameter — the school is always taken from the
+// staff record. Anyone signed in to the app may call it (the picker
+// only renders for admins, but counts themselves aren't restricted
+// beyond "must be a staff member of this school").
+router.get("/houses/with-staff-counts", async (req, res) => {
+  let staffId = req.staffId ?? null;
+  if (!staffId) {
+    const auth = req.headers.authorization;
+    if (typeof auth === "string" && auth.startsWith("Bearer ")) {
+      staffId = verifyAuthToken(auth.slice(7).trim());
+    }
+  }
+  if (!staffId) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const [me] = await db
+    .select({ schoolId: staffTable.schoolId, active: staffTable.active })
+    .from(staffTable)
+    .where(eq(staffTable.id, staffId));
+  if (!me || !me.active) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const schoolId = me.schoolId;
+  try {
+    const houses = await db
+      .select()
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, schoolId));
+    if (houses.length === 0) {
+      res.json({ schoolId, houses: [] });
+      return;
+    }
+    const [studentRows, staffRows] = await Promise.all([
+      db
+        .select({
+          houseId: studentsTable.houseId,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(studentsTable)
+        .where(eq(studentsTable.schoolId, schoolId))
+        .groupBy(studentsTable.houseId),
+      db
+        .select({
+          houseId: staffTable.houseId,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(staffTable)
+        .where(
+          and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)),
+        )
+        .groupBy(staffTable.houseId),
+    ]);
+    const studentCounts = new Map<number, number>();
+    for (const r of studentRows) {
+      if (r.houseId !== null) studentCounts.set(r.houseId, r.count);
+    }
+    const staffCounts = new Map<number, number>();
+    for (const r of staffRows) {
+      if (r.houseId !== null) staffCounts.set(r.houseId, r.count);
+    }
+    res.json({
+      schoolId,
+      houses: houses.map((h: typeof houses[number]) => ({
+        id: h.id,
+        name: h.name,
+        color: h.color,
+        iconKey: h.iconKey,
+        studentCount: studentCounts.get(h.id) ?? 0,
+        staffCount: staffCounts.get(h.id) ?? 0,
+      })),
+    });
+  } catch (_err) {
     res.status(500).json({ error: "Failed to load houses" });
   }
 });

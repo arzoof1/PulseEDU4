@@ -317,6 +317,11 @@ export async function ensureHousesSchema() {
   await db.execute(
     sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS house_id INTEGER`,
   );
+  // staff.house_id — teachers/staff can belong to a house too (printed on
+  // their kiosk activation card and any future "your house" surfaces).
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS house_id INTEGER`,
+  );
 }
 
 export async function seedHousesIfEmpty() {

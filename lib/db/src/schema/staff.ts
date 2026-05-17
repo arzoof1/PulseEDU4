@@ -146,6 +146,11 @@ export const staffTable = pgTable("staff", {
   // value to pre-fill the origin room so teachers don't have to pick it
   // every time.
   defaultRoom: text("default_room"),
+  // Optional PBIS house affiliation for the staff member. FK to houses.id
+  // (no DB-level constraint — same convention as students.house_id). Used
+  // on the kiosk activation card and any future "your house" UX. Nullable
+  // so existing staff rows and non-house schools stay valid.
+  houseId: integer("house_id"),
 
   // Staff Directory phone numbers, surfaced in the Finder ("Where is
   // this teacher right now?") and on student-finder schedule rows.

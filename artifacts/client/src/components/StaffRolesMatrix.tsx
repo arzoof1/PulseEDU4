@@ -19,6 +19,15 @@ type CustomRole = {
   capabilities: string[];
 };
 
+type HouseOption = {
+  id: number;
+  name: string;
+  color: string;
+  iconKey: string | null;
+  studentCount: number;
+  staffCount: number;
+};
+
 interface Props {
   currentUser: {
     id: number;
@@ -197,6 +206,11 @@ const TEACHER_BASELINE: BoolKey[] = [
 export default function StaffRolesMatrix({ currentUser }: Props) {
   const [staff, setStaff] = useState<StaffRow[]>([]);
   const [customRoles, setCustomRoles] = useState<CustomRole[]>([]);
+  // Houses for the per-staff house picker. We keep a live count of
+  // staff-per-house so admins can pick the smallest one ("recommended").
+  // Recomputed locally on every patchStaff so the counts update without
+  // a server round-trip.
+  const [houses, setHouses] = useState<HouseOption[]>([]);
   const [filter, setFilter] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
   const [error, setError] = useState("");
@@ -291,20 +305,51 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   async function refresh() {
     try {
-      const [s, r] = await Promise.all([
+      const [s, r, h] = await Promise.all([
         authFetch("/api/admin/staff").then((res) =>
           res.ok ? res.json() : Promise.reject(res.statusText),
         ),
         authFetch("/api/custom-roles").then((res) =>
           res.ok ? res.json() : [],
         ),
+        authFetch("/api/houses/with-staff-counts").then((res) =>
+          res.ok ? res.json() : { houses: [] },
+        ),
       ]);
       setStaff(s);
       setCustomRoles(r);
+      setHouses(
+        (h?.houses ?? []) as HouseOption[],
+      );
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }
   }
+
+  // Derived: live staff-per-house counts that reflect optimistic
+  // patches. We don't refetch /api/houses/with-staff-counts on every
+  // edit — instead, we re-derive staffCount from the in-memory staff
+  // array. Smallest house is the "recommended" pick.
+  const housesWithLiveCounts = useMemo<HouseOption[]>(() => {
+    const liveCounts = new Map<number, number>();
+    for (const s of staff) {
+      if (!s.active) continue;
+      const hid = (s["houseId"] as number | null) ?? null;
+      if (hid !== null) liveCounts.set(hid, (liveCounts.get(hid) ?? 0) + 1);
+    }
+    return houses.map((h) => ({
+      ...h,
+      staffCount: liveCounts.get(h.id) ?? 0,
+    }));
+  }, [houses, staff]);
+  const recommendedHouseId = useMemo<number | null>(() => {
+    if (housesWithLiveCounts.length === 0) return null;
+    let best = housesWithLiveCounts[0];
+    for (const h of housesWithLiveCounts) {
+      if (h.staffCount < best.staffCount) best = h;
+    }
+    return best.id;
+  }, [housesWithLiveCounts]);
 
   useEffect(() => {
     refresh();
@@ -322,7 +367,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
 
   async function patchStaff(
     id: number,
-    body: Record<string, boolean | string | null>,
+    body: Record<string, boolean | string | number | null>,
   ) {
     setSavingId(id);
     setError("");
@@ -483,6 +528,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 title="Pre-fills the origin room when this user creates a hall pass."
               >
                 Default room
+              </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 170,
+                  textAlign: "left",
+                }}
+                title="PBIS house affiliation. Prints on the kiosk activation card and shows in any 'your house' surfaces. The smallest house is recommended so the picker keeps teams balanced."
+              >
+                House
               </th>
               {PAGES.map((p) => (
                 <th
@@ -650,6 +706,23 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                         patchStaff(s.id, {
                           defaultRoom: next.trim() === "" ? null : next.trim(),
                         })
+                      }
+                    />
+                  </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 170,
+                    }}
+                  >
+                    <HouseCell
+                      value={(s["houseId"] as number | null) ?? null}
+                      houses={housesWithLiveCounts}
+                      recommendedHouseId={recommendedHouseId}
+                      saving={isSaving}
+                      onSave={(next) =>
+                        patchStaff(s.id, { houseId: next })
                       }
                     />
                   </td>
@@ -1157,6 +1230,70 @@ function ModalShell({
         </div>
         {children}
       </div>
+    </div>
+  );
+}
+
+function HouseCell({
+  value,
+  houses,
+  recommendedHouseId,
+  saving,
+  onSave,
+}: {
+  value: number | null;
+  houses: HouseOption[];
+  recommendedHouseId: number | null;
+  saving: boolean;
+  onSave: (next: number | null) => void;
+}) {
+  // No houses configured for this school — show a quiet placeholder so
+  // admins understand the field is intentionally empty rather than broken.
+  if (houses.length === 0) {
+    return (
+      <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
+        No houses
+      </span>
+    );
+  }
+  const selected = houses.find((h) => h.id === value) ?? null;
+  return (
+    <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+      {/* Color swatch echoes the chosen house — disappears when unset. */}
+      <span
+        aria-hidden
+        style={{
+          display: "inline-block",
+          width: 12,
+          height: 12,
+          borderRadius: 3,
+          background: selected ? selected.color : "transparent",
+          border: selected ? "1px solid rgba(0,0,0,0.1)" : "1px dashed #cbd5e1",
+          flexShrink: 0,
+        }}
+      />
+      <select
+        disabled={saving}
+        value={value === null ? "" : String(value)}
+        onChange={(e) => {
+          const v = e.target.value;
+          onSave(v === "" ? null : Number(v));
+        }}
+        style={{ fontSize: 12, padding: "2px 4px", minWidth: 130 }}
+      >
+        <option value="">— None —</option>
+        {houses.map((h) => {
+          const isRec = h.id === recommendedHouseId;
+          const label =
+            `${h.name} (${h.staffCount} staff)` +
+            (isRec ? " · recommended" : "");
+          return (
+            <option key={h.id} value={h.id}>
+              {label}
+            </option>
+          );
+        })}
+      </select>
     </div>
   );
 }
