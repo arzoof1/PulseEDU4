@@ -42,6 +42,16 @@ type PreviewResp = {
   }>;
   totalEligible: number;
   totalChanged: number;
+  // Sibling-pin summary surfaced by the server so the admin can see
+  // *why* a particular new student is heading to a specific house —
+  // an already-placed sibling pins the rest of the family there.
+  // Optional for forward-compat with older server builds.
+  siblingPins?: {
+    groupCount: number;
+    studentCount: number;
+    byHouse: Record<string, number>;
+    sampleNames: string[];
+  };
 };
 
 type ChangesResp = {
@@ -346,6 +356,68 @@ function SortTab({
             {preview.totalChanged === 1 ? "" : "s"} out of{" "}
             {preview.totalEligible} eligible
           </h4>
+          {preview.siblingPins && preview.siblingPins.studentCount > 0 && (() => {
+            const sp = preview.siblingPins!;
+            const houseLookup = new Map(preview.houses.map((h) => [h.id, h]));
+            const byHouseEntries = Object.entries(sp.byHouse)
+              .map(([hid, n]) => ({
+                house: houseLookup.get(Number(hid)),
+                count: n,
+              }))
+              .filter((e) => e.house !== undefined)
+              .sort((a, b) => b.count - a.count);
+            return (
+              <details
+                style={{
+                  margin: "0.25rem 0 0.75rem",
+                  background: "#f1f5f9",
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 6,
+                  padding: "0.5rem 0.75rem",
+                  maxWidth: 520,
+                  fontSize: "0.88rem",
+                }}
+              >
+                <summary
+                  style={{ cursor: "pointer", color: "#334155" }}
+                  title={
+                    sp.sampleNames.length > 0
+                      ? sp.sampleNames.join("\n")
+                      : undefined
+                  }
+                >
+                  {sp.studentCount} student
+                  {sp.studentCount === 1 ? " is" : "s are"} pinned to a house
+                  because of a sibling already there.
+                </summary>
+                <div style={{ marginTop: "0.5rem", color: "#475569" }}>
+                  {byHouseEntries.length > 0 && (
+                    <div style={{ marginBottom: "0.4rem" }}>
+                      {byHouseEntries.map((e, i) => (
+                        <span key={e.house!.id} style={{ marginRight: 8 }}>
+                          <span style={pillStyle(e.house!.color)}>
+                            {e.house!.name}
+                          </span>{" "}
+                          {e.count}
+                          {i < byHouseEntries.length - 1 ? "" : ""}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {sp.sampleNames.length > 0 && (
+                    <div>
+                      <span style={{ color: "#64748b" }}>
+                        {sp.studentCount > sp.sampleNames.length
+                          ? `First ${sp.sampleNames.length} of ${sp.studentCount}: `
+                          : "Affected: "}
+                      </span>
+                      {sp.sampleNames.join("; ")}
+                    </div>
+                  )}
+                </div>
+              </details>
+            );
+          })()}
           {preview.houses.length === 0 ? (
             <p style={{ color: "#475569" }}>
               No PBIS houses configured for this school yet.

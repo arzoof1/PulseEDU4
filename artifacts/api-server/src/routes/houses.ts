@@ -366,6 +366,13 @@ async function computeSortPlan(
   }>;
   totalEligible: number;
   totalChanged: number;
+  // Sibling groups that got pinned to a specific house because at
+  // least one sibling was already placed there. Each entry lists
+  // only the *eligible* (newly-being-placed) student ids — the
+  // already-placed elder isn't in `moves` and isn't useful to
+  // surface as "this student is being pinned". Empty when
+  // keepSiblings is off or no families overlap.
+  pinnedGroups: Array<{ houseId: number; studentDbIds: number[] }>;
 }> {
   const houseRows = await db
     .select({
@@ -384,6 +391,7 @@ async function computeSortPlan(
       moves: [],
       totalEligible: 0,
       totalChanged: 0,
+      pinnedGroups: [],
     };
   }
   const allStudents = await db
@@ -559,11 +567,13 @@ async function computeSortPlan(
     fromHouseId: number | null;
     toHouseId: number;
   }> = [];
+  const pinnedGroups: Array<{ houseId: number; studentDbIds: number[] }> = [];
   for (const { ids: group, idx } of indexed) {
     let target: number;
     const pinned = groupPin.get(idx);
     if (pinned !== undefined) {
       target = pinned;
+      pinnedGroups.push({ houseId: pinned, studentDbIds: [...group] });
     } else {
       // Pick the bucket with the fewest working students; ties broken
       // by house id (deterministic across re-runs).
@@ -591,6 +601,7 @@ async function computeSortPlan(
     moves,
     totalEligible: eligible.length,
     totalChanged: changed.length,
+    pinnedGroups,
   };
 }
 
@@ -642,6 +653,28 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
               inArray(studentsTable.id, studentDbIds),
             ),
           );
+  // Sibling-pin summary: how many eligible students are landing in a
+  // specific house because a sibling is already there (or because two
+  // siblings within the eligible set were unioned to one group with a
+  // pre-existing pin). Lets the admin understand *why* a particular
+  // student is heading where they are, without diffing the moves
+  // list against the parent_students join by hand. We surface a few
+  // sample names — the UI shows ~10 on hover — and a per-house
+  // breakdown so a single number doesn't hide a lopsided pin pattern.
+  const pinnedStudentDbIds = plan.pinnedGroups.flatMap((g) => g.studentDbIds);
+  const studentLookup = new Map(students.map((s) => [s.id, s]));
+  const pinnedByHouse: Record<number, number> = {};
+  for (const g of plan.pinnedGroups) {
+    pinnedByHouse[g.houseId] =
+      (pinnedByHouse[g.houseId] ?? 0) + g.studentDbIds.length;
+  }
+  // Stable sample order: lowest studentDbId first so re-running the
+  // preview against an unchanged roster shows the same names.
+  const sampleIds = [...pinnedStudentDbIds].sort((a, b) => a - b).slice(0, 10);
+  const sampleNames = sampleIds.map((id) => {
+    const s = studentLookup.get(id);
+    return s ? `${s.lastName}, ${s.firstName}` : `#${id}`;
+  });
   res.json({
     ok: true,
     includeAssigned,
@@ -657,6 +690,12 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
     students,
     totalEligible: plan.totalEligible,
     totalChanged: plan.totalChanged,
+    siblingPins: {
+      groupCount: plan.pinnedGroups.length,
+      studentCount: pinnedStudentDbIds.length,
+      byHouse: pinnedByHouse,
+      sampleNames,
+    },
   });
 });
 
