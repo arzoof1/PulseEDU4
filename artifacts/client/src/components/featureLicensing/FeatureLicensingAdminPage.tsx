@@ -101,6 +101,7 @@ async function deleteRequest(url: string): Promise<void> {
 export default function FeatureLicensingAdminPage() {
   const [features, setFeatures] = useState<FeatureSpec[]>([]);
   const [plans, setPlans] = useState<Plan[]>([]);
+  const [canManageGlobalPlans, setCanManageGlobalPlans] = useState(false);
   const [schools, setSchools] = useState<SchoolRow[]>([]);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [editingSchoolId, setEditingSchoolId] = useState<number | null>(null);
@@ -111,11 +112,14 @@ export default function FeatureLicensingAdminPage() {
     try {
       const [fk, p, s] = await Promise.all([
         getJson<{ features: FeatureSpec[] }>("/api/feature-licensing/feature-keys"),
-        getJson<{ plans: Plan[] }>("/api/feature-licensing/plans"),
+        getJson<{ plans: Plan[]; canManageGlobalPlans?: boolean }>(
+          "/api/feature-licensing/plans",
+        ),
         getJson<{ schools: SchoolRow[] }>("/api/feature-licensing/schools"),
       ]);
       setFeatures(fk.features);
       setPlans(p.plans);
+      setCanManageGlobalPlans(Boolean(p.canManageGlobalPlans));
       setSchools(s.schools);
       setError(null);
     } catch (e) {
@@ -146,6 +150,7 @@ export default function FeatureLicensingAdminPage() {
       <PlansSection
         plans={plans}
         features={features}
+        canManage={canManageGlobalPlans}
         onEdit={setEditingPlan}
         onReload={reload}
         onError={setError}
@@ -476,12 +481,14 @@ function AuditLogSection({
 function PlansSection({
   plans,
   features,
+  canManage,
   onEdit,
   onReload,
   onError,
 }: {
   plans: Plan[];
   features: FeatureSpec[];
+  canManage: boolean;
   onEdit: (p: Plan) => void;
   onReload: () => void | Promise<void>;
   onError: (msg: string) => void;
@@ -525,7 +532,14 @@ function PlansSection({
         }}
       >
         <h3 style={{ margin: 0 }}>Plans</h3>
-        <button onClick={createBlank}>+ New plan</button>
+        {canManage ? (
+          <button onClick={createBlank}>+ New plan</button>
+        ) : (
+          <span style={{ fontSize: "0.85em", color: "#777" }}>
+            Read-only — global plan editing requires a cross-district
+            SuperUser. Use per-school overrides below.
+          </span>
+        )}
       </div>
       <table style={{ width: "100%", borderCollapse: "collapse" }}>
         <thead>
@@ -549,8 +563,16 @@ function PlansSection({
                   {onCount} / {features.length}
                 </td>
                 <td style={{ textAlign: "right" }}>
-                  <button onClick={() => onEdit(p)}>Edit</button>{" "}
-                  <button onClick={() => remove(p.id)}>Delete</button>
+                  {canManage ? (
+                    <>
+                      <button onClick={() => onEdit(p)}>Edit</button>{" "}
+                      <button onClick={() => remove(p.id)}>Delete</button>
+                    </>
+                  ) : (
+                    <span style={{ color: "#999", fontSize: "0.85em" }}>
+                      read-only
+                    </span>
+                  )}
                 </td>
               </tr>
             );

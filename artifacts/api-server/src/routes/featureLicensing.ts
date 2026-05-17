@@ -87,6 +87,33 @@ async function requireSuperUser(
   return s;
 }
 
+// Global plan rows (plansTable) are shared across every district. A
+// district-scoped SuperUser editing one of them mutates metadata that
+// other districts' schools depend on — even though the per-school
+// reapply fan-out is already district-scoped, the plan row itself
+// (label / description / features / quotas) is global. Gate global
+// plan CRUD behind the same ALLOW_CROSS_DISTRICT_SUPERUSER env flag
+// that tenancy.ts and the per-school overrides routes already use, so
+// only a SuperUser operating at the cross-district control tier can
+// create / edit / delete plans. When a real `isCrossDistrictSuperUser`
+// staff flag lands (see Open work in replit.md), swap the env check
+// here for that flag — the call sites won't need to change.
+async function requireCrossDistrictSuperUser(
+  req: Request,
+  res: Response,
+): Promise<StaffRow | null> {
+  const s = await requireSuperUser(req, res);
+  if (!s) return null;
+  if (process.env.ALLOW_CROSS_DISTRICT_SUPERUSER !== "1") {
+    res.status(403).json({
+      error:
+        "Global plan CRUD requires a cross-district SuperUser. Use per-school overrides instead.",
+    });
+    return null;
+  }
+  return s;
+}
+
 // ----------------------------------------------------------------------------
 // Registry — every signed-in staff can read it (informational only)
 // ----------------------------------------------------------------------------
@@ -146,7 +173,13 @@ router.get("/feature-licensing/plans", async (req, res, next) => {
       return;
     }
     const plans = await db.select().from(plansTable);
-    res.json({ plans });
+    // Surface the global-plan-CRUD capability so the admin UI can hide
+    // Add/Edit/Delete buttons that would otherwise 403 for a
+    // district-scoped SuperUser (see requireCrossDistrictSuperUser).
+    const canManageGlobalPlans =
+      Boolean(s.isSuperUser) &&
+      process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+    res.json({ plans, canManageGlobalPlans });
   } catch (err) {
     next(err);
   }
@@ -154,7 +187,7 @@ router.get("/feature-licensing/plans", async (req, res, next) => {
 
 router.post("/feature-licensing/plans", async (req, res, next) => {
   try {
-    if (!(await requireSuperUser(req, res))) return;
+    if (!(await requireCrossDistrictSuperUser(req, res))) return;
     const { key, label, description, features, quotas } = req.body ?? {};
     if (typeof key !== "string" || !/^[a-z0-9_]+$/i.test(key)) {
       res.status(400).json({ error: "invalid_key" });
@@ -184,7 +217,7 @@ router.post("/feature-licensing/plans", async (req, res, next) => {
 
 router.patch("/feature-licensing/plans/:id", async (req, res, next) => {
   try {
-    const actor = await requireSuperUser(req, res);
+    const actor = await requireCrossDistrictSuperUser(req, res);
     if (!actor) return;
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
@@ -252,7 +285,7 @@ router.patch("/feature-licensing/plans/:id", async (req, res, next) => {
 
 router.delete("/feature-licensing/plans/:id", async (req, res, next) => {
   try {
-    if (!(await requireSuperUser(req, res))) return;
+    if (!(await requireCrossDistrictSuperUser(req, res))) return;
     const id = Number(req.params.id);
     if (!Number.isFinite(id)) {
       res.status(400).json({ error: "invalid_id" });
