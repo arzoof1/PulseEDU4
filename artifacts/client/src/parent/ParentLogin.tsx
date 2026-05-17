@@ -110,7 +110,15 @@ export default function ParentLogin({
           {busy ? "Signing in…" : "Sign in"}
         </button>
 
-        <div className="text-xs text-white/60 text-center mt-2">
+        <button
+          type="button"
+          onClick={() => navigate("/parent/forgot-password")}
+          className="text-sm text-blue-300 hover:text-blue-200 underline-offset-2 hover:underline"
+        >
+          Forgot password?
+        </button>
+
+        <div className="text-xs text-white/60 text-center mt-1">
           Don't have an account yet? Your school sends an invite by email.
         </div>
       </form>

@@ -129,6 +129,41 @@ export const parentInvitesTable = pgTable(
 export type ParentInviteRow = typeof parentInvitesTable.$inferSelect;
 
 // -----------------------------------------------------------------------------
+// parent_password_resets — one row per "I forgot my password" request.
+// Token is a 64-char URL-safe random string emailed to the parent. Tokens
+// have a 1-hour TTL (short on purpose — possession of the inbox IS the
+// second factor, so we don't want stale links lying around). Marked
+// `used_at` on consumption so the same link can't be replayed.
+//
+// We do NOT delete rows on consumption — keeping the history lets us
+// debug "I clicked the link twice" support calls and could feed a future
+// abuse-rate-limit query.
+// -----------------------------------------------------------------------------
+export const parentPasswordResetsTable = pgTable(
+  "parent_password_resets",
+  {
+    id: serial("id").primaryKey(),
+    parentId: integer("parent_id").notNull(),
+    token: text("token").notNull().unique(),
+    expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+    usedAt: timestamp("used_at", { withTimezone: true }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    // Optional: requester IP for abuse forensics. Stored as text (handles
+    // both v4 and v6) — not indexed because we only ever read it during
+    // post-hoc investigation.
+    requestedIp: text("requested_ip"),
+  },
+  (t) => ({
+    byParent: index("parent_password_resets_by_parent").on(t.parentId),
+  }),
+);
+
+export type ParentPasswordResetRow =
+  typeof parentPasswordResetsTable.$inferSelect;
+
+// -----------------------------------------------------------------------------
 // school_heartbeat_settings — admin layer of the toggle system. One row per
 // school. Each `show_*` flag controls whether that section is even AVAILABLE
 // to parents at this school. A parent can never override "false" to "true";

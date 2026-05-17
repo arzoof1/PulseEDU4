@@ -1,14 +1,22 @@
 import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
+import crypto from "node:crypto";
 import {
   db,
   parentsTable,
   parentStudentsTable,
   parentInvitesTable,
+  parentPasswordResetsTable,
   studentsTable,
+  schoolsTable,
   schoolSettingsTable,
 } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import {
+  buildResetPasswordUrl,
+  sendParentPasswordResetEmail,
+} from "../lib/parentResetEmail.js";
+import { logger } from "../lib/logger.js";
 
 // Feature-licensing backstop for the invite endpoints. The router-level
 // `requireFeature("parentPortal")` middleware in routes/index.ts only
@@ -429,6 +437,280 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
       }
       res.json({
         ...publicParent(parent!),
+        authToken: issueParentAuthToken(parentId),
+      });
+    });
+  });
+});
+
+// -----------------------------------------------------------------------------
+// Password reset — two-step email-mediated flow.
+//
+//   1. POST /parent-auth/request-reset { email }
+//      Always returns 200 (no account enumeration). If a matching active
+//      parent row exists AND their school's parentPortal feature is
+//      licensed AND they have a password set, we generate a fresh token
+//      (1h TTL) and email a reset link. Throttled at one live token per
+//      parent — sending again invalidates the previous link.
+//
+//   2. GET /parent-auth/reset/:token
+//      Validates the token (exists, not expired, not used, parent active,
+//      school still licensed). Returns the parent's email so the reset
+//      page can render context.
+//
+//   3. POST /parent-auth/reset { token, newPassword }
+//      Re-validates, hashes + writes the new password, marks token used,
+//      auto-signs the parent in.
+//
+// The email-link itself is the second factor: it proves the user controls
+// the inbox the school has on file. No SMS / TOTP — see thread for FERPA
+// rationale.
+// -----------------------------------------------------------------------------
+const GENERIC_RESET_ERROR =
+  "This reset link is no longer valid. Request a new one from the sign-in page.";
+const RESET_TTL_MS = 60 * 60 * 1000; // 1 hour
+
+function newResetToken(): string {
+  return crypto.randomBytes(32).toString("base64url");
+}
+
+// We persist only a SHA-256 hash of the reset token, never the raw value.
+// The raw token is sent once in the email URL; everything that hits the DB
+// (issuance, lookup, atomic consumption) goes through this hash. If the DB
+// or query logs ever leak, the leaked column can't be used to reset anyone's
+// password — same defense-in-depth pattern web frameworks use for session
+// IDs and password-reset tokens.
+function hashResetToken(raw: string): string {
+  return crypto.createHash("sha256").update(raw).digest("base64url");
+}
+
+async function getSchoolEmailContext(schoolId: number) {
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const [settings] = await db
+    .select({
+      schoolName: schoolSettingsTable.schoolName,
+      fromName: schoolSettingsTable.fromName,
+      emailSignature: schoolSettingsTable.emailSignature,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  const schoolName = settings?.schoolName || school?.name || "Your school";
+  return {
+    schoolName,
+    fromName: settings?.fromName || school?.name || "PulseEDU",
+    emailSignature:
+      settings?.emailSignature || `Thank you,\n${schoolName}`,
+  };
+}
+
+router.post("/parent-auth/request-reset", async (req, res) => {
+  const { email } = (req.body ?? {}) as { email?: unknown };
+  // Always return the same shape regardless of outcome so the response
+  // can't be used to enumerate registered emails.
+  const okResponse = { ok: true } as const;
+
+  if (typeof email !== "string" || !email.trim() || !email.includes("@")) {
+    res.json(okResponse);
+    return;
+  }
+  const normalized = email.trim().toLowerCase();
+
+  try {
+    const candidates = await db
+      .select()
+      .from(parentsTable)
+      .where(eq(parentsTable.email, normalized));
+    // Pick the first active parent with a password set. If a family is at
+    // two schools, we reset the first one — the other school's account
+    // would need its own reset (rare edge case; both rows share the same
+    // email so they'd both get reset eventually via repeated requests).
+    const parent = candidates.find(
+      (p) => p.active && p.passwordHash !== null,
+    );
+    if (!parent) {
+      res.json(okResponse);
+      return;
+    }
+
+    // Feature-license backstop — if the school's parentPortal license is
+    // off, no reset (matches the invite-acceptance guard).
+    if (!(await isParentPortalLicensedForSchool(parent.schoolId))) {
+      res.json(okResponse);
+      return;
+    }
+
+    // Atomic invalidate-then-insert under a per-parent row lock. Without
+    // the lock, two concurrent reset requests for the same parent could
+    // each invalidate the empty set of prior tokens and then each insert
+    // a fresh row — leaving two live links. SELECT … FOR UPDATE on the
+    // parent row serializes the two requests so the second one sees the
+    // first's invalidate + insert before doing its own.
+    const token = newResetToken();
+    const tokenHash = hashResetToken(token);
+    const expiresAt = new Date(Date.now() + RESET_TTL_MS);
+    await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`select id from ${parentsTable} where id = ${parent.id} for update`,
+      );
+      await tx
+        .update(parentPasswordResetsTable)
+        .set({ usedAt: new Date() })
+        .where(
+          and(
+            eq(parentPasswordResetsTable.parentId, parent.id),
+            isNull(parentPasswordResetsTable.usedAt),
+          ),
+        );
+      await tx.insert(parentPasswordResetsTable).values({
+        parentId: parent.id,
+        token: tokenHash,
+        expiresAt,
+        requestedIp: req.ip ?? null,
+      });
+    });
+
+    const ctx = await getSchoolEmailContext(parent.schoolId);
+    try {
+      await sendParentPasswordResetEmail({
+        to: parent.email,
+        parentDisplayName: parent.displayName,
+        schoolName: ctx.schoolName,
+        fromName: ctx.fromName,
+        emailSignature: ctx.emailSignature,
+        resetUrl: buildResetPasswordUrl(token),
+      });
+    } catch (err) {
+      // Don't surface the send failure — same 200/ok response. Logged
+      // for ops. The parent can request another reset.
+      logger.warn(
+        { err, parentId: parent.id },
+        "parent reset email send failed",
+      );
+    }
+  } catch (err) {
+    logger.warn({ err, email: normalized }, "parent reset request failed");
+  }
+
+  res.json(okResponse);
+});
+
+router.get("/parent-auth/reset/:token", async (req, res) => {
+  const token = String(req.params.token || "").trim();
+  if (!token) {
+    res.status(400).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  const [row] = await db
+    .select({
+      id: parentPasswordResetsTable.id,
+      parentId: parentPasswordResetsTable.parentId,
+      expiresAt: parentPasswordResetsTable.expiresAt,
+      usedAt: parentPasswordResetsTable.usedAt,
+    })
+    .from(parentPasswordResetsTable)
+    .where(eq(parentPasswordResetsTable.token, hashResetToken(token)));
+  if (!row || row.usedAt || row.expiresAt.getTime() < Date.now()) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  const [parent] = await db
+    .select({
+      id: parentsTable.id,
+      email: parentsTable.email,
+      displayName: parentsTable.displayName,
+      schoolId: parentsTable.schoolId,
+      active: parentsTable.active,
+    })
+    .from(parentsTable)
+    .where(eq(parentsTable.id, row.parentId));
+  if (!parent || !parent.active) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  if (!(await isParentPortalLicensedForSchool(parent.schoolId))) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  res.json({
+    email: parent.email,
+    displayName: parent.displayName,
+  });
+});
+
+router.post("/parent-auth/reset", async (req, res) => {
+  const { token, newPassword } = (req.body ?? {}) as {
+    token?: unknown;
+    newPassword?: unknown;
+  };
+  if (typeof token !== "string" || !token.trim()) {
+    res.status(400).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  if (typeof newPassword !== "string" || newPassword.length < 8) {
+    res.status(400).json({ error: "Password must be at least 8 characters" });
+    return;
+  }
+
+  // Atomically consume the token: only succeeds if it's unused + unexpired.
+  // The RETURNING clause tells us the parent_id to update, with zero risk
+  // of two concurrent reset clicks both succeeding. The DB column holds
+  // a SHA-256 hash of the raw token, so we look up by the hash.
+  const consumed = await db
+    .update(parentPasswordResetsTable)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(parentPasswordResetsTable.token, hashResetToken(token.trim())),
+        isNull(parentPasswordResetsTable.usedAt),
+        sql`${parentPasswordResetsTable.expiresAt} > now()`,
+      ),
+    )
+    .returning({ parentId: parentPasswordResetsTable.parentId });
+  if (consumed.length === 0) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  const parentId = consumed[0].parentId;
+
+  const [parent] = await db
+    .select()
+    .from(parentsTable)
+    .where(eq(parentsTable.id, parentId));
+  if (!parent || !parent.active) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+  if (!(await isParentPortalLicensedForSchool(parent.schoolId))) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await db
+    .update(parentsTable)
+    .set({ passwordHash, lastLoginAt: new Date() })
+    .where(eq(parentsTable.id, parentId));
+
+  // Auto-sign-in so the parent lands on their dashboard — same pattern
+  // as accept-invite. Clear any pre-existing staff session bits.
+  req.session.regenerate((err) => {
+    if (err) {
+      res.status(500).json({ error: "Could not start session" });
+      return;
+    }
+    req.session.parentId = parentId;
+    delete req.session.staffId;
+    delete req.session.activeSchoolId;
+    req.session.save((saveErr) => {
+      if (saveErr) {
+        res.status(500).json({ error: "Could not save session" });
+        return;
+      }
+      res.json({
+        ...publicParent({ ...parent, passwordHash }),
         authToken: issueParentAuthToken(parentId),
       });
     });
