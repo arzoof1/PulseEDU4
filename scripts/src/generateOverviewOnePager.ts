@@ -54,7 +54,7 @@ const HIGHLIGHTS = [
 
 const doc = new PDFDocument({
   size: "LETTER",
-  margins: { top: 36, bottom: 36, left: 40, right: 40 },
+  margins: { top: 28, bottom: 28, left: 36, right: 36 },
   bufferPages: true,
   info: {
     Title: "PulseEDU — Overview",
@@ -76,16 +76,16 @@ const MR = doc.page.margins.right;
 const contentW = pageW - ML - MR;
 
 // ---------- Header band ----------
-const HEADER_H = 90;
+const HEADER_H = 60;
 doc.save().rect(0, 0, pageW, HEADER_H).fillColor(C.brandDark).fill().restore();
-doc.fillColor("#ffffff").font(F_BOLD).fontSize(34).text("PulseEDU", ML, 22);
+doc.fillColor("#ffffff").font(F_BOLD).fontSize(28).text("PulseEDU", ML, 16);
 
 // EKG / heartbeat line under the wordmark — a flat baseline with a
 // single QRS spike, drawn to the right of the wordmark and across the
 // header band. Evokes the "Pulse" in the name.
 {
   const wordmarkWidth = doc.widthOfString("PulseEDU");
-  const baselineY = 44;
+  const baselineY = 34;
   const startX = ML + wordmarkWidth + 14;
   const endX = pageW - MR;
   // Pre-spike flat: short dip-bump (P wave), then QRS spike, then T wave, then flat.
@@ -93,13 +93,13 @@ doc.fillColor("#ffffff").font(F_BOLD).fontSize(34).text("PulseEDU", ML, 22);
   const pts: Array<[number, number]> = [
     [startX, baselineY],
     [spikeStart - 40, baselineY],
-    [spikeStart - 32, baselineY - 4],   // P
+    [spikeStart - 32, baselineY - 3],   // P
     [spikeStart - 24, baselineY],
-    [spikeStart - 6, baselineY + 4],    // Q
-    [spikeStart, baselineY - 22],       // R (spike up)
-    [spikeStart + 6, baselineY + 8],    // S
+    [spikeStart - 6, baselineY + 3],    // Q
+    [spikeStart, baselineY - 18],       // R (spike up)
+    [spikeStart + 6, baselineY + 6],    // S
     [spikeStart + 18, baselineY],
-    [spikeStart + 38, baselineY - 6],   // T
+    [spikeStart + 38, baselineY - 5],   // T
     [spikeStart + 58, baselineY],
     [endX, baselineY],
   ];
@@ -109,30 +109,30 @@ doc.fillColor("#ffffff").font(F_BOLD).fontSize(34).text("PulseEDU", ML, 22);
   doc.lineWidth(2).strokeColor("#7dd3fc").stroke().restore();
 }
 
-doc.fillColor("#cbd5e1").font(F_BODY).fontSize(12)
-  .text("One school operations app — running every part of the building", ML, 60);
+doc.fillColor("#cbd5e1").font(F_BODY).fontSize(10)
+  .text("One school operations app — running every part of the building", ML, 44);
 
 // ---------- Tagline / what is it ----------
-let y = HEADER_H + 18;
-doc.fillColor(C.ink).font(F_BOLD).fontSize(13).text("What it is", ML, y);
-y = doc.y + 2;
-doc.fillColor(C.ink).font(F_BODY).fontSize(10.5).text(
+let y = HEADER_H + 10;
+doc.fillColor(C.ink).font(F_BOLD).fontSize(12).text("What it is", ML, y);
+y = doc.y + 1;
+doc.fillColor(C.ink).font(F_BODY).fontSize(9.8).text(
   "PulseEDU brings the day-to-day systems a K-12 school already runs — hall pass, PBIS, " +
   "safety plans, MTSS, parent communications, dismissal, digital signage, dashboards — " +
   "into one role-aware, multi-tenant platform. Schools stop juggling 6–10 single-purpose " +
   "vendors. Districts get rolled-up visibility without spreadsheet stitching.",
   ML, y, { width: contentW, align: "left" },
 );
-y = doc.y + 10;
-
-// ---------- Modules grid (3 columns x 4 rows) ----------
-doc.fillColor(C.ink).font(F_BOLD).fontSize(13).text("What's included", ML, y);
 y = doc.y + 6;
 
-const cols = 3;
-const gutter = 10;
+// ---------- Modules grid (3 columns x 4 rows) ----------
+doc.fillColor(C.ink).font(F_BOLD).fontSize(12).text("What's included", ML, y);
+y = doc.y + 4;
+
+const cols = 4;
+const gutter = 6;
 const cellW = (contentW - gutter * (cols - 1)) / cols;
-const cellH = 78;
+const cellH = 58;
 for (let i = 0; i < MODULES.length; i++) {
   const m = MODULES[i];
   const col = i % cols;
@@ -147,17 +147,17 @@ for (let i = 0; i < MODULES.length; i++) {
     .roundedRect(x, cy, cellW, cellH, 6)
     .lineWidth(0.6).strokeColor(C.rule).stroke().restore();
 
-  doc.fillColor(C.brand).font(F_BOLD).fontSize(11)
-    .text(m.title, x + 10, cy + 8, { width: cellW - 20 });
-  doc.fillColor(C.ink).font(F_BODY).fontSize(9)
-    .text(m.blurb, x + 10, doc.y + 2, { width: cellW - 20 });
+  doc.fillColor(C.brand).font(F_BOLD).fontSize(10)
+    .text(m.title, x + 8, cy + 6, { width: cellW - 16 });
+  doc.fillColor(C.ink).font(F_BODY).fontSize(8.5)
+    .text(m.blurb, x + 8, doc.y + 1, { width: cellW - 16 });
 }
 const rows = Math.ceil(MODULES.length / cols);
-y = y + rows * (cellH + gutter) + 4;
+y = y + rows * (cellH + gutter) + 2;
 
 // ---------- Why it matters ----------
-doc.fillColor(C.ink).font(F_BOLD).fontSize(13).text("Why schools pick it", ML, y);
-y = doc.y + 4;
+doc.fillColor(C.ink).font(F_BOLD).fontSize(12).text("Why schools pick it", ML, y);
+y = doc.y + 3;
 
 // Two-column bullet list
 const bulletCols = 2;
@@ -169,25 +169,30 @@ for (let i = 0; i < HIGHLIGHTS.length; i++) {
   const inLeft = i < half;
   const cx = inLeft ? ML : ML + bColW + 16;
   const cyStart = inLeft ? leftY : rightY;
-  doc.fillColor(C.brand).font(F_BOLD).fontSize(10).text("•", cx, cyStart, { lineBreak: false, width: 8 });
-  doc.fillColor(C.ink).font(F_BODY).fontSize(10).text(HIGHLIGHTS[i], cx + 10, cyStart, { width: bColW - 12 });
-  if (inLeft) leftY = doc.y + 2;
-  else rightY = doc.y + 2;
+  doc.fillColor(C.brand).font(F_BOLD).fontSize(9.5).text("•", cx, cyStart, { lineBreak: false, width: 8 });
+  doc.fillColor(C.ink).font(F_BODY).fontSize(9.5).text(HIGHLIGHTS[i], cx + 10, cyStart, { width: bColW - 12 });
+  if (inLeft) leftY = doc.y + 1;
+  else rightY = doc.y + 1;
 }
-y = Math.max(leftY, rightY) + 4;
+y = Math.max(leftY, rightY) + 2;
 
 // ---------- Footer band ----------
-const FOOTER_H = 56;
+// Drop the bottom margin to 0 while drawing the footer so the wrapped
+// second line never trips an implicit page break.
+const FOOTER_H = 44;
 const footerY = pageH - FOOTER_H;
+const origBottom = doc.page.margins.bottom;
+doc.page.margins.bottom = 0;
 doc.save().rect(0, footerY, pageW, FOOTER_H).fillColor(C.bgPanel).fill().restore();
-doc.fillColor(C.ink).font(F_BOLD).fontSize(11)
-  .text("Next step", ML, footerY + 10);
-doc.fillColor(C.inkSoft).font(F_BODY).fontSize(10)
+doc.fillColor(C.ink).font(F_BOLD).fontSize(10)
+  .text("Next step", ML, footerY + 6, { lineBreak: false });
+doc.fillColor(C.inkSoft).font(F_BODY).fontSize(8.5)
   .text(
     "Book a 30-minute demo. We walk Hall Pass → PBIS → Pickup → MTSS → Insights in the order that fits your building. " +
     "Onboarding finishes in two short sessions; roster import is reversible.",
-    ML, doc.y + 1, { width: contentW },
+    ML, footerY + 20, { width: contentW },
   );
+doc.page.margins.bottom = origBottom;
 
 // Page number is unnecessary on a one-pager — skip the footer text.
 
