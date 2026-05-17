@@ -4565,6 +4565,7 @@ function App() {
     finderShowAbsentBanner: boolean;
     staffDirectoryShowCellPhone: boolean;
     manualRosterUploadEnabled: boolean;
+    strictHouseNameMatch: boolean;
     // Two-tier feature flags. Defaults are TRUE so the optimistic UI
     // matches what the server returns for any school that has not yet
     // flipped anything off.
@@ -4619,6 +4620,7 @@ function App() {
     finderShowAbsentBanner: false,
     staffDirectoryShowCellPhone: false,
     manualRosterUploadEnabled: false,
+    strictHouseNameMatch: false,
     featureFamilyComm: true,
     featurePbis: true,
     featureSchoolStore: true,
@@ -6258,6 +6260,10 @@ function App() {
             typeof data.manualRosterUploadEnabled === "boolean"
               ? data.manualRosterUploadEnabled
               : false,
+          strictHouseNameMatch:
+            typeof data.strictHouseNameMatch === "boolean"
+              ? data.strictHouseNameMatch
+              : false,
           featureFamilyComm: boolOrTrue(data.featureFamilyComm),
           featurePbis: boolOrTrue(data.featurePbis),
           featureSchoolStore: boolOrTrue(data.featureSchoolStore),
@@ -6364,6 +6370,10 @@ function App() {
         manualRosterUploadEnabled:
           typeof data.manualRosterUploadEnabled === "boolean"
             ? data.manualRosterUploadEnabled
+            : false,
+        strictHouseNameMatch:
+          typeof data.strictHouseNameMatch === "boolean"
+            ? data.strictHouseNameMatch
             : false,
         featureFamilyComm: boolOrTrue(data.featureFamilyComm),
         featurePbis: boolOrTrue(data.featurePbis),
@@ -21158,6 +21168,49 @@ function App() {
                   students get changed columns updated, blank CSV cells
                   preserve current values), and every commit is fully
                   reversible from the History tab.
+                </span>
+              </span>
+            </label>
+            <label
+              style={{
+                display: "flex",
+                alignItems: "flex-start",
+                gap: "0.5rem",
+                padding: "0.6rem 0.75rem",
+                border: "1px solid var(--border-subtle, #e2e8f0)",
+                borderRadius: 6,
+                background: "var(--surface-subtle, #f8fafc)",
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={schoolSettings.strictHouseNameMatch}
+                onChange={(e) =>
+                  setSchoolSettings({
+                    ...schoolSettings,
+                    strictHouseNameMatch: e.target.checked,
+                  })
+                }
+                style={{ marginTop: "0.2rem" }}
+              />
+              <span style={{ display: "grid", gap: "0.15rem" }}>
+                <span style={{ fontWeight: 600 }}>
+                  Strict house-name matching on Roster imports
+                </span>
+                <span
+                  style={{
+                    color: "var(--text-subtle, #64748b)",
+                    fontSize: "0.85rem",
+                    fontWeight: "normal",
+                  }}
+                >
+                  Off by default. When off, a Roster CSV row whose
+                  house_name doesn't match any configured house falls
+                  back to the smallest-house rotation (the student still
+                  gets imported, but into a house the SIS didn't pick).
+                  Turn on to instead reject those rows at commit time —
+                  the rest of the file still imports, and admins can
+                  fix the spelling (or add the house) and re-upload.
                 </span>
               </span>
             </label>

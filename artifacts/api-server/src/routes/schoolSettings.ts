@@ -117,6 +117,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     finderShowAbsentBanner,
     staffDirectoryShowCellPhone,
     manualRosterUploadEnabled,
+    strictHouseNameMatch,
     pickupCutoffTime,
     pickupTeacherViewScope,
     kioskWelcomeTemplate,
@@ -412,6 +413,15 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.manualRosterUploadEnabled = manualRosterUploadEnabled;
+  }
+  if (strictHouseNameMatch !== undefined) {
+    if (typeof strictHouseNameMatch !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "strictHouseNameMatch must be a boolean" });
+      return;
+    }
+    updates.strictHouseNameMatch = strictHouseNameMatch;
   }
   if (staffDirectoryShowCellPhone !== undefined) {
     if (typeof staffDirectoryShowCellPhone !== "boolean") {

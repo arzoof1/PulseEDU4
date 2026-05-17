@@ -4996,6 +4996,9 @@ export async function ensureDataImporterRollbackSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS manual_roster_upload_enabled BOOLEAN NOT NULL DEFAULT FALSE`,
   );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS strict_house_name_match BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
 }
 
 // -----------------------------------------------------------------------------

@@ -57,6 +57,10 @@ type PreviewResponse = {
     rowCount: number;
     distinctCount: number;
     samples: string[];
+    // 'fallback' (default) → row commits with smallest-house rotation.
+    // 'strict' → row is rejected at commit (school_settings
+    // .strict_house_name_match = true).
+    policy?: "strict" | "fallback";
   };
 };
 
@@ -2350,7 +2354,9 @@ export default function DataImports({
                             : "s"}{" "}
                           had a house name we didn't recognize;
                         </strong>{" "}
-                        they will use the smallest-house default.
+                        {preview.unrecognizedHouseNames.policy === "strict"
+                          ? "they will be skipped (strict house-name matching is on for this school)."
+                          : "they will use the smallest-house default."}
                       </div>
                       <div style={{ color: "var(--text-subtle)" }}>
                         Unrecognized:{" "}

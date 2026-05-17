@@ -83,6 +83,17 @@ export const schoolSettingsTable = pgTable(
   manualRosterUploadEnabled: boolean("manual_roster_upload_enabled")
     .notNull()
     .default(false),
+  // Data Importer — strict house-name matching for the Roster importer.
+  // Default OFF preserves the legacy behavior where a CSV row whose
+  // `house_name` doesn't match any configured house silently falls back
+  // to the smallest-house rotation. When ON, those rows are rejected at
+  // commit time with a per-row error instead of being rebalanced into a
+  // house the admin never picked — appropriate for schools whose SIS
+  // export occasionally typos a house name and would rather block the
+  // row than quietly shuffle a student.
+  strictHouseNameMatch: boolean("strict_house_name_match")
+    .notNull()
+    .default(false),
   // -----------------------------------------------------------------
   // Per-school feature flags (two-tier model).
   //

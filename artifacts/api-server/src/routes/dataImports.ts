@@ -1621,6 +1621,22 @@ interface KindConfig<T = unknown> {
     parsedValues: T[],
     schoolId: number,
   ) => Promise<Record<string, unknown>>;
+  // Optional: post-parse, pre-insert filter. Runs in the commit handler
+  // after parseRow has rejected malformed rows but before insertChunk
+  // touches the database. Used by kinds that need to enforce
+  // school-scoped policy that parseRow can't see (e.g. the Roster
+  // importer's strict house-name mode, which rejects rows whose
+  // `house_name` doesn't match any configured house when the
+  // `strictHouseNameMatch` school setting is on). Items keep their
+  // 1-based CSV row number so rejections get the same `row` field
+  // parseRow-produced errors do.
+  precommitValidate?: (
+    items: Array<{ rowIndex: number; value: T }>,
+    schoolId: number,
+  ) => Promise<{
+    kept: T[];
+    rejected: Array<{ row: number; message: string }>;
+  }>;
 }
 
 // Same shape as autoMapHeaders but reads its synonym table from the
@@ -1864,10 +1880,18 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         typeof p.houseName === "string" && p.houseName.trim().length > 0,
     );
     if (withHouse.length === 0) return {};
-    const houseRows = await db
-      .select({ name: housesTable.name })
-      .from(housesTable)
-      .where(eq(housesTable.schoolId, schoolId));
+    const [houseRows, settingsRow] = await Promise.all([
+      db
+        .select({ name: housesTable.name })
+        .from(housesTable)
+        .where(eq(housesTable.schoolId, schoolId)),
+      db
+        .select({
+          strictHouseNameMatch: schoolSettingsTable.strictHouseNameMatch,
+        })
+        .from(schoolSettingsTable)
+        .where(eq(schoolSettingsTable.schoolId, schoolId)),
+    ]);
     const known = new Set(
       houseRows.map((h) => h.name.trim().toLowerCase()),
     );
@@ -1883,13 +1907,56 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     }
     if (count === 0) return {};
     const samples = Array.from(distinct.values()).slice(0, 10);
+    // `policy` lets the client adapt the banner copy without having to
+    // re-fetch school settings. 'strict' → rows will be skipped at
+    // commit; 'fallback' → rows will commit with the smallest-house
+    // default (the legacy behavior).
+    const policy: "strict" | "fallback" =
+      settingsRow[0]?.strictHouseNameMatch === true ? "strict" : "fallback";
     return {
       unrecognizedHouseNames: {
         rowCount: count,
         distinctCount: distinct.size,
         samples,
+        policy,
       },
     };
+  },
+  async precommitValidate(items, schoolId) {
+    // Strict mode (school_settings.strict_house_name_match = true):
+    // reject any row whose `house_name` is set but doesn't match a
+    // configured house. The default-off fallback path stays in
+    // insertChunk so unchanged schools keep the smallest-house rotation.
+    const [settingsRow] = await db
+      .select({
+        strictHouseNameMatch: schoolSettingsTable.strictHouseNameMatch,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    if (settingsRow?.strictHouseNameMatch !== true) {
+      return { kept: items.map((i) => i.value), rejected: [] };
+    }
+    const houseRows = await db
+      .select({ name: housesTable.name })
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, schoolId));
+    const known = new Set(
+      houseRows.map((h) => h.name.trim().toLowerCase()),
+    );
+    const kept: ParsedRoster[] = [];
+    const rejected: Array<{ row: number; message: string }> = [];
+    for (const { rowIndex, value } of items) {
+      const hn = value.houseName?.trim();
+      if (hn && !known.has(hn.toLowerCase())) {
+        rejected.push({
+          row: rowIndex,
+          message: `Unrecognized house_name "${hn}" (strict house-name matching is on). Fix the spelling or add the house in PBIS Hub → Houses.`,
+        });
+        continue;
+      }
+      kept.push(value);
+    }
+    return { kept, rejected };
   },
   async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
@@ -2841,7 +2908,7 @@ function makePreviewHandler(kind: string, config: KindConfig) {
   };
 }
 
-function makeCommitHandler(kind: string, config: KindConfig) {
+function makeCommitHandler<T>(kind: string, config: KindConfig<T>) {
   return async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
@@ -2875,7 +2942,7 @@ function makeCommitHandler(kind: string, config: KindConfig) {
       res.status(400).json({ error: mappingError });
       return;
     }
-    const valid: unknown[] = [];
+    const validIndexed: Array<{ rowIndex: number; value: T }> = [];
     const errors: Array<{
       row: number;
       message: string;
@@ -2884,10 +2951,25 @@ function makeCommitHandler(kind: string, config: KindConfig) {
     for (let i = 0; i < rows.length; i++) {
       const parsed = config.parseRow(rows[i], mapping);
       if (parsed.ok) {
-        valid.push(parsed.value);
+        validIndexed.push({ rowIndex: i + 2, value: parsed.value });
       } else if (errors.length < 500) {
         errors.push({ row: i + 2, message: parsed.message, raw: rows[i] });
       }
+    }
+    // Post-parse, pre-insert filter (kind-aware). Used by the roster
+    // importer's strict house-name mode to surface unmatched house
+    // names as per-row errors instead of silently routing them through
+    // the smallest-house fallback.
+    let valid: T[];
+    if (config.precommitValidate) {
+      const r = await config.precommitValidate(validIndexed, schoolId);
+      valid = r.kept;
+      for (const rej of r.rejected) {
+        if (errors.length >= 500) break;
+        errors.push({ row: rej.row, message: rej.message });
+      }
+    } else {
+      valid = validIndexed.map((v) => v.value);
     }
     const result = await db.transaction(async (tx) => {
       const [job] = await tx
