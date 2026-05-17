@@ -210,3 +210,15 @@ id = "8SqIcbhrg1Xr_kRK-ZsfM"
 uri = "file://attached_assets/PulseEDU_Overview.pdf"
 type = "pdf"
 title = "PulseEDU Overview (1-page)"
+
+[[outputs]]
+id = "e0kd5IB-0banMYnWiq-yO"
+uri = "file://attached_assets/PulseEDU_User_Guide.pdf"
+type = "pdf"
+title = "PulseEDU User Guide (screenshot placeholders)"
+
+[[outputs]]
+id = "bdN1fa9wx9bryLZGBmzWs"
+uri = "file://attached_assets/userguide_screens/README.md"
+type = "text"
+title = "Screenshot capture checklist"
