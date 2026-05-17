@@ -371,8 +371,16 @@ async function computeSortPlan(
   // only the *eligible* (newly-being-placed) student ids — the
   // already-placed elder isn't in `moves` and isn't useful to
   // surface as "this student is being pinned". Empty when
-  // keepSiblings is off or no families overlap.
-  pinnedGroups: Array<{ houseId: number; studentDbIds: number[] }>;
+  // keepSiblings is off or no families overlap. `elderStudentDbId`
+  // is the already-placed sibling whose house this group was
+  // pinned to (the "oldest" by grade, tie-broken by lowest id) —
+  // surfaced so the admin can click straight through to that
+  // sibling's profile to sanity-check an unusual pin.
+  pinnedGroups: Array<{
+    houseId: number;
+    studentDbIds: number[];
+    elderStudentDbId: number;
+  }>;
 }> {
   const houseRows = await db
     .select({
@@ -459,6 +467,10 @@ async function computeSortPlan(
   );
   let groups: number[][];
   const groupPin = new Map<number, number>(); // group-index → pinned houseId
+  // group-index → elder studentDbId (the already-placed sibling whose
+  // house caused the pin). Surfaced in the preview response so the
+  // admin can click straight through to that sibling's profile.
+  const groupElder = new Map<number, number>();
   if (keepSiblings && allStudents.length > 0) {
     const allIds = allStudents.map((s) => s.id);
     const allIdSet = new Set(allIds);
@@ -550,6 +562,7 @@ async function computeSortPlan(
         }
         if (houseIds.includes(elder.houseId)) {
           groupPin.set(idx, elder.houseId);
+          groupElder.set(idx, elder.studentDbId);
         }
       }
     }
@@ -567,13 +580,22 @@ async function computeSortPlan(
     fromHouseId: number | null;
     toHouseId: number;
   }> = [];
-  const pinnedGroups: Array<{ houseId: number; studentDbIds: number[] }> = [];
+  const pinnedGroups: Array<{
+    houseId: number;
+    studentDbIds: number[];
+    elderStudentDbId: number;
+  }> = [];
   for (const { ids: group, idx } of indexed) {
     let target: number;
     const pinned = groupPin.get(idx);
     if (pinned !== undefined) {
       target = pinned;
-      pinnedGroups.push({ houseId: pinned, studentDbIds: [...group] });
+      const elder = groupElder.get(idx)!;
+      pinnedGroups.push({
+        houseId: pinned,
+        studentDbIds: [...group],
+        elderStudentDbId: elder,
+      });
     } else {
       // Pick the bucket with the fewest working students; ties broken
       // by house id (deterministic across re-runs).
@@ -636,8 +658,16 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
   // a follow-up round-trip. Only fetch the rows that actually
   // appear in the plan (eligible set, capped by school).
   const studentDbIds = [...new Set(plan.moves.map((m) => m.studentDbId))];
-  const students =
-    studentDbIds.length === 0
+  // Elder (anchoring sibling) lookup needs name + house too, and the
+  // elder is by definition NOT in `moves` (already placed), so its
+  // id won't appear in `studentDbIds`. Union the two id sets so we
+  // fetch them in a single round-trip.
+  const elderDbIds = [
+    ...new Set(plan.pinnedGroups.map((g) => g.elderStudentDbId)),
+  ];
+  const studentFetchIds = [...new Set([...studentDbIds, ...elderDbIds])];
+  const fetchedStudents =
+    studentFetchIds.length === 0
       ? []
       : await db
           .select({
@@ -645,14 +675,22 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
             studentId: studentsTable.studentId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
+            houseId: studentsTable.houseId,
           })
           .from(studentsTable)
           .where(
             and(
               eq(studentsTable.schoolId, schoolId),
-              inArray(studentsTable.id, studentDbIds),
+              inArray(studentsTable.id, studentFetchIds),
             ),
           );
+  // The legacy `students` array in the response is scoped to the
+  // moves set — keep that shape stable so older clients don't break
+  // when we start including elders (which never move).
+  const moveIdSet = new Set(studentDbIds);
+  const students = fetchedStudents
+    .filter((s) => moveIdSet.has(s.id))
+    .map(({ houseId: _houseId, ...rest }) => rest);
   // Sibling-pin summary: how many eligible students are landing in a
   // specific house because a sibling is already there (or because two
   // siblings within the eligible set were unioned to one group with a
@@ -662,11 +700,21 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
   // sample names — the UI shows ~10 on hover — and a per-house
   // breakdown so a single number doesn't hide a lopsided pin pattern.
   const pinnedStudentDbIds = plan.pinnedGroups.flatMap((g) => g.studentDbIds);
-  const studentLookup = new Map(students.map((s) => [s.id, s]));
+  const studentLookup = new Map(fetchedStudents.map((s) => [s.id, s]));
   const pinnedByHouse: Record<number, number> = {};
   for (const g of plan.pinnedGroups) {
     pinnedByHouse[g.houseId] =
       (pinnedByHouse[g.houseId] ?? 0) + g.studentDbIds.length;
+  }
+  // Per-pinned-student lookup of the anchoring elder. The same elder
+  // is shared by every member of a sibling group, so we flatten the
+  // groups into a {pinned -> elder} map for cheap O(1) sample
+  // enrichment below.
+  const elderByPinnedDbId = new Map<number, number>();
+  for (const g of plan.pinnedGroups) {
+    for (const sid of g.studentDbIds) {
+      elderByPinnedDbId.set(sid, g.elderStudentDbId);
+    }
   }
   // Stable sample order: lowest studentDbId first so re-running the
   // preview against an unchanged roster shows the same names.
@@ -674,6 +722,30 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
   const sampleNames = sampleIds.map((id) => {
     const s = studentLookup.get(id);
     return s ? `${s.lastName}, ${s.firstName}` : `#${id}`;
+  });
+  // Richer per-sample payload so the client can render each pinned
+  // name as a click-through to the anchoring sibling's profile —
+  // without a follow-up round-trip. `sampleNames` is preserved
+  // above for forward-compat with older clients; new clients should
+  // prefer `samples`.
+  const samples = sampleIds.map((id) => {
+    const s = studentLookup.get(id);
+    const elderDbId = elderByPinnedDbId.get(id) ?? null;
+    const elder = elderDbId !== null ? studentLookup.get(elderDbId) : undefined;
+    return {
+      studentDbId: id,
+      studentId: s?.studentId ?? null,
+      name: s ? `${s.lastName}, ${s.firstName}` : `#${id}`,
+      elder:
+        elder && elderDbId !== null
+          ? {
+              studentDbId: elderDbId,
+              studentId: elder.studentId,
+              name: `${elder.firstName} ${elder.lastName}`,
+              houseId: elder.houseId,
+            }
+          : null,
+    };
   });
   res.json({
     ok: true,
@@ -695,6 +767,13 @@ router.post("/houses/sort/preview", requireHouseAdmin(), async (req, res) => {
       studentCount: pinnedStudentDbIds.length,
       byHouse: pinnedByHouse,
       sampleNames,
+      samples,
+      // Full per-group payload (no sample cap) — each entry carries
+      // the target house, every pinned student id, and the elder
+      // studentDbId whose existing placement caused the pin. Lets
+      // any API consumer reconstruct the family→house mapping
+      // beyond the ~10 names surfaced in `samples`.
+      groups: plan.pinnedGroups,
     },
   });
 });

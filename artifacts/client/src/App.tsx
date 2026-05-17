@@ -4540,6 +4540,7 @@ function App() {
     | "sebSelDashboard"
     | "equityDashboard"
     | "earlyWarningDashboard"
+    | "houseRankings"
   >("insightsWatchlist");
   const [schoolSettings, setSchoolSettings] = useState<{
     schoolName: string;
@@ -14800,7 +14801,19 @@ function App() {
             authUser?.isMtssCoordinator ||
             authUser?.isSchoolPsychologist) && (
             <div style={{ marginBottom: "1rem" }}>
-              <HousesPanel />
+              <HousesPanel
+                onOpenStudent={(studentId) => {
+                  // Sibling-pin click-through: jump straight to the
+                  // anchoring sibling's profile so the admin can
+                  // sanity-check an unusual pin without digging
+                  // through the roster. Pin the back-target so
+                  // Back returns to Settings, not the default
+                  // insightsWatchlist.
+                  setSelectedInsightsStudentId(studentId);
+                  setStudentProfileReturnTo("houseRankings");
+                  setActiveSection("studentProfile");
+                }}
+              />
             </div>
           )}
           {/* Reuse the signage HousesSignage screen verbatim — when given

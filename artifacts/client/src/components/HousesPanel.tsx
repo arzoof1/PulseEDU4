@@ -51,6 +51,25 @@ type PreviewResp = {
     studentCount: number;
     byHouse: Record<string, number>;
     sampleNames: string[];
+    // Per-sample structured payload — same students as `sampleNames`,
+    // same order. Carries the anchoring sibling ("elder") so the UI
+    // can click through to that student's profile to sanity-check
+    // the pin. `elder` is null only on degenerate data (the elder
+    // row was deleted between compute and resolve); `studentId`
+    // (text) is null only on the same degenerate path for the
+    // pinned student itself. Optional for forward-compat with
+    // older server builds that only returned `sampleNames`.
+    samples?: Array<{
+      studentDbId: number;
+      studentId: string | null;
+      name: string;
+      elder: {
+        studentDbId: number;
+        studentId: string;
+        name: string;
+        houseId: number;
+      } | null;
+    }>;
   };
 };
 
@@ -98,7 +117,15 @@ function pillStyle(color: string): React.CSSProperties {
   };
 }
 
-export default function HousesPanel(): React.ReactElement {
+export default function HousesPanel({
+  onOpenStudent,
+}: {
+  // Click-through from a pinned sibling name to the anchoring
+  // sibling's profile. Optional so the panel still renders for
+  // callers that haven't wired the host's student-profile router
+  // yet — in that case names render as plain text.
+  onOpenStudent?: (studentId: string) => void;
+} = {}): React.ReactElement {
   const [tab, setTab] = useState<"sort" | "audit">("sort");
   return (
     <div>
@@ -119,7 +146,10 @@ export default function HousesPanel(): React.ReactElement {
         </button>
       </div>
       {tab === "sort" ? (
-        <SortTab onGoToAudit={() => setTab("audit")} />
+        <SortTab
+          onGoToAudit={() => setTab("audit")}
+          onOpenStudent={onOpenStudent}
+        />
       ) : (
         <AuditTab />
       )}
@@ -129,8 +159,10 @@ export default function HousesPanel(): React.ReactElement {
 
 function SortTab({
   onGoToAudit,
+  onOpenStudent,
 }: {
   onGoToAudit: () => void;
+  onOpenStudent?: (studentId: string) => void;
 }): React.ReactElement {
   const [includeAssigned, setIncludeAssigned] = useState(false);
   const [keepSiblings, setKeepSiblings] = useState(true);
@@ -411,7 +443,77 @@ function SortTab({
                           ? `First ${sp.sampleNames.length} of ${sp.studentCount}: `
                           : "Affected: "}
                       </span>
-                      {sp.sampleNames.join("; ")}
+                      {sp.samples && sp.samples.length === sp.sampleNames.length ? (
+                        // New structured payload — each pinned name
+                        // links to the anchoring sibling's profile
+                        // (the "elder" the server pinned the family
+                        // to) so the admin can sanity-check the pin
+                        // in one click instead of digging through
+                        // the roster.
+                        <span>
+                          {sp.samples.map((sample, i) => {
+                            const elder = sample.elder;
+                            const elderHouse = elder
+                              ? houseLookup.get(elder.houseId)
+                              : undefined;
+                            const canClick =
+                              onOpenStudent && elder && elder.studentId;
+                            return (
+                              <span key={sample.studentDbId}>
+                                {sample.name}
+                                {elder && (
+                                  <>
+                                    {" → "}
+                                    {canClick ? (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          onOpenStudent!(elder.studentId)
+                                        }
+                                        title={`Open ${elder.name}'s profile`}
+                                        style={{
+                                          background: "transparent",
+                                          border: "none",
+                                          color: "#1d4ed8",
+                                          cursor: "pointer",
+                                          padding: 0,
+                                          textDecoration: "underline",
+                                          font: "inherit",
+                                        }}
+                                      >
+                                        {elder.name}
+                                      </button>
+                                    ) : (
+                                      <span>{elder.name}</span>
+                                    )}
+                                    {elderHouse && (
+                                      <>
+                                        {" "}
+                                        <span
+                                          style={{
+                                            ...pillStyle(elderHouse.color),
+                                            fontSize: "0.72rem",
+                                            padding: "0.05rem 0.4rem",
+                                          }}
+                                        >
+                                          {elderHouse.name}
+                                        </span>
+                                      </>
+                                    )}
+                                  </>
+                                )}
+                                {i < sp.samples!.length - 1 ? "; " : ""}
+                              </span>
+                            );
+                          })}
+                        </span>
+                      ) : (
+                        // Fallback for older server builds (or the
+                        // degenerate case where samples and
+                        // sampleNames drift apart) — preserve the
+                        // original plain-text rendering.
+                        sp.sampleNames.join("; ")
+                      )}
                     </div>
                   )}
                 </div>
