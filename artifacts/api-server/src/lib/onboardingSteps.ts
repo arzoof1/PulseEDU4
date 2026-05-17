@@ -27,6 +27,20 @@ export type OnboardingPhase =
   | "Interventions & MTSS"
   | "Family & Outreach";
 
+// Who owns this step on a typical implementation team. Used purely
+// for UI grouping inside the Onboarding Checklist (chips + nested
+// groups within each phase) — server logic does not branch on role.
+// Kept narrow on purpose; we add new roles only when an actual step
+// can't honestly be filed under one of these four.
+//
+//   admin     - school admin / assistant principal (most ops steps)
+//   tech      - tech coordinator / data lead (imports, devices, signage)
+//   pbis      - PBIS coordinator / behavior specialist (reasons, store,
+//               strategies, expectations)
+//   core-team - Core Team / counselor / dean (sensitive guardrails,
+//               currently AI Consistency Check only)
+export type OnboardingRole = "admin" | "tech" | "pbis" | "core-team";
+
 export interface OnboardingStepRoute {
   // 'settings' = land on the SettingsHub then drill into a tile.
   // 'section'  = jump straight to a top-level activeSection.
@@ -38,6 +52,7 @@ export interface OnboardingStepRoute {
 export interface OnboardingStepDef {
   key: string;
   phase: OnboardingPhase;
+  role: OnboardingRole;
   label: string;
   hint: string;
   route: OnboardingStepRoute;
@@ -65,6 +80,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "branding",
     phase: "Identity & Access",
+    role: "admin",
     label: "School Branding",
     hint: "Upload your school's logo, choose header gradient colors, and set the display name that prints on parent reports and shows on hallway signage. Without branding configured, every screen falls back to neutral PulseEDU colors.",
     route: { kind: "settings", target: "branding" },
@@ -77,6 +93,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "allowlist",
     phase: "Identity & Access",
+    role: "admin",
     label: "Teacher Sign-in Allowlist",
     hint: "Choose which staff email addresses are allowed to sign in to your school. New employees only get access after they're added here. Use the search box to find names, then toggle each row on. Bulk paste is supported.",
     route: { kind: "settings", target: "allowlist" },
@@ -89,6 +106,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "staff-directory",
     phase: "Identity & Access",
+    role: "admin",
     label: "Staff Directory",
     hint: "Confirm every staff member's display name, default classroom, and contact phone. The default room is what auto-fills on hall passes and pullout requests. Use the inline edit table — click any cell to edit, dropdowns let you pick the location.",
     route: { kind: "settings", target: "staff-directory" },
@@ -110,6 +128,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "locations",
     phase: "Identity & Access",
+    role: "tech",
     label: "Locations & Pass Destinations",
     hint: "Add every room, office, and bathroom that staff or students will pick from a dropdown. Mark each one as origin (where passes start), destination (where passes end), or both. Required before kiosks or hall passes work.",
     route: { kind: "settings", target: "locations" },
@@ -121,9 +140,12 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   },
 
   // ---------- Phase 2: Schedule & Operations ----------
+  // (pickup-configured is appended further down in this phase so the
+  // bell-schedule + data-imports prerequisites stay first in the list.)
   {
     key: "bell-schedule",
     phase: "Schedule & Operations",
+    role: "admin",
     label: "Bell Schedule (default)",
     hint: "Create at least one bell schedule (regular day) with each period's start and end time. Mark ONE schedule as the default — this is what the Hall Pass Queue and PBIS Points use to know which period is currently in session.",
     route: { kind: "settings", target: "bell-schedule" },
@@ -143,6 +165,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "signage",
     phase: "Schedule & Operations",
+    role: "tech",
     label: "Hallway Signage / TVs",
     hint: "Open the Displays page to copy the hallway-TV URLs for HeartBEAT, Houses leaderboard, and Active Hall Passes. Paste those URLs into each TV's browser. Optional but recommended — turn this on once your TVs are wired up.",
     route: { kind: "settings", target: "signage" },
@@ -155,6 +178,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "data-imports",
     phase: "Schedule & Operations",
+    role: "tech",
     label: "Initial Data Import",
     hint: "Use the Data Importer to upload your roster (students + sections), assessment scores (FAST, iReady, MAP), and any prior behavior data. Upload one CSV at a time — the importer auto-detects columns and shows a preview before commit.",
     route: { kind: "settings", target: "data-imports" },
@@ -164,19 +188,76 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
         sql`SELECT COUNT(*)::int AS c FROM imports WHERE school_id = ${schoolId}`,
       ),
   },
+  {
+    // Parent Pick-Up Module readiness. Two prerequisites must both be
+    // true before the curb keypad + walker gate work end-to-end:
+    //   (a) at least one active pickup tag has been issued, and
+    //   (b) the default bell schedule includes a period whose name
+    //       matches /walker/i (mirrors the runtime check at
+    //       routes/pickup.ts:1014 + 1169 that gates the walker
+    //       release window).
+    // Partial = one of the two satisfied (gives admins a halfway
+    // visual cue in the checklist that progress has been made).
+    key: "pickup-configured",
+    phase: "Schedule & Operations",
+    role: "admin",
+    label: "Parent Pick-Up Module",
+    hint: "Issue pickup tags to families (bulk start-of-year assign in Settings → Pickup) and add a 'Walker' period to the default bell schedule. Together these turn on the curb keypad and walker release gate. Optional if your school doesn't use the pickup module.",
+    route: { kind: "settings", target: "pickup" },
+    autoCheck: async (db, schoolId) => {
+      const tagsR = await db.execute(
+        sql`SELECT COUNT(*)::int AS c FROM student_pickup_authorizations WHERE school_id = ${schoolId} AND active = true`,
+      );
+      const tags = Number((tagsR.rows[0] as { c?: number } | undefined)?.c ?? 0);
+      const walkerR = await db.execute(
+        sql`SELECT COUNT(*)::int AS c
+              FROM bell_schedule_periods p
+              JOIN bell_schedules s ON s.id = p.schedule_id
+             WHERE s.school_id = ${schoolId}
+               AND s.is_default = true
+               AND p.name ~* 'walker'
+               AND p.start_time IS NOT NULL`,
+      );
+      const walker = Number((walkerR.rows[0] as { c?: number } | undefined)?.c ?? 0);
+      const have = (tags > 0 ? 1 : 0) + (walker > 0 ? 1 : 0);
+      if (have === 2) return "complete";
+      if (have === 1) return "partial";
+      return "empty";
+    },
+  },
 
   // ---------- Phase 3: Behavior & PBIS ----------
   {
     key: "school-features",
     phase: "Behavior & PBIS",
+    role: "admin",
     label: "School Features Switchboard",
     hint: "Toggle the major modules ON for your school: PBIS, FamilyComm, SchoolStore, Accommodations, LogIntervention, RequestPullout. Anything left OFF is hidden from staff. SuperUser must allow each feature first; you flip the actual switch.",
     route: { kind: "settings", target: "schoolFeatures" },
-    autoCheck: async () => "empty", // No clean signal; admins tick manually after reviewing.
+    // Auto: a school_settings row exists and at least one school-level
+    // feature_* column is true. Defaults are all ON when a school is
+    // first seeded, so this resolves "complete" the moment the row is
+    // created. That's intentional — the gate is "has the admin opened
+    // School Settings at all?", not "did they tick a checkbox in the
+    // hub". Admins still toggle off features they don't want, but they
+    // don't have to manually mark this step done.
+    autoCheck: async (db, schoolId) => {
+      const r = await db.execute(
+        sql`SELECT (
+              feature_family_comm OR feature_pbis OR feature_school_store OR
+              feature_accommodations OR feature_log_intervention OR
+              feature_request_pullout OR feature_hall_passes OR
+              feature_tardy_pass OR feature_mtss_plans
+            )::int AS c FROM school_settings WHERE school_id = ${schoolId} LIMIT 1`,
+      );
+      const c = Number((r.rows[0] as { c?: number } | undefined)?.c ?? 0);
+      return c > 0 ? "complete" : "empty";
+    },
   },
   {
     key: "pbis-reasons",
     phase: "Behavior & PBIS",
+    role: "pbis",
     label: "PBIS Recognition Reasons",
     hint: "Build the list of reasons staff can pick when awarding PBIS points (e.g. \"Helping a peer\", \"On-task\"). Set the point weight and category for each. Staff cannot award points until at least one school-wide reason exists.",
     route: { kind: "section", target: "pbisReasons" },
@@ -189,6 +270,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "pbis-thresholds",
     phase: "Behavior & PBIS",
+    role: "pbis",
     label: "PBIS Alert Thresholds",
     hint: "Tune the three behavior alerts: Quiet Teacher (staff awarding very few points), Invisible Student (going unnoticed), and Reason Imbalance (one category over-used). Defaults work for most schools — adjust if you see too few or too many alerts.",
     route: { kind: "settings", target: "pbis-thresholds" },
@@ -197,6 +279,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "pbis-milestones",
     phase: "Behavior & PBIS",
+    role: "pbis",
     label: "PBIS Milestone Emails",
     hint: "Decide which point thresholds (e.g. 25, 50, 100) trigger an automatic congratulations email to parents. Add as many tiers as you want. Requires FamilyComm to be enabled in the Switchboard.",
     route: { kind: "section", target: "pbisMilestoneEmails" },
@@ -209,6 +292,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "school-store",
     phase: "Behavior & PBIS",
+    role: "pbis",
     label: "School Store Catalog",
     hint: "Add the items and privileges students can redeem with PBIS points (e.g. \"5 min computer time = 10 pts\"). Upload a thumbnail image for each. The catalog is school-wide and read-only for teachers.",
     route: { kind: "section", target: "schoolStore" },
@@ -221,6 +305,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "cameras",
     phase: "Behavior & PBIS",
+    role: "tech",
     label: "Camera Registry",
     hint: "Add the named security cameras at your school so admins can pick from a dropdown when logging video evidence on a case (instead of typing long camera names by hand). Schools with 100+ cameras especially benefit. Five demo cameras are seeded automatically; replace them with your real list. Removed cameras are soft-deleted so historical footage rows keep their original camera name.",
     route: { kind: "settings", target: "cameras" },
@@ -233,6 +318,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "iss-and-discipline",
     phase: "Behavior & PBIS",
+    role: "admin",
     label: "ISS Settings & Discipline Reasons",
     hint: "On the ISS Settings page, enter your daily ISS seat capacity, set the soft/hard behavior rules, and add any school-closed days. Then in the same page, populate the Discipline Reasons dropdown that appears in the Add ISS / OSS Log modals.",
     route: { kind: "settings", target: "iss-settings" },
@@ -242,11 +328,28 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
         sql`SELECT COUNT(*)::int AS c FROM discipline_reasons WHERE school_id = ${schoolId} AND active = true`,
       ),
   },
+  {
+    // AI Consistency Check — informational guardrail acknowledgement.
+    // Per replit.md "AI Consistency Check — onboarding step + admin
+    // telemetry tile", Core Team is the sole audience. This step has
+    // no automatic data signal; admins flip the manual "I understand"
+    // marker after reading the hint. The admin telemetry tile portion
+    // of that future-work entry is intentionally NOT shipped here —
+    // task scope is the onboarding step only.
+    key: "ai-consistency-check",
+    phase: "Behavior & PBIS",
+    role: "core-team",
+    label: "AI Consistency Check guardrails",
+    hint: "PulseEDU runs a monthly automated review of case write-ups for tone, scope, and consistency. Findings surface to Core Team only — never to teachers. Before turning the feature on, Core Team should agree on (1) who reviews findings, (2) how often, and (3) what counts as a true vs false positive. Mark this step done after that conversation happens.",
+    route: { kind: "settings", target: "schoolFeatures" },
+    autoCheck: async () => "empty", // Manual "I understand" — no DB signal.
+  },
 
   // ---------- Phase 4: Interventions & MTSS ----------
   {
     key: "school-wide-expectations",
     phase: "Interventions & MTSS",
+    role: "pbis",
     label: "School-wide Expectations",
     hint: "Enter your school's expectations acronym (e.g. PRIDE, ROAR, PAWS) and what each letter stands for. These letters appear as checkboxes on Tier 3 weekly logs so coaches can track which expectation a student worked on.",
     route: { kind: "settings", target: "school-wide-expectations" },
@@ -263,6 +366,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "tier3-strategies",
     phase: "Interventions & MTSS",
+    role: "pbis",
     label: "Tier 3 Strategy Catalog",
     hint: "Group your Tier 3 strategies into categories (e.g. \"De-escalation\", \"Academic supports\") and add the individual strategies under each. These populate the weekly checklist your behavior team fills out for every Tier 3 student.",
     route: { kind: "settings", target: "intervention-strategies" },
@@ -275,6 +379,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "trusted-adult-interventions",
     phase: "Interventions & MTSS",
+    role: "pbis",
     label: "Trusted Adult Interventions",
     hint: "Curate the list of TAI types your school uses (e.g. Check-In/Check-Out, mentor lunch, restorative circle). Behavior Specialists pick from this dropdown when assigning a trusted adult to a student.",
     route: { kind: "section", target: "behaviorSpecialist" },
@@ -287,6 +392,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "mtss-templates",
     phase: "Interventions & MTSS",
+    role: "pbis",
     label: "MTSS Plan Templates",
     hint: "Create reusable Tier 2 / Tier 3 plan templates so coaches don't start from scratch each time. Templates include preset goals, monitoring frequency, and a default strategy bundle. Optional but speeds plan creation 10×.",
     route: { kind: "section", target: "mtssTemplates" },
@@ -295,6 +401,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "separation-tags",
     phase: "Interventions & MTSS",
+    role: "admin",
     label: "Separation Reason Tags",
     hint: "Add the reasons your school uses to flag students who shouldn't be paired (e.g. \"Conflict\", \"Family connection\"). Counselors and deans pick from this list when adding a separation pair.",
     route: { kind: "settings", target: "separation-tags" },
@@ -309,6 +416,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "heartbeat-sections",
     phase: "Family & Outreach",
+    role: "admin",
     label: "HeartBEAT Section Visibility",
     hint: "Choose which sections of a student's HeartBEAT snapshot are visible to parents (PBIS, hall passes, tardies, accommodations, staff notes, MTSS). Toggle off anything your school isn't ready to share with families yet.",
     route: { kind: "settings", target: "parent-portal-sections" },
@@ -317,6 +425,7 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
   {
     key: "parent-access",
     phase: "Family & Outreach",
+    role: "admin",
     label: "Parent Portal Access",
     hint: "Turn on the Parent Portal for your school, then send invite emails to parents. Parents accept the invite, set a password, and can then view their student's HeartBEAT and download a PDF report.",
     route: { kind: "section", target: "parentAccess" },

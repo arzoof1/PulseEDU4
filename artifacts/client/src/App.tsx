@@ -4339,6 +4339,14 @@ function App() {
   // dismisses it). Cleared explicitly — never auto-cleared on page
   // change so it survives multi-step setup flows.
   const [cameFromOnboarding, setCameFromOnboarding] = useState(false);
+  // Live X/N counter for the "Getting Started" section of SettingsHub.
+  // Pulled from /api/onboarding/status whenever the admin lands on the
+  // Settings hub (and after they navigate back from a tile, which would
+  // typically have moved the needle). Null until first successful fetch
+  // so the header silently hides the counter rather than flashing 0/0.
+  const [onboardingProgress, setOnboardingProgress] = useState<
+    { complete: number; total: number } | null
+  >(null);
   const currentStaffUser = authUser?.displayName ?? "";
   const [showChangePw, setShowChangePw] = useState(false);
   // Student Finder state. `null` = closed. Otherwise a discriminated
@@ -7898,6 +7906,76 @@ function App() {
     isAdmin ||
     authUser?.isDistrictAdmin === true ||
     authUser?.isSuperUser === true;
+  // Fetch onboarding progress whenever the admin lands on the Settings
+  // hub (and after each return from a tile — settingsTile flipping from
+  // a value back to null retriggers the effect). This is what powers the
+  // live X/N counter in the "Getting Started" gradient header.
+  //
+  // Endpoint is admin-only on the server; non-admins simply get null
+  // back and the section header silently hides the counter. We swallow
+  // network errors for the same reason — this is a decorative counter,
+  // not a critical path.
+  // Next 3 incomplete onboarding steps, rendered as inline cards in
+  // the Getting Started section of SettingsHub. Same fetch as the
+  // progress counter; we just keep the first three rows with
+  // complete === false.
+  const [onboardingNextSteps, setOnboardingNextSteps] = useState<
+    Array<{
+      key: string;
+      label: string;
+      hint: string;
+      route: { kind: "settings" | "section"; target: string };
+    }>
+  >([]);
+  useEffect(() => {
+    if (!canManageSettings) {
+      setOnboardingProgress(null);
+      setOnboardingNextSteps([]);
+      return;
+    }
+    if (activeSection !== "settings") return;
+    if (settingsTile !== null) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const r = await authFetch("/api/onboarding/status", {
+          credentials: "include",
+        });
+        if (!r.ok || cancelled) return;
+        const json = (await r.json()) as {
+          progress?: { complete?: number; total?: number };
+          steps?: Array<{
+            key: string;
+            label: string;
+            hint: string;
+            complete: boolean;
+            route: { kind: "settings" | "section"; target: string };
+          }>;
+        };
+        if (cancelled) return;
+        const complete = Number(json.progress?.complete ?? 0);
+        const total = Number(json.progress?.total ?? 0);
+        if (Number.isFinite(complete) && Number.isFinite(total)) {
+          setOnboardingProgress({ complete, total });
+        }
+        const next = (json.steps ?? [])
+          .filter((s) => !s.complete)
+          .slice(0, 3)
+          .map((s) => ({
+            key: s.key,
+            label: s.label,
+            hint: s.hint,
+            route: s.route,
+          }));
+        setOnboardingNextSteps(next);
+      } catch {
+        // Decorative counter — silently skip on transient failures.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeSection, settingsTile, canManageSettings]);
   const isEseCoord = authUser?.isEseCoordinator === true || isAdmin;
   const isPbisCoord = authUser?.isPbisCoordinator === true || isAdmin;
   const isBehaviorSpec = authUser?.isBehaviorSpecialist === true || isAdmin;
@@ -19529,7 +19607,7 @@ function App() {
                 title: "Onboarding Checklist",
                 subtitle:
                   "Step-by-step setup for a new school. Auto-detects what's done, prints to PDF.",
-                group: "school-identity",
+                group: "getting-started",
               },
               {
                 id: "notifications",
@@ -19538,13 +19616,14 @@ function App() {
                 subtitle: "Pending alerts that need a response.",
                 badge: adminNotifications.length,
                 group: "admin-tenancy",
+                // ^ kept in admin-tenancy after the regroup.
               },
               {
                 id: "kiosk-setup",
                 icon: "🔗",
                 title: "Kiosk Setup",
                 subtitle: "URL, PIN, and QR code for kiosk activation.",
-                group: "hall-pass-ops",
+                group: "hall-pass-locations",
               },
               {
                 id: "kiosk-welcome",
@@ -19552,7 +19631,7 @@ function App() {
                 title: "Kiosk Welcome Messages",
                 subtitle:
                   "Edit the greeting shown when a student signs in to class.",
-                group: "hall-pass-ops",
+                group: "hall-pass-locations",
               },
               {
                 id: "student-id-badges",
@@ -19560,7 +19639,7 @@ function App() {
                 title: "Student ID Badges",
                 subtitle:
                   "Printable PDF badges with photo, QR + house ribbon — students scan to sign in.",
-                group: "hall-pass-ops",
+                group: "hall-pass-locations",
               },
               {
                 id: "class-signins-today",
@@ -19568,21 +19647,21 @@ function App() {
                 title: "Class Sign-Ins — Today",
                 subtitle:
                   "Roll-call view of every student who signed in to class on a kiosk today.",
-                group: "hall-pass-ops",
+                group: "hall-pass-locations",
               },
               {
                 id: "allowlist",
                 icon: "🚪",
                 title: "Allowed Locations per Teacher",
                 subtitle: `Per-teacher pass destination overrides${allowlistCount ? ` · ${allowlistCount} teachers configured` : ""}.`,
-                group: "hall-pass-ops",
+                group: "people-access",
               },
               {
                 id: "locations",
                 icon: "📍",
                 title: "Locations",
                 subtitle: `Rooms, destinations, and pairings${locationsCount ? ` · ${locationsCount} origin rooms` : ""}.`,
-                group: "hall-pass-ops",
+                group: "hall-pass-locations",
               },
               {
                 id: "school",
@@ -19605,7 +19684,21 @@ function App() {
                 title: "PBIS Thresholds",
                 subtitle:
                   "Tune the alerts shown in the PBIS Hub Needs Attention panel.",
-                group: "feature-config",
+                group: "behavior-pbis",
+              },
+              {
+                // Surfaces the existing PBIS Reasons editor (rendered as a
+                // top-level `activeSection === "pbisReasons"` page, not an
+                // in-frame tile). Clicking this tile is intercepted in the
+                // SettingsHub onSelect handler below and rerouted to the
+                // pbisReasons section. Kept here so admins discover it in
+                // the same place as the rest of the PBIS configuration.
+                id: "pbis-reasons",
+                icon: "⭐",
+                title: "PBIS Recognition Reasons",
+                subtitle:
+                  "School-wide list of reasons staff can pick when awarding points.",
+                group: "behavior-pbis",
               },
               {
                 id: "staff-defaults",
@@ -19613,7 +19706,7 @@ function App() {
                 title: "Staff Defaults",
                 subtitle: `Default rooms by name${staffDefaultsCount ? ` · ${staffDefaultsCount} configured` : ""}. Replaced by per-staff Default Room.`,
                 legacy: true,
-                group: "feature-config",
+                group: "people-access",
               },
             ];
             // School Features — admin + SuperUser. Lets the admin
@@ -19641,14 +19734,14 @@ function App() {
               title: "Staff Directory",
               subtitle:
                 "Active staff with default room and contact phones — surfaced in the Finder.",
-              group: "school-identity",
+              group: "people-access",
             });
             tiles.push({
               id: "schoolFeatures",
               icon: "🧩",
               title: "School Features",
               subtitle: `Turn major features on or off for this school · ${liveCount}/${featureKeys.length} live.`,
-              group: "feature-config",
+              group: "getting-started",
             });
             tiles.push({
               id: "branding",
@@ -19676,7 +19769,7 @@ function App() {
               title: "Intervention Strategies",
               subtitle:
                 "Categories and strategies shown in the Tier 3 weekly checklist.",
-              group: "feature-config",
+              group: "behavior-pbis",
             });
             // ISS settings — daily seat capacity, soft/hard behavior,
             // school-closed days, and discipline reasons. Visible to
@@ -19688,7 +19781,7 @@ function App() {
               title: "ISS Settings",
               subtitle:
                 "Daily ISS seat capacity, school-closed days, and discipline reasons.",
-              group: "feature-config",
+              group: "behavior-pbis",
             });
             // Camera Registry — admin-managed list of named security
             // cameras. Powers the dropdown in the case file's video
@@ -19700,7 +19793,7 @@ function App() {
               title: "Camera Registry",
               subtitle:
                 "Named security cameras for the case file's video evidence dropdown.",
-              group: "feature-config",
+              group: "hall-pass-locations",
             });
             // Parent Pick-Up — cutoff time, teacher release scope, and
             // copy-to-clipboard kiosk URLs (curb / walker / teacher /
@@ -19711,7 +19804,7 @@ function App() {
               title: "Parent Pick-Up",
               subtitle:
                 "Reconciliation cutoff, teacher release scope, kiosk URLs.",
-              group: "feature-config",
+              group: "family-signage",
             });
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV
             // screens (Heartbeat, Houses, Student Timeline). One-click open
@@ -19734,7 +19827,7 @@ function App() {
                 title: "Parent portal sections",
                 subtitle:
                   "Choose which HeartBEAT sections parents can see · sensitive sections off by default.",
-                group: "family-signage",
+                group: "people-access",
               });
             }
             if (isSuperUser) {
@@ -19805,7 +19898,7 @@ function App() {
                 title: "Separation Reason Tags",
                 subtitle:
                   "Curate the dropdown teachers use when flagging two students who shouldn't be paired in the schedule.",
-                group: "feature-config",
+                group: "behavior-pbis",
               });
             }
             // Case-closure outcome catalog — admin-only. Per-school list
@@ -19821,7 +19914,7 @@ function App() {
                 title: "Case Closure Outcomes",
                 subtitle:
                   "Curate the dropdown shown when closing a Watchlist case. Every close requires picking from this list.",
-                group: "feature-config",
+                group: "behavior-pbis",
               });
             }
             // QA tool: swap your session to view PulseEDU as another staff
@@ -19846,12 +19939,38 @@ function App() {
                 title: "FAST Coverage",
                 subtitle:
                   "Per-grade FAST score loading status. Spot missing PM3 imports before sharing the Teacher Roster.",
-                group: "feature-config",
+                group: "behavior-pbis",
               });
             }
             return tiles;
           })()}
-          onSelect={setSettingsTile}
+          onSelect={(id) => {
+            // PBIS Reasons editor lives at activeSection === "pbisReasons"
+            // (a full-page editor), not as an in-frame settings tile.
+            // Intercept the tile click and navigate to that section.
+            if (id === "pbis-reasons") {
+              setSettingsTile(null);
+              setActiveSection("pbisReasons");
+              return;
+            }
+            setSettingsTile(id);
+          }}
+          onboardingProgress={onboardingProgress ?? undefined}
+          onboardingNextSteps={onboardingNextSteps}
+          onNavigateNextStep={(route) => {
+            // Mirrors OnboardingChecklist's onNavigate handler: records
+            // that we came from the checklist so the floating "← Back
+            // to Onboarding" banner can return the admin to where they
+            // came from, then routes to either a settings tile or a
+            // top-level activeSection.
+            setCameFromOnboarding(true);
+            if (route.kind === "settings") {
+              setSettingsTile(route.target as SettingsTileId);
+            } else {
+              setSettingsTile(null);
+              setActiveSection(route.target as typeof activeSection);
+            }
+          }}
         />
       )}
 
