@@ -46,6 +46,7 @@ import {
   ObjectStorageService,
   ObjectNotFoundError,
 } from "../lib/objectStorage.js";
+import { enforceDisplayPlaylistQuota } from "../lib/featureLicensing.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -247,6 +248,12 @@ router.post("/displays/playlists", async (req, res) => {
     }
     const schoolId = activeSchoolId(staff);
 
+    // Phase 3 quota gate: refuse creation when the school has hit
+    // maxPlaylists. Returns 403 quota_exceeded with the same shape the
+    // parent-portal seat check uses so the client can render a uniform
+    // upsell toast.
+    if (!(await enforceDisplayPlaylistQuota(req, res, schoolId, 1))) return;
+
     const name =
       typeof req.body?.name === "string" ? req.body.name.trim().slice(0, 80) : "";
     if (!name) {
@@ -379,8 +386,26 @@ router.patch("/displays/playlists/:id", async (req, res) => {
     // Manual kill switch — toggling this OFF makes the public cycler
     // serve "off-air" immediately and hides the display from the
     // cross-display calendar. Items and overrides are preserved.
+    //
+    // Phase 3 quota note: re-activating a previously-deactivated
+    // playlist consumes a quota slot, so we re-check before allowing
+    // the inactive→active flip. Without this, schools could bypass
+    // maxPlaylists via deactivate → create → re-activate.
     if (req.body?.active !== undefined) {
-      update.active = Boolean(req.body.active);
+      const nextActive = Boolean(req.body.active);
+      if (nextActive && !pl.active) {
+        if (
+          !(await enforceDisplayPlaylistQuota(
+            req,
+            res,
+            pl.schoolId,
+            1,
+          ))
+        ) {
+          return;
+        }
+      }
+      update.active = nextActive;
     }
     if (req.body?.showActiveHallPasses !== undefined) {
       update.showActiveHallPasses = Boolean(req.body.showActiveHallPasses);

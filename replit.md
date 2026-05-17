@@ -69,30 +69,23 @@ _Populate as you build_
 
 ## Future work
 
-- **🚩 PRE-DEPLOYMENT BLOCKER — FAST scale-score coverage gaps.**
-  Partially shipped. Remaining blocker is cut-score data only.
+- **FAST scale-score coverage — SHIPPED.**
   - **SHIPPED — 3rd-grade bucket fallback (Option B).** 3rd graders
     now place PM3 on the G3 chart and compute the bucket from there.
     `bucketTarget` no longer suppresses grade 3.
-  - **SHIPPED — EOC scaffolding.** `Subject` union extended to
-    `"ela" | "math" | "algebra1" | "geometry"`. `chartFor()` routes
-    EOC subjects to their own charts (grade-agnostic). `ALGEBRA1_EOC`
-    + `GEOMETRY_EOC` exist as `FastChart | null` placeholders —
-    today they short-circuit to "n/a" the same way as before, but
-    populating the constants is now the only change needed.
+  - **SHIPPED — EOC scaffolding + cut-score data.** `Subject` union
+    extended to `"ela" | "math" | "algebra1" | "geometry"`.
+    `chartFor()` routes EOC subjects to their own charts
+    (grade-agnostic). `ALGEBRA1_EOC` + `GEOMETRY_EOC` populated
+    from FL DOE FAST Table 8. Subject literal widening done in
+    `dataImports.ts` (FAST_SCORES_CONFIG + FAST_PRIOR_YEAR_CONFIG
+    accept algebra1/geometry + aliases) and the insights export
+    filter — full typecheck clean.
   - **SHIPPED — FAST Coverage telemetry tile** (Settings →
     "📊 FAST Coverage", admin-gated). Backed by
     `GET /api/insights/fast-coverage` in `routes/fastCoverage.ts`.
     Per-(subject, grade) status: Complete / Partial PM3 / Missing
-    PM3 / No chart. Warns admins about Algebra1/Geometry rostered
-    students whose buckets won't render until cut scores land.
-  - **OPEN — Wire the FL DOE FAST Table 8 continuation values into
-    `ALGEBRA1_EOC` and `GEOMETRY_EOC`.** User to supply cut-score
-    doc/URL. Once the constants are populated, the importer +
-    insights + teacher-roster paths still need their `ela | math`
-    string literals widened to the new `Subject` union (~11 file
-    blast radius — held until values arrive so it's testable in a
-    single pass).
+    PM3 / No chart.
 
 
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
@@ -200,17 +193,32 @@ _Populate as you build_
     `skipped/quota_exceeded` so partial batches still succeed
     cleanly. Undefined / non-positive quotas treated as unlimited.
 
-  Phase 3 candidates (not blocking deploy):
-  - Wire `maxDisplayPlaylists` (second quota consumer) to validate
-    the registry pattern with a non-parent feature.
-  - SuperUser-facing audit-log viewer in
-    `SchoolLicensingPage.tsx` — today the audit table is
-    write-only from the cron's perspective; admins have no UI to
-    see "what was swept when, and on which override".
-  - Telemetry tile on the SuperUser dashboard:
-    schools-near-quota count (e.g. ≥80% on any seat-style quota)
-    so the sales/CS team has lead time to upsell before tenants
-    hit the wall.
+  Phase 3 SHIPPED:
+  - **Second quota consumer wired** — `displays.maxPlaylists`
+    enforced in `routes/displays.ts` POST `/displays/playlists`
+    via `checkDisplayPlaylistQuota` + `enforceDisplayPlaylistQuota`
+    in `lib/featureLicensing.ts`. Quota count = active=true
+    playlists (inactive/kill-switched rows do NOT consume a slot).
+    Returns 403 `quota_exceeded` with the same shape parent
+    invites use so the client toast is uniform. Undefined /
+    non-positive quotas = unlimited.
+  - **Audit-log viewer** — `GET /api/feature-licensing/audit`
+    (recent across all schools) + `GET /api/feature-licensing/schools/:id/audit`
+    (per-school filter), both SuperUser-gated. Surfaced as a new
+    "Audit log" section at the bottom of `FeatureLicensingAdminPage.tsx`
+    with school/action/feature/actor/payload columns and a
+    25/50/100/250 row-limit selector. Read-only.
+  - **Schools-near-quota telemetry tile** —
+    `GET /api/feature-licensing/quota-telemetry?threshold=0.8`
+    walks every school × every entry in `KNOWN_SEAT_QUOTAS`
+    (today: parentPortal/maxParentAccounts +
+    displays/maxPlaylists) and returns rows where usage ≥ the
+    threshold. Renders as the top section of the SuperUser
+    admin page with a 50/70/80/90/100% threshold selector and
+    color coding (≥90% bold amber, ≥100% red). Sorted worst-first
+    so the loudest schools surface immediately. Adding a third
+    seat-style quota in the future is a one-line append to
+    `KNOWN_SEAT_QUOTAS`.
 
 - **Student Photos — prerequisite for walker verification, also useful
   app-wide.** New work item, separate from the pickup module but

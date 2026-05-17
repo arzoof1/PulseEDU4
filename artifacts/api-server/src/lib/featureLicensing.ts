@@ -1,13 +1,16 @@
 import type { Request, RequestHandler, Response } from "express";
-import { eq, and, sql } from "drizzle-orm";
+import { eq, and, desc, inArray, sql } from "drizzle-orm";
 import {
   db,
+  displayPlaylistsTable,
+  featureLicensingAuditLogTable,
   parentInvitesTable,
   parentsTable,
   plansTable,
   schoolFeatureOverridesTable,
   schoolsTable,
   schoolSettingsTable,
+  staffTable,
 } from "@workspace/db";
 import { verifyParentAuthToken } from "./authToken.js";
 
@@ -171,7 +174,9 @@ export const FEATURE_KEYS: FeatureSpec[] = [
         name: "maxPlaylists",
         type: "number",
         label: "Max playlists",
-        hint: "Plumbing only in Phase 1 — not enforced yet.",
+        hint:
+          "Counts active playlists (school + owner-staff). Undefined or " +
+          "non-positive = unlimited.",
       },
     ],
   },
@@ -214,7 +219,9 @@ export const FEATURE_KEYS: FeatureSpec[] = [
         name: "maxParentAccounts",
         type: "number",
         label: "Max parent accounts",
-        hint: "Plumbing only in Phase 1 — not enforced yet.",
+        hint:
+          "Counts accepted parents + live pending invites. Undefined or " +
+          "non-positive = unlimited.",
       },
     ],
   },
@@ -770,5 +777,213 @@ export async function enforceParentAccountQuota(
   return true;
 }
 
-// Suppress unused-import warning in builds that tree-shake `and` away.
+// -----------------------------------------------------------------------------
+// Display playlist quota — second consumer of the quota system (Phase 3).
+// -----------------------------------------------------------------------------
+// "Slot" = one row in display_playlists for this school where active=true.
+// Inactive (kill-switched) playlists do NOT count — admins flip `active`
+// off to retire a TV without losing config, and we don't want that to
+// keep eating quota. Mirrors the parent-account check shape exactly so
+// the UI + route handlers feel uniform.
+export async function checkDisplayPlaylistQuota(
+  req: Request,
+  schoolId: number,
+  additional: number,
+): Promise<QuotaCheckResult> {
+  const raw = await getQuota(req, schoolId, "displays", "maxPlaylists");
+  if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) {
+    return { allowed: true, quota: null, current: 0 };
+  }
+  const quota = Math.floor(raw);
+  const rows = await db
+    .select({ id: displayPlaylistsTable.id })
+    .from(displayPlaylistsTable)
+    .where(
+      and(
+        eq(displayPlaylistsTable.schoolId, schoolId),
+        eq(displayPlaylistsTable.active, true),
+      ),
+    );
+  const current = rows.length;
+  if (current + Math.max(0, additional) > quota) {
+    return { allowed: false, quota, current };
+  }
+  return { allowed: true, quota, current };
+}
+
+export async function enforceDisplayPlaylistQuota(
+  req: Request,
+  res: Response,
+  schoolId: number,
+  additional: number,
+): Promise<boolean> {
+  const r = await checkDisplayPlaylistQuota(req, schoolId, additional);
+  if (!r.allowed) {
+    res.status(403).json({
+      error: "quota_exceeded",
+      message:
+        `This school has reached its Display playlist limit ` +
+        `(${r.current}/${r.quota}). Deactivate an unused playlist or ` +
+        `ask your district admin to raise the quota.`,
+      quota: r.quota,
+      current: r.current,
+      feature: "displays",
+      quotaName: "maxPlaylists",
+    });
+    return false;
+  }
+  return true;
+}
+
+// =============================================================================
+// Audit-log listing helpers (Phase 3)
+// =============================================================================
+// The expired-override sweep cron writes to feature_licensing_audit_log on
+// every run; until now the SuperUser had no UI to see what was swept and
+// when. These helpers feed the audit viewer in SchoolLicensingPage and
+// the "recent activity" tile on the SuperUser dashboard.
+
+export type AuditRowWithActor = {
+  id: number;
+  schoolId: number;
+  schoolName: string | null;
+  action: string;
+  overrideId: number | null;
+  featureKey: string | null;
+  payload: Record<string, unknown>;
+  actorStaffId: number | null;
+  actorName: string | null;
+  createdAt: Date;
+};
+
+// Recent rows, optionally filtered to one school. `limit` is hard-capped
+// at 500 — this is an admin surface, not a paginated firehose.
+export async function listFeatureLicensingAudit(opts: {
+  schoolId?: number;
+  limit?: number;
+}): Promise<AuditRowWithActor[]> {
+  const limit = Math.min(Math.max(opts.limit ?? 100, 1), 500);
+  // Join schools + staff in-memory rather than chaining drizzle joins —
+  // audit volume is low (1 row per swept override per day) so the
+  // simple two-extra-selects shape is fine and easier to read.
+  const baseRows = await (opts.schoolId !== undefined
+    ? db
+        .select()
+        .from(featureLicensingAuditLogTable)
+        .where(eq(featureLicensingAuditLogTable.schoolId, opts.schoolId))
+        .orderBy(desc(featureLicensingAuditLogTable.createdAt))
+        .limit(limit)
+    : db
+        .select()
+        .from(featureLicensingAuditLogTable)
+        .orderBy(desc(featureLicensingAuditLogTable.createdAt))
+        .limit(limit));
+  if (baseRows.length === 0) return [];
+  const schoolIds = Array.from(new Set(baseRows.map((r) => r.schoolId)));
+  // Filter the name lookup to only the schools we actually need — keeps
+  // the round-trip small even if the schools table grows.
+  const schoolRows = await db
+    .select({ id: schoolsTable.id, name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(inArray(schoolsTable.id, schoolIds));
+  const schoolNameById = new Map(schoolRows.map((s) => [s.id, s.name]));
+  return baseRows.map((r) => ({
+    id: r.id,
+    schoolId: r.schoolId,
+    schoolName: schoolNameById.get(r.schoolId) ?? null,
+    action: r.action,
+    overrideId: r.overrideId,
+    featureKey: r.featureKey,
+    payload: r.payload,
+    actorStaffId: r.actorStaffId,
+    actorName: r.actorName,
+    createdAt: r.createdAt,
+  }));
+}
+
+// =============================================================================
+// Quota telemetry — schools-near-quota tile (Phase 3)
+// =============================================================================
+// One row per (school, feature, quotaName) where usage is ≥ `threshold`
+// (default 0.80). Walks every school once, calls the existing
+// check-*-quota helpers per feature so the count math stays in ONE
+// place (no chance of the tile and the gate drifting). Empty plan
+// caches per call (`{} as Request`) — these helpers don't actually
+// use any request state beyond REQ_CACHE, and a fresh per-school
+// "request" is fine because we're already iterating per-school anyway.
+
+export type QuotaTelemetryRow = {
+  schoolId: number;
+  schoolName: string;
+  feature: string;
+  quotaName: string;
+  current: number;
+  quota: number;
+  pct: number; // 0..1+
+};
+
+const KNOWN_SEAT_QUOTAS: Array<{
+  feature: string;
+  quotaName: string;
+  check: (
+    req: Request,
+    schoolId: number,
+    additional: number,
+  ) => Promise<QuotaCheckResult>;
+}> = [
+  {
+    feature: "parentPortal",
+    quotaName: "maxParentAccounts",
+    check: checkParentAccountQuota,
+  },
+  {
+    feature: "displays",
+    quotaName: "maxPlaylists",
+    check: checkDisplayPlaylistQuota,
+  },
+];
+
+export async function listSchoolsNearQuota(
+  threshold = 0.8,
+): Promise<QuotaTelemetryRow[]> {
+  const schools = await db
+    .select({ id: schoolsTable.id, name: schoolsTable.name })
+    .from(schoolsTable);
+  const out: QuotaTelemetryRow[] = [];
+  for (const s of schools) {
+    // Synthetic per-school request object — only needs to satisfy the
+    // WeakMap cache key contract in loadEffectiveFeatures. Using a
+    // fresh `{}` each iteration means no cross-school cache pollution.
+    const fakeReq = {} as Request;
+    for (const spec of KNOWN_SEAT_QUOTAS) {
+      try {
+        const r = await spec.check(fakeReq, s.id, 0);
+        // Unlimited (quota === null) → skip.
+        if (r.allowed && r.quota === null) continue;
+        const quota = r.quota ?? 0;
+        if (quota <= 0) continue;
+        const pct = r.current / quota;
+        if (pct >= threshold) {
+          out.push({
+            schoolId: s.id,
+            schoolName: s.name,
+            feature: spec.feature,
+            quotaName: spec.quotaName,
+            current: r.current,
+            quota,
+            pct,
+          });
+        }
+      } catch {
+        // One school's broken settings shouldn't break the whole tile.
+      }
+    }
+  }
+  // Worst offenders first so the tile preview shows the loudest schools.
+  out.sort((a, b) => b.pct - a.pct);
+  return out;
+}
+
+// Suppress unused-import warning in builds that tree-shake helpers away.
 void and;
+void staffTable;

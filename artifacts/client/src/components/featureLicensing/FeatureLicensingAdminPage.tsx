@@ -51,6 +51,29 @@ type Override = {
   createdAt: string;
 };
 
+type AuditEntry = {
+  id: number;
+  schoolId: number;
+  schoolName: string | null;
+  action: string;
+  overrideId: number | null;
+  featureKey: string | null;
+  payload: Record<string, unknown>;
+  actorStaffId: number | null;
+  actorName: string | null;
+  createdAt: string;
+};
+
+type QuotaTelemetryRow = {
+  schoolId: number;
+  schoolName: string;
+  feature: string;
+  quotaName: string;
+  current: number;
+  quota: number;
+  pct: number;
+};
+
 async function getJson<T>(url: string): Promise<T> {
   const res = await authFetch(url);
   if (!res.ok) throw new Error(`${url} → ${res.status}`);
@@ -117,6 +140,8 @@ export default function FeatureLicensingAdminPage() {
         </div>
       )}
 
+      <QuotaTelemetrySection onError={setError} />
+
       <PlansSection
         plans={plans}
         features={features}
@@ -132,6 +157,8 @@ export default function FeatureLicensingAdminPage() {
         onReload={reload}
         onError={setError}
       />
+
+      <AuditLogSection onError={setError} />
 
       {editingPlan !== null && (
         <PlanEditorModal
@@ -163,6 +190,259 @@ export default function FeatureLicensingAdminPage() {
         />
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Quota telemetry tile (Phase 3) — schools-near-quota at ≥80% usage on any
+// seat-style quota. Cheap GET, polled on mount only — admins refresh
+// manually with the "Refresh" button.
+// ---------------------------------------------------------------------------
+function QuotaTelemetrySection({
+  onError,
+}: {
+  onError: (msg: string) => void;
+}) {
+  const [rows, setRows] = useState<QuotaTelemetryRow[]>([]);
+  const [threshold, setThreshold] = useState(0.8);
+  const [loading, setLoading] = useState(true);
+
+  async function reload() {
+    try {
+      setLoading(true);
+      const r = await getJson<{
+        threshold: number;
+        rows: QuotaTelemetryRow[];
+      }>(`/api/feature-licensing/quota-telemetry?threshold=${threshold}`);
+      setRows(r.rows);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [threshold]);
+
+  return (
+    <section
+      className="card"
+      style={{ marginBottom: "1.5rem", background: "var(--bg-soft, #fafafa)" }}
+    >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "0.5rem",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>
+          Schools near quota{" "}
+          <span style={{ fontWeight: "normal", color: "#777", fontSize: "0.85em" }}>
+            (≥ {Math.round(threshold * 100)}% usage)
+          </span>
+        </h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label style={{ fontSize: "0.85em" }}>
+            Threshold:
+            <select
+              value={threshold}
+              onChange={(e) => setThreshold(Number(e.target.value))}
+              style={{ marginLeft: 4 }}
+            >
+              <option value={0.5}>50%</option>
+              <option value={0.7}>70%</option>
+              <option value={0.8}>80%</option>
+              <option value={0.9}>90%</option>
+              <option value={1.0}>100%</option>
+            </select>
+          </label>
+          <button onClick={reload}>Refresh</button>
+        </div>
+      </div>
+      {loading ? (
+        <p style={{ color: "#777", margin: 0 }}>Loading…</p>
+      ) : rows.length === 0 ? (
+        <p style={{ color: "#0a7", margin: 0 }}>
+          ✓ No schools at or above the threshold on any seat quota.
+        </p>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ textAlign: "left" }}>
+              <th>School</th>
+              <th>Feature</th>
+              <th>Quota</th>
+              <th>Usage</th>
+              <th>%</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr
+                key={`${r.schoolId}-${r.feature}-${r.quotaName}`}
+                style={{ borderTop: "1px solid var(--border, #eee)" }}
+              >
+                <td>{r.schoolName}</td>
+                <td>
+                  <code style={{ fontSize: "0.85em" }}>{r.feature}</code>
+                </td>
+                <td>
+                  <code style={{ fontSize: "0.85em" }}>{r.quotaName}</code>
+                </td>
+                <td>
+                  {r.current} / {r.quota}
+                </td>
+                <td
+                  style={{
+                    color: r.pct >= 1 ? "#c33" : r.pct >= 0.9 ? "#d80" : "#333",
+                    fontWeight: r.pct >= 0.9 ? 600 : 400,
+                  }}
+                >
+                  {Math.round(r.pct * 100)}%
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Audit log section (Phase 3) — recent activity from the override sweep
+// cron + any future write events that land here. Read-only.
+// ---------------------------------------------------------------------------
+function AuditLogSection({
+  onError,
+}: {
+  onError: (msg: string) => void;
+}) {
+  const [rows, setRows] = useState<AuditEntry[]>([]);
+  const [limit, setLimit] = useState(50);
+  const [loading, setLoading] = useState(true);
+
+  async function reload() {
+    try {
+      setLoading(true);
+      const r = await getJson<{ entries: AuditEntry[] }>(
+        `/api/feature-licensing/audit?limit=${limit}`,
+      );
+      setRows(r.entries);
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void reload();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [limit]);
+
+  function renderPayload(p: Record<string, unknown>): string {
+    try {
+      const compact = JSON.stringify(p);
+      return compact.length > 80 ? compact.slice(0, 77) + "…" : compact;
+    } catch {
+      return "{}";
+    }
+  }
+
+  return (
+    <section style={{ marginTop: "2rem" }}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          marginBottom: "0.5rem",
+        }}
+      >
+        <h3 style={{ margin: 0 }}>Audit log</h3>
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <label style={{ fontSize: "0.85em" }}>
+            Show:
+            <select
+              value={limit}
+              onChange={(e) => setLimit(Number(e.target.value))}
+              style={{ marginLeft: 4 }}
+            >
+              <option value={25}>25</option>
+              <option value={50}>50</option>
+              <option value={100}>100</option>
+              <option value={250}>250</option>
+            </select>
+          </label>
+          <button onClick={reload}>Refresh</button>
+        </div>
+      </div>
+      <p
+        style={{
+          color: "var(--text-subtle, #555)",
+          margin: "0 0 0.5rem 0",
+          fontSize: "0.9em",
+        }}
+      >
+        Append-only trail of licensing state changes. Today this is driven
+        by the daily expired-override sweep cron; future plan/override
+        write events will land here too.
+      </p>
+      {loading ? (
+        <p style={{ color: "#777" }}>Loading…</p>
+      ) : rows.length === 0 ? (
+        <p style={{ color: "#777" }}>No audit entries yet.</p>
+      ) : (
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <thead>
+            <tr style={{ textAlign: "left" }}>
+              <th>When</th>
+              <th>School</th>
+              <th>Action</th>
+              <th>Feature</th>
+              <th>Actor</th>
+              <th>Payload</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.id} style={{ borderTop: "1px solid var(--border, #eee)" }}>
+                <td style={{ whiteSpace: "nowrap", fontSize: "0.85em" }}>
+                  {new Date(r.createdAt).toLocaleString()}
+                </td>
+                <td>{r.schoolName ?? `#${r.schoolId}`}</td>
+                <td>
+                  <code style={{ fontSize: "0.85em" }}>{r.action}</code>
+                </td>
+                <td>
+                  {r.featureKey ? (
+                    <code style={{ fontSize: "0.85em" }}>{r.featureKey}</code>
+                  ) : (
+                    <span style={{ color: "#aaa" }}>—</span>
+                  )}
+                </td>
+                <td>
+                  {r.actorName ?? (
+                    <span style={{ color: "#aaa" }}>
+                      {r.actorStaffId ? `#${r.actorStaffId}` : "system"}
+                    </span>
+                  )}
+                </td>
+                <td style={{ fontFamily: "monospace", fontSize: "0.8em" }}>
+                  {renderPayload(r.payload)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </section>
   );
 }
 

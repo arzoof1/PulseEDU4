@@ -24,6 +24,8 @@ import {
   lockSchoolForLicensing,
   countSchoolsOnPlan,
   listSchoolsWithLicensing,
+  listFeatureLicensingAudit,
+  listSchoolsNearQuota,
 } from "../lib/featureLicensing.js";
 
 const router: IRouter = Router();
@@ -426,6 +428,73 @@ router.delete(
         await reapplyLicensingToSchool(schoolId, tx);
       });
       res.json({ ok: true });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ----------------------------------------------------------------------------
+// Audit log (Phase 3) — read-only viewer for the SuperUser surface.
+// The expired-override sweep cron writes here on every run; admins
+// previously had no UI to see what was swept.
+// ----------------------------------------------------------------------------
+router.get("/feature-licensing/audit", async (req, res, next) => {
+  try {
+    if (!(await requireSuperUser(req, res))) return;
+    const limitRaw = req.query.limit;
+    const limit =
+      typeof limitRaw === "string" && /^\d+$/.test(limitRaw)
+        ? Number(limitRaw)
+        : 100;
+    const rows = await listFeatureLicensingAudit({ limit });
+    res.json({ entries: rows });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.get(
+  "/feature-licensing/schools/:id/audit",
+  async (req, res, next) => {
+    try {
+      if (!(await requireSuperUser(req, res))) return;
+      const schoolId = Number(req.params.id);
+      if (!Number.isFinite(schoolId)) {
+        res.status(400).json({ error: "invalid_id" });
+        return;
+      }
+      const limitRaw = req.query.limit;
+      const limit =
+        typeof limitRaw === "string" && /^\d+$/.test(limitRaw)
+          ? Number(limitRaw)
+          : 100;
+      const rows = await listFeatureLicensingAudit({ schoolId, limit });
+      res.json({ entries: rows });
+    } catch (err) {
+      next(err);
+    }
+  },
+);
+
+// ----------------------------------------------------------------------------
+// Quota telemetry (Phase 3) — schools-near-quota tile.
+// Returns one row per (school, feature, quotaName) where usage ≥ threshold.
+// Threshold defaults to 0.80; SuperUser can pass `?threshold=0.5` to dig in.
+// ----------------------------------------------------------------------------
+router.get(
+  "/feature-licensing/quota-telemetry",
+  async (req, res, next) => {
+    try {
+      if (!(await requireSuperUser(req, res))) return;
+      const raw = req.query.threshold;
+      let threshold = 0.8;
+      if (typeof raw === "string" && raw.trim()) {
+        const n = Number(raw);
+        if (Number.isFinite(n) && n > 0 && n <= 2) threshold = n;
+      }
+      const rows = await listSchoolsNearQuota(threshold);
+      res.json({ threshold, rows });
     } catch (err) {
       next(err);
     }
