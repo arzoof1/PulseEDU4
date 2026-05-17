@@ -91,19 +91,6 @@ pointer here.
 
 ### Open work
 
-- **Global plan CRUD — cross-district scoping.** Plan rows are
-  global, but `POST/PATCH/DELETE /api/feature-licensing/plans`
-  are currently `requireSuperUser`-only with no district gate.
-  A district-scoped SuperUser editing a shared plan row mutates
-  global metadata used by other districts (though the reapply
-  fan-out is now scoped to the caller's district). Fix: either
-  gate global plan CRUD behind `ALLOW_CROSS_DISTRICT_SUPERUSER=1`
-  outright, OR introduce a real `isCrossDistrictSuperUser` staff
-  flag (the same flag the tenancy/audit routes will need when
-  the platform-tier role lands) and require it on these endpoints.
-  Per-school plan assignment + overrides are already scoped
-  correctly via `assertSchoolInCallerDistrict`.
-
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
   (1) Register a "Review Consistency Check guardrails" step in
   `lib/onboardingSteps.ts` (Behavior & PBIS phase) with an
