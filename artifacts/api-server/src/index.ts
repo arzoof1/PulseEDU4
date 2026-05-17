@@ -31,6 +31,7 @@ import {
   ensureKioskWelcomeSchema,
   ensureBadgePrintEventsSchema,
   ensureSchoolsTimezoneColumn,
+  ensureStudentPhotoColumns,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -185,6 +186,9 @@ async function runSeed(): Promise<void> {
   // Packet A — Per-school IANA timezone column on schools (pre-2026
   // tenants may be missing it). Idempotent.
   await ensureSchoolsTimezoneColumn();
+  // Packet B — Student photo + consent columns on students (pre-2026
+  // tenants may be missing them). Idempotent.
+  await ensureStudentPhotoColumns();
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a
@@ -414,12 +418,34 @@ function startListening(): void {
     });
 }
 
+// Pre-listen critical column bootstrap. Runs BEFORE we open the port
+// so legacy-DB tenants don't 500 on `/students`, `/spotlight/pick`,
+// or `/pickup/lookup` during the window between app.listen and the
+// background runSeed() completing. Each ALTER is idempotent + cheap
+// (milliseconds against a populated table), so it's safe to also
+// leave the calls inside runSeed() as a defense-in-depth no-op.
+async function bootstrapCriticalColumns(): Promise<void> {
+  try {
+    await ensureSchoolsTimezoneColumn();
+    await ensureStudentPhotoColumns();
+  } catch (err) {
+    logger.error({ err }, "[boot] critical column bootstrap failed");
+    throw err;
+  }
+}
+
 // Boot. In dev we keep the original "seed first, then listen" flow so
 // the workflow logs read top-to-bottom and a `pnpm dev` restart waits
-// for data to be ready. In production we listen immediately and run
-// the (idempotent) seed in the background — see startListening().
+// for data to be ready. In production we run the critical column
+// bootstrap, listen immediately, and run the (idempotent) full seed
+// in the background — see startListening().
 if (seedInBackground) {
-  startListening();
+  bootstrapCriticalColumns()
+    .catch((err) => {
+      logger.error({ err }, "Critical bootstrap failed; exiting");
+      process.exit(1);
+    })
+    .then(() => startListening());
 } else {
   runSeed()
     .catch((err) => logger.error({ err }, "Seed failed"))

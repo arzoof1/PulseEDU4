@@ -524,6 +524,11 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       houseId: studentsTable.houseId,
+      // Packet B — let the reveal card render the real student photo
+      // (falls back to initials bubble on the client when null or
+      // consent=false). School-scoped already via the WHERE above.
+      photoObjectKey: studentsTable.photoObjectKey,
+      photoConsent: studentsTable.photoConsent,
     })
     .from(studentsTable)
     .where(
@@ -609,6 +614,8 @@ router.post("/spotlight/pick", requireStaff, async (req, res) => {
       firstName: student.firstName,
       lastName: student.lastName,
       house,
+      photoObjectKey: student.photoObjectKey,
+      photoConsent: student.photoConsent,
     },
     prompt,
     poolSize: pool.length,

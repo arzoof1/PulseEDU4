@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import * as LucideIcons from "lucide-react";
 import { authFetch } from "../lib/authToken";
+import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // Spotlight — fair, fast, "pull a name from the hat" picker for whole-class
@@ -49,6 +50,10 @@ interface PickResult {
     firstName: string | null;
     lastName: string | null;
     house: HouseInfo | null;
+    // Server-supplied for the reveal avatar; null pre-yearbook or
+    // pre-Packet-B server. <StudentPhoto/> falls back to initials.
+    photoObjectKey?: string | null;
+    photoConsent?: boolean | null;
   };
   prompt: { id: number; text: string } | null;
   poolSize: number;
@@ -1578,6 +1583,19 @@ function ResultCard({
   return (
     <div className="spotlight-result" style={{ width: "100%" }}>
       <div className="spotlight-result-eyebrow">🎉 Spotlight</div>
+      {/* Packet B — big avatar on the reveal so the whole class sees
+          who got picked. <StudentPhoto/> falls back to an initials
+          bubble when the school hasn't ingested yearbook photos yet
+          or the student has consent=false. */}
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: "0.5rem" }}>
+        <StudentPhoto
+          firstName={pick.pick.firstName ?? ""}
+          lastName={pick.pick.lastName ?? ""}
+          photoObjectKey={pick.pick.photoObjectKey ?? null}
+          photoConsent={pick.pick.photoConsent ?? true}
+          size={120}
+        />
+      </div>
       <div className="spotlight-result-name">{fullName}</div>
 
       {house ? (

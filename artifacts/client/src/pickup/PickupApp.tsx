@@ -840,11 +840,22 @@ function WalkerGatePage({ me }: { me: Me }) {
                     key={c.authorizationId}
                     style={{ ...studentCard, borderColor, background: bg }}
                   >
-                    <div style={{ fontWeight: 600 }}>
-                      {c.firstName} {c.lastName}
-                    </div>
-                    <div style={{ color: "#6b7280", fontSize: 13 }}>
-                      Grade {c.grade} · ID {c.studentId} · walker
+                    <div style={{ display: "flex", gap: 12, alignItems: "center" }}>
+                      <StudentPhoto
+                        firstName={c.firstName}
+                        lastName={c.lastName}
+                        photoObjectKey={c.photoObjectKey}
+                        photoConsent={c.photoConsent}
+                        size={48}
+                      />
+                      <div>
+                        <div style={{ fontWeight: 600 }}>
+                          {c.firstName} {c.lastName}
+                        </div>
+                        <div style={{ color: "#6b7280", fontSize: 13 }}>
+                          Grade {c.grade} · ID {c.studentId} · walker
+                        </div>
+                      </div>
                     </div>
                     {c.restricted && (
                       <div

@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import StudentPhoto from "./StudentPhoto";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // =============================================================================
@@ -30,6 +31,10 @@ type Student = {
   firstName: string;
   lastName: string;
   grade?: number | null;
+  // Packet B — server-supplied; renders via <StudentPhoto/> which
+  // falls back to the initials bubble when null or consent=false.
+  photoObjectKey?: string | null;
+  photoConsent?: boolean | null;
 };
 
 // ownerScope='school'  — visible to all staff, editable by admin/BS/MTSS only.
@@ -1104,6 +1109,18 @@ function StudentCard({
         onMouseUp={(e) => (e.currentTarget.style.transform = "scale(1)")}
         onMouseLeave={(e) => (e.currentTarget.style.transform = "scale(1)")}
       >
+        {/* Packet B — student photo above the name. Initials bubble
+            when no photo or consent revoked, so existing cards keep
+            their look until a yearbook ingest runs. */}
+        <div style={{ marginBottom: "0.4rem" }}>
+          <StudentPhoto
+            firstName={student.firstName}
+            lastName={student.lastName}
+            photoObjectKey={student.photoObjectKey ?? null}
+            photoConsent={student.photoConsent ?? true}
+            size={56}
+          />
+        </div>
         <div
           style={{
             fontSize: "0.95rem",

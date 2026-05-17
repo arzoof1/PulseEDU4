@@ -5759,6 +5759,26 @@ export async function ensureSchoolsTimezoneColumn(): Promise<void> {
   );
 }
 
+// -----------------------------------------------------------------------------
+// Student photo columns bootstrap (Packet B).
+//
+// `photo_object_key TEXT NULL` — object-storage key bound to the student's
+// school via bindObjectToSchool. Null on legacy rows / schools without a
+// yearbook ingest yet (renders the initials bubble).
+// `photo_consent BOOLEAN NOT NULL DEFAULT true` — render gate. False
+// suppresses the photo everywhere even when bytes are on disk; bytes are
+// not deleted so the toggle is reversible.
+// Schema TS declares both; the ALTERs handle DBs onboarded before May 2026.
+// -----------------------------------------------------------------------------
+export async function ensureStudentPhotoColumns(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_object_key TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_consent BOOLEAN NOT NULL DEFAULT true`,
+  );
+}
+
 export async function ensureBadgePrintEventsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS badge_print_events (
