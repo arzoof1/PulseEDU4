@@ -1148,10 +1148,26 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
         ell: studentsTable.ell,
         ese: studentsTable.ese,
         is504: studentsTable.is504,
+        // Pulled so the export round-trips the student's PBIS house
+        // assignment. Maps to the optional `house_name` importer
+        // column — blank/unknown names fall back to the smallest
+        // house at insert time (recommendNextHouse).
+        houseId: studentsTable.houseId,
       })
       .from(studentsTable)
       .where(rosterWhere)
       .orderBy(studentsTable.lastName, studentsTable.firstName);
+    // House name lookup for the export. One query per export call,
+    // bounded to the requested schools — cheap (≤ a few dozen rows
+    // total even for a district-wide export).
+    const houseList = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+      })
+      .from(housesTable)
+      .where(inArray(housesTable.schoolId, schoolIds));
+    const houseNameById = new Map(houseList.map((h) => [h.id, h.name]));
     headers = [
       "student_id",
       "first_name",
@@ -1164,6 +1180,9 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       "ell",
       "ese",
       "is_504",
+      // Optional on import. Blank cells get auto-assigned to the
+      // smallest house at insert time; unknown names also fall back.
+      "house_name",
     ];
     rows = list.map((r) => [
       r.studentId,
@@ -1179,6 +1198,7 @@ router.get("/data-imports/export", requireImporter(), async (req, res) => {
       r.ell ? "Y" : "N",
       r.ese ? "Y" : "N",
       r.is504 ? "Y" : "N",
+      r.houseId == null ? "" : (houseNameById.get(r.houseId) ?? ""),
     ]);
   } else if (kindRaw === "behavior") {
     // Build a grade-filter subselect once; reused below for FAST +
