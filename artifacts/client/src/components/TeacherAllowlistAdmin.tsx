@@ -7,6 +7,7 @@ interface Props {
   allDestinations: string[];
   allowlistMap: Record<string, string[]>;
   onChange: (next: Record<string, string[]>) => void;
+  onEditLocations?: () => void;
 }
 
 export default function TeacherAllowlistAdmin({
@@ -14,6 +15,7 @@ export default function TeacherAllowlistAdmin({
   allDestinations,
   allowlistMap,
   onChange,
+  onEditLocations,
 }: Props) {
   const [filter, setFilter] = useState("");
   const [savingFor, setSavingFor] = useState<string | null>(null);
@@ -70,13 +72,64 @@ export default function TeacherAllowlistAdmin({
 
   return (
     <div className="card" style={{ marginTop: "1rem" }}>
-      <h2>Allowed Locations per Teacher</h2>
-      <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
+      <div
+        style={{
+          display: "flex",
+          justifyContent: "space-between",
+          alignItems: "flex-start",
+          gap: "0.75rem",
+          flexWrap: "wrap",
+        }}
+      >
+        <h2 style={{ margin: 0 }}>Allowed Locations per Teacher</h2>
+        {onEditLocations && (
+          <button
+            type="button"
+            onClick={onEditLocations}
+            title="Add, rename, or remove the locations that appear as columns below."
+            style={{
+              background: "#f1f5f9",
+              color: "#0f172a",
+              border: "1px solid #cbd5e1",
+              padding: "0.35rem 0.7rem",
+              borderRadius: 6,
+              cursor: "pointer",
+              fontSize: "0.85rem",
+              whiteSpace: "nowrap",
+            }}
+          >
+            Edit locations →
+          </button>
+        )}
+      </div>
+      <p style={{ color: "var(--text-subtle)", marginTop: "0.5rem" }}>
         Pick the destinations each teacher can send students to without
         confirming contact (typically the closest restrooms or rooms next
         door). Anything outside this list will require the teacher to check
         "I've contacted them" before sending. Hall&nbsp;Pass admins skip this
         check entirely.
+        {onEditLocations && (
+          <>
+            {" "}
+            Need a new column?{" "}
+            <button
+              type="button"
+              onClick={onEditLocations}
+              style={{
+                background: "none",
+                border: "none",
+                padding: 0,
+                color: "#2563eb",
+                cursor: "pointer",
+                textDecoration: "underline",
+                font: "inherit",
+              }}
+            >
+              Edit locations
+            </button>
+            .
+          </>
+        )}
       </p>
       <HowToUseHelp title="How to use the Teacher Allowlist">
         <HowToSection title="What it does">

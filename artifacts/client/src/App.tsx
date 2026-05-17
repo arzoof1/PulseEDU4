@@ -21008,6 +21008,7 @@ function App() {
           })()}
           allowlistMap={teacherAllowlistMap}
           onChange={setTeacherAllowlistMap}
+          onEditLocations={() => setSettingsTile("locations")}
         />
         )}
         {settingsTile === "locations" && (
