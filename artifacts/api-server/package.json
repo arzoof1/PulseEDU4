@@ -18,6 +18,7 @@
     "@workspace/db": "workspace:*",
     "@workspace/sis-adapters": "workspace:*",
     "bcryptjs": "^3.0.3",
+    "bwip-js": "^4.10.1",
     "connect-pg-simple": "^10.0.0",
     "cookie-parser": "^1.4.7",
     "cors": "^2",
@@ -36,6 +37,7 @@
   },
   "devDependencies": {
     "@types/bcryptjs": "^3.0.0",
+    "@types/bwip-js": "^3.2.3",
     "@types/connect-pg-simple": "^7.0.3",
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",

@@ -10,9 +10,12 @@ import {
   staffDefaultsTable,
   staffTable,
   kioskActivationsTable,
+  kioskEnrollTokensTable,
   adminNotificationsTable,
   studentsTable,
+  schoolsTable,
 } from "@workspace/db";
+import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
@@ -33,7 +36,31 @@ import {
   getCurrentPeriodKey,
 } from "./hallPassQueue";
 
+// Default TTL for the legacy email-+-password activation flow. The
+// printed-card path (`/kiosk/activate-by-enrollment`,
+// `/kiosk/activate-by-pin`) uses ENROLL_TTL_MS; the Core Team sub /
+// proxy path picks between END_OF_DAY and ENROLL based on the request.
 const ACTIVATION_TTL_MS = 12 * 60 * 60 * 1000;
+const ENROLL_TTL_MS = 14 * 24 * 60 * 60 * 1000;
+
+// "End of school day" cutoff — used for sub/proxy activations whose
+// default duration is "today only". Currently 11:59 PM local server
+// time; refined later when per-school IANA timezone lands (replit.md
+// future-work item). The TTL just needs to be a comfortable "until
+// the building closes" boundary, not minute-perfect.
+function endOfDayTtlMs(): number {
+  const now = new Date();
+  const endOfDay = new Date(
+    now.getFullYear(),
+    now.getMonth(),
+    now.getDate(),
+    23,
+    59,
+    0,
+    0,
+  );
+  return Math.max(60 * 1000, endOfDay.getTime() - now.getTime());
+}
 
 const router: IRouter = Router();
 
@@ -103,9 +130,24 @@ async function resolveActivation(args: {
   replaceExisting: boolean;
   deviceLabel: string | null;
   deviceFingerprint: string | null;
+  // Phase 1 additions. All optional so the legacy password path stays
+  // unchanged. `staff` is the kiosk's *identity* (whose name shows on
+  // the masthead and whose default room we pull); `actorStaffId` is
+  // who actually triggered the activation (a Core Team sub-coverer for
+  // proxy activations, otherwise == staff.id).
+  ttlMs?: number;
+  sessionKind?: "password" | "enroll" | "proxy";
+  enrollTokenId?: number | null;
+  actorStaffId?: number;
+  proxyForStaffId?: number | null;
 }): Promise<ActivateOutcome> {
   const { staff, dryRun, replaceExisting, deviceLabel, deviceFingerprint } =
     args;
+  const ttlMs = args.ttlMs ?? ACTIVATION_TTL_MS;
+  const sessionKind = args.sessionKind ?? "password";
+  const enrollTokenId = args.enrollTokenId ?? null;
+  const actorStaffId = args.actorStaffId ?? staff.id;
+  const proxyForStaffId = args.proxyForStaffId ?? null;
 
   const [defaultRow] = await db
     .select()
@@ -178,7 +220,7 @@ async function resolveActivation(args: {
   // collide.
   const token = randomBytes(32).toString("base64url");
   const tokenHash = hashToken(token);
-  const expiresAt = new Date(Date.now() + ACTIVATION_TTL_MS);
+  const expiresAt = new Date(Date.now() + ttlMs);
 
   type TxOutcome =
     | { kind: "ok"; replacedPriorStaffId: number | null }
@@ -268,6 +310,10 @@ async function resolveActivation(args: {
       expiresAt,
       deviceLabel,
       deviceFingerprint,
+      sessionKind,
+      enrollTokenId,
+      activatedByStaffId: actorStaffId,
+      proxyForStaffId,
     });
 
     return { kind: "ok", replacedPriorStaffId };
@@ -1008,6 +1054,806 @@ router.post("/kiosk/hall-passes/return", async (req, res) => {
     studentFirstName: student?.firstName ?? null,
     nextInQueue,
   });
+});
+
+// =====================================================================
+// Phase 1 — Activation cards (per-teacher enrollment tokens).
+//
+// Three new activation paths, all eventually calling resolveActivation:
+//   - /kiosk/activate-by-enrollment  → scanned QR / Code 128 token
+//   - /kiosk/activate-by-pin         → typed 6-digit PIN
+//   - /kiosk/activate-proxy          → Core Team sub coverage
+//
+// Plus admin management:
+//   - GET  /kiosk/enroll-tokens
+//   - POST /kiosk/enroll-tokens/regenerate/:staffId
+//   - POST /kiosk/enroll-tokens/bulk-generate
+//   - GET  /kiosk/cards.pdf
+//   - POST /kiosk/my-active/revoke-all  (any staff)
+// =====================================================================
+
+// Linear bcrypt scan is fine at school scale (<300 staff). If this
+// grows past ~1000 enroll tokens per school we'll add a pin_prefix
+// indexed column to narrow the search before bcrypt.compare.
+async function findEnrollTokenByPin(
+  schoolId: number,
+  pin: string,
+): Promise<typeof kioskEnrollTokensTable.$inferSelect | null> {
+  const candidates = await db
+    .select()
+    .from(kioskEnrollTokensTable)
+    .where(
+      and(
+        eq(kioskEnrollTokensTable.schoolId, schoolId),
+        isNull(kioskEnrollTokensTable.revokedAt),
+      ),
+    );
+  for (const row of candidates) {
+    if (!row.pinHash) continue;
+    // eslint-disable-next-line no-await-in-loop
+    if (await bcrypt.compare(pin, row.pinHash)) return row;
+  }
+  return null;
+}
+
+async function findEnrollTokenByRawToken(
+  rawToken: string,
+): Promise<typeof kioskEnrollTokensTable.$inferSelect | null> {
+  const [row] = await db
+    .select()
+    .from(kioskEnrollTokensTable)
+    .where(
+      and(
+        eq(kioskEnrollTokensTable.tokenHash, hashToken(rawToken)),
+        isNull(kioskEnrollTokensTable.revokedAt),
+      ),
+    );
+  return row ?? null;
+}
+
+// Generate a fresh 6-digit PIN (no leading-zero collisions; ALL six
+// digits are 0-9 so the printed PIN can really start with "0" — we just
+// avoid the trivially-guessable "000000" / "123456" / "111111" set).
+function generatePin(): string {
+  const BANNED = new Set([
+    "000000",
+    "111111",
+    "222222",
+    "333333",
+    "444444",
+    "555555",
+    "666666",
+    "777777",
+    "888888",
+    "999999",
+    "123456",
+    "654321",
+    "012345",
+  ]);
+  for (let i = 0; i < 20; i++) {
+    const n = randomBytes(4).readUInt32BE(0) % 1_000_000;
+    const candidate = n.toString().padStart(6, "0");
+    if (!BANNED.has(candidate)) return candidate;
+  }
+  // Fallback — vanishingly rare.
+  return "428193";
+}
+
+function generateEnrollToken(): string {
+  return randomBytes(24).toString("base64url");
+}
+
+// Compute the public-facing kiosk URL the QR should encode. We trust
+// the first $REPLIT_DOMAINS host in production; in dev we fall back to
+// the inbound request host so the QR scans correctly on Replit dev URLs.
+function kioskBaseUrl(req: Request): string {
+  const replitDomains = (process.env.REPLIT_DOMAINS ?? "").trim();
+  if (replitDomains) {
+    const first = replitDomains.split(",")[0]?.trim();
+    if (first) return `https://${first}/kiosk`;
+  }
+  const proto = (req.headers["x-forwarded-proto"] as string) ?? "https";
+  const host = req.headers["x-forwarded-host"] ?? req.headers.host;
+  return `${proto}://${host}/kiosk`;
+}
+
+// Shared helper: given a teacher and the activation context, do the
+// confirm-on-first-scan dance + resolveActivation. Centralizes the
+// confirm UX so PIN and token paths look identical to the kiosk.
+async function activateForTeacher(args: {
+  teacher: typeof staffTable.$inferSelect;
+  enrollTokenId: number;
+  room: string | undefined;
+  deviceLabel: string | null;
+  deviceFingerprint: string | null;
+  replaceExisting: boolean;
+  confirm: boolean;
+  ttlMs: number;
+  sessionKind: "enroll" | "proxy";
+  actorStaffId: number;
+  proxyForStaffId: number | null;
+  res: Response;
+}) {
+  const {
+    teacher,
+    enrollTokenId,
+    room,
+    deviceLabel,
+    deviceFingerprint,
+    replaceExisting,
+    confirm,
+    ttlMs,
+    sessionKind,
+    actorStaffId,
+    proxyForStaffId,
+    res,
+  } = args;
+
+  // First-scan confirmation step (Security model A). If this device has
+  // never been seen for this teacher (or the caller hasn't confirmed
+  // yet), return a 200 with `requiresConfirm:true` so the kiosk can
+  // render an "Activate kiosk for {staffName} in {room}?" modal.
+  if (!confirm) {
+    const [defaultRow] = await db
+      .select()
+      .from(staffDefaultsTable)
+      .where(eq(staffDefaultsTable.staffId, teacher.id));
+    const previewRoom = (room && room.trim()) || defaultRow?.defaultLocationName || null;
+    res.status(200).json({
+      requiresConfirm: true,
+      staffId: teacher.id,
+      staffName: teacher.displayName,
+      previewRoom,
+      ttlDays: Math.round(ttlMs / (24 * 60 * 60 * 1000)),
+      sessionKind,
+    });
+    return;
+  }
+
+  const outcome = await resolveActivation({
+    staff: teacher,
+    room,
+    dryRun: false,
+    replaceExisting,
+    deviceLabel,
+    deviceFingerprint,
+    ttlMs,
+    sessionKind,
+    enrollTokenId,
+    actorStaffId,
+    proxyForStaffId,
+  });
+
+  // Stamp last_used_at on the enrollment token so admins can spot
+  // "I never use my kiosk card" gaps.
+  if (outcome.kind === "ok") {
+    await db
+      .update(kioskEnrollTokensTable)
+      .set({ lastUsedAt: new Date() })
+      .where(eq(kioskEnrollTokensTable.id, enrollTokenId));
+  }
+
+  switch (outcome.kind) {
+    case "ok":
+      res.status(201).json(outcome.body);
+      return;
+    case "needs_room":
+    case "room_taken":
+      res.status(409).json(outcome.body);
+      return;
+    case "bad_room":
+      res.status(400).json(outcome.body);
+      return;
+    case "dry_run":
+      // Shouldn't happen (dryRun:false above) but keep TS exhaustive.
+      res.status(500).json({ error: "unexpected dry-run outcome" });
+      return;
+  }
+}
+
+router.post("/kiosk/activate-by-enrollment", async (req, res) => {
+  const { enrollToken, room, replaceExisting, confirm } = req.body ?? {};
+  if (typeof enrollToken !== "string" || enrollToken.length < 16) {
+    res.status(400).json({ error: "enrollToken is required" });
+    return;
+  }
+  const tokenRow = await findEnrollTokenByRawToken(enrollToken);
+  if (!tokenRow) {
+    res.status(401).json({ error: "Card not recognized — ask an admin to reissue." });
+    return;
+  }
+  const [teacher] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, tokenRow.staffId));
+  if (!teacher || !teacher.active) {
+    res.status(401).json({ error: "Teacher account is inactive — ask an admin to reissue." });
+    return;
+  }
+  const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
+  await activateForTeacher({
+    teacher,
+    enrollTokenId: tokenRow.id,
+    room: typeof room === "string" ? room : undefined,
+    deviceLabel,
+    deviceFingerprint,
+    replaceExisting: replaceExisting === true,
+    confirm: confirm === true,
+    ttlMs: ENROLL_TTL_MS,
+    sessionKind: "enroll",
+    actorStaffId: teacher.id,
+    proxyForStaffId: null,
+    res,
+  });
+});
+
+router.post("/kiosk/activate-by-pin", async (req, res) => {
+  const { pin, room, replaceExisting, confirm, schoolId: bodySchoolId } =
+    req.body ?? {};
+  if (typeof pin !== "string" || !/^\d{6}$/.test(pin)) {
+    res.status(400).json({ error: "pin must be 6 digits" });
+    return;
+  }
+
+  // Abuse control: PIN endpoint is unauthenticated and a bcrypt
+  // miss is expensive. Throttle per source IP. (See PIN_THROTTLE_*.)
+  const clientIp =
+    (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim() ??
+    req.ip ??
+    "unknown";
+  if (isPinThrottled(clientIp)) {
+    res
+      .status(429)
+      .json({
+        error:
+          "Too many PIN attempts from this device. Wait a minute and try again, or use the QR code on your card.",
+      });
+    return;
+  }
+
+  // PIN is per-school. We REQUIRE an unambiguous match to preserve
+  // tenant isolation: if the caller provided a schoolId we scan only
+  // that school; otherwise we scan all schools and accept only a
+  // single live match. Multiple cross-school matches → 409 with a
+  // hint to use the QR token (which is globally unique).
+  let schoolIds: number[] = [];
+  if (typeof bodySchoolId === "number" && Number.isInteger(bodySchoolId)) {
+    schoolIds = [bodySchoolId];
+  } else {
+    const allSchools = await db
+      .select({ id: schoolsTable.id })
+      .from(schoolsTable);
+    schoolIds = allSchools.map((s) => s.id);
+  }
+
+  const matches: Array<typeof kioskEnrollTokensTable.$inferSelect> = [];
+  for (const sid of schoolIds) {
+    // eslint-disable-next-line no-await-in-loop
+    const m = await findEnrollTokenByPin(sid, pin);
+    if (m) matches.push(m);
+    if (matches.length > 1) break;
+  }
+  if (matches.length === 0) {
+    recordPinFailure(clientIp);
+    res.status(401).json({
+      error:
+        "PIN not recognized — check the digits or ask an admin to reissue.",
+    });
+    return;
+  }
+  if (matches.length > 1) {
+    // Ambiguous across schools — refuse rather than guess. Caller
+    // should re-attempt with explicit schoolId, or scan the QR.
+    res.status(409).json({
+      error:
+        "That PIN is in use at more than one school. Scan the QR code on your card instead, or contact your admin.",
+      ambiguous: true,
+    });
+    return;
+  }
+  const match = matches[0];
+  const [teacher] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, match.staffId));
+  if (!teacher || !teacher.active) {
+    res.status(401).json({ error: "Teacher account is inactive — ask an admin to reissue." });
+    return;
+  }
+  const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
+  await activateForTeacher({
+    teacher,
+    enrollTokenId: match.id,
+    room: typeof room === "string" ? room : undefined,
+    deviceLabel,
+    deviceFingerprint,
+    replaceExisting: replaceExisting === true,
+    confirm: confirm === true,
+    ttlMs: ENROLL_TTL_MS,
+    sessionKind: "enroll",
+    actorStaffId: teacher.id,
+    proxyForStaffId: null,
+    res,
+  });
+});
+
+// Core Team picks a teacher + room and activates a kiosk on their
+// behalf (sub coverage). The kiosk shows the absent teacher's name;
+// activated_by_staff_id records who actually triggered it. Default
+// duration: end of today. `durationKind:'14d'` overrides for a full
+// two-week sub block.
+router.post("/kiosk/activate-proxy", requireStaff, async (req, res) => {
+  const actor = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  // Sub-activation is a Core Team responsibility (matches the
+  // canManageRoomQueue gate already in hallPassQueue.ts).
+  const isCore = Boolean(
+    actor.isSuperUser ||
+      actor.isDistrictAdmin ||
+      actor.isAdmin ||
+      actor.isBehaviorSpecialist ||
+      actor.isMtssCoordinator ||
+      actor.isSchoolPsychologist,
+  );
+  if (!isCore) {
+    res
+      .status(403)
+      .json({ error: "Sub-activation requires Core Team membership" });
+    return;
+  }
+  const { forStaffId, room, durationKind, replaceExisting } = req.body ?? {};
+  if (!Number.isInteger(forStaffId) || forStaffId <= 0) {
+    res.status(400).json({ error: "forStaffId is required" });
+    return;
+  }
+  if (typeof room !== "string" || !room.trim()) {
+    res
+      .status(400)
+      .json({ error: "room is required for sub-activation" });
+    return;
+  }
+  const [teacher] = await db
+    .select()
+    .from(staffTable)
+    .where(eq(staffTable.id, forStaffId));
+  if (
+    !teacher ||
+    !teacher.active ||
+    teacher.schoolId !== actor.schoolId
+  ) {
+    res
+      .status(404)
+      .json({ error: "Teacher not found in your school" });
+    return;
+  }
+  const ttlMs =
+    durationKind === "14d" ? ENROLL_TTL_MS : endOfDayTtlMs();
+
+  const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
+  const outcome = await resolveActivation({
+    staff: teacher,
+    room,
+    dryRun: false,
+    replaceExisting: replaceExisting === true,
+    deviceLabel,
+    deviceFingerprint,
+    ttlMs,
+    sessionKind: "proxy",
+    enrollTokenId: null,
+    actorStaffId: actor.id,
+    proxyForStaffId: teacher.id,
+  });
+
+  // Audit trail: every sub coverage shows up in admin_notifications
+  // so an admin can see "yesterday Mrs. Smith was out — covered by
+  // Mr. Jones, Room 204, 1:14 PM."
+  if (outcome.kind === "ok") {
+    await db.insert(adminNotificationsTable).values({
+      schoolId: actor.schoolId,
+      type: "kiosk_proxy_activated",
+      payload: {
+        room,
+        forStaffId: teacher.id,
+        forStaffName: teacher.displayName,
+        actorStaffId: actor.id,
+        actorStaffName: actor.displayName,
+        durationKind: durationKind === "14d" ? "14d" : "today",
+        at: new Date().toISOString(),
+      },
+    });
+  }
+
+  switch (outcome.kind) {
+    case "ok":
+      res.status(201).json(outcome.body);
+      return;
+    case "needs_room":
+    case "room_taken":
+      res.status(409).json(outcome.body);
+      return;
+    case "bad_room":
+      res.status(400).json(outcome.body);
+      return;
+    case "dry_run":
+      res.status(500).json({ error: "unexpected dry-run outcome" });
+      return;
+  }
+});
+
+// "Sign me out everywhere" — used by a teacher whose card was stolen
+// or who got a new device. Revokes every live activation where they
+// are the kiosk identity (staff_id). Sub/proxy sessions issued for
+// them are also wiped, since they're equally compromised if the
+// teacher's identity is.
+router.post("/kiosk/my-active/revoke-all", requireStaff, async (req, res) => {
+  const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+    .staff;
+  const result = await db
+    .update(kioskActivationsTable)
+    .set({
+      deactivatedAt: new Date(),
+      deactivatedByStaffId: staff.id,
+    })
+    .where(
+      and(
+        eq(kioskActivationsTable.schoolId, staff.schoolId),
+        eq(kioskActivationsTable.staffId, staff.id),
+        isNull(kioskActivationsTable.deactivatedAt),
+      ),
+    )
+    .returning({ id: kioskActivationsTable.id });
+  res.json({ revoked: result.length });
+});
+
+// ---- Admin: enrollment-token management ----------------------------
+
+// One row per active teacher with their enrollment-token status.
+router.get("/kiosk/enroll-tokens", requireAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const rows = await db
+    .select({
+      staffId: staffTable.id,
+      displayName: staffTable.displayName,
+      email: staffTable.email,
+      isAdmin: staffTable.isAdmin,
+      defaultRoom: staffDefaultsTable.defaultLocationName,
+      tokenId: kioskEnrollTokensTable.id,
+      tokenCreatedAt: kioskEnrollTokensTable.createdAt,
+      tokenLastUsedAt: kioskEnrollTokensTable.lastUsedAt,
+    })
+    .from(staffTable)
+    .leftJoin(
+      staffDefaultsTable,
+      eq(staffDefaultsTable.staffId, staffTable.id),
+    )
+    .leftJoin(
+      kioskEnrollTokensTable,
+      and(
+        eq(kioskEnrollTokensTable.staffId, staffTable.id),
+        isNull(kioskEnrollTokensTable.revokedAt),
+      ),
+    )
+    .where(
+      and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)),
+    )
+    .orderBy(asc(staffTable.displayName));
+  res.json(rows);
+});
+
+// Issue (or rotate) the enrollment token for a single teacher. Returns
+// the RAW token + RAW PIN ONCE — caller is expected to print them
+// immediately, never re-displayable.
+router.post(
+  "/kiosk/enroll-tokens/regenerate/:staffId",
+  requireAdmin,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const actor = (req as Request & {
+      staff: typeof staffTable.$inferSelect;
+    }).staff;
+    const staffId = Number(req.params.staffId);
+    if (!Number.isInteger(staffId) || staffId <= 0) {
+      res.status(400).json({ error: "Invalid staffId" });
+      return;
+    }
+    const [teacher] = await db
+      .select()
+      .from(staffTable)
+      .where(eq(staffTable.id, staffId));
+    if (!teacher || teacher.schoolId !== schoolId) {
+      res.status(404).json({ error: "Teacher not in your school" });
+      return;
+    }
+    const { rawToken, rawPin, tokenId } = await issueEnrollToken({
+      schoolId,
+      staffId,
+      actorStaffId: actor.id,
+      reason: "regenerate",
+    });
+    res.status(201).json({
+      tokenId,
+      enrollToken: rawToken,
+      pin: rawPin,
+      staffId: teacher.id,
+      staffName: teacher.displayName,
+    });
+  },
+);
+
+// Bulk-issue: ensures every active teacher in the school has a live
+// enrollment token. Teachers who already have one are skipped. Does
+// NOT return raw tokens (they'd flood the response and aren't useful
+// — the admin will go straight to "Print all cards (PDF)" after this).
+router.post(
+  "/kiosk/enroll-tokens/bulk-generate",
+  requireAdmin,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const actor = (req as Request & {
+      staff: typeof staffTable.$inferSelect;
+    }).staff;
+    // Eligible = active staff who teach OR run a classroom (anyone
+    // who'd plausibly run a kiosk). For v1 we keep this generous —
+    // any active staff, then admins can prune from the UI.
+    const eligible = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, schoolId),
+          eq(staffTable.active, true),
+        ),
+      );
+    const alreadyHave = new Set(
+      (
+        await db
+          .select({ staffId: kioskEnrollTokensTable.staffId })
+          .from(kioskEnrollTokensTable)
+          .where(
+            and(
+              eq(kioskEnrollTokensTable.schoolId, schoolId),
+              isNull(kioskEnrollTokensTable.revokedAt),
+            ),
+          )
+      ).map((r) => r.staffId),
+    );
+    const bulkContext = `bulk:${randomBytes(6).toString("hex")}`;
+    let created = 0;
+    for (const s of eligible) {
+      if (alreadyHave.has(s.id)) continue;
+      // eslint-disable-next-line no-await-in-loop
+      await issueEnrollToken({
+        schoolId,
+        staffId: s.id,
+        actorStaffId: actor.id,
+        reason: "bulk_generate",
+        bulkContext,
+      });
+      created += 1;
+    }
+    res.json({
+      created,
+      alreadyHad: alreadyHave.size,
+      eligible: eligible.length,
+    });
+  },
+);
+
+// Shared issuer used by regenerate + bulk-generate. Revokes any
+// existing live token for (schoolId, staffId) in the same transaction
+// so the partial unique index never sees two live rows.
+//
+// Also writes an append-only audit row to admin_notifications so a
+// historical "who rotated whose card, when" is reconstructable. We
+// roll up bulk operations under a single `bulkContext` key so admins
+// can collapse them in the UI.
+async function issueEnrollToken(args: {
+  schoolId: number;
+  staffId: number;
+  actorStaffId: number;
+  reason: "regenerate" | "bulk_generate" | "card_print";
+  bulkContext?: string;
+}): Promise<{ rawToken: string; rawPin: string; tokenId: number }> {
+  const rawToken = generateEnrollToken();
+  const tokenHash = hashToken(rawToken);
+  const rawPin = generatePin();
+  const pinHash = await bcrypt.hash(rawPin, 10);
+
+  const tokenId = await db.transaction(async (tx) => {
+    await tx
+      .update(kioskEnrollTokensTable)
+      .set({
+        revokedAt: new Date(),
+        revokedByStaffId: args.actorStaffId,
+      })
+      .where(
+        and(
+          eq(kioskEnrollTokensTable.schoolId, args.schoolId),
+          eq(kioskEnrollTokensTable.staffId, args.staffId),
+          isNull(kioskEnrollTokensTable.revokedAt),
+        ),
+      );
+    const [inserted] = await tx
+      .insert(kioskEnrollTokensTable)
+      .values({
+        schoolId: args.schoolId,
+        staffId: args.staffId,
+        tokenHash,
+        pinHash,
+        createdByStaffId: args.actorStaffId,
+        rotatedAt: new Date(),
+      })
+      .returning({ id: kioskEnrollTokensTable.id });
+    return inserted.id;
+  });
+
+  // Append-only audit row. We don't store the raw token/PIN — only the
+  // fact that a rotation happened.
+  await db.insert(adminNotificationsTable).values({
+    schoolId: args.schoolId,
+    type: "kiosk_enroll_token_rotated",
+    payload: {
+      staffId: args.staffId,
+      tokenId,
+      reason: args.reason,
+      actorStaffId: args.actorStaffId,
+      bulkContext: args.bulkContext ?? null,
+      at: new Date().toISOString(),
+    },
+  });
+
+  return { rawToken, rawPin, tokenId };
+}
+
+// Simple in-memory PIN attempt throttle. Per-IP bucket of recent
+// failures; once a bucket exceeds the cap inside the window we refuse
+// further attempts from that IP. Resets on process restart — fine for
+// Phase 1 (the API server runs as a single process). If we ever
+// scale horizontally this should move to Redis.
+const PIN_THROTTLE_WINDOW_MS = 60 * 1000;
+const PIN_THROTTLE_MAX_FAILS = 8;
+const pinFailures = new Map<string, number[]>();
+function recordPinFailure(ip: string): boolean {
+  const now = Date.now();
+  const arr = (pinFailures.get(ip) ?? []).filter(
+    (t) => now - t < PIN_THROTTLE_WINDOW_MS,
+  );
+  arr.push(now);
+  pinFailures.set(ip, arr);
+  return arr.length >= PIN_THROTTLE_MAX_FAILS;
+}
+function isPinThrottled(ip: string): boolean {
+  const now = Date.now();
+  const arr = (pinFailures.get(ip) ?? []).filter(
+    (t) => now - t < PIN_THROTTLE_WINDOW_MS,
+  );
+  pinFailures.set(ip, arr);
+  return arr.length >= PIN_THROTTLE_MAX_FAILS;
+}
+
+// ---- Admin: printable card PDF -------------------------------------
+// IMPORTANT: regenerates raw tokens + PINs on the fly. Because we only
+// store hashes, the only way to print a card is to issue a NEW token.
+// Calling this rotates every selected teacher's enrollment token —
+// their previous card stops working the moment this endpoint runs.
+// The admin UI MUST make this clear.
+// IMPORTANT: this endpoint MUTATES state (it rotates the enroll
+// token + PIN for every teacher in the response). It must be POST so
+// a browser navigation/img-tag cross-site request can't silently
+// invalidate cards. requireAdmin enforces session auth; the auth
+// cookie/CSRF stack already protects POST.
+router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const actor = (req as Request & {
+    staff: typeof staffTable.$inferSelect;
+  }).staff;
+
+  // Accept body params (POST). Legacy query-string params still work
+  // for backwards compat with hand-tested URLs but the client must
+  // POST so the browser includes credentials + CSRF protections.
+  const body = (req.body ?? {}) as { all?: boolean; staffIds?: number[] };
+  const all =
+    body.all === true ||
+    req.query.all === "1" ||
+    req.query.all === "true";
+  const bodyIds = Array.isArray(body.staffIds)
+    ? body.staffIds.filter((n): n is number => Number.isInteger(n) && n > 0)
+    : [];
+  const queryIdsRaw =
+    typeof req.query.staffIds === "string" ? req.query.staffIds : "";
+  const queryIds = queryIdsRaw
+    .split(",")
+    .map((s) => Number(s.trim()))
+    .filter((n) => Number.isInteger(n) && n > 0);
+  const staffIds = bodyIds.length ? bodyIds : queryIds;
+
+  if (!all && staffIds.length === 0) {
+    res
+      .status(400)
+      .json({ error: "Provide staffIds=1,2,3 or all=1" });
+    return;
+  }
+
+  const teachers = await db
+    .select()
+    .from(staffTable)
+    .where(
+      and(
+        eq(staffTable.schoolId, schoolId),
+        eq(staffTable.active, true),
+        ...(all ? [] : [sql`${staffTable.id} = ANY(${staffIds})`]),
+      ),
+    )
+    .orderBy(asc(staffTable.displayName));
+
+  if (teachers.length === 0) {
+    res.status(404).json({ error: "No matching teachers" });
+    return;
+  }
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const schoolName = school?.name ?? "PulseEDU";
+
+  // Pull each teacher's default room (if any) for the card.
+  const teacherIds = teachers.map((t) => t.id);
+  const roomByStaffId = new Map<number, string | null>();
+  if (teacherIds.length) {
+    const defaults = await db
+      .select({
+        staffId: staffDefaultsTable.staffId,
+        defaultLocationName: staffDefaultsTable.defaultLocationName,
+      })
+      .from(staffDefaultsTable)
+      .where(sql`${staffDefaultsTable.staffId} = ANY(${teacherIds})`);
+    for (const d of defaults) {
+      if (d.staffId == null) continue;
+      roomByStaffId.set(d.staffId, d.defaultLocationName ?? null);
+    }
+  }
+
+  const cards: Array<{
+    teacherName: string;
+    room: string | null;
+    schoolName: string;
+    enrollToken: string;
+    pin: string;
+    baseUrl: string;
+  }> = [];
+  const baseUrl = kioskBaseUrl(req);
+  const bulkContext = `print:${randomBytes(6).toString("hex")}`;
+  for (const t of teachers) {
+    // eslint-disable-next-line no-await-in-loop
+    const { rawToken, rawPin } = await issueEnrollToken({
+      schoolId,
+      staffId: t.id,
+      actorStaffId: actor.id,
+      reason: "card_print",
+      bulkContext,
+    });
+    cards.push({
+      teacherName: t.displayName,
+      room: roomByStaffId.get(t.id) ?? null,
+      schoolName,
+      enrollToken: rawToken,
+      pin: rawPin,
+      baseUrl,
+    });
+  }
+
+  const pdf = await renderKioskCardsPdf(cards);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="kiosk-cards-${new Date().toISOString().slice(0, 10)}.pdf"`,
+  );
+  res.send(pdf);
 });
 
 export default router;

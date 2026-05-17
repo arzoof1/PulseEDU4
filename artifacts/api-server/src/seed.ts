@@ -5651,3 +5651,50 @@ export async function ensureFeaturePlansSchema() {
     WHERE plan_id IS NULL
   `);
 }
+
+// -----------------------------------------------------------------------------
+// Hall pass kiosk activation cards (Phase 1).
+//
+// Adds the per-teacher enrollment-token table and the provenance /
+// sub-flow columns on kiosk_activations. All additive + idempotent.
+// -----------------------------------------------------------------------------
+export async function ensureKioskCardsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS kiosk_enroll_tokens (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      token_hash TEXT NOT NULL UNIQUE,
+      pin_hash TEXT,
+      label TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER,
+      rotated_at TIMESTAMPTZ,
+      revoked_at TIMESTAMPTZ,
+      revoked_by_staff_id INTEGER,
+      last_used_at TIMESTAMPTZ
+    )
+  `);
+  // At most one live enrollment token per teacher per school.
+  // "Reissue card" must revoke-then-insert in a single transaction so
+  // this partial index never sees two live rows for the same teacher.
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS kiosk_enroll_tokens_one_live_per_staff ON kiosk_enroll_tokens(school_id, staff_id) WHERE revoked_at IS NULL`,
+  );
+
+  // Provenance / sub-flow columns on kiosk_activations. The new columns
+  // are all NULL-tolerant so legacy rows (password-activated kiosks)
+  // remain valid without backfill.
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS enroll_token_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS activated_by_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS proxy_for_staff_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS session_kind TEXT`,
+  );
+}

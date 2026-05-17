@@ -25,6 +25,7 @@ import CameraRegistryPage from "./components/CameraRegistryPage";
 import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
+import { KioskCardsPanel } from "./components/KioskCardsPanel";
 import SpotlightPanel from "./components/SpotlightPanel";
 import SpotlightLaunchButton from "./components/SpotlightLaunchButton";
 import LogTardyModal from "./components/LogTardyModal";
@@ -4027,7 +4028,7 @@ const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   // hallPassMgmt is reached via the Hall Passes admin tools; it has no
   // dedicated nav item so we anchor it to School Admin so the sidebar
   // gives the user *some* group context when they're on that page.
-  schoolAdmin: ["bellSchedule", "activeKiosks", "settings", "hallPassMgmt"],
+  schoolAdmin: ["bellSchedule", "activeKiosks", "kioskCards", "settings", "hallPassMgmt"],
 };
 // Insights launches mtssCoordinator/mtssTemplates as sub-pages (via tile
 // launchers in InsightsHub); they have no direct sidebar item, so they
@@ -4050,6 +4051,7 @@ NAV_GROUP_OWNERSHIP.insights = [
 NAV_GROUP_OWNERSHIP.schoolAdmin = [
   "bellSchedule",
   "activeKiosks",
+  "kioskCards",
   "settings",
   "hallPassMgmt",
   "trustedAdultsAdmin",
@@ -4446,6 +4448,7 @@ function App() {
     | "staffRoles"
     | "bellSchedule"
     | "activeKiosks"
+    | "kioskCards"
     | "parentAccess"
     | "superUserHome"
     | "featureLicensing"
@@ -9388,6 +9391,12 @@ function App() {
                   renderNavItem({
                     key: "activeKiosks",
                     label: "Active Kiosks",
+                    icon: IconClipboard,
+                  })}
+                {canManageSettings &&
+                  renderNavItem({
+                    key: "kioskCards",
+                    label: "Kiosk Cards",
                     icon: IconClipboard,
                   })}
                 {isAdmin && renderNavItem(adminNavSections[1])}
@@ -20404,6 +20413,10 @@ function App() {
             </table>
           )}
         </div>
+      )}
+
+      {activeSection === "kioskCards" && canManageSettings && (
+        <KioskCardsPanel authUser={authUser} />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "kiosk-setup" && (() => {

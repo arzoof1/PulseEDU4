@@ -79,7 +79,26 @@ function getDeviceLabel(): string {
 type Phase =
   | { kind: "loading" }
   | { kind: "activate" }
-  | { kind: "ready"; token: string; room: string; staffName: string | null };
+  | {
+      // First-scan confirmation. Server returned `requiresConfirm:true`
+      // for an activate-by-enrollment / activate-by-pin call. The kiosk
+      // shows a big "Activate kiosk for X in Y?" modal — once confirmed
+      // we call back with `confirm:true`.
+      kind: "enrollConfirm";
+      method: "enroll" | "pin";
+      credential: string; // raw token OR pin
+      staffId: number;
+      staffName: string;
+      previewRoom: string | null;
+      ttlDays: number;
+    }
+  | {
+      kind: "ready";
+      token: string;
+      room: string;
+      staffName: string | null;
+      expiresAt?: string | null;
+    };
 
 type Mode = "out" | "back";
 
@@ -132,6 +151,27 @@ export default function Kiosk() {
   useSchoolBranding({ mode: "kiosk", token: kioskToken });
 
   useEffect(() => {
+    // First check for an ?enroll=<token> in the URL. A teacher who
+    // scanned their card with the device's camera lands on
+    // `/kiosk?enroll=<...>`. We try to activate-by-enrollment, which
+    // returns either `requiresConfirm:true` (first scan on this device)
+    // or a live activation immediately if the kiosk was already in
+    // place. Either way we strip the token from the URL so a refresh
+    // doesn't re-trigger the flow.
+    const params = new URLSearchParams(window.location.search);
+    const enrollFromUrl = params.get("enroll");
+    if (enrollFromUrl) {
+      params.delete("enroll");
+      const qs = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${qs ? "?" + qs : ""}`,
+      );
+      void beginEnrollActivation(enrollFromUrl);
+      return;
+    }
+
     const token = getStoredToken();
     if (!token) {
       setPhase({ kind: "activate" });
@@ -150,6 +190,7 @@ export default function Kiosk() {
           token,
           room: data.room,
           staffName: data.staffName ?? null,
+          expiresAt: data.expiresAt ?? null,
         });
       })
       .catch(() => {
@@ -157,11 +198,77 @@ export default function Kiosk() {
         // user isn't stuck staring at a spinner forever.
         setPhase({ kind: "activate" });
       });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  function handleActivated(token: string, room: string, staffName: string) {
+  // Used by both the ?enroll= URL path AND the in-app "Enter 6-digit
+  // code" path. `method:'enroll'` sends `{enrollToken}`; `'pin'` sends
+  // `{pin}`. On `requiresConfirm:true` we hop to the enrollConfirm
+  // phase. Otherwise treat it as a normal activation success/failure.
+  async function beginEnrollActivation(
+    credential: string,
+    method: "enroll" | "pin" = "enroll",
+    room?: string,
+  ): Promise<{ ok: boolean; error?: string }> {
+    const path =
+      method === "enroll"
+        ? "/api/kiosk/activate-by-enrollment"
+        : "/api/kiosk/activate-by-pin";
+    const body: Record<string, unknown> = {
+      deviceFingerprint: getOrCreateDeviceFingerprint(),
+      deviceLabel: getDeviceLabel(),
+      confirm: false,
+    };
+    if (method === "enroll") body.enrollToken = credential;
+    else body.pin = credential;
+    if (room) body.room = room;
+    try {
+      const res = await fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.requiresConfirm) {
+        setPhase({
+          kind: "enrollConfirm",
+          method,
+          credential,
+          staffId: data.staffId,
+          staffName: data.staffName,
+          previewRoom: data.previewRoom ?? null,
+          ttlDays: data.ttlDays ?? 14,
+        });
+        return { ok: true };
+      }
+      if (res.ok && data.token) {
+        handleActivated(
+          data.token,
+          data.room,
+          data.staffName,
+          data.expiresAt ?? null,
+        );
+        return { ok: true };
+      }
+      setPhase({ kind: "activate" });
+      return { ok: false, error: data.error ?? `Activation failed (${res.status})` };
+    } catch (err) {
+      setPhase({ kind: "activate" });
+      return {
+        ok: false,
+        error: err instanceof Error ? err.message : "Network error",
+      };
+    }
+  }
+
+  function handleActivated(
+    token: string,
+    room: string,
+    staffName: string,
+    expiresAt: string | null = null,
+  ) {
     setStoredToken(token);
-    setPhase({ kind: "ready", token, room, staffName });
+    setPhase({ kind: "ready", token, room, staffName, expiresAt });
   }
 
   function handleRevoked() {
@@ -181,7 +288,57 @@ export default function Kiosk() {
   if (phase.kind === "activate") {
     return (
       <Shell>
-        <ActivationScreen onActivated={handleActivated} />
+        <ActivationEntry
+          onActivated={handleActivated}
+          onBeginEnroll={beginEnrollActivation}
+        />
+      </Shell>
+    );
+  }
+
+  if (phase.kind === "enrollConfirm") {
+    return (
+      <Shell>
+        <EnrollConfirmScreen
+          staffName={phase.staffName}
+          previewRoom={phase.previewRoom}
+          ttlDays={phase.ttlDays}
+          onCancel={() => setPhase({ kind: "activate" })}
+          onConfirm={async (room) => {
+            const body: Record<string, unknown> = {
+              deviceFingerprint: getOrCreateDeviceFingerprint(),
+              deviceLabel: getDeviceLabel(),
+              confirm: true,
+              room,
+            };
+            if (phase.method === "enroll")
+              body.enrollToken = phase.credential;
+            else body.pin = phase.credential;
+            const path =
+              phase.method === "enroll"
+                ? "/api/kiosk/activate-by-enrollment"
+                : "/api/kiosk/activate-by-pin";
+            const res = await fetch(path, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(body),
+            });
+            const data = await res.json().catch(() => ({}));
+            if (res.ok && data.token) {
+              handleActivated(
+                data.token,
+                data.room,
+                data.staffName,
+                data.expiresAt ?? null,
+              );
+              return { ok: true };
+            }
+            return {
+              ok: false,
+              error: data.error ?? `Activation failed (${res.status})`,
+            };
+          }}
+        />
       </Shell>
     );
   }
@@ -189,6 +346,7 @@ export default function Kiosk() {
   return (
     <Shell>
       <GearButton onClick={() => setShowDeactivate(true)} />
+      {phase.expiresAt && <ExpiryNudge expiresAt={phase.expiresAt} />}
       {/* "Step out" — opens the staff app in a new tab so a teacher can
           log attendance, write a support note, etc. without losing the
           waiting line. The kiosk keeps polling the queue server-side
@@ -208,6 +366,332 @@ export default function Kiosk() {
         />
       )}
     </Shell>
+  );
+}
+
+// Day-12 nudge: surfaces a small amber banner when the activation has
+// fewer than 2 days left. Encourages the teacher to re-scan their card
+// before the kiosk dies mid-period. Hidden once expiry is past
+// (deactivation handler will catch that).
+function ExpiryNudge({ expiresAt }: { expiresAt: string }) {
+  const ts = Date.parse(expiresAt);
+  if (!Number.isFinite(ts)) return null;
+  const msLeft = ts - Date.now();
+  const NUDGE_MS = 2 * 24 * 60 * 60 * 1000;
+  if (msLeft > NUDGE_MS || msLeft <= 0) return null;
+  const daysLeft = Math.max(1, Math.ceil(msLeft / (24 * 60 * 60 * 1000)));
+  return (
+    <div
+      role="status"
+      style={{
+        position: "fixed",
+        top: 12,
+        left: "50%",
+        transform: "translateX(-50%)",
+        background: "rgba(245, 158, 11, 0.18)",
+        border: "1px solid rgba(245, 158, 11, 0.55)",
+        color: "#fbbf24",
+        padding: "0.5rem 1rem",
+        borderRadius: 999,
+        fontSize: "0.85rem",
+        fontWeight: 600,
+        zIndex: 30,
+        pointerEvents: "none",
+      }}
+    >
+      This kiosk expires in {daysLeft} day{daysLeft === 1 ? "" : "s"} —
+      scan your card to renew.
+    </div>
+  );
+}
+
+/* ----------------------------- Activation entry ----------------------------- */
+
+// Three-tab entry point. Scan tab is the default: a teacher who already
+// scanned their card with the device camera never lands here (they hit
+// the ?enroll= path in the top-level useEffect). The Scan tab is just
+// the instruction sheet for what to do. PIN tab accepts the 6-digit
+// code printed on the card. Password tab is the original email +
+// password flow, kept as a fallback for teachers who lost their card.
+function ActivationEntry({
+  onActivated,
+  onBeginEnroll,
+}: {
+  onActivated: (
+    token: string,
+    room: string,
+    staffName: string,
+    expiresAt?: string | null,
+  ) => void;
+  onBeginEnroll: (
+    credential: string,
+    method: "enroll" | "pin",
+    room?: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [tab, setTab] = useState<"scan" | "pin" | "password">("scan");
+  return (
+    <div
+      style={{
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 12,
+        padding: "1.75rem",
+        width: "min(520px, 92vw)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "1rem",
+      }}
+    >
+      <div style={{ textAlign: "center" }}>
+        <div
+          style={{
+            fontSize: "1.4rem",
+            fontWeight: 700,
+            letterSpacing: "0.02em",
+          }}
+        >
+          Activate Kiosk
+        </div>
+        <div style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 4 }}>
+          Scan your activation card, enter your 6-digit code, or sign in
+          with your email and password.
+        </div>
+      </div>
+
+      <div
+        role="tablist"
+        style={{
+          display: "flex",
+          gap: 4,
+          background: "rgba(0,0,0,0.25)",
+          padding: 4,
+          borderRadius: 8,
+        }}
+      >
+        {(["scan", "pin", "password"] as const).map((t) => (
+          <button
+            key={t}
+            role="tab"
+            aria-selected={tab === t}
+            type="button"
+            onClick={() => setTab(t)}
+            style={{
+              flex: 1,
+              background:
+                tab === t ? "rgba(255,255,255,0.12)" : "transparent",
+              border: "none",
+              color: "white",
+              padding: "0.5rem 0.75rem",
+              borderRadius: 6,
+              fontSize: "0.9rem",
+              fontWeight: tab === t ? 700 : 500,
+              cursor: "pointer",
+            }}
+          >
+            {t === "scan" ? "Scan card" : t === "pin" ? "6-digit code" : "Password"}
+          </button>
+        ))}
+      </div>
+
+      {tab === "scan" && <ScanInstructions />}
+      {tab === "pin" && <PinEntry onBeginEnroll={onBeginEnroll} />}
+      {tab === "password" && <ActivationScreen onActivated={onActivated} />}
+    </div>
+  );
+}
+
+function ScanInstructions() {
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.75rem",
+        padding: "0.5rem 0.25rem",
+        fontSize: "0.95rem",
+        lineHeight: 1.5,
+      }}
+    >
+      <ol style={{ margin: 0, paddingLeft: "1.25rem", opacity: 0.9 }}>
+        <li>Open your camera app.</li>
+        <li>
+          Point it at the QR code on your activation card. A link will
+          pop up at the top of the screen.
+        </li>
+        <li>Tap the link — this kiosk will activate for 14 days.</li>
+      </ol>
+      <div
+        style={{
+          fontSize: "0.85rem",
+          opacity: 0.65,
+          borderTop: "1px solid rgba(255,255,255,0.08)",
+          paddingTop: "0.75rem",
+        }}
+      >
+        No card?  Use the <b>6-digit code</b> tab if you remember your
+        PIN, or sign in with your <b>password</b>. Cards are issued by
+        an admin from <em>Hall Pass Kiosks → Cards</em>.
+      </div>
+    </div>
+  );
+}
+
+function PinEntry({
+  onBeginEnroll,
+}: {
+  onBeginEnroll: (
+    credential: string,
+    method: "enroll" | "pin",
+    room?: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [pin, setPin] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!/^\d{6}$/.test(pin)) {
+      setError("PIN must be 6 digits");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const result = await onBeginEnroll(pin, "pin");
+    if (!result.ok) setError(result.error ?? "Activation failed");
+    setBusy(false);
+  }
+  return (
+    <form
+      onSubmit={submit}
+      style={{ display: "flex", flexDirection: "column", gap: "1rem" }}
+    >
+      <Field label="6-digit code from your activation card">
+        <input
+          type="text"
+          inputMode="numeric"
+          pattern="\d{6}"
+          maxLength={6}
+          autoFocus
+          value={pin}
+          onChange={(e) =>
+            setPin(e.target.value.replace(/\D/g, "").slice(0, 6))
+          }
+          disabled={busy}
+          style={{
+            ...inputStyle,
+            fontSize: "1.6rem",
+            letterSpacing: "0.5em",
+            textAlign: "center",
+            fontFamily: "ui-monospace, SFMono-Regular, monospace",
+          }}
+        />
+      </Field>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <button
+        type="submit"
+        disabled={busy || pin.length !== 6}
+        style={primaryBtn(busy || pin.length !== 6)}
+      >
+        {busy ? "Checking…" : "Activate this kiosk"}
+      </button>
+    </form>
+  );
+}
+
+function EnrollConfirmScreen({
+  staffName,
+  previewRoom,
+  ttlDays,
+  onCancel,
+  onConfirm,
+}: {
+  staffName: string;
+  previewRoom: string | null;
+  ttlDays: number;
+  onCancel: () => void;
+  onConfirm: (room: string) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [room, setRoom] = useState(previewRoom ?? "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    if (!room.trim()) {
+      setError("Pick a room name for this kiosk");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const result = await onConfirm(room.trim());
+    if (!result.ok) {
+      setError(result.error ?? "Activation failed");
+      setBusy(false);
+    }
+    // On success the parent moves us to phase:'ready' — no need to
+    // unset busy.
+  }
+  return (
+    <form
+      onSubmit={submit}
+      style={{
+        background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.12)",
+        borderRadius: 12,
+        padding: "1.75rem",
+        width: "min(480px, 92vw)",
+        display: "flex",
+        flexDirection: "column",
+        gap: "1rem",
+      }}
+    >
+      <div style={{ textAlign: "center" }}>
+        <div style={{ fontSize: "1.4rem", fontWeight: 700 }}>
+          Activate kiosk for {staffName}?
+        </div>
+        <div
+          style={{ fontSize: "0.85rem", opacity: 0.7, marginTop: 6 }}
+        >
+          This device will be signed in for {ttlDays} days. You can
+          sign out from the gear menu any time.
+        </div>
+      </div>
+      <Field label="Room this kiosk is in">
+        <input
+          type="text"
+          autoFocus
+          value={room}
+          onChange={(e) => setRoom(e.target.value)}
+          disabled={busy}
+          placeholder={previewRoom ? `${previewRoom} (your room)` : "Room name…"}
+          style={inputStyle}
+        />
+      </Field>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <button
+        type="submit"
+        disabled={busy || !room.trim()}
+        style={primaryBtn(busy || !room.trim())}
+      >
+        {busy ? "Activating…" : `Yes, activate for ${room.trim() || "…"}`}
+      </button>
+      <button
+        type="button"
+        onClick={onCancel}
+        disabled={busy}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: "rgba(255,255,255,0.7)",
+          fontSize: "0.9rem",
+          textDecoration: "underline",
+          cursor: "pointer",
+          padding: "0.25rem",
+        }}
+      >
+        Cancel
+      </button>
+    </form>
   );
 }
 
@@ -1737,6 +2221,10 @@ function DeactivateModal({
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  // "Also sign out every other kiosk I'm signed in on" — for the
+  // lost-device case. We bundle this into the same email+password flow
+  // so the teacher only has to authenticate once.
+  const [revokeAll, setRevokeAll] = useState(false);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
@@ -1759,6 +2247,14 @@ function DeactivateModal({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token }),
       });
+      if (revokeAll) {
+        // Best-effort: if it fails the teacher is at least signed out
+        // of THIS kiosk. They can hit revoke-all again from their
+        // staff app whenever.
+        await fetch("/api/kiosk/my-active/revoke-all", {
+          method: "POST",
+        }).catch(() => {});
+      }
       // Always log the staff out so we don't leave a teacher session sitting on
       // a shared classroom device.
       await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
@@ -1838,6 +2334,30 @@ function DeactivateModal({
         </Field>
 
         {error && <ErrorBox>{error}</ErrorBox>}
+
+        <label
+          style={{
+            display: "flex",
+            alignItems: "flex-start",
+            gap: "0.5rem",
+            fontSize: "0.85rem",
+            opacity: 0.85,
+            cursor: "pointer",
+            lineHeight: 1.4,
+          }}
+        >
+          <input
+            type="checkbox"
+            checked={revokeAll}
+            onChange={(e) => setRevokeAll(e.target.checked)}
+            disabled={busy}
+            style={{ marginTop: 2 }}
+          />
+          <span>
+            Also sign me out of every other kiosk I&apos;m signed in on
+            (use if your card or device was lost).
+          </span>
+        </label>
 
         <div style={{ display: "flex", gap: "0.5rem" }}>
           <button

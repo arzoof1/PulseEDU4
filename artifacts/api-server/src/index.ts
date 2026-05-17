@@ -27,6 +27,7 @@ import {
   ensureDataImporterRollbackSchema,
   ensurePickupSchema,
   ensureAstSchema,
+  ensureKioskCardsSchema,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -168,6 +169,10 @@ async function runSeed(): Promise<void> {
   await ensurePickupSchema();
   await ensureAstSchema();
   await ensureFeaturePlansSchema();
+  // Phase 1 — Hall pass kiosk activation cards (per-teacher enrollment
+  // tokens encoded as QR + Code 128 + 6-digit PIN; sub/proxy + audit
+  // columns on kiosk_activations). Idempotent.
+  await ensureKioskCardsSchema();
 }
 
 // In production we MUST open the port within the platform's health-check
