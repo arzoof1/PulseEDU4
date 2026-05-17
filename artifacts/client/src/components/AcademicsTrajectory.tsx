@@ -802,7 +802,9 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
               }}
             >
               <Stat
-                label="Total students"
+                label={
+                  subjects.length > 1 ? "Total trajectories" : "Total students"
+                }
                 value={data.total.toLocaleString()}
               />
               <Stat
