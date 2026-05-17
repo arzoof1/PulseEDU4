@@ -388,9 +388,31 @@ const GRADE_CHIPS: { value: string; label: string }[] = [
 // =============================================================================
 
 export default function AcademicsTrajectory({ onOpenProfile }: Props) {
-  const [subject, setSubject] = useState<Subject>("ela");
+  // Multi-select. At least one subject must remain on at all times —
+  // toggling the last active subject off is a no-op so the page is
+  // never in a zero-subject state.
+  const [subjects, setSubjects] = useState<Subject[]>(["ela"]);
   // Empty set = "all grades". Order is preserved in the query string.
   const [selectedGrades, setSelectedGrades] = useState<string[]>([]);
+
+  const toggleSubject = (s: Subject) => {
+    setSubjects((prev) => {
+      if (prev.includes(s)) {
+        if (prev.length === 1) return prev;
+        return prev.filter((x) => x !== s);
+      }
+      // Keep canonical order (ela first) so labels are stable.
+      const next = [...prev, s];
+      return (["ela", "math"] as Subject[]).filter((x) => next.includes(x));
+    });
+  };
+
+  const subjectLabel =
+    subjects.length === 2
+      ? "FAST aReading + aMath"
+      : subjects[0] === "ela"
+      ? "FAST aReading"
+      : "FAST aMath";
   const [filters, setFilters] = useState<InsightsFilterValue>(EMPTY_FILTERS);
   const [drillKey, setDrillKey] = useState<ArchetypeKey | null>(null);
 
@@ -411,7 +433,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
 
   function buildQuery(): URLSearchParams {
     const qs = filtersToQuery(filters);
-    qs.set("subject", subject);
+    qs.set("subjects", subjects.join(","));
     if (selectedGrades.length > 0) qs.set("grades", selectedGrades.join(","));
     return qs;
   }
@@ -437,7 +459,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       const match = /filename="?([^"]+)"?/i.exec(dispo);
       const filename =
         match?.[1] ||
-        `trajectory_${subject}_${
+        `trajectory_${subjects.join("-")}_${
           selectedGrades.length > 0
             ? selectedGrades.join("-")
             : "all-grades"
@@ -481,7 +503,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
     const sub = drawerSubKey ? `_${drawerSubKey}` : "";
     const a = document.createElement("a");
     a.href = url;
-    a.download = `trajectory_${subject}_${arch}${sub}_${today}.csv`;
+    a.download = `trajectory_${subjects.join("-")}_${arch}${sub}_${today}.csv`;
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -529,13 +551,13 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subject, selectedGrades, filters]);
+  }, [subjects, selectedGrades, filters]);
 
   // Switching subject/grade should drop the drill state — counts will
   // shift and the open archetype may end up empty.
   useEffect(() => {
     setDrillKey(null);
-  }, [subject, selectedGrades, filters]);
+  }, [subjects, selectedGrades, filters]);
 
   // Dev-only invariants: parent counts must sum to total; sub counts
   // within each parent must sum to that parent's count. If either ever
@@ -668,14 +690,14 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
             FILTERS
           </div>
           <SubjectChip
-            active={subject === "ela"}
-            onClick={() => setSubject("ela")}
+            active={subjects.includes("ela")}
+            onClick={() => toggleSubject("ela")}
             icon={BookOpen}
             label="ELA"
           />
           <SubjectChip
-            active={subject === "math"}
-            onClick={() => setSubject("math")}
+            active={subjects.includes("math")}
+            onClick={() => toggleSubject("math")}
             icon={Calculator}
             label="Math"
           />
@@ -767,7 +789,7 @@ export default function AcademicsTrajectory({ onOpenProfile }: Props) {
               </span>
               <span style={{ color: "#94a3b8", margin: "0 4px" }}>·</span>
               <span>
-                {subject === "ela" ? "FAST aReading" : "FAST aMath"}
+                {subjectLabel}
                 {selectedGrades.length > 0 ? ` · ${gradeLabel}` : ""}
               </span>
             </div>

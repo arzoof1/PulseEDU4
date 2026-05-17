@@ -2932,6 +2932,33 @@ function classifySubArchetype(rec: TrajectoryStudentRec): string {
 
 // Build the per-cohort trajectory record set. Shared between the summary
 // endpoint and the drill-in endpoint so the two stay in sync.
+// Parse the trajectory subject filter. Accepts either:
+//   ?subjects=ela,math   (preferred, multi-select)
+//   ?subject=ela         (legacy single-select)
+// Returns at least one valid subject; defaults to ["ela"] if none parsed.
+function parseTrajectorySubjects(req: {
+  query: Record<string, unknown>;
+}): ("ela" | "math")[] {
+  const out = new Set<"ela" | "math">();
+  const add = (raw: string) => {
+    const s = raw.trim().toLowerCase();
+    if (s === "ela" || s === "math") out.add(s);
+  };
+  const subjectsRaw =
+    typeof req.query.subjects === "string" ? req.query.subjects : "";
+  if (subjectsRaw) {
+    for (const p of subjectsRaw.split(",")) add(p);
+  } else if (typeof req.query.subject === "string") {
+    add(req.query.subject);
+  }
+  if (out.size === 0) out.add("ela");
+  // Preserve a stable order (ela first, then math) for consistent labels.
+  const ordered: ("ela" | "math")[] = [];
+  if (out.has("ela")) ordered.push("ela");
+  if (out.has("math")) ordered.push("math");
+  return ordered;
+}
+
 // Parse the trajectory grade filter. Accepts either:
 //   ?grades=3,4,5   (preferred, multi-select)
 //   ?grade=5        (legacy single-select)
@@ -3102,16 +3129,19 @@ router.get("/insights/academics/trajectory", async (req, res) => {
     return;
   }
 
-  const subjectRaw =
-    typeof req.query.subject === "string"
-      ? req.query.subject.toLowerCase()
-      : "";
-  const subject: "ela" | "math" = subjectRaw === "math" ? "math" : "ela";
-
+  const subjects = parseTrajectorySubjects(req);
   const { gradeInts, gradeLabel } = parseTrajectoryGradeFilter(req);
   const filters = parseInsightsFilters(req);
 
-  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInts, filters);
+  // Multi-subject: concat per-subject record sets so a student tested in
+  // both ELA and Math contributes two rows (one trajectory per subject),
+  // which is the honest unit-of-analysis here.
+  const recsArrays = await Promise.all(
+    subjects.map((s) =>
+      loadTrajectoryRecs(schoolId, s, gradeInts, filters),
+    ),
+  );
+  const recs = recsArrays.flat();
 
   const matrix: Record<TrajectoryBand, Record<TrajectoryBand, number>> = {
     above: { above: 0, below: 0, well: 0, na: 0 },
@@ -3145,7 +3175,8 @@ router.get("/insights/academics/trajectory", async (req, res) => {
   }
 
   res.json({
-    subject,
+    subject: subjects[0],
+    subjects,
     grade: gradeLabel,
     grades: gradeInts,
     total: recs.length,
@@ -3175,16 +3206,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     return;
   }
 
-  const subjectRaw =
-    typeof req.query.subject === "string"
-      ? req.query.subject.toLowerCase()
-      : "";
-  const subject: "ela" | "math" | null =
-    subjectRaw === "ela" ? "ela" : subjectRaw === "math" ? "math" : null;
-  if (!subject) {
-    res.status(400).json({ error: "subject (ela|math) required" });
-    return;
-  }
+  const subjects = parseTrajectorySubjects(req);
   const ARCHETYPE_KEYS: TrajectoryArchetype[] = [
     "climbed",
     "stayedHi",
@@ -3210,7 +3232,13 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
   const { gradeInts } = parseTrajectoryGradeFilter(req);
   const filters = parseInsightsFilters(req);
 
-  const recs = await loadTrajectoryRecs(schoolId, subject, gradeInts, filters);
+  // Tag each rec with its subject so the multi-subject drill-in can
+  // tell the user *which* subject a row came from when both are on.
+  const tagged: { subject: "ela" | "math"; rec: TrajectoryStudentRec }[] = [];
+  for (const subj of subjects) {
+    const sRecs = await loadTrajectoryRecs(schoolId, subj, gradeInts, filters);
+    for (const r of sRecs) tagged.push({ subject: subj, rec: r });
+  }
 
   type Hit = {
     studentId: string;
@@ -3218,17 +3246,22 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     grade: number | null;
     pm1: number | null;
     pm3: number | null;
+    subject?: "ela" | "math";
   };
   const hits: Hit[] = [];
-  for (const r of recs) {
+  for (const { subject: subj, rec: r } of tagged) {
     if (classifyArchetype(r) !== wantArchetype) continue;
     if (subKey && classifySubArchetype(r) !== subKey) continue;
     hits.push({
       studentId: r.studentId,
-      studentName: r.studentName,
+      studentName:
+        subjects.length > 1
+          ? `${r.studentName} (${subj.toUpperCase()})`
+          : r.studentName,
       grade: r.grade,
       pm1: r.pm1,
       pm3: r.pm3,
+      subject: subj,
     });
   }
   hits.sort((a, b) => a.studentName.localeCompare(b.studentName));
@@ -3236,7 +3269,8 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
   const CAP = 200;
   const truncated = hits.length > CAP;
   res.json({
-    subject,
+    subject: subjects[0],
+    subjects,
     archetype: wantArchetype,
     subKey,
     students: truncated ? hits.slice(0, CAP) : hits,
@@ -3267,15 +3301,19 @@ router.get(
       return;
     }
 
-    const subjectRaw =
-      typeof req.query.subject === "string"
-        ? req.query.subject.toLowerCase()
-        : "";
-    const subject: "ela" | "math" = subjectRaw === "math" ? "math" : "ela";
-
+    const subjects = parseTrajectorySubjects(req);
     const { gradeInts, gradeLabel } = parseTrajectoryGradeFilter(req);
     const filters = parseInsightsFilters(req);
-    const recs = await loadTrajectoryRecs(schoolId, subject, gradeInts, filters);
+    const tagged: { subject: "ela" | "math"; rec: TrajectoryStudentRec }[] = [];
+    for (const subj of subjects) {
+      const sRecs = await loadTrajectoryRecs(
+        schoolId,
+        subj,
+        gradeInts,
+        filters,
+      );
+      for (const r of sRecs) tagged.push({ subject: subj, rec: r });
+    }
 
     const ARCHETYPE_LABEL: Record<TrajectoryArchetype, string> = {
       climbed: "Climbing",
@@ -3311,17 +3349,17 @@ router.get(
       "archetype",
       "sub_archetype",
     ];
-    const sorted = [...recs].sort((a, b) =>
-      a.studentName.localeCompare(b.studentName),
+    const sorted = [...tagged].sort((a, b) =>
+      a.rec.studentName.localeCompare(b.rec.studentName),
     );
     const lines: string[] = [header.join(",")];
-    for (const r of sorted) {
+    for (const { subject: subj, rec: r } of sorted) {
       lines.push(
         [
           esc(r.studentId),
           esc(r.studentName),
           esc(r.grade === 0 ? "K" : r.grade),
-          esc(subject),
+          esc(subj),
           esc(r.pm1),
           esc(r.pm2),
           esc(r.pm3),
@@ -3338,7 +3376,8 @@ router.get(
     const gradeSlug = gradeLabel
       ? gradeLabel.replace(/\s+/g, "")
       : "all-grades";
-    const filename = `trajectory_${subject}_${gradeSlug}_${today}.csv`;
+    const subjectSlug = subjects.join("-");
+    const filename = `trajectory_${subjectSlug}_${gradeSlug}_${today}.csv`;
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader(
