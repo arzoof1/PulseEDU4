@@ -108,12 +108,20 @@ export default function HousesPanel(): React.ReactElement {
           Recent changes
         </button>
       </div>
-      {tab === "sort" ? <SortTab /> : <AuditTab />}
+      {tab === "sort" ? (
+        <SortTab onGoToAudit={() => setTab("audit")} />
+      ) : (
+        <AuditTab />
+      )}
     </div>
   );
 }
 
-function SortTab(): React.ReactElement {
+function SortTab({
+  onGoToAudit,
+}: {
+  onGoToAudit: () => void;
+}): React.ReactElement {
   const [includeAssigned, setIncludeAssigned] = useState(false);
   const [keepSiblings, setKeepSiblings] = useState(true);
   // Required (≥10 chars) only when includeAssigned is on, mirroring
@@ -313,7 +321,22 @@ function SortTab(): React.ReactElement {
         >
           Reassigned {lastCommit.affectedCount} student
           {lastCommit.affectedCount === 1 ? "" : "s"}. Undo available for
-          24 hours on the Recent changes tab.
+          24 hours on the Recent changes tab.{" "}
+          <button
+            type="button"
+            onClick={onGoToAudit}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#166534",
+              cursor: "pointer",
+              padding: 0,
+              textDecoration: "underline",
+              fontWeight: 600,
+            }}
+          >
+            Open Recent changes to undo →
+          </button>
         </div>
       )}
       {preview && (
