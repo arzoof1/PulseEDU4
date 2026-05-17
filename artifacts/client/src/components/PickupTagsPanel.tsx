@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useState, type CSSProperties } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+} from "react";
 import { authFetch } from "../lib/authToken";
 
 // =============================================================================
@@ -26,6 +32,14 @@ type AuthRow = {
   restrictedFrom: boolean;
   active: boolean;
   parentDisplayName: string | null;
+};
+
+type StudentHit = {
+  id: number;
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  gradeLevel?: string | null;
 };
 
 const wrap: CSSProperties = {
@@ -124,9 +138,22 @@ const infoBox: CSSProperties = {
 export default function PickupTagsPanel() {
   const [studentDbIdInput, setStudentDbIdInput] = useState("");
   const [studentDbId, setStudentDbId] = useState<number | null>(null);
+  const [studentLabel, setStudentLabel] = useState<string>("");
   const [auths, setAuths] = useState<AuthRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+
+  // Name typeahead. Debounced /api/students?q= against the same search
+  // the Admin Hub discipline modal uses — prefix-matches first/last
+  // name and student_id, school-scoped server-side. Picking a hit
+  // populates studentDbId (numeric PK), which the existing load path
+  // already consumes; we keep the manual DB-id input as an escape
+  // hatch for tickets that already cite an internal id.
+  const [nameQ, setNameQ] = useState("");
+  const [hits, setHits] = useState<StudentHit[]>([]);
+  const [searching, setSearching] = useState(false);
+  const [showHits, setShowHits] = useState(false);
+  const searchSeq = useRef(0);
 
   const refresh = useCallback(async (sid: number) => {
     setLoading(true);
@@ -158,7 +185,46 @@ export default function PickupTagsPanel() {
       return;
     }
     setMsg(null);
+    setStudentLabel(`Student #${n}`);
     setStudentDbId(n);
+  };
+
+  // Debounced name search. Aborts stale responses with searchSeq so a
+  // slow earlier request can't overwrite a faster later one.
+  useEffect(() => {
+    const q = nameQ.trim();
+    if (q.length < 2) {
+      setHits([]);
+      setSearching(false);
+      return;
+    }
+    const mySeq = ++searchSeq.current;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const res = await authFetch(
+          `/api/students?q=${encodeURIComponent(q)}`,
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as StudentHit[];
+        if (mySeq !== searchSeq.current) return;
+        setHits(data.slice(0, 12));
+      } finally {
+        if (mySeq === searchSeq.current) setSearching(false);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [nameQ]);
+
+  const pickStudent = (s: StudentHit) => {
+    setStudentDbIdInput(String(s.id));
+    setStudentLabel(
+      `${s.lastName}, ${s.firstName} (${s.studentId}${s.gradeLevel ? ` · grade ${s.gradeLevel}` : ""})`,
+    );
+    setNameQ(`${s.firstName} ${s.lastName}`);
+    setShowHits(false);
+    setMsg(null);
+    setStudentDbId(s.id);
   };
 
   // Stream a tag-PDF response to the browser as a download. Uses
@@ -236,7 +302,89 @@ export default function PickupTagsPanel() {
         <div style={{ fontWeight: 600, marginBottom: 8 }}>
           Look up a student
         </div>
-        <div style={{ display: "flex", gap: 8, alignItems: "end" }}>
+        <div style={{ display: "flex", gap: 16, alignItems: "end", flexWrap: "wrap" }}>
+          <label style={{ ...labelStyle, position: "relative" }}>
+            Search by name or SIS id
+            <input
+              value={nameQ}
+              onChange={(e) => {
+                setNameQ(e.target.value);
+                setShowHits(true);
+              }}
+              onFocus={() => setShowHits(true)}
+              onBlur={() => {
+                // Delay so an in-flight onMouseDown can fire before the
+                // dropdown unmounts — otherwise the click is swallowed.
+                setTimeout(() => setShowHits(false), 150);
+              }}
+              style={{ ...inputStyle, minWidth: 280 }}
+              placeholder="Type at least 2 letters…"
+              autoComplete="off"
+            />
+            {showHits && nameQ.trim().length >= 2 && (
+              <div
+                style={{
+                  position: "absolute",
+                  top: "100%",
+                  left: 0,
+                  right: 0,
+                  marginTop: 4,
+                  background: "var(--surface, #fff)",
+                  border: "1px solid var(--border, #d1d5db)",
+                  borderRadius: 8,
+                  boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                  maxHeight: 280,
+                  overflowY: "auto",
+                  zIndex: 20,
+                }}
+              >
+                {searching && (
+                  <div style={{ padding: "8px 12px", color: "var(--text-subtle, #6b7280)", fontSize: 13 }}>
+                    Searching…
+                  </div>
+                )}
+                {!searching && hits.length === 0 && (
+                  <div style={{ padding: "8px 12px", color: "var(--text-subtle, #6b7280)", fontSize: 13 }}>
+                    No matches.
+                  </div>
+                )}
+                {hits.map((s) => (
+                  <button
+                    key={s.id}
+                    type="button"
+                    onMouseDown={(e) => {
+                      // Fire on mousedown so the click lands before the
+                      // input's onBlur tears the dropdown down.
+                      e.preventDefault();
+                      pickStudent(s);
+                    }}
+                    style={{
+                      display: "block",
+                      width: "100%",
+                      textAlign: "left",
+                      padding: "8px 12px",
+                      background: "transparent",
+                      border: "none",
+                      borderBottom: "1px solid var(--border-soft, #f3f4f6)",
+                      cursor: "pointer",
+                      fontSize: 14,
+                    }}
+                  >
+                    <div style={{ fontWeight: 600 }}>
+                      {s.lastName}, {s.firstName}
+                    </div>
+                    <div style={{ fontSize: 12, color: "var(--text-subtle, #6b7280)" }}>
+                      SIS #{s.studentId}
+                      {s.gradeLevel ? ` · grade ${s.gradeLevel}` : ""}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </label>
+          <span style={{ alignSelf: "center", color: "var(--text-subtle, #6b7280)", fontSize: 12 }}>
+            or
+          </span>
           <label style={labelStyle}>
             Student DB id
             <input
@@ -267,7 +415,7 @@ export default function PickupTagsPanel() {
             }}
           >
             <div style={{ fontWeight: 600 }}>
-              Authorizations for student #{studentDbId}
+              Authorizations for {studentLabel || `student #${studentDbId}`}
             </div>
             <button
               onClick={printActiveForStudent}
