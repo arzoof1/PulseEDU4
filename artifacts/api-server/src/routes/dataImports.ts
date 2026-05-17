@@ -1842,6 +1842,56 @@ function parseBoolFlag(raw: string | null | undefined): boolean {
   return v === "y" || v === "yes" || v === "true" || v === "t" || v === "1";
 }
 
+// Levenshtein distance between two strings (iterative, O(n*m)). Used
+// only to suggest the closest configured house name for an
+// unrecognized CSV value (e.g. "Pheonix" → "Phoenix"); inputs are
+// short school-house names, so the quadratic cost is irrelevant.
+function levenshtein(a: string, b: string): number {
+  if (a === b) return 0;
+  if (a.length === 0) return b.length;
+  if (b.length === 0) return a.length;
+  let prev = new Array<number>(b.length + 1);
+  let curr = new Array<number>(b.length + 1);
+  for (let j = 0; j <= b.length; j++) prev[j] = j;
+  for (let i = 1; i <= a.length; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(
+        curr[j - 1] + 1,
+        prev[j] + 1,
+        prev[j - 1] + cost,
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[b.length];
+}
+
+// Returns the closest configured house name to `value` if one is
+// within a small edit distance, else undefined. Threshold scales with
+// the input length so single-character names don't accept wild
+// matches but typical 6–10 char names tolerate 2-character typos
+// (the "Pheonix"/"Phoenix" case).
+function suggestHouseName(
+  value: string,
+  knownNames: string[],
+): string | undefined {
+  const trimmed = value.trim();
+  if (!trimmed || knownNames.length === 0) return undefined;
+  const lower = trimmed.toLowerCase();
+  const threshold = Math.max(1, Math.min(3, Math.ceil(trimmed.length / 3)));
+  let best: { name: string; dist: number } | undefined;
+  for (const name of knownNames) {
+    const d = levenshtein(lower, name.toLowerCase());
+    if (d === 0) return name;
+    if (d <= threshold && (!best || d < best.dist)) {
+      best = { name, dist: d };
+    }
+  }
+  return best?.name;
+}
+
 const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
   validTargets: new Set([
     "student_id",
@@ -1997,9 +2047,8 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         .from(schoolSettingsTable)
         .where(eq(schoolSettingsTable.schoolId, schoolId)),
     ]);
-    const known = new Set(
-      houseRows.map((h) => h.name.trim().toLowerCase()),
-    );
+    const knownNames = houseRows.map((h) => h.name.trim());
+    const known = new Set(knownNames.map((n) => n.toLowerCase()));
     let count = 0;
     const distinct = new Map<string, string>();
     for (const p of withHouse) {
@@ -2011,7 +2060,12 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
       }
     }
     if (count === 0) return {};
-    const samples = Array.from(distinct.values()).slice(0, 10);
+    const samples = Array.from(distinct.values())
+      .slice(0, 10)
+      .map((value) => {
+        const suggestion = suggestHouseName(value, knownNames);
+        return suggestion ? { value, suggestion } : { value };
+      });
     // `policy` lets the client adapt the banner copy without having to
     // re-fetch school settings. 'strict' → rows will be skipped at
     // commit; 'fallback' → rows will commit with the smallest-house
@@ -2045,9 +2099,8 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
       .select({ name: housesTable.name })
       .from(housesTable)
       .where(eq(housesTable.schoolId, schoolId));
-    const known = new Set(
-      houseRows.map((h) => h.name.trim().toLowerCase()),
-    );
+    const knownNames = houseRows.map((h) => h.name.trim());
+    const known = new Set(knownNames.map((n) => n.toLowerCase()));
     const kept: ParsedRoster[] = [];
     const rejected: Array<{
       row: number;
@@ -2059,9 +2112,13 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     for (const { rowIndex, value, raw } of items) {
       const hn = value.houseName?.trim();
       if (hn && !known.has(hn.toLowerCase())) {
+        const suggestion = suggestHouseName(hn, knownNames);
+        const didYouMean = suggestion
+          ? ` — did you mean "${suggestion}"?`
+          : "";
         rejected.push({
           row: rowIndex,
-          message: `Unrecognized house_name "${hn}" (strict house-name matching is on). Fix the spelling or add the house in PBIS Hub → Houses.`,
+          message: `Unrecognized house_name "${hn}"${didYouMean} (strict house-name matching is on). Fix the spelling or add the house in PBIS Hub → Houses.`,
           // Persist the original CSV row + a machine-readable code so the
           // History tab can group the skipped rows by house and offer a
           // "Download skipped rows as CSV" fixup export. Without `raw`

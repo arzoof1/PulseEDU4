@@ -56,7 +56,10 @@ type PreviewResponse = {
   unrecognizedHouseNames?: {
     rowCount: number;
     distinctCount: number;
-    samples: string[];
+    // Each sample is the unrecognized CSV value plus, when a configured
+    // house name is within a small edit distance, a "did you mean"
+    // suggestion (e.g. "Pheonix" → "Phoenix").
+    samples: Array<{ value: string; suggestion?: string }>;
     // 'fallback' (default) → row commits with smallest-house rotation.
     // 'strict' → row is rejected at commit (school_settings
     // .strict_house_name_match = true).
@@ -2367,7 +2370,11 @@ export default function DataImports({
                       <div style={{ color: "var(--text-subtle)" }}>
                         Unrecognized:{" "}
                         {preview.unrecognizedHouseNames.samples
-                          .map((s) => `"${s}"`)
+                          .map((s) =>
+                            s.suggestion
+                              ? `"${s.value}" (did you mean "${s.suggestion}"?)`
+                              : `"${s.value}"`,
+                          )
                           .join(", ")}
                         {preview.unrecognizedHouseNames.distinctCount >
                           preview.unrecognizedHouseNames.samples.length && (
