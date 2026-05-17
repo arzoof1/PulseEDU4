@@ -104,6 +104,7 @@ export default function FeatureLicensingAdminPage() {
   const [schools, setSchools] = useState<SchoolRow[]>([]);
   const [editingPlan, setEditingPlan] = useState<Plan | null>(null);
   const [editingSchoolId, setEditingSchoolId] = useState<number | null>(null);
+  const [pickingSchoolId, setPickingSchoolId] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   async function reload() {
@@ -154,6 +155,7 @@ export default function FeatureLicensingAdminPage() {
         schools={schools}
         plans={plans}
         onOpenOverrides={setEditingSchoolId}
+        onOpenPicker={setPickingSchoolId}
         onReload={reload}
         onError={setError}
       />
@@ -189,6 +191,28 @@ export default function FeatureLicensingAdminPage() {
           onError={setError}
         />
       )}
+
+      {pickingSchoolId !== null &&
+        (() => {
+          const school = schools.find((s) => s.schoolId === pickingSchoolId);
+          if (!school) return null;
+          const plan = plans.find((p) => p.id === school.planId) ?? null;
+          return (
+            <FeaturePickerModal
+              schoolId={pickingSchoolId}
+              schoolName={school.schoolName}
+              plan={plan}
+              features={features}
+              onClose={() => setPickingSchoolId(null)}
+              onSaved={async () => {
+                setPickingSchoolId(null);
+                await reload();
+                await refreshFeatures(true);
+              }}
+              onError={setError}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -663,12 +687,14 @@ function SchoolsSection({
   schools,
   plans,
   onOpenOverrides,
+  onOpenPicker,
   onReload,
   onError,
 }: {
   schools: SchoolRow[];
   plans: Plan[];
   onOpenOverrides: (id: number) => void;
+  onOpenPicker: (id: number) => void;
   onReload: () => void | Promise<void>;
   onError: (msg: string) => void;
 }) {
@@ -719,6 +745,12 @@ function SchoolsSection({
               </td>
               <td>{s.overrideCount}</td>
               <td style={{ textAlign: "right" }}>
+                <button
+                  onClick={() => onOpenPicker(s.schoolId)}
+                  style={{ marginRight: 6 }}
+                >
+                  Pick features…
+                </button>
                 <button onClick={() => onOpenOverrides(s.schoolId)}>
                   Overrides…
                 </button>
@@ -863,6 +895,238 @@ function OverridesDrawer({
       <div style={{ textAlign: "right", marginTop: 12 }}>
         <button onClick={onClose}>Close</button>
       </div>
+    </ModalShell>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FeaturePickerModal — bulk "only these features are on for this school"
+// picker. Writes one override row per feature with the desired enabled
+// state, so the result is independent of the underlying plan. This is
+// the surface SuperUsers actually wanted for the "Enterprise plan but
+// I only want Hall Pass + Tardy Pass live for this school" case — the
+// Overrides drawer required them to know plans default-on and then
+// manually add 17 disable rows. Here they just check the two boxes
+// they want on, hit Save, and the modal writes all 19 overrides
+// (idempotent POST upserts).
+// ---------------------------------------------------------------------------
+function FeaturePickerModal({
+  schoolId,
+  schoolName,
+  plan,
+  features,
+  onClose,
+  onSaved,
+  onError,
+}: {
+  schoolId: number;
+  schoolName: string;
+  plan: Plan | null;
+  features: FeatureSpec[];
+  onClose: () => void;
+  onSaved: () => void | Promise<void>;
+  onError: (msg: string) => void;
+}) {
+  const [selected, setSelected] = useState<Record<string, boolean> | null>(
+    null,
+  );
+  const [existingOverrides, setExistingOverrides] = useState<Override[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [reason, setReason] = useState("");
+
+  // Initial state: feature is "on" if there's an enabled override OR if
+  // the plan defaults it on AND no disable override.
+  useEffect(() => {
+    void (async () => {
+      try {
+        const r = await getJson<{ overrides: Override[] }>(
+          `/api/feature-licensing/schools/${schoolId}/overrides`,
+        );
+        setExistingOverrides(r.overrides);
+        const overrideByKey = new Map(r.overrides.map((o) => [o.featureKey, o]));
+        const init: Record<string, boolean> = {};
+        for (const f of features) {
+          const o = overrideByKey.get(f.key);
+          if (o) {
+            init[f.key] = o.enabled;
+          } else {
+            init[f.key] = Boolean(plan?.features?.[f.key]);
+          }
+        }
+        setSelected(init);
+      } catch (e) {
+        onError(e instanceof Error ? e.message : String(e));
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schoolId]);
+
+  function toggle(key: string, value: boolean) {
+    setSelected((s) => (s ? { ...s, [key]: value } : s));
+  }
+
+  function selectAll(value: boolean) {
+    if (!selected) return;
+    const next: Record<string, boolean> = {};
+    for (const f of features) next[f.key] = value;
+    setSelected(next);
+  }
+
+  async function save() {
+    if (!selected) return;
+    setSaving(true);
+    try {
+      // Pre-existing showUpsell values should be preserved so the picker
+      // doesn't accidentally clobber an upsell setting the admin set in
+      // the Overrides drawer.
+      const showUpsellByKey = new Map(
+        existingOverrides.map((o) => [o.featureKey, o.showUpsell]),
+      );
+      const cleanedReason = reason.trim() || undefined;
+      // Serial POSTs — each upsert opens a tx + reapplies licensing to
+      // school_settings; running them in parallel risks lock contention
+      // on the same row and out-of-order super_feature_* writes. 19
+      // features is fast enough to do sequentially.
+      for (const f of features) {
+        await sendJson(
+          `/api/feature-licensing/schools/${schoolId}/overrides`,
+          "POST",
+          {
+            featureKey: f.key,
+            enabled: Boolean(selected[f.key]),
+            showUpsell: showUpsellByKey.get(f.key) ?? false,
+            reason: cleanedReason,
+          },
+        );
+      }
+      await onSaved();
+    } catch (e) {
+      onError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const enabledCount = selected
+    ? Object.values(selected).filter(Boolean).length
+    : 0;
+
+  return (
+    <ModalShell
+      title={`Pick features — ${schoolName}`}
+      onClose={saving ? () => {} : onClose}
+    >
+      <p style={{ color: "var(--text-subtle, #555)", marginTop: 0 }}>
+        Check the features that should be live for this school. Saving
+        writes a per-school override for every feature with the state
+        you picked, so the result is independent of the plan (
+        {plan ? <code>{plan.key}</code> : "no plan"}). To go back to
+        plan defaults, use the <em>Overrides…</em> drawer and click
+        Clear on each row.
+      </p>
+
+      {selected === null ? (
+        <p>Loading…</p>
+      ) : (
+        <>
+          <div style={{ marginBottom: 8, display: "flex", gap: 8 }}>
+            <button type="button" onClick={() => selectAll(true)}>
+              All on
+            </button>
+            <button type="button" onClick={() => selectAll(false)}>
+              All off
+            </button>
+            <span
+              style={{
+                marginLeft: "auto",
+                alignSelf: "center",
+                color: "var(--text-subtle, #777)",
+                fontSize: "0.85em",
+              }}
+            >
+              {enabledCount} of {features.length} on
+            </span>
+          </div>
+
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+              gap: "6px 16px",
+              border: "1px solid var(--border, #eee)",
+              borderRadius: 6,
+              padding: 10,
+              maxHeight: "45vh",
+              overflowY: "auto",
+            }}
+          >
+            {features.map((f) => (
+              <label
+                key={f.key}
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  alignItems: "center",
+                  padding: "4px 6px",
+                  borderRadius: 4,
+                  cursor: "pointer",
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={selected[f.key] ?? false}
+                  onChange={(e) => toggle(f.key, e.target.checked)}
+                />
+                <span>
+                  <strong>{f.label}</strong>{" "}
+                  <code style={{ fontSize: "0.8em", color: "#888" }}>
+                    {f.key}
+                  </code>
+                </span>
+              </label>
+            ))}
+          </div>
+
+          <div style={{ marginTop: 12 }}>
+            <label style={{ display: "block", fontSize: "0.85em" }}>
+              Reason (optional, audited):
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="e.g. 'Starter tier for pilot school'"
+                style={{
+                  display: "block",
+                  width: "100%",
+                  marginTop: 4,
+                  padding: "6px 8px",
+                  border: "1px solid var(--border, #ddd)",
+                  borderRadius: 4,
+                  font: "inherit",
+                  boxSizing: "border-box",
+                }}
+              />
+            </label>
+          </div>
+
+          <div
+            style={{
+              textAlign: "right",
+              marginTop: 12,
+              display: "flex",
+              gap: 8,
+              justifyContent: "flex-end",
+            }}
+          >
+            <button type="button" onClick={onClose} disabled={saving}>
+              Cancel
+            </button>
+            <button type="button" onClick={save} disabled={saving}>
+              {saving ? "Saving…" : `Save (${features.length} overrides)`}
+            </button>
+          </div>
+        </>
+      )}
     </ModalShell>
   );
 }
