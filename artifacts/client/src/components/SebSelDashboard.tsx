@@ -998,9 +998,10 @@ const selectStyle: React.CSSProperties = {
 
 const panelTitleStyle: React.CSSProperties = {
   fontSize: 12,
+  fontWeight: 700,
   letterSpacing: "0.04em",
   textTransform: "uppercase",
-  color: "var(--text-subtle, #64748b)",
+  color: "var(--brand-accent, #6d28d9)",
   marginBottom: "0.5rem",
 };
 
