@@ -19,6 +19,8 @@ export default function ResetPassword({
   const [error, setError] = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm] = useState("");
+  const [code, setCode] = useState("");
+  const [otpStep, setOtpStep] = useState(false);
   const [busy, setBusy] = useState(false);
 
   useEffect(() => {
@@ -66,11 +68,23 @@ export default function ResetPassword({
         method: "POST",
         credentials: "include",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, newPassword: password }),
+        body: JSON.stringify({
+          token,
+          newPassword: password,
+          ...(otpStep ? { code: code.trim() } : {}),
+        }),
       });
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        setError(body.error ?? `Could not reset password (${res.status})`);
+        const body = (await res.json().catch(() => ({}))) as {
+          error?: string;
+          requiresOtp?: boolean;
+        };
+        if (body.requiresOtp) {
+          setOtpStep(true);
+          setError(body.error ?? "Enter your 6-digit code.");
+        } else {
+          setError(body.error ?? `Could not reset password (${res.status})`);
+        }
         return;
       }
       const body = await res.json();
@@ -175,6 +189,28 @@ export default function ResetPassword({
             className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400"
           />
         </label>
+
+        {otpStep && (
+          <label className="flex flex-col gap-1.5">
+            <span className="text-sm text-white/80">
+              6-digit code from your authenticator app
+            </span>
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              pattern="\d{6}"
+              autoFocus
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              disabled={busy}
+              className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400 tracking-[0.4em] text-center font-mono"
+            />
+          </label>
+        )}
 
         {error && (
           <div className="bg-red-500/15 border border-red-500/40 text-red-200 px-3 py-2 rounded-lg text-sm">

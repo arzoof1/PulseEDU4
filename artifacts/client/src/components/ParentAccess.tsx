@@ -18,6 +18,7 @@ interface InviteRow {
   expiresAt: string;
   acceptedAt: string | null;
   acceptedParentName: string | null;
+  acceptedLastLoginAt: string | null;
   resendCount: number;
   lastResentAt: string | null;
 }
@@ -614,7 +615,7 @@ function StudentInviteRow({
               <StatusPill status={inv.status} />
               <span style={{ fontSize: 11, color: "var(--text-subtle)" }}>
                 {inv.status === "accepted"
-                  ? `Accepted ${fmtDate(inv.acceptedAt)}${inv.acceptedParentName ? ` · ${inv.acceptedParentName}` : ""}`
+                  ? `Accepted ${fmtDate(inv.acceptedAt)}${inv.acceptedParentName ? ` · ${inv.acceptedParentName}` : ""}${inv.acceptedLastLoginAt ? ` · last sign-in ${fmtDate(inv.acceptedLastLoginAt)}` : " · never signed in"}`
                   : inv.status === "pending"
                     ? `Sent ${fmtDate(inv.sentAt)} · expires ${fmtDate(inv.expiresAt)}${inv.resendCount ? ` · resent ${inv.resendCount}×` : ""}`
                     : inv.status === "expired"

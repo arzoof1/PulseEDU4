@@ -39,6 +39,13 @@ export const parentsTable = pgTable(
       .notNull()
       .defaultNow(),
     lastLoginAt: timestamp("last_login_at", { withTimezone: true }),
+    // Optional TOTP second factor. NULL = not enrolled. When set, parent
+    // must supply a 6-digit code at login + at password-reset finalization.
+    // Stored as the base32 secret (otplib format); rotated only via the
+    // disable/re-enroll flow. Email-link reset is still the primary
+    // recovery path, so TOTP loss = use reset link.
+    totpSecret: text("totp_secret"),
+    totpEnabledAt: timestamp("totp_enabled_at", { withTimezone: true }),
   },
   (t) => ({
     // Email is unique per school (allows the same parent address to be

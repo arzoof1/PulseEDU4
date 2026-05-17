@@ -1,5 +1,14 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Mail, Eye, EyeOff, Shield, RotateCcw } from "lucide-react";
+import {
+  ArrowLeft,
+  Mail,
+  Eye,
+  EyeOff,
+  Shield,
+  RotateCcw,
+  ShieldCheck,
+} from "lucide-react";
+import QRCode from "qrcode";
 import { Card, CardContent } from "@/components/ui/card";
 import { Switch } from "@/components/ui/switch";
 import { Button } from "@/components/ui/button";
@@ -379,9 +388,338 @@ export default function Preferences({ studentId, studentName, onBack }: Props) {
               Toggling a hidden section back on returns it to the school's
               default — flipping it off hides it from your view only.
             </div>
+
+            <TwoStepCard />
           </>
         )}
       </main>
     </div>
+  );
+}
+
+// =============================================================================
+// Two-step verification (TOTP). Optional, per-parent. Enrolls via:
+//   1) "Set up" → password gate → server returns a fresh secret + otpauth URI
+//   2) Parent scans the QR with Google Authenticator / 1Password / Authy
+//   3) Enters first 6-digit code → server verifies and persists
+// Disable requires both password AND a current code (so a stolen password
+// alone can't turn off 2FA).
+// =============================================================================
+type TotpMode =
+  | { kind: "idle" }
+  | { kind: "setup-password" }
+  | {
+      kind: "setup-confirm";
+      secret: string;
+      otpauthUri: string;
+      qrDataUrl: string;
+    }
+  | { kind: "disable" };
+
+function TwoStepCard() {
+  const [enabled, setEnabled] = useState<boolean | null>(null);
+  const [enabledAt, setEnabledAt] = useState<string | null>(null);
+  const [mode, setMode] = useState<TotpMode>({ kind: "idle" });
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [password, setPassword] = useState("");
+  const [code, setCode] = useState("");
+
+  useEffect(() => {
+    loadStatus();
+  }, []);
+
+  async function loadStatus() {
+    try {
+      const r = await parentFetch("/api/parent-auth/totp/status");
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const j = (await r.json()) as {
+        enabled: boolean;
+        enabledAt: string | null;
+      };
+      setEnabled(j.enabled);
+      setEnabledAt(j.enabledAt);
+    } catch {
+      setEnabled(false);
+    }
+  }
+
+  function reset() {
+    setMode({ kind: "idle" });
+    setPassword("");
+    setCode("");
+    setErr(null);
+  }
+
+  async function startSetup(e: React.FormEvent) {
+    e.preventDefault();
+    if (!password) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await parentFetch("/api/parent-auth/totp/setup", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: password }),
+      });
+      const j = (await r.json().catch(() => ({}))) as {
+        secret?: string;
+        otpauthUri?: string;
+        error?: string;
+      };
+      if (!r.ok || !j.secret || !j.otpauthUri) {
+        setErr(j.error ?? "Could not start setup");
+        return;
+      }
+      const qrDataUrl = await QRCode.toDataURL(j.otpauthUri, { margin: 1 });
+      setMode({
+        kind: "setup-confirm",
+        secret: j.secret,
+        otpauthUri: j.otpauthUri,
+        qrDataUrl,
+      });
+      setCode("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function confirmSetup(e: React.FormEvent) {
+    e.preventDefault();
+    if (mode.kind !== "setup-confirm" || code.length < 6) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await parentFetch("/api/parent-auth/totp/confirm", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ secret: mode.secret, code }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) {
+        setErr(j.error ?? "That code didn't match.");
+        return;
+      }
+      reset();
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function disable(e: React.FormEvent) {
+    e.preventDefault();
+    if (!password || code.length < 6) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await parentFetch("/api/parent-auth/totp/disable", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ currentPassword: password, code }),
+      });
+      const j = (await r.json().catch(() => ({}))) as { error?: string };
+      if (!r.ok) {
+        setErr(j.error ?? "Could not turn off two-step verification.");
+        return;
+      }
+      reset();
+      await loadStatus();
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (enabled === null) return null;
+
+  return (
+    <Card>
+      <CardContent className="p-4 space-y-3">
+        <div className="flex items-start gap-4">
+          <div className="mt-0.5 text-violet-500">
+            <ShieldCheck className="h-4 w-4" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-semibold text-slate-900">
+                Two-step verification
+              </span>
+              {enabled ? (
+                <Badge className="text-[10px] uppercase tracking-wider bg-green-100 text-green-800 hover:bg-green-100">
+                  On
+                </Badge>
+              ) : (
+                <Badge
+                  variant="outline"
+                  className="text-[10px] uppercase tracking-wider border-slate-300 text-slate-500"
+                >
+                  Off
+                </Badge>
+              )}
+            </div>
+            <p className="text-sm text-slate-600 mt-1 leading-snug">
+              {enabled
+                ? `Sign-in requires a 6-digit code from your authenticator app${enabledAt ? ` (since ${new Date(enabledAt).toLocaleDateString()})` : ""}.`
+                : "Add a second step at sign-in with an authenticator app like Google Authenticator, 1Password, or Authy."}
+            </p>
+          </div>
+          {mode.kind === "idle" && (
+            <Button
+              variant={enabled ? "outline" : "default"}
+              size="sm"
+              onClick={() =>
+                setMode({ kind: enabled ? "disable" : "setup-password" })
+              }
+            >
+              {enabled ? "Turn off" : "Set up"}
+            </Button>
+          )}
+        </div>
+
+        {mode.kind === "setup-password" && (
+          <form onSubmit={startSetup} className="space-y-2 pl-8">
+            <label className="text-sm text-slate-700 block">
+              Confirm your current password to continue.
+            </label>
+            <input
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={busy}
+              className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
+            />
+            {err && (
+              <div className="text-xs text-red-600">{err}</div>
+            )}
+            <div className="flex gap-2">
+              <Button type="submit" size="sm" disabled={busy || !password}>
+                Continue
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={reset}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {mode.kind === "setup-confirm" && (
+          <form onSubmit={confirmSetup} className="space-y-3 pl-8">
+            <div className="text-sm text-slate-700">
+              Scan this QR code with your authenticator app, then enter the
+              6-digit code it shows.
+            </div>
+            <div className="flex flex-col sm:flex-row gap-4 items-start">
+              <img
+                src={mode.qrDataUrl}
+                alt="Authenticator QR code"
+                className="h-40 w-40 border border-slate-200 rounded"
+              />
+              <div className="flex-1 min-w-0 space-y-2">
+                <div className="text-xs text-slate-500">
+                  Can't scan? Type this key into your app:
+                </div>
+                <div className="font-mono text-xs bg-slate-50 border border-slate-200 rounded px-2 py-1.5 break-all">
+                  {mode.secret}
+                </div>
+                <label className="text-sm text-slate-700 block pt-1">
+                  6-digit code
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="one-time-code"
+                  maxLength={6}
+                  value={code}
+                  onChange={(e) =>
+                    setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+                  }
+                  disabled={busy}
+                  className="w-32 border border-slate-300 rounded-md px-3 py-2 text-base font-mono tracking-[0.3em] text-center"
+                />
+              </div>
+            </div>
+            {err && <div className="text-xs text-red-600">{err}</div>}
+            <div className="flex gap-2">
+              <Button
+                type="submit"
+                size="sm"
+                disabled={busy || code.length < 6}
+              >
+                Turn on
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={reset}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+
+        {mode.kind === "disable" && (
+          <form onSubmit={disable} className="space-y-2 pl-8">
+            <div className="text-sm text-slate-700">
+              Enter your password and a current 6-digit code to turn off
+              two-step verification.
+            </div>
+            <input
+              type="password"
+              autoComplete="current-password"
+              autoFocus
+              placeholder="Password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              disabled={busy}
+              className="w-full border border-slate-300 rounded-md px-3 py-2 text-sm"
+            />
+            <input
+              type="text"
+              inputMode="numeric"
+              autoComplete="one-time-code"
+              maxLength={6}
+              placeholder="6-digit code"
+              value={code}
+              onChange={(e) =>
+                setCode(e.target.value.replace(/\D/g, "").slice(0, 6))
+              }
+              disabled={busy}
+              className="w-32 border border-slate-300 rounded-md px-3 py-2 text-base font-mono tracking-[0.3em] text-center"
+            />
+            {err && <div className="text-xs text-red-600">{err}</div>}
+            <div className="flex gap-2">
+              <Button
+                type="submit"
+                size="sm"
+                variant="destructive"
+                disabled={busy || !password || code.length < 6}
+              >
+                Turn off
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={reset}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+            </div>
+          </form>
+        )}
+      </CardContent>
+    </Card>
   );
 }

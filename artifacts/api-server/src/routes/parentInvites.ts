@@ -117,6 +117,7 @@ router.get("/admin/parent-invites", async (req, res) => {
     resendCount: number;
     lastResentAt: Date | null;
     acceptedParentName: string | null;
+    acceptedLastLoginAt: Date | null;
   };
   // Return ALL invites per student (not just latest) so the admin UI can
   // show every email a student has been invited under — supports the
@@ -136,6 +137,7 @@ router.get("/admin/parent-invites", async (req, res) => {
         resendCount: parentInvitesTable.resendCount,
         lastResentAt: parentInvitesTable.lastResentAt,
         acceptedParentName: parentsTable.displayName,
+        acceptedLastLoginAt: parentsTable.lastLoginAt,
       })
       .from(parentInvitesTable)
       .leftJoin(
@@ -171,6 +173,7 @@ router.get("/admin/parent-invites", async (req, res) => {
           expiresAt: inv.expiresAt,
           acceptedAt: inv.acceptedAt,
           acceptedParentName: inv.acceptedParentName,
+          acceptedLastLoginAt: inv.acceptedLastLoginAt,
           resendCount: inv.resendCount,
           lastResentAt: inv.lastResentAt,
         };

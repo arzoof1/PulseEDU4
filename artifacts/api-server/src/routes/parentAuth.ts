@@ -11,7 +11,41 @@ import {
   schoolsTable,
   schoolSettingsTable,
 } from "@workspace/db";
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, gt, inArray, isNull, sql } from "drizzle-orm";
+import { authenticator } from "otplib";
+import { encryptSecret, decryptSecret } from "../lib/secretCrypto.js";
+
+// otplib defaults to a 1-step window. Bump to allow ±1 step (≈±30s) of clock
+// skew on the parent's phone — same tolerance every major site uses.
+authenticator.options = { window: 1 };
+
+const TOTP_ISSUER = "PulseEDU";
+
+function buildOtpauthUri(email: string, secret: string): string {
+  return authenticator.keyuri(email, TOTP_ISSUER, secret);
+}
+
+function isValidTotpCode(secret: string, code: unknown): boolean {
+  if (typeof code !== "string") return false;
+  const trimmed = code.trim().replace(/\s+/g, "");
+  if (!/^\d{6}$/.test(trimmed)) return false;
+  try {
+    return authenticator.check(trimmed, secret);
+  } catch {
+    return false;
+  }
+}
+
+// Wrapper that decrypts an at-rest stored secret before verifying. Stored
+// secrets land via `encryptSecret(...)` in /totp/confirm; callers should
+// pass `parent.totpSecret` straight in.
+function verifyStoredTotp(storedSecret: string, code: unknown): boolean {
+  try {
+    return isValidTotpCode(decryptSecret(storedSecret), code);
+  } catch {
+    return false;
+  }
+}
 import {
   buildResetPasswordUrl,
   sendParentPasswordResetEmail,
@@ -107,6 +141,27 @@ router.post("/parent-auth/login", async (req: Request, res) => {
     if (!parent.active || !parent.passwordHash) continue;
     const ok = await bcrypt.compare(password, parent.passwordHash);
     if (!ok) continue;
+
+    // TOTP second factor — only enforced when the parent has opted in
+    // (totpSecret is non-null). Returning a distinct shape lets the
+    // client render a 6-digit code step instead of a generic error.
+    if (parent.totpSecret) {
+      const { code } = (req.body ?? {}) as { code?: unknown };
+      if (typeof code !== "string" || !code.trim()) {
+        res.status(401).json({
+          requiresOtp: true,
+          error: "Enter the 6-digit code from your authenticator app.",
+        });
+        return;
+      }
+      if (!verifyStoredTotp(parent.totpSecret, code)) {
+        res.status(401).json({
+          requiresOtp: true,
+          error: "That 6-digit code didn't match. Try again.",
+        });
+        return;
+      }
+    }
 
     await db
       .update(parentsTable)
@@ -542,19 +597,53 @@ router.post("/parent-auth/request-reset", async (req, res) => {
       return;
     }
 
-    // Atomic invalidate-then-insert under a per-parent row lock. Without
-    // the lock, two concurrent reset requests for the same parent could
-    // each invalidate the empty set of prior tokens and then each insert
-    // a fresh row — leaving two live links. SELECT … FOR UPDATE on the
-    // parent row serializes the two requests so the second one sees the
-    // first's invalidate + insert before doing its own.
+    // Abuse rate limit + atomic issuance, all inside one transaction so
+    // the count → check → insert sequence can't be raced by concurrent
+    // requests. Two locks serialize the relevant scopes:
+    //   - SELECT … FOR UPDATE on the parent row  → per-parent serialization
+    //     (also serializes the invalidate+insert below).
+    //   - pg_advisory_xact_lock(hashtext(ip))    → per-IP serialization.
+    // Caps:
+    //   - 5/hour per parent (attacker who knows the email can't spam inbox)
+    //   - 20/hour per IP   (attacker can't enumerate a wide list)
+    // Both still return the no-enumeration 200; the breach just skips
+    // the issuance + email. Logged at warn so ops can spot abuse.
     const token = newResetToken();
     const tokenHash = hashResetToken(token);
     const expiresAt = new Date(Date.now() + RESET_TTL_MS);
-    await db.transaction(async (tx) => {
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    type IssuanceOutcome = "issued" | "rate-parent" | "rate-ip";
+    const outcome: IssuanceOutcome = await db.transaction(async (tx) => {
       await tx.execute(
         sql`select id from ${parentsTable} where id = ${parent.id} for update`,
       );
+      if (req.ip) {
+        await tx.execute(
+          sql`select pg_advisory_xact_lock(hashtext(${req.ip}))`,
+        );
+      }
+      const [byParent] = await tx
+        .select({ n: sql<number>`count(*)::int` })
+        .from(parentPasswordResetsTable)
+        .where(
+          and(
+            eq(parentPasswordResetsTable.parentId, parent.id),
+            gt(parentPasswordResetsTable.createdAt, oneHourAgo),
+          ),
+        );
+      if ((byParent?.n ?? 0) >= 5) return "rate-parent";
+      if (req.ip) {
+        const [byIp] = await tx
+          .select({ n: sql<number>`count(*)::int` })
+          .from(parentPasswordResetsTable)
+          .where(
+            and(
+              eq(parentPasswordResetsTable.requestedIp, req.ip),
+              gt(parentPasswordResetsTable.createdAt, oneHourAgo),
+            ),
+          );
+        if ((byIp?.n ?? 0) >= 20) return "rate-ip";
+      }
       await tx
         .update(parentPasswordResetsTable)
         .set({ usedAt: new Date() })
@@ -570,7 +659,21 @@ router.post("/parent-auth/request-reset", async (req, res) => {
         expiresAt,
         requestedIp: req.ip ?? null,
       });
+      return "issued";
     });
+    if (outcome === "rate-parent") {
+      logger.warn(
+        { parentId: parent.id, ip: req.ip ?? null },
+        "parent reset rate-limited per-parent",
+      );
+      res.json(okResponse);
+      return;
+    }
+    if (outcome === "rate-ip") {
+      logger.warn({ ip: req.ip }, "parent reset rate-limited per-ip");
+      res.json(okResponse);
+      return;
+    }
 
     const ctx = await getSchoolEmailContext(parent.schoolId);
     try {
@@ -654,26 +757,30 @@ router.post("/parent-auth/reset", async (req, res) => {
     return;
   }
 
-  // Atomically consume the token: only succeeds if it's unused + unexpired.
-  // The RETURNING clause tells us the parent_id to update, with zero risk
-  // of two concurrent reset clicks both succeeding. The DB column holds
-  // a SHA-256 hash of the raw token, so we look up by the hash.
-  const consumed = await db
-    .update(parentPasswordResetsTable)
-    .set({ usedAt: new Date() })
+  // Two-phase consume so we can enforce TOTP before burning the token.
+  // Phase 1: look up the still-live reset row by hash and the parent it
+  // points at. Phase 2 (below): atomic UPDATE…WHERE…unused that's the
+  // actual single-use guarantee. The window between them is small and
+  // the worst case (a concurrent click also succeeds) is still single-
+  // use because the atomic phase has exactly one winner.
+  const tokenHash = hashResetToken(token.trim());
+  const [resetRow] = await db
+    .select({
+      parentId: parentPasswordResetsTable.parentId,
+    })
+    .from(parentPasswordResetsTable)
     .where(
       and(
-        eq(parentPasswordResetsTable.token, hashResetToken(token.trim())),
+        eq(parentPasswordResetsTable.token, tokenHash),
         isNull(parentPasswordResetsTable.usedAt),
-        sql`${parentPasswordResetsTable.expiresAt} > now()`,
+        gt(parentPasswordResetsTable.expiresAt, new Date()),
       ),
-    )
-    .returning({ parentId: parentPasswordResetsTable.parentId });
-  if (consumed.length === 0) {
+    );
+  if (!resetRow) {
     res.status(410).json({ error: GENERIC_RESET_ERROR });
     return;
   }
-  const parentId = consumed[0].parentId;
+  const parentId = resetRow.parentId;
 
   const [parent] = await db
     .select()
@@ -684,6 +791,47 @@ router.post("/parent-auth/reset", async (req, res) => {
     return;
   }
   if (!(await isParentPortalLicensedForSchool(parent.schoolId))) {
+    res.status(410).json({ error: GENERIC_RESET_ERROR });
+    return;
+  }
+
+  // TOTP enforcement at reset. If the parent enrolled, the email link
+  // alone isn't enough — possession of the inbox AND the authenticator
+  // must both be true. (If they lost the authenticator, they should
+  // ask the school admin to clear it; we don't expose a self-serve
+  // bypass for that on purpose.)
+  if (parent.totpSecret) {
+    const { code } = (req.body ?? {}) as { code?: unknown };
+    if (typeof code !== "string" || !code.trim()) {
+      res.status(401).json({
+        requiresOtp: true,
+        error: "Enter the 6-digit code from your authenticator app.",
+      });
+      return;
+    }
+    if (!verifyStoredTotp(parent.totpSecret, code)) {
+      res.status(401).json({
+        requiresOtp: true,
+        error: "That 6-digit code didn't match. Try again.",
+      });
+      return;
+    }
+  }
+
+  // Atomic single-use consume — winner takes the row; a racing click
+  // gets 0 rows back and fails closed.
+  const consumed = await db
+    .update(parentPasswordResetsTable)
+    .set({ usedAt: new Date() })
+    .where(
+      and(
+        eq(parentPasswordResetsTable.token, tokenHash),
+        isNull(parentPasswordResetsTable.usedAt),
+        sql`${parentPasswordResetsTable.expiresAt} > now()`,
+      ),
+    )
+    .returning({ parentId: parentPasswordResetsTable.parentId });
+  if (consumed.length === 0) {
     res.status(410).json({ error: GENERIC_RESET_ERROR });
     return;
   }
@@ -757,6 +905,152 @@ router.post("/parent-auth/change-password", async (req, res) => {
     .set({ passwordHash })
     .where(eq(parentsTable.id, pid));
   res.json({ ok: true });
+});
+
+// =============================================================================
+// TOTP (Time-based One-Time Password) — optional second factor.
+//
+// Opt-in, per-parent. Setup is a two-step dance so we never persist a secret
+// the parent hasn't actually scanned + confirmed:
+//   1) POST /totp/setup    — auth + current password. Generates a fresh
+//      base32 secret and returns it + otpauth URI. We DON'T persist yet.
+//   2) POST /totp/confirm  — auth. Body carries back the secret from step 1
+//      plus the first 6-digit code from the authenticator app. If the code
+//      verifies, we persist `totp_secret` + `totp_enabled_at`.
+// Disable requires both password and a current code (you can't disable just
+// by knowing the password, in case the password was phished but the
+// authenticator is still on the real owner's phone).
+// =============================================================================
+function requireParent(
+  req: Request,
+): { ok: true; pid: number } | { ok: false; status: number; error: string } {
+  const pid = req.parentId;
+  if (!pid) return { ok: false, status: 401, error: "Sign-in required" };
+  return { ok: true, pid };
+}
+
+router.get("/parent-auth/totp/status", async (req, res) => {
+  const auth = requireParent(req);
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.error });
+    return;
+  }
+  const [p] = await db
+    .select({ enabledAt: parentsTable.totpEnabledAt })
+    .from(parentsTable)
+    .where(eq(parentsTable.id, auth.pid));
+  res.json({ enabled: Boolean(p?.enabledAt), enabledAt: p?.enabledAt ?? null });
+});
+
+router.post("/parent-auth/totp/setup", async (req, res) => {
+  const auth = requireParent(req);
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.error });
+    return;
+  }
+  const { currentPassword } = (req.body ?? {}) as { currentPassword?: unknown };
+  if (typeof currentPassword !== "string" || !currentPassword) {
+    res.status(400).json({ error: "Current password is required" });
+    return;
+  }
+  const [parent] = await db
+    .select()
+    .from(parentsTable)
+    .where(eq(parentsTable.id, auth.pid));
+  if (!parent || !parent.active || !parent.passwordHash) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const ok = await bcrypt.compare(currentPassword, parent.passwordHash);
+  if (!ok) {
+    res.status(401).json({ error: "Current password is incorrect" });
+    return;
+  }
+  // Fresh secret each call so an aborted setup doesn't leave a half-known
+  // secret pinned to the account. The client must echo it back to /confirm.
+  const secret = authenticator.generateSecret();
+  res.json({
+    secret,
+    otpauthUri: buildOtpauthUri(parent.email, secret),
+    issuer: TOTP_ISSUER,
+  });
+});
+
+router.post("/parent-auth/totp/confirm", async (req, res) => {
+  const auth = requireParent(req);
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.error });
+    return;
+  }
+  const { secret, code } = (req.body ?? {}) as {
+    secret?: unknown;
+    code?: unknown;
+  };
+  if (typeof secret !== "string" || !secret.trim()) {
+    res.status(400).json({ error: "Setup expired — start again." });
+    return;
+  }
+  if (!isValidTotpCode(secret, code)) {
+    res.status(400).json({
+      error: "That code didn't match. Try the next code your app shows.",
+    });
+    return;
+  }
+  await db
+    .update(parentsTable)
+    .set({
+      // Encrypted at rest with an app-key derivative; the raw secret only
+      // ever lives in this request handler + the parent's authenticator app.
+      totpSecret: encryptSecret(secret),
+      totpEnabledAt: new Date(),
+    })
+    .where(eq(parentsTable.id, auth.pid));
+  res.json({ ok: true, enabled: true });
+});
+
+router.post("/parent-auth/totp/disable", async (req, res) => {
+  const auth = requireParent(req);
+  if (!auth.ok) {
+    res.status(auth.status).json({ error: auth.error });
+    return;
+  }
+  const { currentPassword, code } = (req.body ?? {}) as {
+    currentPassword?: unknown;
+    code?: unknown;
+  };
+  if (typeof currentPassword !== "string" || !currentPassword) {
+    res.status(400).json({ error: "Current password is required" });
+    return;
+  }
+  const [parent] = await db
+    .select()
+    .from(parentsTable)
+    .where(eq(parentsTable.id, auth.pid));
+  if (!parent || !parent.active || !parent.passwordHash) {
+    res.status(401).json({ error: "Sign-in required" });
+    return;
+  }
+  const ok = await bcrypt.compare(currentPassword, parent.passwordHash);
+  if (!ok) {
+    res.status(401).json({ error: "Current password is incorrect" });
+    return;
+  }
+  if (!parent.totpSecret) {
+    res.json({ ok: true, enabled: false });
+    return;
+  }
+  if (!verifyStoredTotp(parent.totpSecret, code)) {
+    res.status(400).json({
+      error:
+        "Enter the 6-digit code from your authenticator app to turn off two-step verification.",
+    });
+    return;
+  }
+  await db
+    .update(parentsTable)
+    .set({ totpSecret: null, totpEnabledAt: null })
+    .where(eq(parentsTable.id, auth.pid));
+  res.json({ ok: true, enabled: false });
 });
 
 export default router;
