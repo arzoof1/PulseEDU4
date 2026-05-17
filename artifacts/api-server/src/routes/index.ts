@@ -14,6 +14,7 @@ import locationsRouter from "./locations";
 import staffDefaultsRouter from "./staffDefaults";
 import locationAllowedDestinationsRouter from "./locationAllowedDestinations";
 import kioskRouter from "./kiosk";
+import studentIdBadgesRouter from "./studentIdBadges";
 import authRouter from "./auth";
 import reportsRouter from "./reports";
 import listsAdminRouter from "./listsAdmin";
@@ -95,6 +96,10 @@ import {
 const router: IRouter = Router();
 
 router.use(healthRouter);
+// studentIdBadgesRouter MUST be mounted before studentsRouter — the
+// students router exposes `GET /students/:studentId`, which would
+// otherwise shadow `GET /students/id-badges.pdf`.
+router.use(studentIdBadgesRouter);
 router.use(studentsRouter);
 router.use(hallPassesRouter);
 router.use(tardiesRouter);

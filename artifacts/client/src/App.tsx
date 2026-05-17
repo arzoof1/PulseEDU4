@@ -26,6 +26,8 @@ import CreatePassModal from "./components/CreatePassModal";
 import { CompanionQueuePanel } from "./components/CompanionQueuePanel";
 import { KioskBanner } from "./components/KioskBanner";
 import { KioskCardsPanel } from "./components/KioskCardsPanel";
+import { KioskWelcomePanel } from "./components/KioskWelcomePanel";
+import { StudentBadgesPanel } from "./components/StudentBadgesPanel";
 import SpotlightPanel from "./components/SpotlightPanel";
 import SpotlightLaunchButton from "./components/SpotlightLaunchButton";
 import LogTardyModal from "./components/LogTardyModal";
@@ -19461,6 +19463,14 @@ function App() {
         <IssSettingsPage />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "kiosk-welcome" && (
+        <KioskWelcomePanel />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "student-id-badges" && (
+        <StudentBadgesPanel />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "pickup" && (
         <PickupSettingsPage />
       )}
@@ -19497,6 +19507,22 @@ function App() {
                 icon: "🔗",
                 title: "Kiosk Setup",
                 subtitle: "URL, PIN, and QR code for kiosk activation.",
+                group: "hall-pass-ops",
+              },
+              {
+                id: "kiosk-welcome",
+                icon: "👋",
+                title: "Kiosk Welcome Messages",
+                subtitle:
+                  "Edit the greeting shown when a student signs in to class.",
+                group: "hall-pass-ops",
+              },
+              {
+                id: "student-id-badges",
+                icon: "🪪",
+                title: "Student ID Badges",
+                subtitle:
+                  "Printable PDF badges with QR + house ribbon — students scan to sign in.",
                 group: "hall-pass-ops",
               },
               {

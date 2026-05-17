@@ -3,6 +3,28 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **Kiosk Phase 3 — printable student ID badges + class sign-in +
+  per-school welcome messages + in-browser camera scanning.**
+  Four kiosk gaps closed: (1) `GET/POST /api/students/id-badges.pdf`
+  generates Letter-size badges with QR (`/kiosk?signin=<id>`), house
+  ribbon, and initials-bubble fallback; shared `pdfColors.ts` defends
+  against bad hex. (2) New `class_signins` ledger + `POST
+  /api/kiosk/class-signin` with kiosk-session auth, per-school
+  tenant scoping, and per-activation rate limiting; full-screen
+  `WelcomeOverlay` greets the student with house-tinted accent
+  and 5-second auto-dismiss. (3) `school_settings.kiosk_welcome_template`
+  + `kiosk_welcome_messages` JSONB (per-house overrides) editable via
+  `KioskWelcomePanel` Settings tile with live preview; PUT validates
+  length ≤ 240. (4) `CameraScanner.tsx` uses native `BarcodeDetector`
+  where available, lazy-loads `@zxing/browser` elsewhere; wired into
+  the kiosk's student-ID input for both pass + sign-in flows. URL
+  `?signin=<id>` param is also parsed on load and auto-submits when
+  an activation is present. Route ordering fix: `studentIdBadgesRouter`
+  is mounted before `studentsRouter` to avoid `/students/:studentId`
+  shadowing the badge PDF endpoint. Drift: T007 "Print badges" surface
+  is a dedicated Settings tile (Print all + numeric ID list) rather
+  than inline on the roster page — same admin gate, same PDF.
+
 - **SuperUser Home Phase 5 trio + roadmap cleanup.**
   Three roadmap cards (District Switcher, Cross-District Reports,
   Global Feature Flags) all promoted from placeholder to live, and

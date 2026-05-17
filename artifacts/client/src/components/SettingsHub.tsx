@@ -28,6 +28,8 @@ export type SettingsTileId =
   | "cameras"
   | "case-outcomes"
   | "fast-coverage"
+  | "kiosk-welcome"
+  | "student-id-badges"
   | "onboarding";
 
 export type SettingsGroupId =

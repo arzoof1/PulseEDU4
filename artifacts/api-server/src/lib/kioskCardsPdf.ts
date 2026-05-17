@@ -10,6 +10,7 @@
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
 import bwipjs from "bwip-js";
+import { normalizeHex } from "./pdfColors";
 
 export interface KioskCardInput {
   teacherName: string;
@@ -231,14 +232,3 @@ async function renderOneCard(
     );
 }
 
-// Defensive: pdfkit accepts a "#RRGGBB" or "RRGGBB" string but throws on
-// anything else (e.g. "rebeccapurple" or "rgb(...)"). Fall back to a
-// neutral slate if we get something we don't recognize so a bad house
-// color never blocks a print job.
-function normalizeHex(raw: string): string {
-  const trimmed = (raw ?? "").trim();
-  if (/^#?[0-9a-fA-F]{6}$/.test(trimmed)) {
-    return trimmed.startsWith("#") ? trimmed : `#${trimmed}`;
-  }
-  return "#475569";
-}

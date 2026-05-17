@@ -15,6 +15,8 @@ import {
   studentsTable,
   schoolsTable,
   housesTable,
+  schoolSettingsTable,
+  classSigninsTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
@@ -1251,6 +1253,172 @@ async function activateForTeacher(args: {
       return;
   }
 }
+
+// -----------------------------------------------------------------------------
+// Phase 3 — "Sign in to class" arrival flow.
+//
+// Authenticated by the kiosk's own activation token (same scheme as
+// /kiosk/hall-passes). Looks up the student in the kiosk's school,
+// appends a class_signins ledger row, and returns the substituted
+// welcome message (per-house override → school default →
+// hard-coded fallback). Per-student per-kiosk rate limit prevents a
+// student from accidentally double-tapping into a runaway loop.
+// -----------------------------------------------------------------------------
+
+// Substitute {firstName}/{lastName}/{house}/{grade} into a template
+// string. Unknown placeholders are left as-is so a typo in School
+// Settings is visible to whoever's editing it, not silently dropped.
+function substituteWelcome(
+  template: string,
+  vars: { firstName: string; lastName: string; house: string; grade: string },
+): string {
+  return template
+    .replace(/\{firstName\}/g, vars.firstName)
+    .replace(/\{lastName\}/g, vars.lastName)
+    .replace(/\{house\}/g, vars.house)
+    .replace(/\{grade\}/g, vars.grade);
+}
+
+// In-memory per-kiosk-activation rate limiter for class sign-ins. Keys
+// are activation ids; values are arrays of recent signed-in-at ms
+// timestamps. Allows up to MAX_SIGNINS_PER_WINDOW per WINDOW_MS per
+// kiosk. Memory is bounded — we evict old keys lazily on each call.
+const SIGNIN_RATE_WINDOW_MS = 60 * 1000;
+const SIGNIN_RATE_MAX = 40;
+const signinRateBuckets = new Map<number, number[]>();
+function checkSigninRate(activationId: number): boolean {
+  const now = Date.now();
+  const cutoff = now - SIGNIN_RATE_WINDOW_MS;
+  const bucket = (signinRateBuckets.get(activationId) ?? []).filter(
+    (t) => t > cutoff,
+  );
+  if (bucket.length >= SIGNIN_RATE_MAX) {
+    signinRateBuckets.set(activationId, bucket);
+    return false;
+  }
+  bucket.push(now);
+  signinRateBuckets.set(activationId, bucket);
+  // Cheap GC: every ~500 calls, drop empty buckets.
+  if (signinRateBuckets.size > 500) {
+    for (const [k, v] of signinRateBuckets) {
+      if (v.length === 0 || v[v.length - 1] < cutoff) signinRateBuckets.delete(k);
+    }
+  }
+  return true;
+}
+
+router.post("/kiosk/class-signin", async (req, res) => {
+  const { studentId, token } = req.body ?? {};
+
+  if (typeof token !== "string" || token.length < 16) {
+    res.status(401).json({
+      error: "Kiosk activation token is required",
+      revoked: true,
+    });
+    return;
+  }
+  if (typeof studentId !== "string" || !studentId.trim()) {
+    res.status(400).json({ error: "studentId is required" });
+    return;
+  }
+
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res.status(401).json({
+      error: "Kiosk activation not found, revoked, or expired",
+      revoked: true,
+    });
+    return;
+  }
+
+  if (!checkSigninRate(act.id)) {
+    res.status(429).json({ error: "Too many sign-ins on this kiosk" });
+    return;
+  }
+
+  // Student must belong to the kiosk's school — students.student_id is
+  // globally unique on the schema but we still enforce the school
+  // filter so a leaked id from another tenant can't trigger a sign-in.
+  const [student] = await db
+    .select()
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.studentId, studentId.trim()),
+        eq(studentsTable.schoolId, act.schoolId),
+      ),
+    );
+  if (!student) {
+    res.status(404).json({ error: "Student not found" });
+    return;
+  }
+
+  // School welcome template + (optional) per-house override.
+  const [settings] = await db
+    .select({
+      template: schoolSettingsTable.kioskWelcomeTemplate,
+      overrides: schoolSettingsTable.kioskWelcomeMessages,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, act.schoolId));
+
+  // Resolve house metadata for both the placeholder substitution and
+  // the response payload (the kiosk uses the color as the welcome
+  // background accent).
+  let house: { id: number; name: string; color: string } | null = null;
+  if (student.houseId !== null && student.houseId !== undefined) {
+    const [h] = await db
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+        color: housesTable.color,
+      })
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.id, student.houseId),
+          eq(housesTable.schoolId, act.schoolId),
+        ),
+      );
+    if (h) house = h;
+  }
+
+  const baseTemplate = settings?.template ?? "Welcome, {firstName}!";
+  const overrideMap = (settings?.overrides ?? {}) as Record<string, string>;
+  const houseOverride = house ? overrideMap[String(house.id)] : undefined;
+  const chosenTemplate = houseOverride || baseTemplate;
+
+  const welcomeMessage = substituteWelcome(chosenTemplate, {
+    firstName: student.firstName,
+    lastName: student.lastName,
+    house: house?.name ?? "",
+    grade: String(student.grade ?? ""),
+  });
+
+  await db.insert(classSigninsTable).values({
+    schoolId: act.schoolId,
+    studentId: student.id,
+    kioskActivationId: act.id,
+    signedInByStaffId: act.staffId,
+  });
+
+  res.status(201).json({
+    firstName: student.firstName,
+    lastName: student.lastName,
+    grade: student.grade,
+    house,
+    welcomeMessage,
+  });
+});
 
 router.post("/kiosk/activate-by-enrollment", async (req, res) => {
   const { enrollToken, room, replaceExisting, confirm } = req.body ?? {};

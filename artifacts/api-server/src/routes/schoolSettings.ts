@@ -119,6 +119,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     manualRosterUploadEnabled,
     pickupCutoffTime,
     pickupTeacherViewScope,
+    kioskWelcomeTemplate,
+    kioskWelcomeMessages,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -458,6 +460,52 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.issCapacityBehavior = issCapacityBehavior;
+  }
+
+  // -----------------------------------------------------------------
+  // Kiosk welcome template + per-house overrides (Phase 3).
+  // Length-capped to prevent runaway storage / signage layouts; any
+  // settings-manager can edit (same gate as the rest of this PUT).
+  // -----------------------------------------------------------------
+  if (kioskWelcomeTemplate !== undefined) {
+    if (typeof kioskWelcomeTemplate !== "string") {
+      res
+        .status(400)
+        .json({ error: "kioskWelcomeTemplate must be a string" });
+      return;
+    }
+    const trimmed = kioskWelcomeTemplate.slice(0, 240);
+    updates.kioskWelcomeTemplate =
+      trimmed.trim().length === 0 ? "Welcome, {firstName}!" : trimmed;
+  }
+  if (kioskWelcomeMessages !== undefined) {
+    if (
+      kioskWelcomeMessages === null ||
+      typeof kioskWelcomeMessages !== "object" ||
+      Array.isArray(kioskWelcomeMessages)
+    ) {
+      if (kioskWelcomeMessages === null) {
+        updates.kioskWelcomeMessages = {};
+      } else {
+        res.status(400).json({
+          error: "kioskWelcomeMessages must be an object or null",
+        });
+        return;
+      }
+    } else {
+      const sanitized: Record<string, string> = {};
+      for (const [k, v] of Object.entries(
+        kioskWelcomeMessages as Record<string, unknown>,
+      )) {
+        if (typeof v !== "string") continue;
+        const cleaned = v.slice(0, 240).trim();
+        if (cleaned.length === 0) continue;
+        // House id key is stringified integer; ignore anything else.
+        if (!/^\d+$/.test(k)) continue;
+        sanitized[k] = cleaned;
+      }
+      updates.kioskWelcomeMessages = sanitized;
+    }
   }
 
   // -----------------------------------------------------------------

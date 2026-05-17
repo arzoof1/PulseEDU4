@@ -164,6 +164,22 @@ export const schoolSettingsTable = pgTable(
   pickupTeacherViewScope: text("pickup_teacher_view_scope")
     .notNull()
     .default("all_students"),
+  // -----------------------------------------------------------------
+  // Kiosk welcome messages (Phase 3 — "Sign in to class" flow).
+  //   kioskWelcomeTemplate  — default template shown to every student
+  //     after they sign in. Supports {firstName}, {lastName}, {house},
+  //     {grade} placeholders. Length capped at 240 chars by the route.
+  //   kioskWelcomeMessages  — optional per-house override map keyed by
+  //     house id (stringified): { "12": "Welcome home, Phoenix!" }.
+  //     Empty / missing key falls back to kioskWelcomeTemplate.
+  // -----------------------------------------------------------------
+  kioskWelcomeTemplate: text("kiosk_welcome_template")
+    .notNull()
+    .default("Welcome, {firstName}!"),
+  kioskWelcomeMessages: jsonb("kiosk_welcome_messages")
+    .$type<Record<string, string>>()
+    .notNull()
+    .default({}),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()

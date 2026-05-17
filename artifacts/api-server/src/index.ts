@@ -28,6 +28,7 @@ import {
   ensurePickupSchema,
   ensureAstSchema,
   ensureKioskCardsSchema,
+  ensureKioskWelcomeSchema,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -173,6 +174,9 @@ async function runSeed(): Promise<void> {
   // tokens encoded as QR + Code 128 + 6-digit PIN; sub/proxy + audit
   // columns on kiosk_activations). Idempotent.
   await ensureKioskCardsSchema();
+  // Phase 3 — Kiosk "Sign in to class" welcome messages + class_signins
+  // append-only ledger. Idempotent.
+  await ensureKioskWelcomeSchema();
 }
 
 // In production we MUST open the port within the platform's health-check

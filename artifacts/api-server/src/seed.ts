@@ -5703,3 +5703,35 @@ export async function ensureKioskCardsSchema(): Promise<void> {
     sql`ALTER TABLE kiosk_activations ADD COLUMN IF NOT EXISTS session_kind TEXT`,
   );
 }
+
+// -----------------------------------------------------------------------------
+// Kiosk "Sign in to class" + per-school welcome messages (Phase 3).
+//
+// Adds two columns to school_settings (default template + per-house
+// override JSON map) and creates the class_signins append-only ledger.
+// All additive + idempotent — safe to call on every boot.
+// -----------------------------------------------------------------------------
+export async function ensureKioskWelcomeSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_welcome_template TEXT NOT NULL DEFAULT 'Welcome, {firstName}!'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS kiosk_welcome_messages JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_signins (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      kiosk_activation_id INTEGER,
+      signed_in_by_staff_id INTEGER,
+      signed_in_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_signins_school_day_idx ON class_signins(school_id, signed_in_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_signins_student_idx ON class_signins(school_id, student_id, signed_in_at)`,
+  );
+}

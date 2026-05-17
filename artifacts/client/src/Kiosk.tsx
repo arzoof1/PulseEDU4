@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { CameraScanner } from "./components/CameraScanner";
 import { useSchoolBranding } from "./lib/branding";
 
 interface SchoolSettings {
@@ -100,7 +101,15 @@ type Phase =
       expiresAt?: string | null;
     };
 
-type Mode = "out" | "back";
+type Mode = "out" | "back" | "signin";
+
+interface SigninSuccess {
+  firstName: string;
+  lastName: string;
+  grade: number | string | null;
+  house: { id: number; name: string; color: string } | null;
+  welcomeMessage: string;
+}
 
 interface ActivePass {
   id: number;
@@ -142,6 +151,9 @@ const NEXT_UP_TIMEOUT_MS = 60_000;
 
 export default function Kiosk() {
   const [phase, setPhase] = useState<Phase>({ kind: "loading" });
+  // Phase 3: `?signin=<studentId>` parsed from URL on first load,
+  // handed to KioskBody once a token is in place. Null after consumption.
+  const [pendingSignin, setPendingSignin] = useState<string | null>(null);
   const [showDeactivate, setShowDeactivate] = useState(false);
 
   // Apply per-school branding once we have an activation token. The hook
@@ -170,6 +182,23 @@ export default function Kiosk() {
       );
       void beginEnrollActivation(enrollFromUrl);
       return;
+    }
+
+    // Phase 3: a student badge QR encodes `/kiosk?signin=<studentId>`.
+    // If the device has an existing kiosk activation in localStorage,
+    // we hand the ID to KioskBody via `pendingSignin` so it auto-fills
+    // and submits the sign-in flow. We strip it from the URL either
+    // way so a refresh is a no-op.
+    const signinFromUrl = params.get("signin");
+    if (signinFromUrl) {
+      params.delete("signin");
+      const qs = params.toString();
+      window.history.replaceState(
+        null,
+        "",
+        `${window.location.pathname}${qs ? "?" + qs : ""}`,
+      );
+      setPendingSignin(signinFromUrl);
     }
 
     const token = getStoredToken();
@@ -357,6 +386,8 @@ export default function Kiosk() {
         room={phase.room}
         staffName={phase.staffName}
         onRevoked={handleRevoked}
+        pendingSignin={pendingSignin}
+        onPendingSigninConsumed={() => setPendingSignin(null)}
       />
       {showDeactivate && (
         <DeactivateModal
@@ -1147,11 +1178,15 @@ function KioskBody({
   room,
   staffName,
   onRevoked,
+  pendingSignin,
+  onPendingSigninConsumed,
 }: {
   token: string;
   room: string;
   staffName: string | null;
   onRevoked: () => void;
+  pendingSignin: string | null;
+  onPendingSigninConsumed: () => void;
 }) {
   const [school, setSchool] = useState<SchoolSettings | null>(null);
   const [locations, setLocations] = useState<LocationRow[]>([]);
@@ -1165,6 +1200,15 @@ function KioskBody({
   const [returning, setReturning] = useState(false);
   const [returnError, setReturnError] = useState<string | null>(null);
   const studentIdInputRef = useRef<HTMLInputElement | null>(null);
+  // Phase 3: full-screen welcome overlay after a successful class
+  // sign-in. Auto-dismisses; setting back to null returns the kiosk
+  // to its idle form.
+  const [welcome, setWelcome] = useState<SigninSuccess | null>(null);
+  // Camera-scanner modal. Opened from the student-id field via the
+  // 📷 button; on a successful decode we populate the student-id
+  // input. Lazy-loaded so phones/tablets without the scanner never
+  // pay the @zxing/browser cost.
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   // ---- Hall Pass Queue state ---------------------------------------------
   // Polled from /api/kiosk/queue/:token; auto-clears at period boundary on
@@ -1299,9 +1343,87 @@ function KioskBody({
     return () => clearTimeout(id);
   }, [status.kind]);
 
+  // Welcome overlay auto-dismiss. Five seconds is long enough to read
+  // the greeting + see the house color, short enough that the next
+  // student isn't blocked.
+  useEffect(() => {
+    if (!welcome) return;
+    const id = setTimeout(() => setWelcome(null), 5000);
+    return () => clearTimeout(id);
+  }, [welcome]);
+
+  // Extract a student id from a scanned barcode. Two forms supported:
+  //   1. raw id (hardware scanner or QR encoded as just "12345")
+  //   2. signin URL (badge QR points at /kiosk?signin=12345)
+  // Anything else is passed through verbatim — server-side validation
+  // will reject if it's bogus.
+  function extractStudentIdFromScan(text: string): string {
+    const trimmed = text.trim();
+    const match = trimmed.match(/[?&]signin=([^&\s]+)/);
+    if (match) return decodeURIComponent(match[1]);
+    return trimmed;
+  }
+
+  async function handleSignin(rawStudentId: string) {
+    const id = rawStudentId.trim();
+    if (!id) return;
+    setStatus({ kind: "submitting" });
+    try {
+      const res = await fetch("/api/kiosk/class-signin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ studentId: id, token }),
+      });
+      if (res.status === 401) {
+        const b = await res.json().catch(() => ({}));
+        if (b.revoked) {
+          onRevoked();
+          return;
+        }
+      }
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        setStatus({
+          kind: "error",
+          message: b.error ?? `Sign-in failed (${res.status})`,
+        });
+        return;
+      }
+      const data = (await res.json()) as SigninSuccess;
+      setWelcome(data);
+      setStudentId("");
+      setStatus({ kind: "idle" });
+    } catch (err) {
+      setStatus({
+        kind: "error",
+        message: err instanceof Error ? err.message : "Network error",
+      });
+    }
+  }
+
+  // Consume `?signin=<studentId>` once: drop into sign-in mode,
+  // fire the request, then tell the parent so a re-render doesn't
+  // re-trigger. Guarded by a ref so React 18 strict double-invoke
+  // can't double-submit.
+  const pendingSigninConsumed = useRef(false);
+  useEffect(() => {
+    if (!pendingSignin) return;
+    if (pendingSigninConsumed.current) return;
+    pendingSigninConsumed.current = true;
+    setMode("signin");
+    setStudentId(pendingSignin);
+    void handleSignin(pendingSignin);
+    onPendingSigninConsumed();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingSignin]);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!studentId.trim()) return;
+    if (mode === "signin") {
+      await handleSignin(studentId);
+      return;
+    }
     if (mode === "out" && !destination) return;
     setStatus({ kind: "submitting" });
     try {
@@ -1409,6 +1531,32 @@ function KioskBody({
 
   return (
     <>
+      {welcome && (
+        <WelcomeOverlay
+          welcome={welcome}
+          onDismiss={() => setWelcome(null)}
+        />
+      )}
+      {scannerOpen && (
+        <CameraScanner
+          onScan={(text) => {
+            const id = extractStudentIdFromScan(text);
+            setScannerOpen(false);
+            if (!id) return;
+            setStudentId(id);
+            // For sign-in mode, auto-submit on a successful scan —
+            // the whole point is to walk up and tap the badge.
+            // Pass / return modes still require a destination
+            // selection so we just populate the field.
+            if (mode === "signin") {
+              void handleSignin(id);
+            } else {
+              studentIdInputRef.current?.focus();
+            }
+          }}
+          onCancel={() => setScannerOpen(false)}
+        />
+      )}
       <div
         style={{
           fontSize: "0.875rem",
@@ -1562,24 +1710,58 @@ function KioskBody({
             >
               I'm back
             </ModeButton>
+            <ModeButton
+              active={mode === "signin"}
+              onClick={() => {
+                if (status.kind === "submitting") return;
+                setMode("signin");
+                setDestination("");
+                setStatus({ kind: "idle" });
+                studentIdInputRef.current?.focus();
+              }}
+            >
+              Sign in to class
+            </ModeButton>
           </div>
 
-          <Field label="Student ID">
-            <input
-              ref={studentIdInputRef}
-              type="text"
-              inputMode="numeric"
-              autoComplete="off"
-              autoFocus
-              value={studentId}
-              onChange={(e) => setStudentId(e.target.value)}
-              placeholder="e.g. 12345"
-              style={inputStyle}
-              disabled={status.kind === "submitting"}
-            />
+          <Field label={mode === "signin" ? "Scan or enter your ID" : "Student ID"}>
+            <div style={{ display: "flex", gap: "0.5rem" }}>
+              <input
+                ref={studentIdInputRef}
+                type="text"
+                inputMode="numeric"
+                autoComplete="off"
+                autoFocus
+                value={studentId}
+                onChange={(e) => setStudentId(e.target.value)}
+                placeholder="e.g. 12345"
+                style={{ ...inputStyle, flex: 1 }}
+                disabled={status.kind === "submitting"}
+              />
+              <button
+                type="button"
+                onClick={() => setScannerOpen(true)}
+                disabled={status.kind === "submitting"}
+                aria-label="Scan badge with camera"
+                title="Scan badge with camera"
+                style={{
+                  background: "rgba(255,255,255,0.1)",
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  borderRadius: 8,
+                  color: "#fff",
+                  width: 56,
+                  fontSize: "1.5rem",
+                  cursor: "pointer",
+                  flexShrink: 0,
+                }}
+              >
+                📷
+              </button>
+            </div>
           </Field>
 
           {mode === "out" && (
+            <>
             <Field label="Where are you going?">
               <select
                 value={destination}
@@ -1605,6 +1787,7 @@ function KioskBody({
                 </div>
               )}
             </Field>
+            </>
           )}
 
           {status.kind === "error" && <ErrorBox>{status.message}</ErrorBox>}
@@ -1622,14 +1805,19 @@ function KioskBody({
                 (mode === "out" && !destination),
               { padding: "0.9rem 1rem", fontSize: "1.1rem" },
             )}
+            aria-label={mode === "signin" ? "Sign in to class" : undefined}
           >
             {status.kind === "submitting"
               ? mode === "out"
                 ? "Creating pass…"
-                : "Signing back in…"
+                : mode === "back"
+                  ? "Signing back in…"
+                  : "Signing in…"
               : mode === "out"
                 ? "Get Pass"
-                : "Sign Back In"}
+                : mode === "back"
+                  ? "Sign Back In"
+                  : "Sign in to class"}
           </button>
         </form>
       )}
@@ -2724,6 +2912,112 @@ function TimerScreen({
       >
         {returning ? "Signing in…" : "I'm back"}
       </button>
+    </div>
+  );
+}
+
+// Full-screen welcome shown after a successful class sign-in.
+// Auto-dismisses after 5s (managed by KioskBody). Background accent
+// is the student's house color when available — a subtle radial wash
+// so it doesn't overpower the greeting.
+function WelcomeOverlay({
+  welcome,
+  onDismiss,
+}: {
+  welcome: SigninSuccess;
+  onDismiss: () => void;
+}) {
+  const initials =
+    (welcome.firstName?.[0] ?? "?") + (welcome.lastName?.[0] ?? "");
+  const houseColor = welcome.house?.color ?? "#3b82f6";
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      onClick={onDismiss}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: `radial-gradient(circle at top, ${houseColor}55 0%, #0b0f1a 60%)`,
+        zIndex: 90,
+        display: "flex",
+        flexDirection: "column",
+        alignItems: "center",
+        justifyContent: "center",
+        cursor: "pointer",
+        padding: "2rem",
+      }}
+    >
+      <div
+        aria-hidden="true"
+        style={{
+          width: 160,
+          height: 160,
+          borderRadius: "50%",
+          background: houseColor,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          color: "#fff",
+          fontSize: "3.5rem",
+          fontWeight: 700,
+          boxShadow: "0 12px 40px rgba(0,0,0,0.4)",
+          marginBottom: "1.5rem",
+          textTransform: "uppercase",
+        }}
+      >
+        {initials}
+      </div>
+      <div
+        style={{
+          fontSize: "clamp(2rem, 6vw, 4rem)",
+          fontWeight: 700,
+          color: "#fff",
+          textAlign: "center",
+          maxWidth: "min(900px, 92vw)",
+          lineHeight: 1.15,
+        }}
+      >
+        {welcome.welcomeMessage}
+      </div>
+      {welcome.house && (
+        <div
+          style={{
+            marginTop: "1.25rem",
+            color: "#fff",
+            opacity: 0.85,
+            fontSize: "1.1rem",
+            display: "flex",
+            alignItems: "center",
+            gap: "0.5rem",
+          }}
+        >
+          <span
+            aria-hidden="true"
+            style={{
+              width: 16,
+              height: 16,
+              borderRadius: 4,
+              background: houseColor,
+              display: "inline-block",
+              border: "1px solid rgba(255,255,255,0.5)",
+            }}
+          />
+          {welcome.house.name}
+          {welcome.grade !== null && welcome.grade !== ""
+            ? ` · Grade ${welcome.grade}`
+            : ""}
+        </div>
+      )}
+      <div
+        style={{
+          marginTop: "2rem",
+          color: "rgba(255,255,255,0.55)",
+          fontSize: "0.9rem",
+        }}
+      >
+        Tap anywhere to dismiss
+      </div>
     </div>
   );
 }
