@@ -204,3 +204,9 @@ id = "8uSJwEkWxXaWTTlxIS9mJ"
 uri = "file://attached_assets/PulseEDU_Demo_Guide.pdf"
 type = "pdf"
 title = "PulseEDU Demo Guide"
+
+[[outputs]]
+id = "8SqIcbhrg1Xr_kRK-ZsfM"
+uri = "file://attached_assets/PulseEDU_Overview.pdf"
+type = "pdf"
+title = "PulseEDU Overview (1-pager)"

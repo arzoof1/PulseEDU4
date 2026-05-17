@@ -6,6 +6,7 @@
   "scripts": {
     "hello": "tsx ./src/hello.ts",
     "demo-guide": "tsx ./src/generateDemoGuide.ts",
+    "overview": "tsx ./src/generateOverviewOnePager.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
