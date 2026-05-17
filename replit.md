@@ -71,6 +71,23 @@ _Populate as you build_
 
 ### Recently shipped (reference only — no remaining action)
 
+- **Edit + soft-delete schools.** `PATCH /api/tenancy/schools/:id`
+  in `routes/tenancy.ts` — SuperUser-only, same cross-district env
+  gate as onboard-school. Partial patch over `name`, `shortName`,
+  `stateSchoolCode`, `active`; null/empty clears the optional
+  strings. 23505 → 409 with composite-unique-index message.
+  Refuses to deactivate `isPrimary` schools (409 — deactivate the
+  district instead). Hard-delete intentionally not offered (too
+  many FK dependents). Soft-delete is enforced at request-context
+  resolution in `app.ts`: if the staff's home school is `active=false`,
+  `req.schoolId` is cleared so downstream route guards 4xx; the
+  override branch also requires `overrideSchool.active`. Client
+  modal `components/districtOverview/EditSchoolModal.tsx` + new
+  inline "Edit" / "Deactivate"-"Reactivate" buttons in the
+  SuperUser-gated action column of `DistrictOverviewRollups`.
+  Overview now returns `active` per school and includes inactive
+  schools for SuperUsers (so they can reactivate from the row).
+
 - **Onboard-a-School (existing district).** `POST
   /api/tenancy/onboard-school` in `routes/tenancy.ts` — SuperUser-only,
   tx-wrapped school → schoolSettings → applyPlan → first admin under

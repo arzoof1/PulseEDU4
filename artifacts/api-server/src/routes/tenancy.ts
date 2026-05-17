@@ -809,4 +809,148 @@ router.post("/tenancy/onboard-school", async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// PATCH /api/tenancy/schools/:id
+//   SuperUser-only. Edits a school's editable metadata + soft-delete via
+//   `active`. Hard-delete is intentionally not offered — too many FK
+//   dependents (students, staff, audit rows). Deactivating a school
+//   hides it from rollups + lookups; reactivating restores it.
+//
+//   Guardrails:
+//     * Cross-district: same env gate as onboard-school.
+//     * Cannot deactivate the district's primary school — that's the
+//       row created at district onboarding; if you need to retire it,
+//       deactivate the district instead.
+// ---------------------------------------------------------------------------
+router.patch("/tenancy/schools/:id", async (req, res) => {
+  const staff = await requireSuperUser(req, res);
+  if (!staff) return;
+
+  const schoolId = Number(req.params.id);
+  if (!Number.isInteger(schoolId) || schoolId <= 0) {
+    res.status(400).json({ error: "school id must be a positive integer" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    name?: unknown;
+    shortName?: unknown;
+    stateSchoolCode?: unknown;
+    active?: unknown;
+  };
+
+  // Build a partial-update object — only patch keys the caller sent. All
+  // strings are trimmed; explicit `null` (or empty string) on the optional
+  // fields clears them.
+  const patch: {
+    name?: string;
+    shortName?: string | null;
+    stateSchoolCode?: string | null;
+    active?: boolean;
+  } = {};
+
+  if (body.name !== undefined) {
+    if (typeof body.name !== "string" || !body.name.trim()) {
+      res.status(400).json({ error: "name must be a non-empty string" });
+      return;
+    }
+    patch.name = body.name.trim();
+  }
+  if (body.shortName !== undefined) {
+    if (body.shortName === null || body.shortName === "") {
+      patch.shortName = null;
+    } else if (typeof body.shortName === "string") {
+      patch.shortName = body.shortName.trim() || null;
+    } else {
+      res.status(400).json({ error: "shortName must be a string or null" });
+      return;
+    }
+  }
+  if (body.stateSchoolCode !== undefined) {
+    if (body.stateSchoolCode === null || body.stateSchoolCode === "") {
+      patch.stateSchoolCode = null;
+    } else if (typeof body.stateSchoolCode === "string") {
+      patch.stateSchoolCode = body.stateSchoolCode.trim() || null;
+    } else {
+      res
+        .status(400)
+        .json({ error: "stateSchoolCode must be a string or null" });
+      return;
+    }
+  }
+  if (body.active !== undefined) {
+    if (typeof body.active !== "boolean") {
+      res.status(400).json({ error: "active must be a boolean" });
+      return;
+    }
+    patch.active = body.active;
+  }
+
+  if (Object.keys(patch).length === 0) {
+    res.status(400).json({ error: "no editable fields supplied" });
+    return;
+  }
+
+  // Pre-flight: school must exist; caller must own its district.
+  const [school] = await db
+    .select()
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  if (!school) {
+    res.status(404).json({ error: `School ${schoolId} not found` });
+    return;
+  }
+  const crossDistrict = process.env.ALLOW_CROSS_DISTRICT_SUPERUSER === "1";
+  if (!crossDistrict) {
+    const callerDistrictId = await getDistrictIdForSchool(staff.schoolId);
+    if (callerDistrictId === null || callerDistrictId !== school.districtId) {
+      res
+        .status(403)
+        .json({ error: "Cannot edit a school in another district" });
+      return;
+    }
+  }
+  // The primary school of a district is a structural anchor — refuse
+  // to deactivate it from this endpoint. (Renaming + state code edits
+  // are fine.)
+  if (patch.active === false && school.isPrimary) {
+    res.status(409).json({
+      error:
+        "Cannot deactivate the district's primary school. Deactivate the district instead.",
+    });
+    return;
+  }
+
+  try {
+    const [updated] = await db
+      .update(schoolsTable)
+      .set(patch)
+      .where(eq(schoolsTable.id, schoolId))
+      .returning();
+    res.json({
+      school: {
+        id: updated.id,
+        name: updated.name,
+        shortName: updated.shortName,
+        stateSchoolCode: updated.stateSchoolCode,
+        active: updated.active,
+        isPrimary: updated.isPrimary,
+      },
+    });
+  } catch (err: any) {
+    // Postgres unique_violation. The schema has a composite unique
+    // index on (district_id, state_school_code); surface that as 409
+    // instead of a generic 500 so the UI can show a useful message.
+    if (err?.code === "23505") {
+      res.status(409).json({
+        error:
+          "A school with that state code already exists in this district.",
+      });
+      return;
+    }
+    req.log?.error?.({ err, schoolId }, "patch-school failed");
+    res.status(500).json({ error: "Failed to update school" });
+  }
+});
+
 export default router;

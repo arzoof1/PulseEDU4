@@ -220,15 +220,19 @@ router.get("/district-admin/overview", async (req, res) => {
     return;
   }
 
-  // Schools in this district.
+  // Schools in this district. SuperUsers see inactive schools too so
+  // they can reactivate from the rollup row; everyone else gets the
+  // active-only view.
   const schools = await db
     .select()
     .from(schoolsTable)
     .where(
-      and(
-        eq(schoolsTable.districtId, districtId),
-        eq(schoolsTable.active, true),
-      ),
+      staff.isSuperUser
+        ? eq(schoolsTable.districtId, districtId)
+        : and(
+            eq(schoolsTable.districtId, districtId),
+            eq(schoolsTable.active, true),
+          ),
     )
     .orderBy(schoolsTable.id);
 
@@ -353,6 +357,7 @@ router.get("/district-admin/overview", async (req, res) => {
       shortName: s.shortName,
       stateSchoolCode: s.stateSchoolCode,
       isPrimary: s.isPrimary,
+      active: s.active,
       studentCount: stu,
       staffCount: stf,
       pbisPoints7d: pbisPts.get(s.id) ?? 0,

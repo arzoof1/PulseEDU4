@@ -223,6 +223,21 @@ app.use(async (req, _res, next) => {
         // requests inside the Replit preview iframe — where session cookies
         // are blocked — keep the SuperUser's switch active across reloads.
         const override = staff.activeSchoolOverride ?? null;
+        // Confirm the staff's home school is still active before honoring
+        // any school context. Soft-deactivated (active=false) schools
+        // must not be able to act as the request's tenant; otherwise
+        // existing sessions keep reading/writing under a "retired"
+        // school. We let the request through with req.schoolId=null;
+        // downstream route guards already 4xx on missing school.
+        const [homeSchoolActive] = await db
+          .select({ active: schoolsTable.active })
+          .from(schoolsTable)
+          .where(eq(schoolsTable.id, staff.schoolId));
+        if (!homeSchoolActive || !homeSchoolActive.active) {
+          req.schoolId = null;
+          next();
+          return;
+        }
         if (staff.isSuperUser && override && override !== staff.schoolId) {
           // D6 defense-in-depth: even if a stale pre-D6 override points
           // at a school in another district, refuse to honor it. Only
@@ -233,7 +248,10 @@ app.use(async (req, _res, next) => {
           // request. switch-school now refuses to *set* such an
           // override, but old data may still exist.
           const [overrideSchool] = await db
-            .select({ districtId: schoolsTable.districtId })
+            .select({
+              districtId: schoolsTable.districtId,
+              active: schoolsTable.active,
+            })
             .from(schoolsTable)
             .where(eq(schoolsTable.id, override));
           const [homeSchool] = await db
@@ -242,13 +260,15 @@ app.use(async (req, _res, next) => {
             .where(eq(schoolsTable.id, staff.schoolId));
           if (
             overrideSchool &&
+            overrideSchool.active &&
             homeSchool &&
             overrideSchool.districtId === homeSchool.districtId
           ) {
             req.schoolId = override;
             req.isSchoolSwitched = true;
           } else {
-            // Stale or cross-district override — fall back to home school.
+            // Stale, cross-district, or inactive override — fall back to
+            // home school. (Home school is already known active here.)
             req.schoolId = staff.schoolId;
           }
         } else {

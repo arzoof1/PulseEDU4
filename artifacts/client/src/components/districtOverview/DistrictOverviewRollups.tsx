@@ -6,6 +6,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { authFetch } from "../../lib/authToken";
+import EditSchoolModal from "./EditSchoolModal";
 
 type SchoolRow = {
   id: number;
@@ -13,6 +14,7 @@ type SchoolRow = {
   shortName: string | null;
   stateSchoolCode: string | null;
   isPrimary: boolean;
+  active: boolean;
   studentCount: number;
   staffCount: number;
   pbisPoints7d: number;
@@ -73,6 +75,8 @@ export default function DistrictOverviewRollups() {
   const [data, setData] = useState<Overview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [switching, setSwitching] = useState<number | null>(null);
+  const [editing, setEditing] = useState<SchoolRow | null>(null);
+  const [togglingActive, setTogglingActive] = useState<number | null>(null);
 
   const reload = useCallback(async () => {
     try {
@@ -88,6 +92,37 @@ export default function DistrictOverviewRollups() {
   useEffect(() => {
     void reload();
   }, [reload]);
+
+  async function toggleActive(s: SchoolRow) {
+    const next = !s.active;
+    const verb = next ? "reactivate" : "deactivate";
+    if (
+      !window.confirm(
+        `${verb === "deactivate" ? "Deactivate" : "Reactivate"} ${s.name}?\n\n` +
+          (next
+            ? "It will reappear in rollups and lookups."
+            : "It will be hidden from rollups and most lookups. Existing data is preserved."),
+      )
+    )
+      return;
+    setTogglingActive(s.id);
+    try {
+      const res = await authFetch(`/api/tenancy/schools/${s.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ active: next }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await reload();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setTogglingActive(null);
+    }
+  }
 
   async function switchTo(schoolId: number) {
     setSwitching(schoolId);
@@ -181,7 +216,9 @@ export default function DistrictOverviewRollups() {
                 <th style={thRight}>PBIS pts (7d)</th>
                 <th style={thRight}>Hall passes (7d)</th>
                 <th style={thRight}>ISS days (7d)</th>
-                {data.caller.isSuperUser && <th style={th}></th>}
+                {data.caller.isSuperUser && (
+                  <th style={th} colSpan={3}></th>
+                )}
               </tr>
             </thead>
             <tbody>
@@ -209,24 +246,62 @@ export default function DistrictOverviewRollups() {
                   <td style={tdRight}>{s.hallPasses7d.toLocaleString()}</td>
                   <td style={tdRight}>{s.issDays7d.toLocaleString()}</td>
                   {data.caller.isSuperUser && (
-                    <td style={td}>
-                      <button
-                        type="button"
-                        onClick={() => switchTo(s.id)}
-                        disabled={switching !== null}
-                        style={{
-                          padding: "0.35rem 0.65rem",
-                          border: "1px solid var(--border, #e2e8f0)",
-                          borderRadius: 5,
-                          background: "var(--surface, #fff)",
-                          cursor:
-                            switching !== null ? "not-allowed" : "pointer",
-                          fontSize: "0.8rem",
-                        }}
-                      >
-                        {switching === s.id ? "Switching…" : "Switch to"}
-                      </button>
-                    </td>
+                    <>
+                      <td style={td}>
+                        <button
+                          type="button"
+                          onClick={() => setEditing(s)}
+                          style={rowBtn}
+                        >
+                          Edit
+                        </button>
+                      </td>
+                      <td style={td}>
+                        <button
+                          type="button"
+                          onClick={() => void toggleActive(s)}
+                          disabled={
+                            togglingActive !== null ||
+                            (s.isPrimary && s.active)
+                          }
+                          title={
+                            s.isPrimary && s.active
+                              ? "Primary school cannot be deactivated"
+                              : undefined
+                          }
+                          style={{
+                            ...rowBtn,
+                            color: s.active ? "#b91c1c" : "#15803d",
+                            opacity:
+                              s.isPrimary && s.active
+                                ? 0.4
+                                : togglingActive === s.id
+                                  ? 0.6
+                                  : 1,
+                          }}
+                        >
+                          {togglingActive === s.id
+                            ? "…"
+                            : s.active
+                              ? "Deactivate"
+                              : "Reactivate"}
+                        </button>
+                      </td>
+                      <td style={td}>
+                        <button
+                          type="button"
+                          onClick={() => switchTo(s.id)}
+                          disabled={switching !== null}
+                          style={{
+                            ...rowBtn,
+                            cursor:
+                              switching !== null ? "not-allowed" : "pointer",
+                          }}
+                        >
+                          {switching === s.id ? "Switching…" : "Switch to"}
+                        </button>
+                      </td>
+                    </>
                   )}
                 </tr>
               ))}
@@ -234,9 +309,28 @@ export default function DistrictOverviewRollups() {
           </table>
         </div>
       )}
+      {editing && (
+        <EditSchoolModal
+          school={editing}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            void reload();
+          }}
+        />
+      )}
     </div>
   );
 }
+
+const rowBtn: React.CSSProperties = {
+  padding: "0.35rem 0.65rem",
+  border: "1px solid var(--border, #e2e8f0)",
+  borderRadius: 5,
+  background: "var(--surface, #fff)",
+  cursor: "pointer",
+  fontSize: "0.8rem",
+};
 
 const th: React.CSSProperties = {
   padding: "0.5rem 0.75rem",
