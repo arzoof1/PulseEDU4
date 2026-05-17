@@ -12,10 +12,88 @@
 // or Mountain tenant onboarded (a case opened 9pm PT on June 30 would
 // land in next year's bucket because UTC was already July 1).
 //
-// Single canonical TZ for now (matches the seed migration and the AST
-// cron). When a real cross-TZ tenant onboards, swap the default for
-// a per-school IANA column threaded through every caller.
+// Default fallback TZ. The `schools.timezone` column (added 2026)
+// is the source of truth per-school; this constant only matters for
+// callers that don't have a schoolId in scope (test fixtures, cron
+// pre-loops, and the in-memory date math in `formatCaseNumber`).
 export const DEFAULT_SCHOOL_TZ = "America/New_York";
+
+import { db, schoolsTable } from "@workspace/db";
+import { eq } from "drizzle-orm";
+
+// Process-lifetime cache of school → IANA timezone. School TZ is set
+// once at onboarding and almost never changes, so a tiny LRU-free
+// Map keyed by id is fine — worst case we re-read on a cold worker.
+// Clearing is manual (`clearSchoolTimezoneCache`) for tests or after
+// a SuperUser edit; production never needs it.
+const schoolTzCache = new Map<number, string>();
+
+export async function getSchoolTimezone(schoolId: number): Promise<string> {
+  const cached = schoolTzCache.get(schoolId);
+  if (cached) return cached;
+  const [row] = await db
+    .select({ timezone: schoolsTable.timezone })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const tz = row?.timezone || DEFAULT_SCHOOL_TZ;
+  schoolTzCache.set(schoolId, tz);
+  return tz;
+}
+
+export function clearSchoolTimezoneCache(schoolId?: number): void {
+  if (schoolId == null) schoolTzCache.clear();
+  else schoolTzCache.delete(schoolId);
+}
+
+// Compute the UTC instant for "local midnight today" in a given IANA
+// timezone. Used by daily roll-call/queue queries that want a stable
+// per-school day boundary instead of UTC-noon-ish heuristics.
+//
+// Algorithm: start from the local YYYY-MM-DD that `now` lives in,
+// then iteratively converge a UTC guess so that, when re-formatted in
+// the target tz, it reads as exactly y-m-d 00:00. Two passes handle
+// DST transitions correctly — a noon-probe offset is wrong on the
+// spring-forward day because midnight and noon sit on opposite sides
+// of the 02:00 jump (architect-flagged regression, May 2026).
+export function startOfDayUtc(now: Date, tz: string): Date {
+  const dayFmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  const ymd = dayFmt.format(now); // YYYY-MM-DD
+  const [yStr, mStr, dStr] = ymd.split("-");
+  const y = Number(yStr);
+  const m = Number(mStr);
+  const d = Number(dStr);
+  const tzFmt = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+  const targetMs = Date.UTC(y, m - 1, d, 0, 0, 0);
+  let guess = targetMs; // naive: treat local midnight as if it were UTC
+  for (let i = 0; i < 3; i++) {
+    const parts = tzFmt.formatToParts(new Date(guess));
+    const ly = Number(parts.find((p) => p.type === "year")?.value);
+    const lm = Number(parts.find((p) => p.type === "month")?.value);
+    const ld = Number(parts.find((p) => p.type === "day")?.value);
+    let lh = Number(parts.find((p) => p.type === "hour")?.value);
+    const lmin = Number(parts.find((p) => p.type === "minute")?.value);
+    // Intl in some runtimes emits "24" for midnight; normalize.
+    if (lh === 24) lh = 0;
+    const localMs = Date.UTC(ly, lm - 1, ld, lh, lmin, 0);
+    const diff = targetMs - localMs;
+    if (diff === 0) return new Date(guess);
+    guess += diff;
+  }
+  return new Date(guess);
+}
 
 function calendarPartsInTz(d: Date, tz: string): { y: number; m: number } {
   // en-US YYYY-MM-DD via Intl, then parse. Avoids any locale ambiguity.

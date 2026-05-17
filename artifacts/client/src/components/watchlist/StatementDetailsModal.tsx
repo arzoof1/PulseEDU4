@@ -20,6 +20,7 @@ interface StatementOut {
   requestedAt: string;
   completedAt: string | null;
   body: string | null;
+  formattedId?: string | null;
 }
 
 interface InteractionOut {
@@ -38,6 +39,7 @@ interface InteractionOut {
   dismissedAt?: string | null;
   dismissedReason?: string | null;
   dismissedByName?: string | null;
+  formattedCaseId?: string | null;
 }
 
 interface DetailsResponse {
@@ -114,7 +116,7 @@ export default function StatementDetailsModal({
               Statement details
             </div>
             <div className="text-base font-bold" style={{ color: C.ink }}>
-              {i ? `#${i.id} · ${i.kind}` : "Loading…"}
+              {i ? `${i.formattedCaseId ?? `#${i.id}`} · ${i.kind}` : "Loading…"}
             </div>
           </div>
           <button
@@ -171,7 +173,7 @@ export default function StatementDetailsModal({
                   className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-semibold"
                   style={{ background: C.brandSoft, color: C.brand }}
                 >
-                  Case #{i.caseId} →
+                  {i.formattedCaseId ? `Case ${i.formattedCaseId}` : `Case #${i.caseId}`} →
                 </button>
               ) : i.status === "dismissed" ? (
                 <span

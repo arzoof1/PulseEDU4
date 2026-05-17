@@ -64,16 +64,23 @@ export async function runAstYearEndLapse(
 ): Promise<LapseResult[]> {
   // School-year label for the year that just ENDED (the one whose
   // balance is being zeroed). When this runs July 1 2027 it should
-  // record "26-27" lapses, not "27-28".
+  // record "26-27" lapses, not "27-28". Computed per-school so a
+  // Pacific or Mountain tenant's boundary fires correctly relative
+  // to their own midnight.
   const oneSecondBeforeMidnight = new Date(now.getTime() - 1000);
-  const yearLabel = schoolYearLabelFor(oneSecondBeforeMidnight);
-  const yearKey = hashYearLabel(yearLabel);
 
-  const schools = await db.select({ id: schoolsTable.id }).from(schoolsTable);
+  const schools = await db
+    .select({ id: schoolsTable.id, timezone: schoolsTable.timezone })
+    .from(schoolsTable);
   const results: LapseResult[] = [];
 
   for (const school of schools) {
     const schoolId = school.id;
+    const yearLabel = schoolYearLabelFor(
+      oneSecondBeforeMidnight,
+      school.timezone,
+    );
+    const yearKey = hashYearLabel(yearLabel);
 
     const result = await db.transaction(async (tx) => {
       // 1. Advisory lock on (namespace ^ schoolId, yearKey). Auto-

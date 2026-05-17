@@ -4498,7 +4498,7 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       caseInserts.push({
         schoolId: school.id,
         caseNumber: i + 1,
-        schoolYearLabel: schoolYearLabelFor(new Date()),
+        schoolYearLabel: schoolYearLabelFor(new Date(), school.timezone),
         title: WL_CASE_TITLES[i] ?? `Case ${i + 1}`,
         status: i === 0 ? "escalated" : i === numCases - 1 ? "monitoring" : "open",
         leadStaffId: lead.id,
@@ -5743,6 +5743,22 @@ export async function ensureKioskWelcomeSchema(): Promise<void> {
 // Lets admins spot lost-badge / reissue patterns and provides a
 // chain-of-custody for the printed credential.
 // -----------------------------------------------------------------------------
+// -----------------------------------------------------------------------------
+// Schools.timezone bootstrap (per-school IANA timezone).
+//
+// The schema TS file declares `timezone TEXT NOT NULL DEFAULT 'America/New_York'`,
+// but production DBs onboarded before May 2026 won't have the column yet
+// — add it idempotently via ALTER. Threaded through `getSchoolTimezone()`
+// and used by the case-number year-label flow, AST lapse cron, and kiosk
+// sign-in roll-call so a non-Eastern tenant computes day boundaries
+// correctly.
+// -----------------------------------------------------------------------------
+export async function ensureSchoolsTimezoneColumn(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE schools ADD COLUMN IF NOT EXISTS timezone TEXT NOT NULL DEFAULT 'America/New_York'`,
+  );
+}
+
 export async function ensureBadgePrintEventsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS badge_print_events (

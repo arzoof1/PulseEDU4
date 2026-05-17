@@ -30,9 +30,11 @@ import {
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
   ensureBadgePrintEventsSchema,
+  ensureSchoolsTimezoneColumn,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
+import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
@@ -180,6 +182,21 @@ async function runSeed(): Promise<void> {
   await ensureKioskWelcomeSchema();
   // Phase 4 — Badge print event audit ledger. Idempotent.
   await ensureBadgePrintEventsSchema();
+  // Packet A — Per-school IANA timezone column on schools (pre-2026
+  // tenants may be missing it). Idempotent.
+  await ensureSchoolsTimezoneColumn();
+  // Packet A — One-shot backfill of ws_seq for legacy witness
+  // statements that were attached to cases before the per-case
+  // numbering shipped. Idempotent: skips rows that already have a
+  // ws_seq, so a second boot is a near-no-op cheap COUNT.
+  try {
+    const r = await backfillWitnessSequences();
+    if (r.cases > 0) {
+      logger.info(r, "[boot] backfilled witness statement sequences");
+    }
+  } catch (err) {
+    logger.warn({ err }, "[boot] witness ws_seq backfill failed");
+  }
 }
 
 // In production we MUST open the port within the platform's health-check

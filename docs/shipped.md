@@ -3,6 +3,18 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Packet A follow-ups: witness statement formatted-ID surfacing
+  (PlayerDrawer pill + StatementDetailsModal header `formattedCaseId`
+  + audit payloads on reminded/requested/edited/completed + one-shot
+  boot backfill); per-school IANA timezone threaded through seed case
+  backfill, AST lapse cron, watchlist case-create (x2), and kiosk
+  `/class-signins/today` + `resolveActivePeriod` (replaces the
+  hardcoded `America/New_York` + bogus `-05:00` offset, now uses a
+  DST-correct `startOfDayUtc()` helper); pickup module design
+  decisions captured in code (in-app chime stays visual-only,
+  5-digit expansion deferred until the 80%-of-range warn fires with
+  the exact change recipe inlined).
+
 - Kiosk Phase 4 packet: rectangle student photos on lanyard badges
   (with house-color frame + initials-bubble fallback), roster-inline
   admin "Print badge" button on StudentProfile, student picker

@@ -1551,6 +1551,23 @@ router.patch(
 
 // 4-digit range: 1001..9999 inclusive = 8999 slots per school. The
 // admin UI surfaces a warning at 80% so an admin can plan ahead.
+//
+// 5-DIGIT EXPANSION PATH (Packet A — design notes, code change deferred
+// until the 80%-of-range warning fires for a real tenant): bump
+// NUMBER_RANGE_MAX to 99999, narrow the PDF tag font one notch in
+// lib/pickupTagsPdf.ts, and let the curb keypad accept 4-OR-5 digit
+// input (keypad already caps at 6 chars, server already clean()s
+// to 10 — no migration required, the column is TEXT). DO NOT bump
+// preemptively: a 5-digit number is harder for a parent to read aloud
+// on the carpool radio, so we trade 11x capacity for usability only
+// when a school crosses the warn threshold.
+//
+// IN-APP CHIME (Packet A — design resolved, no code change): visual-
+// only confirmation stays. A chime on every "added to line" would
+// overlap noisily at peak (30 cars/min schools) and would conflict
+// with the cafeteria/classroom signage tile that some tenants already
+// play through the same audio bus. Reopen if we ever build a per-
+// kiosk volume model.
 const NUMBER_RANGE_MIN = 1001;
 const NUMBER_RANGE_MAX = 9999;
 const NUMBER_RANGE_TOTAL = NUMBER_RANGE_MAX - NUMBER_RANGE_MIN + 1;

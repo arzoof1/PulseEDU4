@@ -25,6 +25,7 @@ import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
+import { getSchoolTimezone, startOfDayUtc } from "../lib/schoolYear.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
 import {
   findPolarityConflict,
@@ -1283,22 +1284,12 @@ router.get(
   async (req: Request, res: Response): Promise<void> => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    // Local-midnight cutoff in America/New_York (per
-    // DEFAULT_SCHOOL_TZ). Compute today's YYYY-MM-DD in that tz,
-    // then turn back into a UTC instant.
-    const tz = "America/New_York";
-    const fmt = new Intl.DateTimeFormat("en-CA", {
-      timeZone: tz,
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-    });
-    const today = fmt.format(new Date()); // YYYY-MM-DD
-    const startOfDay = new Date(`${today}T00:00:00-05:00`);
-    // Note: -05:00 is correct for EST; DST would be -04:00. Since
-    // this query only filters "today's rows" (a coarse window), a
-    // 1-hour edge case at midnight is acceptable. The per-school
-    // IANA work in replit.md "Open work" will tighten this.
+    // Local-midnight cutoff in the school's own IANA timezone (now
+    // sourced from schools.timezone — see getSchoolTimezone). Uses
+    // the shared startOfDayUtc helper which round-trips through Intl
+    // to avoid the spring-forward hour gap.
+    const tz = await getSchoolTimezone(schoolId);
+    const startOfDay = startOfDayUtc(new Date(), tz);
     const rows = await db
       .select({
         id: classSigninsTable.id,
@@ -1378,11 +1369,11 @@ async function resolveActivePeriod(
       })
       .from(bellSchedulePeriodsTable)
       .where(eq(bellSchedulePeriodsTable.scheduleId, schedule.id));
-    // Compute current HH:MM in the school's canonical timezone
-    // (DEFAULT_SCHOOL_TZ — America/New_York), NOT the server's local
-    // clock — Replit hosts can drift to UTC and the period-name
-    // lookup would silently mis-match for most of the day.
-    const tz = "America/New_York";
+    // Compute current HH:MM in the school's own IANA timezone (from
+    // schools.timezone), NOT the server's local clock — Replit hosts
+    // can drift to UTC and the period-name lookup would silently
+    // mis-match for most of the day.
+    const tz = await getSchoolTimezone(schoolId);
     const parts = new Intl.DateTimeFormat("en-US", {
       timeZone: tz,
       hour12: false,
