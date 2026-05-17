@@ -3,6 +3,24 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Student House Placement — admin bulk-sort UI (preview + commit with
+  per-house current/proposed/Δ counts, 24-hour undo) on the "House
+  Rankings" page above the public signage; balanced largest-group-first
+  placement with union-find sibling clustering through `parent_students`;
+  `student_house_sort_jobs` (snapshot of prior `house_id` per change)
+  and append-only `student_house_changes` audit table; routes
+  `POST /api/houses/sort/preview|commit`, `POST /api/houses/sort/undo/:jobId`,
+  `GET /api/houses/changes` (200-row feed + undoable banner), all
+  admin/superuser-gated. Single-student `PATCH /api/students/:studentId/house`
+  with reason ≥10 chars + cross-tenant guards, surfaced from the
+  Student Profile header via a house pill + "Change house" modal.
+  Roster importer accepts an optional `house_name` column; unmapped
+  brand-new rows fall back to a rotating smallest-house default
+  (existing students are never auto-reassigned by re-uploads). Shared
+  `recommendNextHouse(schoolId)` helper exported from
+  `routes/houses.ts`. Student Profile API now returns the active
+  house (id/name/color) on the header payload.
+
 - Kiosk Phase 3 — printable Student ID badges (Letter PDF, QR to
   `/kiosk?signin=<studentId>`, house ribbon via shared
   `pdfColors.normalizeHex`); real "Sign in to class" arrival flow

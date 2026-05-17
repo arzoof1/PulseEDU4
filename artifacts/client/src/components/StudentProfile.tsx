@@ -18,6 +18,7 @@ import {
   ResponsiveContainer,
 } from "recharts";
 import { authFetch } from "../lib/authToken";
+import ChangeHouseModal from "./ChangeHouseModal";
 
 type WindowKey = "3" | "7" | "15" | "30" | "custom";
 
@@ -51,6 +52,9 @@ interface ProfilePayload {
     // Drives the "Retained: Grade N" Chip in the header and the
     // mark/unmark control in the demographics editor.
     retainedGrades: number[];
+    // PBIS house affiliation. null when unassigned. Drives the colored
+    // house pill + admin "Change house" modal in the header.
+    house: { id: number; name: string; color: string } | null;
   };
   window: { from: string; to: string; label: string; days: number | null };
   pillars: {
@@ -1823,6 +1827,11 @@ export default function StudentProfile({
   const [editIs504, setEditIs504] = useState(false);
   const [editCtEla, setEditCtEla] = useState(false);
   const [editCtMath, setEditCtMath] = useState(false);
+  // Change-house modal (admin-only). Open state lives at the page
+  // level so the modal portals out of the header chip stack and the
+  // save callback can patch our local `data.header.house` in place
+  // without forcing a refetch of the whole profile payload.
+  const [changeHouseOpen, setChangeHouseOpen] = useState(false);
 
   // Unified intervention history (Tier 2 + Tier 3 + legacy + check-in/out).
   // Lives below the pillars grid as the canonical "everything we've tried
@@ -2130,6 +2139,65 @@ export default function StudentProfile({
                   )
                 }
               />
+              {/* PBIS house pill. Always rendered (read-only) so any
+                  staff member sees which house the student belongs to;
+                  admins additionally get a "Change" button that opens
+                  the audited single-student house-change modal. */}
+              {header.house ? (
+                <span
+                  title={`PBIS house: ${header.house.name}`}
+                  style={{
+                    display: "inline-block",
+                    marginLeft: 4,
+                    padding: "0.2rem 0.6rem",
+                    background: header.house.color || "#e5e7eb",
+                    color: "#0f172a",
+                    border: "1px solid rgba(15,23,42,0.12)",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 700,
+                  }}
+                >
+                  🏠 {header.house.name}
+                </span>
+              ) : (
+                <span
+                  title="No PBIS house assigned"
+                  style={{
+                    display: "inline-block",
+                    marginLeft: 4,
+                    padding: "0.2rem 0.6rem",
+                    background: "#f1f5f9",
+                    color: "#475569",
+                    border: "1px dashed #cbd5e1",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                  }}
+                >
+                  No house
+                </span>
+              )}
+              {isAdmin && (
+                <button
+                  type="button"
+                  onClick={() => setChangeHouseOpen(true)}
+                  style={{
+                    marginLeft: 4,
+                    background: "transparent",
+                    border: "1px solid #cbd5e1",
+                    color: "#1e3a8a",
+                    padding: "0.2rem 0.6rem",
+                    borderRadius: 999,
+                    fontSize: "0.78rem",
+                    fontWeight: 600,
+                    cursor: "pointer",
+                  }}
+                  title="Change this student's PBIS house"
+                >
+                  Change house
+                </button>
+              )}
               
               {canPrintOverallReport && (
                 <a
@@ -3126,6 +3194,19 @@ export default function StudentProfile({
           </div>
         )}
       </div>
+      {changeHouseOpen && data && (
+        <ChangeHouseModal
+          studentId={data.header.studentId}
+          studentName={`${data.header.firstName} ${data.header.lastName}`}
+          currentHouseId={data.header.house?.id ?? null}
+          onClose={() => setChangeHouseOpen(false)}
+          onSaved={(next) =>
+            setData((prev) =>
+              prev ? { ...prev, header: { ...prev.header, house: next } } : prev,
+            )
+          }
+        />
+      )}
     </div>
   );
 }

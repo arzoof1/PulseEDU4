@@ -33,6 +33,7 @@ import {
   studentFastScoresTable,
   studentImportSnapshotsTable,
   schoolSettingsTable,
+  housesTable,
 } from "@workspace/db";
 import { eq, and, or, desc, sql, isNull, inArray, gte, lte, ilike } from "drizzle-orm";
 import {
@@ -1670,6 +1671,13 @@ type ParsedRoster = {
   ell: boolean | undefined;
   ese: boolean | undefined;
   is504: boolean | undefined;
+  // Optional PBIS house affiliation by display name (case-insensitive
+  // match against houses.name for the importer's school). Resolved to
+  // houses.id at insert time. Brand-new students whose row has no
+  // house_name (or an unmatched value) fall back to the smallest-house
+  // recommendation so rosters stay balanced as kids arrive through the
+  // year.
+  houseName: string | null;
 };
 
 // Boolean coercion for CSV columns. Accepts the conventions actual SIS
@@ -1699,6 +1707,7 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     "ell",
     "ese",
     "is_504",
+    "house_name",
   ]),
   requiredFields: ["student_id", "first_name", "last_name", "grade"],
   headerSynonyms: {
@@ -1747,6 +1756,7 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
     ell: ["ell", "esol", "lep", "ell_flag", "english_learner", "el_status"],
     ese: ["ese", "sped", "swd", "iep", "ese_flag", "exceptional_student"],
     is_504: ["504", "is_504", "section_504", "504_plan", "fivezerofour"],
+    house_name: ["house", "house_name", "housename", "pbis_house", "team"],
   },
   parseRow(row, mapping) {
     const target: Record<string, string> = {};
@@ -1810,6 +1820,7 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         ell: optionalFlag("ell"),
         ese: optionalFlag("ese"),
         is504: optionalFlag("is_504"),
+        houseName: optional("house_name"),
       },
     };
   },
@@ -1844,6 +1855,60 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
       existing.map((s) => [s.studentId, s]),
     );
 
+    // House placement (Phase 5: bulk house placement). For brand-new
+    // inserts only: resolve the CSV's house_name to a houses.id, OR
+    // pick the currently smallest house as the rotating default so
+    // mid-year additions stay balanced. We do NOT touch the houseId
+    // on existing students from the roster importer — that's reserved
+    // for the admin "Change house" modal (audited) and the bulk sort
+    // commit (snapshotted).
+    const houseRows = await tx
+      .select({
+        id: housesTable.id,
+        name: housesTable.name,
+      })
+      .from(housesTable)
+      .where(eq(housesTable.schoolId, schoolId));
+    const houseByName = new Map(
+      houseRows.map((h) => [h.name.trim().toLowerCase(), h.id]),
+    );
+    // Local running count so successive inserts in the same chunk
+    // rotate through houses instead of all landing on the same one
+    // (the unbumped DB count). Seeded from the live per-house total.
+    const liveCounts: Record<number, number> = {};
+    for (const h of houseRows) liveCounts[h.id] = 0;
+    if (houseRows.length > 0) {
+      const cnt = await tx
+        .select({
+          houseId: studentsTable.houseId,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(studentsTable)
+        .where(eq(studentsTable.schoolId, schoolId))
+        .groupBy(studentsTable.houseId);
+      for (const r of cnt) {
+        if (r.houseId !== null && liveCounts[r.houseId] !== undefined) {
+          liveCounts[r.houseId] = r.count;
+        }
+      }
+    }
+    const orderedHouseIds = houseRows
+      .map((h) => h.id)
+      .sort((a, b) => a - b);
+    const pickRotatingHouseId = (): number | null => {
+      if (orderedHouseIds.length === 0) return null;
+      let pick = orderedHouseIds[0];
+      let best = liveCounts[pick];
+      for (const hid of orderedHouseIds) {
+        if (liveCounts[hid] < best) {
+          pick = hid;
+          best = liveCounts[hid];
+        }
+      }
+      liveCounts[pick] += 1;
+      return pick;
+    };
+
     let touched = 0;
     for (const p of parsed) {
       const prior = existingByStudentId.get(p.studentId);
@@ -1864,6 +1929,24 @@ const ROSTERS_CONFIG: KindConfig<ParsedRoster> = {
         if (p.ell !== undefined) insertRow.ell = p.ell;
         if (p.ese !== undefined) insertRow.ese = p.ese;
         if (p.is504 !== undefined) insertRow.is504 = p.is504;
+        // House placement: explicit CSV value wins; otherwise rotate
+        // the smallest house. An unmatched house_name silently falls
+        // back to the rotation rather than erroring the whole row —
+        // an import is the wrong place to fail a child on misspelled
+        // metadata, and the admin sort panel can fix anything stray.
+        if (p.houseName) {
+          const hid = houseByName.get(p.houseName.trim().toLowerCase());
+          if (hid !== undefined) {
+            insertRow.houseId = hid;
+            liveCounts[hid] = (liveCounts[hid] ?? 0) + 1;
+          } else {
+            const fallback = pickRotatingHouseId();
+            if (fallback !== null) insertRow.houseId = fallback;
+          }
+        } else {
+          const fallback = pickRotatingHouseId();
+          if (fallback !== null) insertRow.houseId = fallback;
+        }
         // Race: another concurrent commit may have inserted this
         // student_id between our SELECT and INSERT. onConflictDoNothing
         // turns that race into a no-op rather than a hard failure;

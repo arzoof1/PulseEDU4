@@ -44,6 +44,7 @@ import {
   parentStudentsTable,
   studentSeparationsTable,
   studentRetentionsTable,
+  housesTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -1009,6 +1010,27 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       // Grades the student was retained in (ascending). Drives the R
       // indicator on the Student Profile header.
       retainedGrades: retainedGradesList,
+      // PBIS house affiliation (null when unassigned). Drives the
+      // colored house pill + admin "Change house" modal in the
+      // Student Profile header. Loaded lazily here so the profile
+      // route stays a single round-trip for the client.
+      house: await (async () => {
+        if (student.houseId == null) return null;
+        const [h] = await db
+          .select({
+            id: housesTable.id,
+            name: housesTable.name,
+            color: housesTable.color,
+          })
+          .from(housesTable)
+          .where(
+            and(
+              eq(housesTable.id, student.houseId),
+              eq(housesTable.schoolId, schoolId),
+            ),
+          );
+        return h ?? null;
+      })(),
     },
     window: {
       from: window.from.toISOString(),

@@ -73,6 +73,7 @@ import PbisNeedsAttention from "./components/PbisNeedsAttention";
 // the main content pane (sidebar stays visible). The component file is
 // kept for possible future reuse but is no longer imported.
 import HousesSignage from "./signage/HousesSignage";
+import HousesPanel from "./components/HousesPanel";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
@@ -14784,6 +14785,15 @@ function App() {
 
       {activeSection === "houseRankings" && (
         <FeatureGate feature="houses" label="PBIS Houses">
+          {/* Admin tooling (bulk sort + audit log) renders above the
+              public rankings; non-admins get a 403 from those endpoints
+              so the panel's empty/error state is what they would see —
+              we hide it entirely for them to keep the surface clean. */}
+          {(authUser?.isAdmin || authUser?.isSuperUser) && (
+            <div style={{ marginBottom: "1rem" }}>
+              <HousesPanel />
+            </div>
+          )}
           {/* Reuse the signage HousesSignage screen verbatim — when given
               schoolId="session" it drops the URL query param and trusts
               the logged-in session, which is what we want for in-app

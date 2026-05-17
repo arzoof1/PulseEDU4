@@ -322,6 +322,48 @@ export async function ensureHousesSchema() {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS house_id INTEGER`,
   );
+  // student_house_changes — append-only audit of every house move.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_house_changes (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_db_id INTEGER NOT NULL,
+      from_house_id INTEGER,
+      to_house_id INTEGER NOT NULL,
+      reason TEXT NOT NULL,
+      changed_by_staff_id INTEGER NOT NULL,
+      source TEXT NOT NULL DEFAULT 'manual',
+      sort_job_id INTEGER,
+      changed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_house_changes_by_school
+      ON student_house_changes (school_id, changed_at)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_house_changes_by_student
+      ON student_house_changes (student_db_id)
+  `);
+  // student_house_sort_jobs — snapshot per bulk sort for 24h undo.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_house_sort_jobs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      committed_by_staff_id INTEGER NOT NULL,
+      committed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      include_assigned INTEGER NOT NULL DEFAULT 0,
+      keep_siblings INTEGER NOT NULL DEFAULT 0,
+      affected_count INTEGER NOT NULL DEFAULT 0,
+      snapshot JSONB NOT NULL DEFAULT '[]'::jsonb,
+      undone_at TIMESTAMPTZ,
+      undone_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS student_house_sort_jobs_by_school
+      ON student_house_sort_jobs (school_id, committed_at)
+  `);
 }
 
 export async function seedHousesIfEmpty() {

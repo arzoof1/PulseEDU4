@@ -12,6 +12,8 @@ import {
   schoolAccommodationsTable,
   studentEmergencyContactsTable,
   staffTable,
+  housesTable,
+  studentHouseChangesTable,
 } from "@workspace/db";
 import { eq, isNull, and, asc, inArray, or, ilike } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -297,6 +299,116 @@ router.patch(
         ),
       );
     res.json({ ok: true, updated: result.rowCount ?? 0 });
+  },
+);
+
+// PATCH /students/:studentId/house — admin-only, single-row house change
+// with a required reason. Writes the new house_id AND appends a row to
+// student_house_changes so the move is auditable. Cross-tenant guards:
+// student must belong to the actor's school, and the new house must
+// belong to the same school as the student.
+router.patch(
+  "/students/:studentId/house",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    if (!isAdminOrSuperUser(staff)) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const studentIdParam = String(req.params.studentId ?? "");
+    if (!studentIdParam) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const body = req.body ?? {};
+    const rawHouseId = body.houseId;
+    const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+    if (reason.length < 10) {
+      res
+        .status(400)
+        .json({ error: "Reason is required (at least 10 characters)." });
+      return;
+    }
+    let newHouseId: number | null;
+    if (rawHouseId === null) {
+      newHouseId = null;
+    } else if (
+      typeof rawHouseId === "number" &&
+      Number.isInteger(rawHouseId) &&
+      rawHouseId > 0
+    ) {
+      newHouseId = rawHouseId;
+    } else {
+      res
+        .status(400)
+        .json({ error: "houseId must be a positive integer or null" });
+      return;
+    }
+    const [student] = await db
+      .select({ id: studentsTable.id, houseId: studentsTable.houseId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.studentId, studentIdParam),
+        ),
+      );
+    if (!student) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+    if (newHouseId !== null) {
+      const [house] = await db
+        .select({ id: housesTable.id })
+        .from(housesTable)
+        .where(
+          and(
+            eq(housesTable.id, newHouseId),
+            eq(housesTable.schoolId, schoolId),
+          ),
+        );
+      if (!house) {
+        res
+          .status(400)
+          .json({ error: "House does not belong to this school." });
+        return;
+      }
+    }
+    if (student.houseId === newHouseId) {
+      res.json({ ok: true, unchanged: true });
+      return;
+    }
+    // The audit table requires a non-null toHouseId; clearing a
+    // student's house ("— None —") is a legitimate operation on the
+    // students row but we don't generate an audit row for it. The
+    // record-of-truth is the student row itself in that case.
+    await db.transaction(async (tx) => {
+      await tx
+        .update(studentsTable)
+        .set({ houseId: newHouseId })
+        .where(
+          and(
+            eq(studentsTable.id, student.id),
+            eq(studentsTable.schoolId, schoolId),
+          ),
+        );
+      if (newHouseId !== null) {
+        await tx.insert(studentHouseChangesTable).values({
+          schoolId,
+          studentDbId: student.id,
+          fromHouseId: student.houseId,
+          toHouseId: newHouseId,
+          reason,
+          changedByStaffId: staff.id,
+          source: "manual",
+        });
+      }
+    });
+    res.json({ ok: true, houseId: newHouseId });
   },
 );
 
