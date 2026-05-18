@@ -192,6 +192,15 @@ export default function FastBenchmarksDashboard({
     };
   }, [subject, window, schoolYear]);
 
+  // Reset the outlier benchmark picker whenever primary filters
+  // change — codes are subject-specific, so a stale code from a
+  // previous subject/window/year would silently send a request the
+  // server can't satisfy. Clearing it lets the auto-pick (weakest
+  // benchmark) re-engage on the next response.
+  useEffect(() => {
+    setOutlierCode("");
+  }, [subject, window, schoolYear]);
+
   // Outliers load — subject/window/schoolYear/(optional code).
   useEffect(() => {
     let cancelled = false;
