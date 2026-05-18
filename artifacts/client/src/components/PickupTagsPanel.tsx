@@ -170,6 +170,14 @@ export default function PickupTagsPanel() {
   const [teacherQ, setTeacherQ] = useState("");
   const [showTeacherHits, setShowTeacherHits] = useState(false);
   const [teacherBusy, setTeacherBusy] = useState(false);
+  // Resolved teacher + tag-id set. Selecting a teacher only LOADS the
+  // ids (count is shown to the user), then explicit Download/View
+  // buttons trigger the PDF — the prior "click name → instant
+  // download" surprised users who wanted to confirm the count first.
+  const [selectedTeacher, setSelectedTeacher] =
+    useState<TeacherOption | null>(null);
+  const [teacherAuthIds, setTeacherAuthIds] = useState<number[]>([]);
+  const [teacherStudentCount, setTeacherStudentCount] = useState(0);
 
   const refresh = useCallback(async (sid: number) => {
     setLoading(true);
@@ -260,9 +268,14 @@ export default function PickupTagsPanel() {
       .slice(0, 12);
   })();
 
-  const printTagsForTeacher = async (t: TeacherOption) => {
+  // Load (but don't print) the tag-id set for a teacher. Surface the
+  // count so the user can sanity-check before downloading 47 pages.
+  const loadTagsForTeacher = async (t: TeacherOption) => {
     setMsg(null);
     setTeacherBusy(true);
+    setSelectedTeacher(t);
+    setTeacherAuthIds([]);
+    setTeacherStudentCount(0);
     try {
       const res = await authFetch(
         `/api/pickup/authorizations/by-teacher?teacherId=${t.id}`,
@@ -277,25 +290,34 @@ export default function PickupTagsPanel() {
         studentCount: number;
         rosterSize?: number;
       };
+      setTeacherAuthIds(data.authorizationIds);
+      setTeacherStudentCount(data.studentCount);
       if (data.authorizationIds.length === 0) {
         setMsg(
           `No active pickup tags on ${t.displayName}'s roster ` +
             `(${data.rosterSize ?? 0} students).`,
         );
-        return;
       }
-      await downloadPdf(
-        `/api/pickup/tags.pdf?ids=${data.authorizationIds.join(",")}`,
-        `pickup-tags-${t.displayName.replace(/[^a-z0-9]+/gi, "-")}.pdf`,
-      );
-      setMsg(
-        `Printed ${data.authorizationIds.length} tag(s) for ` +
-          `${data.studentCount} student(s) on ${t.displayName}'s roster.`,
-      );
     } finally {
       setTeacherBusy(false);
       setShowTeacherHits(false);
     }
+  };
+
+  const teacherFilenameSlug = (t: TeacherOption | null) =>
+    t ? t.displayName.replace(/[^a-z0-9]+/gi, "-") : "teacher";
+
+  const downloadTeacherPdf = () => {
+    if (!selectedTeacher || teacherAuthIds.length === 0) return;
+    return downloadPdf(
+      `/api/pickup/tags.pdf?ids=${teacherAuthIds.join(",")}`,
+      `pickup-tags-${teacherFilenameSlug(selectedTeacher)}.pdf`,
+    );
+  };
+
+  const viewTeacherPdf = () => {
+    if (!selectedTeacher || teacherAuthIds.length === 0) return;
+    return viewPdf(`/api/pickup/tags.pdf?ids=${teacherAuthIds.join(",")}`);
   };
 
   const pickStudent = (s: StudentHit) => {
@@ -309,30 +331,55 @@ export default function PickupTagsPanel() {
     setStudentDbId(s.id);
   };
 
-  // Stream a tag-PDF response to the browser as a download. Uses
-  // authFetch so the school-scoped session cookie rides along —
-  // window.open() would skip it inside the Replit iframe and 401.
-  const downloadPdf = async (url: string, filename: string) => {
+  // Fetch a tag-PDF response via authFetch (so the school-scoped
+  // session cookie rides along — window.open() to the URL directly
+  // would skip the cookie inside the Replit iframe and 401), then
+  // hand back a same-origin blob: URL the caller can use for a
+  // download anchor or a `_blank` window.open.
+  const fetchPdfBlobUrl = async (url: string): Promise<string | null> => {
     setMsg(null);
     try {
       const res = await authFetch(url);
       if (!res.ok) {
         const b = (await res.json().catch(() => ({}))) as { error?: string };
         setMsg(b.error ?? `PDF failed (${res.status})`);
-        return;
+        return null;
       }
       const blob = await res.blob();
-      const objectUrl = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = objectUrl;
-      a.download = filename;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+      return URL.createObjectURL(blob);
     } catch (err) {
       setMsg(err instanceof Error ? err.message : String(err));
+      return null;
     }
+  };
+
+  const downloadPdf = async (url: string, filename: string) => {
+    const objectUrl = await fetchPdfBlobUrl(url);
+    if (!objectUrl) return;
+    const a = document.createElement("a");
+    a.href = objectUrl;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 30_000);
+  };
+
+  // Open the PDF inline in a new tab so the user can preview before
+  // printing. blob: URLs don't need cookies, so this works inside the
+  // Replit iframe even though a direct window.open(url) would 401.
+  const viewPdf = async (url: string) => {
+    const objectUrl = await fetchPdfBlobUrl(url);
+    if (!objectUrl) return;
+    const w = window.open(objectUrl, "_blank", "noopener,noreferrer");
+    if (!w) {
+      setMsg(
+        "Pop-up blocked — allow pop-ups for this site to view the PDF inline, or use Download instead.",
+      );
+    }
+    // Revoke later than download because the new tab needs the URL
+    // alive while the user is reading the PDF.
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 5 * 60_000);
   };
 
   const printOne = (a: AuthRow) =>
@@ -341,8 +388,14 @@ export default function PickupTagsPanel() {
       `pickup-tag-${a.pickupNumber}.pdf`,
     );
 
+  const viewOne = (a: AuthRow) =>
+    viewPdf(`/api/pickup/authorizations/${a.id}/tag.pdf`);
+
+  const activeIdsForStudent = () =>
+    auths.filter((a) => a.active).map((a) => a.id);
+
   const printActiveForStudent = () => {
-    const ids = auths.filter((a) => a.active).map((a) => a.id);
+    const ids = activeIdsForStudent();
     if (ids.length === 0) {
       setMsg("No active authorizations to print for this student.");
       return;
@@ -353,11 +406,22 @@ export default function PickupTagsPanel() {
     );
   };
 
+  const viewActiveForStudent = () => {
+    const ids = activeIdsForStudent();
+    if (ids.length === 0) {
+      setMsg("No active authorizations to view for this student.");
+      return;
+    }
+    return viewPdf(`/api/pickup/tags.pdf?ids=${ids.join(",")}`);
+  };
+
   const printAllActive = () =>
     downloadPdf(
       `/api/pickup/tags.pdf`,
       `pickup-tags-all-${new Date().toISOString().slice(0, 10)}.pdf`,
     );
+
+  const viewAllActive = () => viewPdf(`/api/pickup/tags.pdf`);
 
   return (
     <div style={wrap}>
@@ -371,13 +435,22 @@ export default function PickupTagsPanel() {
         <div style={{ fontWeight: 600, marginBottom: 8 }}>
           School-wide
         </div>
-        <button
-          onClick={printAllActive}
-          style={primaryBtn}
-          title="One PDF containing every active pickup tag at this school."
-        >
-          Print all active tags (school-wide)
-        </button>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button
+            onClick={printAllActive}
+            style={primaryBtn}
+            title="Download one PDF containing every active pickup tag at this school."
+          >
+            Download PDF (school-wide)
+          </button>
+          <button
+            onClick={viewAllActive}
+            style={secondaryBtn}
+            title="Open the PDF in a new tab to preview before printing."
+          >
+            View PDF
+          </button>
+        </div>
       </div>
 
       <div style={card}>
@@ -450,7 +523,7 @@ export default function PickupTagsPanel() {
                   onMouseDown={(e) => {
                     e.preventDefault();
                     setTeacherQ(t.displayName);
-                    void printTagsForTeacher(t);
+                    void loadTagsForTeacher(t);
                   }}
                   style={{
                     display: "block",
@@ -478,9 +551,50 @@ export default function PickupTagsPanel() {
               color: "var(--text-subtle, #6b7280)",
             }}
           >
-            Building PDF…
+            Loading tag list…
           </div>
         )}
+        {!teacherBusy &&
+          selectedTeacher &&
+          teacherAuthIds.length > 0 && (
+            <div
+              style={{
+                marginTop: 12,
+                padding: "10px 12px",
+                borderRadius: 8,
+                background: "var(--surface-soft, #f3f4f6)",
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 10,
+              }}
+            >
+              <div style={{ fontSize: 13 }}>
+                Found{" "}
+                <strong>{teacherAuthIds.length} tag(s)</strong> for{" "}
+                <strong>{teacherStudentCount} student(s)</strong> on{" "}
+                <strong>{selectedTeacher.displayName}</strong>'s roster.
+              </div>
+              <div
+                style={{ display: "flex", gap: 8, marginLeft: "auto" }}
+              >
+                <button
+                  onClick={downloadTeacherPdf}
+                  style={primaryBtn}
+                  title="Download the homeroom tag stack as a PDF."
+                >
+                  Download PDF
+                </button>
+                <button
+                  onClick={viewTeacherPdf}
+                  style={secondaryBtn}
+                  title="Open the PDF in a new tab to preview before printing."
+                >
+                  View PDF
+                </button>
+              </div>
+            </div>
+          )}
       </div>
 
       <div style={card}>
@@ -602,14 +716,24 @@ export default function PickupTagsPanel() {
             <div style={{ fontWeight: 600 }}>
               Authorizations for {studentLabel || `student #${studentDbId}`}
             </div>
-            <button
-              onClick={printActiveForStudent}
-              style={secondaryBtn}
-              title="Print all active tags for this student in one PDF."
-              disabled={auths.filter((a) => a.active).length === 0}
-            >
-              Print all for this student
-            </button>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                onClick={printActiveForStudent}
+                style={primaryBtn}
+                title="Download all active tags for this student in one PDF."
+                disabled={auths.filter((a) => a.active).length === 0}
+              >
+                Download all
+              </button>
+              <button
+                onClick={viewActiveForStudent}
+                style={secondaryBtn}
+                title="Open the combined PDF in a new tab to preview."
+                disabled={auths.filter((a) => a.active).length === 0}
+              >
+                View all
+              </button>
+            </div>
           </div>
           {loading ? (
             <div style={{ color: "var(--text-subtle, #6b7280)" }}>
@@ -638,13 +762,22 @@ export default function PickupTagsPanel() {
                     <td style={td}>{a.restrictedFrom ? "yes" : "no"}</td>
                     <td style={td}>{a.active ? "yes" : "no"}</td>
                     <td style={td}>
-                      <button
-                        onClick={() => printOne(a)}
-                        style={smallBtn}
-                        title="Download a single-tag PDF (reprint)."
-                      >
-                        Print tag
-                      </button>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        <button
+                          onClick={() => printOne(a)}
+                          style={smallBtn}
+                          title="Download a single-tag PDF (reprint)."
+                        >
+                          Download
+                        </button>
+                        <button
+                          onClick={() => viewOne(a)}
+                          style={smallBtn}
+                          title="Open the single-tag PDF in a new tab."
+                        >
+                          View
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 ))}
