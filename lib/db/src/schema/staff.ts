@@ -140,6 +140,31 @@ export const staffTable = pgTable("staff", {
   // the admin role. Route gates check admin OR this flag.
   canApproveAst: boolean("can_approve_ast").notNull().default(false),
 
+  // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
+  // the AST gate above so the role-management UI can sit them side by
+  // side under "Time Tracking."
+  //
+  // exemptStatus  — required for staff to see / submit comp-time
+  //                 requests. 'non_exempt' enables the bank; 'exempt'
+  //                 (and NULL) hard-blocks at the route with a copy
+  //                 that points teachers at AST.
+  // canApproveCompTime — explicit per-staff approver flag. Backfilled
+  //                 TRUE for admin tier at boot. Principals + Assistant
+  //                 Principals are auto-elected by the seed; admins
+  //                 can extend to a confidential secretary / HR clerk
+  //                 the same way they do for AST.
+  exemptStatus: text("exempt_status"),
+  canApproveCompTime: boolean("can_approve_comp_time")
+    .notNull()
+    .default(false),
+  // Stamped when an admin marks the staff member as paid-out (flipped
+  // to exempt OR separated). The payout writes a negative ledger row
+  // zeroing the balance; this column is the human-readable "yes, the
+  // last check went out" marker on Staff & Roles.
+  compTimePaidOutAt: timestamp("comp_time_paid_out_at", {
+    withTimezone: true,
+  }),
+
   // Optional home/default classroom for this staff member. Stored as
   // free text (the location name) so historical records remain intact if
   // a room is later renamed or deleted. The Send Pass modal uses this

@@ -97,6 +97,7 @@ export * from "./caseConsistencyState";
 export * from "./caseFootageRequests";
 export * from "./caseOutcomeTypes";
 export * from "./staffAst";
+export * from "./staffComp";
 export * from "./featurePlans";
 export * from "./featureLicensingAuditLog";
 export * from "./studentHouseChanges";

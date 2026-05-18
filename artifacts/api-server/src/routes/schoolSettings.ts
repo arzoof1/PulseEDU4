@@ -2,6 +2,7 @@ import { Router, type IRouter } from "express";
 import { db, schoolSettingsTable, staffTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { bindObjectToSchool } from "./storage.js";
 
 const router: IRouter = Router();
 
@@ -124,6 +125,9 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     pickupWalkedOutDisplaySeconds,
     kioskWelcomeTemplate,
     kioskWelcomeMessages,
+    workweekStart,
+    compTimeRequireAuthForm,
+    compTimeAuthFormObjectKey,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -672,6 +676,84 @@ router.put("/school-settings", async (req, res): Promise<void> => {
         }
       }
     }
+  }
+
+  // Time Tracking settings (shared by AST + Comp Time). Admin only —
+  // these are policy controls that govern FLSA-relevant overtime
+  // accrual for the whole school. Non-admin role changes here are
+  // rejected even though the other settings on this PUT are typically
+  // unrestricted (their UI is gated client-side).
+  if (
+    workweekStart !== undefined ||
+    compTimeRequireAuthForm !== undefined ||
+    compTimeAuthFormObjectKey !== undefined
+  ) {
+    const staffId = req.staffId;
+    let meRow: typeof staffTable.$inferSelect | undefined;
+    if (staffId) {
+      [meRow] = await db
+        .select()
+        .from(staffTable)
+        .where(eq(staffTable.id, staffId));
+    }
+    const isPolicyAdmin = Boolean(
+      meRow?.active &&
+        (meRow.isAdmin || meRow.isDistrictAdmin || meRow.isSuperUser),
+    );
+    if (!isPolicyAdmin) {
+      res.status(403).json({
+        error: "forbidden",
+        message: "Only admins can change Time Tracking policy settings.",
+      });
+      return;
+    }
+  }
+  if (workweekStart !== undefined) {
+    if (workweekStart !== "sunday" && workweekStart !== "monday") {
+      res
+        .status(400)
+        .json({ error: "workweekStart must be 'sunday' or 'monday'" });
+      return;
+    }
+    updates.workweekStart = workweekStart;
+  }
+  if (compTimeRequireAuthForm !== undefined) {
+    if (typeof compTimeRequireAuthForm !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "compTimeRequireAuthForm must be boolean" });
+      return;
+    }
+    updates.compTimeRequireAuthForm = compTimeRequireAuthForm;
+  }
+  if (compTimeAuthFormObjectKey !== undefined) {
+    if (
+      compTimeAuthFormObjectKey !== null &&
+      typeof compTimeAuthFormObjectKey !== "string"
+    ) {
+      res.status(400).json({
+        error: "compTimeAuthFormObjectKey must be a string or null",
+      });
+      return;
+    }
+    if (compTimeAuthFormObjectKey) {
+      // Bind the freshly-uploaded object to this school's ACL so the
+      // PDF can only be served to staff of this school and can't be
+      // a spoofed cross-tenant path.
+      const bound = await bindObjectToSchool(
+        compTimeAuthFormObjectKey,
+        schoolId,
+      );
+      if (!bound) {
+        res.status(400).json({
+          error: "compTimeAuthFormObjectKey_invalid",
+          message:
+            "Uploaded template could not be verified. Please re-upload.",
+        });
+        return;
+      }
+    }
+    updates.compTimeAuthFormObjectKey = compTimeAuthFormObjectKey || null;
   }
 
   if (Object.keys(updates).length === 0) {

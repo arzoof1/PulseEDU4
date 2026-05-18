@@ -200,16 +200,22 @@ function ReconciliationTile({ data }: { data: ReconciliationResp | null }) {
 
 export default function AdminHubPage({
   onOpenAstQueue,
+  onOpenCompQueue,
 }: {
   // Optional deep-link to the AST admin queue. When provided, the AST
   // pending-count tile becomes clickable. Wired by App.tsx.
   onOpenAstQueue?: () => void;
+  // Optional deep-link to the Comp Time admin queue. Same pattern as
+  // AST — the tile is silent for non-approvers and shows the pending
+  // count for approvers.
+  onOpenCompQueue?: () => void;
 } = {}) {
   const [recent, setRecent] = useState<RecentRow[] | null>(null);
   const [ack, setAck] = useState<AckResp | null>(null);
   const [reconciliation, setReconciliation] =
     useState<ReconciliationResp | null>(null);
   const [astPending, setAstPending] = useState<number | null>(null);
+  const [compPending, setCompPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
   const [issDetail, setIssDetail] = useState<{
     id: number;
@@ -219,11 +225,12 @@ export default function AdminHubPage({
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2, r3, r4] = await Promise.all([
+      const [r1, r2, r3, r4, r5] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
         authFetch("/api/pickup/reconciliation"),
         authFetch("/api/ast/admin-pending-count"),
+        authFetch("/api/comp/admin-pending-count"),
       ]);
       if (!r1.ok) throw new Error(await r1.text());
       if (!r2.ok) throw new Error(await r2.text());
@@ -238,6 +245,15 @@ export default function AdminHubPage({
         setAstPending(typeof d4.total === "number" ? d4.total : 0);
       } else {
         setAstPending(null);
+      }
+      // Comp Time pending count. Same best-effort treatment as AST
+      // — the route returns { count: 0 } for non-approvers rather
+      // than 403, so r5.ok should virtually always be true.
+      if (r5.ok) {
+        const d5 = (await r5.json()) as { count?: number };
+        setCompPending(typeof d5.count === "number" ? d5.count : 0);
+      } else {
+        setCompPending(null);
       }
       // Reconciliation is best-effort; admins without curb access still
       // see the rest of the hub. (canRunCurb covers admin already, so a
@@ -458,6 +474,54 @@ export default function AdminHubPage({
               }}
             >
               {astPending}
+            </span>
+          )}
+        </button>
+      )}
+
+      {compPending !== null && compPending >= 0 && (
+        <button
+          type="button"
+          onClick={() => onOpenCompQueue?.()}
+          disabled={!onOpenCompQueue}
+          style={{
+            ...card,
+            textAlign: "left",
+            cursor: onOpenCompQueue ? "pointer" : "default",
+            background: compPending > 0 ? "#fff7ed" : "var(--surface, #fff)",
+            borderColor: compPending > 0 ? "#fed7aa" : "var(--border, #e5e7eb)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "space-between",
+            gap: 12,
+          }}
+        >
+          <div>
+            <h3 style={{ margin: 0 }}>⏱ Comp Time: {compPending}</h3>
+            <div
+              style={{
+                color: "var(--text-subtle, #64748b)",
+                fontSize: 13,
+                marginTop: 2,
+              }}
+            >
+              {compPending === 0
+                ? "No pending Comp Time approvals."
+                : `${compPending} pending Comp Time approval${compPending === 1 ? "" : "s"}. Click to review.`}
+            </div>
+          </div>
+          {compPending > 0 && (
+            <span
+              style={{
+                background: "#ea580c",
+                color: "white",
+                borderRadius: 999,
+                padding: "4px 12px",
+                fontWeight: 700,
+                fontSize: 14,
+              }}
+            >
+              {compPending}
             </span>
           )}
         </button>

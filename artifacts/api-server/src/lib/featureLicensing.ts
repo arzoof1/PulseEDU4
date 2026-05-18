@@ -74,6 +74,7 @@ export type FeatureSpec = {
     | "superFeatureHouses"
     | "superFeatureParentPortal"
     | "superFeatureAst"
+    | "superFeatureCompTime"
     | null;
   quotas: QuotaSpec[];
 };
@@ -230,6 +231,14 @@ export const FEATURE_KEYS: FeatureSpec[] = [
     label: "AST (Alternate Schedule Time)",
     description: "HCTA-contract AST request + admin approval workflow.",
     schoolSettingsKey: "superFeatureAst",
+    quotas: [],
+  },
+  {
+    key: "compTime",
+    label: "Comp Time (FLSA)",
+    description:
+      "Compensatory-time bank for non-exempt staff: 1.5x earn over 40h/wk, 240h cap, admin approval workflow that mirrors AST.",
+    schoolSettingsKey: "superFeatureCompTime",
     quotas: [],
   },
 ];

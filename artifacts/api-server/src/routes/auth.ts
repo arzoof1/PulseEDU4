@@ -39,6 +39,8 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     capCarRiderMonitor: row.capCarRiderMonitor,
     capManageDismissal: row.capManageDismissal,
     canApproveAst: row.canApproveAst,
+    canApproveCompTime: row.canApproveCompTime,
+    exemptStatus: row.exemptStatus,
     defaultRoom: row.defaultRoom,
   };
 }

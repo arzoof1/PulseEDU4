@@ -13,6 +13,10 @@ import AdminHubPage from "./components/AdminHubPage";
 import StaffAstPage from "./components/ast/StaffAstPage";
 import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
 import AstInsightsPage from "./components/ast/AstInsightsPage";
+import StaffCompPage from "./components/comp/StaffCompPage";
+import AdminCompQueuePage from "./components/comp/AdminCompQueuePage";
+import CompInsightsPage from "./components/comp/CompInsightsPage";
+import TimeTrackingPanel from "./components/comp/TimeTrackingPanel";
 import WatchlistHub from "./components/WatchlistHub";
 import CaseOutcomesPage from "./components/CaseOutcomesPage";
 import WatchlistNetwork from "./components/WatchlistNetwork";
@@ -4323,6 +4327,8 @@ function App() {
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
     canApproveAst?: boolean;
+    canApproveCompTime?: boolean;
+    exemptStatus?: string | null;
     defaultRoom?: string | null;
     // Set when this session is currently previewing-as another staff
     // member via the Admin → Preview as Staff tool. Triggers the
@@ -4497,6 +4503,9 @@ function App() {
     | "ast"
     | "astAdmin"
     | "astInsights"
+    | "comp"
+    | "compAdmin"
+    | "compInsights"
     | "pickupTags"
   >("hallPasses");
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
@@ -8388,6 +8397,7 @@ function App() {
     { key: "myInterventions", label: "My Interventions", icon: IconClipboard },
     { key: "requestPullout", label: "Request Pullout", icon: IconClipboard },
     { key: "ast", label: "AST", icon: IconClock },
+    { key: "comp", label: "Comp Time", icon: IconClock },
   ];
   // Sidebar entries that map to a per-school feature flag. Anything not
   // in this map (Hall Passes, Tardy Pass, Teacher Roster) is always on.
@@ -8435,6 +8445,8 @@ function App() {
     { key: "settings", label: "Settings", icon: IconSettings },
     { key: "astAdmin", label: "AST Approvals", icon: IconClock },
     { key: "astInsights", label: "AST Insights", icon: IconClipboard },
+    { key: "compAdmin", label: "Comp Time Approvals", icon: IconClock },
+    { key: "compInsights", label: "Comp Time Insights", icon: IconClipboard },
   ];
   // Anyone with the canApproveAst flag — admin tier OR an explicit per-staff
   // grant (e.g. confidential secretary) — can see the admin AST queue.
@@ -8443,6 +8455,14 @@ function App() {
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isDistrictAdmin) ||
     Boolean(authUser?.canApproveAst);
+  // Comp Time approvers — admin tier OR per-staff canApproveCompTime
+  // (Principal + Assistant Principal seeded by default; admins can
+  // grant to e.g. payroll secretary via Staff & Roles).
+  const canApproveCompTime =
+    Boolean(authUser?.isAdmin) ||
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    Boolean(authUser?.canApproveCompTime);
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
@@ -9180,6 +9200,26 @@ function App() {
                   <AstSidebarBadge refreshKey={interventionRefreshKey} />
                 </span>
               </span>
+            </FeatureGate>
+            {/* Comp Time — sibling of AST. Visible to every staff
+                member; the server returns an eligibility splash for
+                exempt staff so the page renders an explanatory card
+                instead of action buttons. Feature-gated: hidden when
+                off, locked-upsell pill when showUpsell. */}
+            <FeatureGate
+              feature="compTime"
+              fallback={
+                <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                  {renderNavItem({ key: "comp", label: "Comp Time", icon: IconClock })}
+                  <span style={{ marginLeft: 4 }}><LockedBadge /></span>
+                </span>
+              }
+            >
+              {renderNavItem({
+                key: "comp",
+                label: "Comp Time",
+                icon: IconClock,
+              })}
             </FeatureGate>
             {/* Verify Pullout — surfaces in Quick Access ONLY when there's
                 pending work (pendingPulloutCount > 0). When the queue is
@@ -16141,6 +16181,23 @@ function App() {
         </FeatureGate>
       )}
 
+      {activeSection === "comp" && (
+        <FeatureGate feature="compTime" label="Comp Time">
+          <StaffCompPage />
+        </FeatureGate>
+      )}
+
+      {activeSection === "compAdmin" && canApproveCompTime && (
+        <FeatureGate feature="compTime" label="Comp Time">
+          <AdminCompQueuePage />
+        </FeatureGate>
+      )}
+      {activeSection === "compInsights" && canApproveCompTime && (
+        <FeatureGate feature="compTime" label="Comp Time">
+          <CompInsightsPage />
+        </FeatureGate>
+      )}
+
       {activeSection === "featureLicensing" && isSuperUser && (
         <FeatureLicensingAdminPage />
       )}
@@ -19525,6 +19582,11 @@ function App() {
 
       {activeSection === "adminHub" && (
         <AdminHubPage
+          onOpenCompQueue={
+            canApproveCompTime
+              ? () => setActiveSection("compAdmin")
+              : undefined
+          }
           onOpenAstQueue={
             canApproveAst ? () => setActiveSection("astAdmin") : undefined
           }
@@ -19953,6 +20015,18 @@ function App() {
             // closing a Watchlist case. Defaults are seeded; admins can
             // add/edit/disable but every close must pick from the live
             // catalog (no skip path on the modal).
+            // Time Tracking — shared workweek anchor + Comp Time
+            // authorization-form template. Admin only.
+            if (isAdmin || isDistrictAdmin || isSuperUser) {
+              tiles.push({
+                id: "time-tracking",
+                icon: "⏱",
+                title: "Time Tracking",
+                subtitle:
+                  "Workweek anchor (Sunday/Monday) for AST + Comp Time, plus the Comp Time authorization form template.",
+                group: "people-access",
+              });
+            }
             if (isAdmin || isDistrictAdmin || isSuperUser) {
               tiles.push({
                 id: "case-outcomes",
@@ -20091,6 +20165,9 @@ function App() {
             }
           }}
         />
+      )}
+      {activeSection === "settings" && canManageSettings && settingsTile === "time-tracking" && (isAdmin || isDistrictAdmin || isSuperUser) && (
+        <TimeTrackingPanel />
       )}
       {activeSection === "settings" && canManageSettings && settingsTile === "separation-tags" && (
         <div className="card" style={{ marginBottom: "1rem" }}>

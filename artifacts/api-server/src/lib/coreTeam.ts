@@ -133,6 +133,33 @@ export function canManagePickup(staff: {
   );
 }
 
+// Comp Time approver gate. Mirrors `canApproveAst` (admin tier OR
+// explicit per-staff flag) and additionally auto-elects any staff
+// member whose role is Principal or Assistant Principal — those
+// roles are surfaced via the existing `isAdmin` / "principalship"
+// flag for school-admins, plus an explicit `canApproveCompTime`
+// override an admin can grant to a designated supervisor (e.g.
+// HR clerk).
+export function canApproveCompTime(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  canApproveCompTime?: boolean | null;
+}): boolean {
+  return (
+    isAdminOrSuperUser(staff) || Boolean(staff.canApproveCompTime)
+  );
+}
+
+// Comp Time submitter gate. Hard-blocks anyone whose exempt_status
+// is not 'non_exempt'. Teachers and exempt staff get a splash that
+// points them at AST.
+export function canSubmitCompTime(staff: {
+  exemptStatus?: string | null;
+}): boolean {
+  return staff.exemptStatus === "non_exempt";
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a

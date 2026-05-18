@@ -5615,6 +5615,98 @@ export async function ensureFeaturePlansColumns() {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_ast BOOLEAN NOT NULL DEFAULT TRUE`,
   );
+  // Comp Time (FLSA) — additive column adds. Default ON for the
+  // enterprise rollout; the route still hard-blocks staff whose
+  // exempt_status != 'non_exempt' so teachers stay on AST.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS super_feature_comp_time BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS workweek_start TEXT NOT NULL DEFAULT 'sunday'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS comp_time_require_auth_form BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS comp_time_auth_form_object_key TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS exempt_status TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS can_approve_comp_time BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS comp_time_paid_out_at TIMESTAMPTZ`,
+  );
+  // Backfill: any admin tier (school admin / district admin / super
+  // user) gets canApproveCompTime so the rollout doesn't break.
+  // Principals + Assistant Principals carry isAdmin, so this also
+  // auto-elects them per spec.
+  await db.execute(sql`
+    UPDATE staff
+       SET can_approve_comp_time = true
+     WHERE can_approve_comp_time = false
+       AND (is_admin = true OR is_district_admin = true OR is_super_user = true)
+  `);
+  // Comp Time tables. Additive, idempotent.
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_comp_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      state TEXT NOT NULL DEFAULT 'pending_preapproval',
+      week_start_date TEXT,
+      reason TEXT,
+      hours_worked_qh INTEGER,
+      computed_credit_qh INTEGER,
+      quarter_hours_requested INTEGER NOT NULL,
+      quarter_hours_actual INTEGER,
+      use_start_at TIMESTAMPTZ,
+      use_end_at TIMESTAMPTZ,
+      auth_form_object_key TEXT,
+      timesheet_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+      prior_supervisor_approval_confirmed BOOLEAN NOT NULL DEFAULT FALSE,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      preapproved_at TIMESTAMPTZ,
+      preapproved_by_staff_id INTEGER,
+      preapproval_note TEXT,
+      completion_submitted_at TIMESTAMPTZ,
+      completion_note TEXT,
+      confirmed_at TIMESTAMPTZ,
+      confirmed_by_staff_id INTEGER,
+      confirm_note TEXT,
+      denied_at TIMESTAMPTZ,
+      denied_by_staff_id INTEGER,
+      deny_note TEXT,
+      cancelled_at TIMESTAMPTZ,
+      cancel_note TEXT,
+      staff_acknowledged_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_comp_requests_school_staff_idx ON staff_comp_requests(school_id, staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_comp_requests_school_state_idx ON staff_comp_requests(school_id, state)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_comp_ledger (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      staff_id INTEGER NOT NULL,
+      delta_quarter_hours INTEGER NOT NULL,
+      kind TEXT NOT NULL,
+      request_id INTEGER,
+      note TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      created_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_comp_ledger_school_staff_idx ON staff_comp_ledger(school_id, staff_id)`,
+  );
 }
 
 export async function ensureFeaturePlansSchema() {
@@ -5704,6 +5796,7 @@ export async function ensureFeaturePlansSchema() {
     houses: true,
     parentPortal: true,
     ast: true,
+    compTime: true,
   };
   await db.execute(sql`
     INSERT INTO plans (key, label, description, features, quotas)

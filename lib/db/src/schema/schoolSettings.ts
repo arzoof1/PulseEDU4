@@ -145,6 +145,36 @@ export const schoolSettingsTable = pgTable(
   // AST shipped after the original superFeature catalog; added here so
   // the licensing layer can gate it like every other feature.
   superFeatureAst: boolean("super_feature_ast").notNull().default(true),
+  // Comp Time (FLSA compensatory time, non-exempt only). Default ON
+  // for the enterprise rollout — the route still hard-blocks staff
+  // whose exempt_status != 'non_exempt' so the flag does NOT broadly
+  // enable comp-time accrual for teachers (they remain on AST).
+  superFeatureCompTime: boolean("super_feature_comp_time")
+    .notNull()
+    .default(true),
+  // -----------------------------------------------------------------
+  // Time Tracking nuances (governs both AST + Comp Time so a school
+  // configures workweek once for the whole "Time Tracking" surface).
+  //
+  // workweekStart  — 'sunday' (default, FLSA canonical) | 'monday'.
+  //                  Comp-time submissions anchor `week_start_date`
+  //                  to this and the route validates the supplied
+  //                  date is a workweek start.
+  // compTimeRequireAuthForm — when true, every earn submission MUST
+  //                           include a signed Authorization to
+  //                           Accrue Comp Time. Default true; admins
+  //                           can disable if their district uses a
+  //                           separate paper process.
+  // compTimeAuthFormObjectKey — object key (in /api/storage/*) for
+  //                           the blank template staff download
+  //                           before signing. NULL = use the built-in
+  //                           generic PDF template.
+  // -----------------------------------------------------------------
+  workweekStart: text("workweek_start").notNull().default("sunday"),
+  compTimeRequireAuthForm: boolean("comp_time_require_auth_form")
+    .notNull()
+    .default(true),
+  compTimeAuthFormObjectKey: text("comp_time_auth_form_object_key"),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

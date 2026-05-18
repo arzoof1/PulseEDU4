@@ -84,6 +84,7 @@ import watchlistRouter from "./watchlist";
 import onboardingRouter from "./onboarding";
 import pickupRouter from "./pickup";
 import astRouter from "./ast";
+import compRouter from "./comp";
 import featureLicensingRouter from "./featureLicensing";
 import fastCoverageRouter from "./fastCoverage";
 import districtOverviewRouter from "./districtOverview";
@@ -145,6 +146,7 @@ router.use(adminStaffRouter);
 // `requireFeatureForParent` (resolves schoolId from `req.parentId` →
 // parents.school_id) because parent sessions don't carry `req.schoolId`.
 router.use("/ast", requireFeature("ast"));
+router.use("/comp", requireFeature("compTime"));
 router.use("/admin/parent-invites", requireFeature("parentPortal"));
 router.use("/admin/parent-preview", requireFeature("parentPortal"));
 
@@ -232,6 +234,7 @@ router.use(watchlistRouter);
 router.use(onboardingRouter);
 router.use(pickupRouter);
 router.use(astRouter);
+router.use(compRouter);
 router.use(featureLicensingRouter);
 router.use(fastCoverageRouter);
 router.use(districtOverviewRouter);

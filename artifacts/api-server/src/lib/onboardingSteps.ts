@@ -104,6 +104,30 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
       ),
   },
   {
+    key: "time-tracking",
+    phase: "Identity & Access",
+    role: "admin",
+    label: "Time Tracking (workweek + Comp Time form)",
+    hint: "Pick the workweek anchor (Sunday or Monday) that governs AST and Comp Time accrual, and upload a blank Authorization to Accrue Comp Time form for non-exempt staff to download, sign, and re-upload with every earn submission. Defaults are Sunday + auth-form required. You can disable the auth-form requirement if your district doesn't use one.",
+    route: { kind: "settings", target: "time-tracking" },
+    autoCheck: async (db, schoolId) => {
+      // 'Complete' once the admin has touched the workweek setting
+      // OR uploaded an auth-form template. Schools that accept the
+      // default Sunday workweek + no auth form can mark this manually.
+      const r = await db.execute(
+        sql`SELECT workweek_start, comp_time_auth_form_object_key
+            FROM school_settings WHERE school_id = ${schoolId} LIMIT 1`,
+      );
+      const row = (r.rows[0] ?? {}) as {
+        workweek_start?: string | null;
+        comp_time_auth_form_object_key?: string | null;
+      };
+      if (row.comp_time_auth_form_object_key) return "complete";
+      if (row.workweek_start === "monday") return "complete";
+      return "empty";
+    },
+  },
+  {
     key: "staff-directory",
     phase: "Identity & Access",
     role: "admin",

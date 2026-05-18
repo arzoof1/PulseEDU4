@@ -32,6 +32,7 @@ export type SettingsTileId =
   | "kiosk-welcome"
   | "student-id-badges"
   | "class-signins-today"
+  | "time-tracking"
   | "onboarding";
 
 export type SettingsGroupId =
