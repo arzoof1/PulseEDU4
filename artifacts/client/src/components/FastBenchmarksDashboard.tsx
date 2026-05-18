@@ -13,7 +13,7 @@
 // optional and many benchmarks won't have ≥5 students to qualify for
 // the bottom-3 tile.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
 
 type SubjectKey = "ela" | "math" | "algebra1" | "geometry";
@@ -66,6 +66,7 @@ interface OutlierTeacher {
   studentCount: number;
   zScore: number;
   flagged: boolean;
+  direction?: "low" | "high" | null;
 }
 interface OutlierResponse {
   subject: string;
@@ -526,7 +527,7 @@ export default function FastBenchmarksDashboard({
                 color: "#6b7280",
               }}
             >
-              flag threshold z &lt; −{outliers.zThreshold.toFixed(2)}
+              flag threshold |z| &gt; {outliers.zThreshold.toFixed(2)} (high or low)
             </span>
           )}
         </h3>
@@ -614,7 +615,11 @@ export default function FastBenchmarksDashboard({
                   key={t.teacherId}
                   style={{
                     borderTop: "1px solid #f3f4f6",
-                    background: t.flagged ? "#fef2f2" : undefined,
+                    background: t.flagged
+                      ? t.direction === "high"
+                        ? "#ecfdf5"
+                        : "#fef2f2"
+                      : undefined,
                   }}
                 >
                   <td style={{ padding: "6px 8px" }}>
@@ -648,15 +653,17 @@ export default function FastBenchmarksDashboard({
                     {t.flagged ? (
                       <span
                         style={{
-                          background: "#fecaca",
-                          color: "#991b1b",
+                          background:
+                            t.direction === "high" ? "#bbf7d0" : "#fecaca",
+                          color:
+                            t.direction === "high" ? "#065f46" : "#991b1b",
                           padding: "2px 8px",
                           borderRadius: 999,
                           fontSize: 11,
                           fontWeight: 700,
                         }}
                       >
-                        outlier
+                        {t.direction === "high" ? "high outlier" : "low outlier"}
                       </span>
                     ) : (
                       <span style={{ color: "#9ca3af" }}>—</span>
@@ -808,7 +815,7 @@ export default function FastBenchmarksDashboard({
   );
 }
 
-const errorStyle: React.CSSProperties = {
+const errorStyle: CSSProperties = {
   color: "#991b1b",
   background: "#fee2e2",
   border: "1px solid #fca5a5",

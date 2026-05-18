@@ -2174,7 +2174,13 @@ router.get(
           meanPct: t.meanPct,
           studentCount: t.studentCount,
           zScore: Math.round(z * 100) / 100,
-          flagged: stdev > 0 && z < -zThreshold,
+          flagged: stdev > 0 && Math.abs(z) > zThreshold,
+          direction:
+            stdev > 0 && Math.abs(z) > zThreshold
+              ? z < 0
+                ? ("low" as const)
+                : ("high" as const)
+              : null,
         };
       })
       .sort((a, b) => a.meanPct - b.meanPct);
