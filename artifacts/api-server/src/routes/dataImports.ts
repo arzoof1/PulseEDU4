@@ -3100,7 +3100,7 @@ type FloridaParse =
   | { ok: false; error: string }
   | {
       ok: true;
-      subject: "ela";
+      subject: "ela" | "math";
       gradeLabel: string | null;
       windowsSeen: Set<string>;
       students: FloridaStudentRow[];
@@ -3154,15 +3154,20 @@ function detectWindow(testReason: string): "pm1" | "pm2" | "pm3" | null {
   return (`pm${m[1]}`) as "pm1" | "pm2" | "pm3";
 }
 
-// Phase 1 only recognizes ELA Reading. Math and Writing parsers ship
-// in Phase 6 — when the scale-score header points at one of those
-// subjects we still return a structured "unsupported" error rather
-// than mis-importing into the ELA column.
+// Phase 6 recognizes ELA Reading and Mathematics (per-benchmark
+// quadruplet layout). Writing uses a rubric-scored format that does
+// not carry the Category / Benchmark / Points-Earned / Points-Possible
+// quadruplets the rest of this parser depends on, so we surface a
+// friendly "not yet supported" rejection rather than crashing or
+// mis-importing.
 function detectSubjectFromScaleHeader(
   header: string,
-): { subject: "ela"; grade: string | null } | { error: string } {
+):
+  | { subject: "ela" | "math"; grade: string | null }
+  | { error: string } {
   // Examples we accept:
   //   "Grade 6 FAST ELA Reading Scale Score"
+  //   "Grade 6 FAST Mathematics Scale Score"
   //   "FAST ELA Reading Scale Score"
   const gradeMatch = /Grade\s+(\d+)/i.exec(header);
   const grade = gradeMatch ? gradeMatch[1] : null;
@@ -3170,19 +3175,16 @@ function detectSubjectFromScaleHeader(
     return { subject: "ela", grade };
   }
   if (/Mathematics|\bMath\b/i.test(header)) {
-    return {
-      error:
-        "Florida FAST Mathematics xlsx parsing is on the FAST Phase 6 roadmap. For now, upload Math scores through the generic CSV importer or the dedicated FAST Scores CSV importer.",
-    };
+    return { subject: "math", grade };
   }
   if (/Writing/i.test(header)) {
     return {
       error:
-        "Florida FAST Writing xlsx parsing is on the FAST Phase 6 roadmap.",
+        "Florida FAST Writing xlsx parsing isn't supported yet — the rubric-scored Writing export has a different layout than ELA/Math. Please contact support if you'd like to prioritize it.",
     };
   }
   return {
-    error: `Could not recognize subject from header "${header}". Phase 1 supports ELA Reading only.`,
+    error: `Could not recognize subject from header "${header}". This importer supports ELA Reading and Mathematics.`,
   };
 }
 

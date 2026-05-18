@@ -550,19 +550,19 @@ const KIND_DEFS: Record<Kind, KindDef> = {
     ],
   },
   fast_florida: {
-    label: "Florida FAST (state xlsx — ELA Reading)",
+    label: "Florida FAST (state xlsx — ELA Reading + Math)",
     // This importer doesn't use the column-mapping flow — the xlsx layout
     // is known a priori. Empty targets means the mapping step is skipped.
     targetsFor: () => [],
     supportsDistrict: false,
     helpText:
-      "Per-student xlsx export from the Florida FAST state portal. Captures scale score + every per-benchmark item response. Phase 1: ELA Reading only. Pick the school year to back-fill prior years.",
+      "Per-student xlsx export from the Florida FAST state portal. Captures scale score + every per-benchmark item response. Supports ELA Reading and Mathematics; Writing is not yet supported. Pick the school year to back-fill prior years.",
     description:
-      "Drop in the state's per-student xlsx (the one with ~180 columns: demographics, scale score, achievement level, then 40 repeating Category / Benchmark / Points Earned / Points Possible quadruplets). No column mapping needed — the layout is fixed. The importer stamps the school year you choose, lands the scale score in PM1/PM2/PM3 based on the file's Test Reason column, and records every benchmark response for the new item-level heatmap. Re-uploading the same PM + school year DELETEs the prior item-response rows for those students before reinserting (idempotent). Math and Writing xlsx parsers ship in a future phase — upload those through the generic FAST scores CSV importer for now.",
+      "Drop in the state's per-student xlsx (the one with ~180 columns: demographics, scale score, achievement level, then 40 repeating Category / Benchmark / Points Earned / Points Possible quadruplets). No column mapping needed — the layout is fixed. The importer auto-detects the subject (ELA Reading or Mathematics) and the PM window (PM1/PM2/PM3) from the file itself. It stamps the school year you choose, lands the scale score in PM1/PM2/PM3 based on the file's Test Reason column, and records every benchmark response for the item-level heatmap. Re-uploading the same PM + school year DELETEs the prior item-response rows for those students before reinserting (idempotent). FAST Writing uses a rubric-scored layout that this importer doesn't yet handle — contact support if you need it prioritized.",
     columns: [],
     sampleCsv: "",
     notes: [
-      "School-scope only. Phase 1 supports ELA Reading only.",
+      "School-scope only. Supports ELA Reading and Mathematics (one subject per file, auto-detected from the scale-score column).",
       "Pick the school year on the upload step — the current year plus the three preceding years are allowed (for prior-year back-fill).",
       "Rollback DELETEs every benchmark response stamped with this import job, plus any scale-score row the same job created. PM values written by an earlier job survive.",
       "12 MB file limit. Split by grade if the state export exceeds it.",
@@ -1350,7 +1350,9 @@ export default function DataImports({
             }) => ({
               studentId: s.studentId,
               assessmentName:
-                `Florida FAST ELA ${s.window.toUpperCase()}` +
+                `Florida FAST ${
+                  data.subject === "math" ? "Math" : "ELA"
+                } ${s.window.toUpperCase()}` +
                 (data.gradeLabel ? ` · Grade ${data.gradeLabel}` : ""),
               score: s.scaleScore,
               scoreLevel: s.achievementLevel,
