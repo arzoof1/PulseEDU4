@@ -80,6 +80,10 @@ const CHAPTERS: Chapter[] = [
           { action: "Guidance Counselor.", detail: "Safety Plans (edit). No Investigations, no MTSS hub, no Settings unless also Admin." },
           { action: "School Psychologist.", detail: "Safety Plans (edit). Note: the server treats School Psychologist as Core Team for some intervention-write paths, but the client sidebar gates (canAccessMtssHub, canManageMtssPlans) currently do NOT include School Psychologist — so the MTSS Coordinator hub and MTSS Plans tabs do not appear on the sidebar for this role today. If a School Psychologist needs day-to-day MTSS access, ask an admin to flag them as MTSS Coordinator." },
           { action: "PBIS Coordinator.", detail: "PBIS Hub, PBIS Reasons, PBIS Milestone Emails, MTSS Plans, Intervention Reports, Verify Pullouts, School Store editing. No Investigations, no Safety Plans." },
+          { action: "Non-Exempt.", detail: "FLSA non-exempt staff. Sidebar collapses to Hall Pass + Tardy Pass + Comp Time ONLY — everything else is hidden (no Teacher Roster, no PBIS, no Request Pullout). Applying this preset auto-flips the staff member's exempt status to 'non_exempt' so Comp Time accrues. Admins escape the collapse if accidentally flagged Non-Exempt. The exempt-status field is also an independent admin toggle for non-exempt staff who carry a different role (e.g., a non-exempt aide who is also a Behavior Specialist)." },
+          { action: "Front Office.", detail: "Clerical / receptionist staff. Sees the full teacher bundle EXCEPT Request Pullout (pullouts are a teacher referral, not a front-desk action). Does NOT grant AST or Comp Time approval — Confidential Secretary keeps that grant unchanged." },
+          { action: "SRO.", detail: "School Resource Officer. Same capability bundle as Teacher today, broken out as its own role so future SRO-specific surfaces (incident logs, weapon screenings) can target it cleanly." },
+          { action: "Guardian.", detail: "Hall monitor / security aide / campus guardian. Same capability bundle as Teacher today, broken out as a distinct role for reporting and future role-targeted features." },
         ],
         tips: [
           "If a screen mentioned in this guide isn't visible to you, your role doesn't have it — ask your administrator to add the flag, or escalate.",
@@ -784,15 +788,17 @@ const CHAPTERS: Chapter[] = [
         rolesSeeing: "SuperUser, Admin, or anyone with the Staff Roles capability.",
         whereToFind: "Sidebar → Staff & Roles.",
         whatItIs:
-          "A matrix of every staff member with checkboxes for each role flag (Admin, SuperUser, District Admin, Behavior Specialist, MTSS Coordinator, PBIS Coordinator, ESE Coordinator, Dean, Guidance Counselor, School Psychologist, ISS Teacher, etc.).",
+          "A matrix of every staff member with checkboxes for each role flag (Admin, SuperUser, District Admin, Behavior Specialist, MTSS Coordinator, PBIS Coordinator, ESE Coordinator, Dean, Guidance Counselor, School Psychologist, ISS Teacher, Non-Exempt, Front Office, SRO, Guardian, etc.).",
         steps: [
           { action: "Click Staff & Roles in the sidebar." },
           { action: "Find the staff member (use the search at the top if the list is long)." },
           { action: "Tick or untick a role flag.", detail: "Saves automatically — the change takes effect the next time the user reloads or signs back in." },
           { action: "Use the Capability columns to grant fine-grained capabilities (e.g., manage displays, manage staff roles) without granting full Admin." },
+          { action: "For Non-Exempt staff, set the Exempt Status column to 'Non-exempt'.", detail: "Applying the Non-Exempt role preset does this automatically. You can also flip it manually for a staff member who is non-exempt but wears another role bundle (e.g., a non-exempt aide who is also a Behavior Specialist) — Comp Time accrual is driven by this column, not by the role checkbox." },
         ],
         watchOutFor: [
           "Removing your own SuperUser flag is permanent until another SuperUser restores it. Always have at least one other SuperUser configured.",
+          "Non-Exempt + Admin on the same staff member: Admin tier wins on the sidebar collapse (you still see the full Admin nav). Exempt Status still controls whether Comp Time accrues, so set both deliberately.",
         ],
       },
       {

@@ -191,13 +191,13 @@ title = "PulseEDU Workflow Guide"
 id = "9s91rGVr0KW4qGhiD-Kip"
 uri = "file://attached_assets/PulseEDU_Teacher_User_Guide.pdf"
 type = "pdf"
-title = "PulseEDU Teacher User Guide"
+title = "PulseEDU Teacher User Guide (updated)"
 
 [[outputs]]
 id = "apZDwSO7DEUrV6eFHyowL"
 uri = "file://attached_assets/PulseEDU_Core_Team_User_Guide.pdf"
 type = "pdf"
-title = "PulseEDU Core Team User Guide"
+title = "PulseEDU Core Team User Guide (updated)"
 
 [[outputs]]
 id = "8uSJwEkWxXaWTTlxIS9mJ"
