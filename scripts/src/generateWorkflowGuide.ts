@@ -9,7 +9,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = resolve(HERE, "..", "..", "attached_assets", "PulseEDU_Workflow_Guide.pdf");
+const OUT = resolve(HERE, "..", "..", "attached_assets", "PulseEDU_Workflow_Guide_v3.pdf");
 mkdirSync(dirname(OUT), { recursive: true });
 
 const COLORS = {

@@ -222,3 +222,9 @@ id = "bdN1fa9wx9bryLZGBmzWs"
 uri = "file://attached_assets/userguide_screens/README.md"
 type = "text"
 title = "Screenshot capture checklist"
+
+[[outputs]]
+id = "-hgjircQ3aLXs2DCb51Jj"
+uri = "file://attached_assets/PulseEDU_Workflow_Guide_v3.pdf"
+type = "pdf"
+title = "PulseEDU Workflow Guide v3"
