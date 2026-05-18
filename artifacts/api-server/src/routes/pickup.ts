@@ -1912,6 +1912,58 @@ router.get(
   },
 );
 
+// GET /pickup/authorizations/by-teacher?teacherId=N
+// Returns the active authorization ids for every student on a teacher's
+// non-planning roster. Office staff use this to print a "homeroom
+// stack" of pickup tags by teacher name without having to look up each
+// student individually. Same canManagePickup gate as the PDF routes.
+router.get(
+  "/pickup/authorizations/by-teacher",
+  requireStaff,
+  async (req, res) => {
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    if (!canManagePickup(staff)) {
+      res.status(403).json({ error: "Not authorized to manage pickup tags" });
+      return;
+    }
+    const teacherId = Number(req.query.teacherId);
+    if (!Number.isInteger(teacherId) || teacherId <= 0) {
+      res.status(400).json({ error: "teacherId required" });
+      return;
+    }
+    const rosterIds = await loadOwnRosterStudentIds(schoolId, teacherId);
+    if (rosterIds.size === 0) {
+      res.json({ authorizationIds: [], studentCount: 0 });
+      return;
+    }
+    const rows = await db
+      .select({
+        id: studentPickupAuthorizationsTable.id,
+        studentId: studentPickupAuthorizationsTable.studentId,
+      })
+      .from(studentPickupAuthorizationsTable)
+      .where(
+        and(
+          eq(studentPickupAuthorizationsTable.schoolId, schoolId),
+          eq(studentPickupAuthorizationsTable.active, true),
+          inArray(
+            studentPickupAuthorizationsTable.studentId,
+            Array.from(rosterIds),
+          ),
+        ),
+      );
+    const studentIdsWithTags = new Set(rows.map((r) => r.studentId));
+    res.json({
+      authorizationIds: rows.map((r) => r.id),
+      studentCount: studentIdsWithTags.size,
+      rosterSize: rosterIds.size,
+    });
+  },
+);
+
 // GET /pickup/tags.pdf — batch print all active tags. Optional
 // ?ids=1,2,3 lets the admin print a filtered subset (used by the
 // "print all unprinted" workflow once we track print history; today

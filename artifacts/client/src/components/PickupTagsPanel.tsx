@@ -42,6 +42,11 @@ type StudentHit = {
   gradeLevel?: string | null;
 };
 
+type TeacherOption = {
+  id: number;
+  displayName: string;
+};
+
 const wrap: CSSProperties = {
   padding: "1.25rem 1.5rem",
   maxWidth: 960,
@@ -155,6 +160,17 @@ export default function PickupTagsPanel() {
   const [showHits, setShowHits] = useState(false);
   const searchSeq = useRef(0);
 
+  // Teacher picker. Loaded once from /api/teacher-roster/teachers
+  // (Core Team sees every active teacher with a non-planning section;
+  // teachers themselves see only themselves — but they're gated out
+  // of this panel entirely so the dropdown effectively serves admins
+  // and office staff). Local filter on displayName is plenty for
+  // typical school sizes (<200 teachers); no debounce needed.
+  const [teachers, setTeachers] = useState<TeacherOption[]>([]);
+  const [teacherQ, setTeacherQ] = useState("");
+  const [showTeacherHits, setShowTeacherHits] = useState(false);
+  const [teacherBusy, setTeacherBusy] = useState(false);
+
   const refresh = useCallback(async (sid: number) => {
     setLoading(true);
     try {
@@ -215,6 +231,72 @@ export default function PickupTagsPanel() {
     }, 200);
     return () => clearTimeout(t);
   }, [nameQ]);
+
+  // One-shot teacher load on mount. Quiet failure: the by-teacher
+  // card simply stays empty if the endpoint is unreachable.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await authFetch(`/api/teacher-roster/teachers`);
+        if (!res.ok) return;
+        const data = (await res.json()) as { teachers: TeacherOption[] };
+        if (cancelled) return;
+        setTeachers(data.teachers ?? []);
+      } catch {
+        /* ignore */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const filteredTeachers = (() => {
+    const q = teacherQ.trim().toLowerCase();
+    if (!q) return teachers.slice(0, 12);
+    return teachers
+      .filter((t) => (t.displayName ?? "").toLowerCase().includes(q))
+      .slice(0, 12);
+  })();
+
+  const printTagsForTeacher = async (t: TeacherOption) => {
+    setMsg(null);
+    setTeacherBusy(true);
+    try {
+      const res = await authFetch(
+        `/api/pickup/authorizations/by-teacher?teacherId=${t.id}`,
+      );
+      if (!res.ok) {
+        const b = (await res.json().catch(() => ({}))) as { error?: string };
+        setMsg(b.error ?? `Lookup failed (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as {
+        authorizationIds: number[];
+        studentCount: number;
+        rosterSize?: number;
+      };
+      if (data.authorizationIds.length === 0) {
+        setMsg(
+          `No active pickup tags on ${t.displayName}'s roster ` +
+            `(${data.rosterSize ?? 0} students).`,
+        );
+        return;
+      }
+      await downloadPdf(
+        `/api/pickup/tags.pdf?ids=${data.authorizationIds.join(",")}`,
+        `pickup-tags-${t.displayName.replace(/[^a-z0-9]+/gi, "-")}.pdf`,
+      );
+      setMsg(
+        `Printed ${data.authorizationIds.length} tag(s) for ` +
+          `${data.studentCount} student(s) on ${t.displayName}'s roster.`,
+      );
+    } finally {
+      setTeacherBusy(false);
+      setShowTeacherHits(false);
+    }
+  };
 
   const pickStudent = (s: StudentHit) => {
     setStudentDbIdInput(String(s.id));
@@ -296,6 +378,109 @@ export default function PickupTagsPanel() {
         >
           Print all active tags (school-wide)
         </button>
+      </div>
+
+      <div style={card}>
+        <div style={{ fontWeight: 600, marginBottom: 8 }}>
+          By teacher
+        </div>
+        <div
+          style={{
+            color: "var(--text-subtle, #6b7280)",
+            fontSize: 13,
+            marginBottom: 8,
+          }}
+        >
+          Prints active tags for every student on the teacher's
+          non-planning roster. Useful for homeroom stacks at the start
+          of the year.
+        </div>
+        <div style={{ position: "relative", display: "inline-block" }}>
+          <input
+            value={teacherQ}
+            onChange={(e) => {
+              setTeacherQ(e.target.value);
+              setShowTeacherHits(true);
+            }}
+            onFocus={() => setShowTeacherHits(true)}
+            onBlur={() => {
+              setTimeout(() => setShowTeacherHits(false), 150);
+            }}
+            style={{ ...inputStyle, minWidth: 320 }}
+            placeholder={
+              teachers.length === 0
+                ? "Loading teachers…"
+                : "Type a teacher name…"
+            }
+            disabled={teacherBusy}
+            autoComplete="off"
+          />
+          {showTeacherHits && teachers.length > 0 && (
+            <div
+              style={{
+                position: "absolute",
+                top: "100%",
+                left: 0,
+                right: 0,
+                marginTop: 4,
+                background: "var(--surface, #fff)",
+                border: "1px solid var(--border, #d1d5db)",
+                borderRadius: 8,
+                boxShadow: "0 4px 12px rgba(0,0,0,0.08)",
+                maxHeight: 280,
+                overflowY: "auto",
+                zIndex: 20,
+              }}
+            >
+              {filteredTeachers.length === 0 && (
+                <div
+                  style={{
+                    padding: "8px 12px",
+                    color: "var(--text-subtle, #6b7280)",
+                    fontSize: 13,
+                  }}
+                >
+                  No matches.
+                </div>
+              )}
+              {filteredTeachers.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setTeacherQ(t.displayName);
+                    void printTagsForTeacher(t);
+                  }}
+                  style={{
+                    display: "block",
+                    width: "100%",
+                    textAlign: "left",
+                    padding: "8px 12px",
+                    background: "transparent",
+                    border: "none",
+                    borderBottom: "1px solid var(--border-soft, #f3f4f6)",
+                    cursor: "pointer",
+                    fontSize: 14,
+                  }}
+                >
+                  {t.displayName}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+        {teacherBusy && (
+          <div
+            style={{
+              marginTop: 8,
+              fontSize: 13,
+              color: "var(--text-subtle, #6b7280)",
+            }}
+          >
+            Building PDF…
+          </div>
+        )}
       </div>
 
       <div style={card}>
