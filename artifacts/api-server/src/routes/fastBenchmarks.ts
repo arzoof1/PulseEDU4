@@ -1162,10 +1162,19 @@ router.get(
       .sort((a, b) => b.localeCompare(a));
 
     // Resolve the school year — explicit param if valid; else most
-    // recent with data; else current SY for an empty render.
+    // recent with data; else current SY for an empty render. We
+    // validate against a strict "YY-YY" shape AND against the
+    // available-years set so a junk querystring can't ghost-render
+    // an empty panel for a non-existent year.
     const rawSY = req.query.schoolYear;
+    const SY_FORMAT = /^\d{2}-\d{2}$/;
     let schoolYear: string;
-    if (typeof rawSY === "string" && rawSY.length > 0) {
+    if (
+      typeof rawSY === "string" &&
+      SY_FORMAT.test(rawSY) &&
+      (availableSchoolYears.length === 0 ||
+        availableSchoolYears.includes(rawSY))
+    ) {
       schoolYear = rawSY;
     } else if (availableSchoolYears.length > 0) {
       schoolYear = availableSchoolYears[0]!;
@@ -1236,7 +1245,10 @@ router.get(
       Map<string, { category: string | null; earned: number; possible: number; attempts: number }>
     >();
     for (const r of items) {
-      if (r.pointsPossible == null) continue;
+      // pointsPossible <= 0 would corrupt the per-benchmark percent
+      // (Infinity / NaN). Skip defensively even though the importer
+      // shouldn't write zero-possible rows.
+      if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
       const w = byWindow.get(r.window) ?? new Map();
       const prior =
         w.get(r.benchmarkCode) ?? {
