@@ -80,6 +80,13 @@ export const studentMtssPlansTable = pgTable(
     // weekly form renders only this many score rows. Defaults to 2 to
     // match the most common form layout in the wild.
     tier3GoalSlots: integer("tier3_goal_slots").notNull().default(2),
+    // FAST Phase 3 read-path / Phase 5 write-path. Nullable Florida
+    // benchmark code (e.g. "ELA.6.R.1.1") this plan targets. The
+    // student-profile Benchmarks panel lights a small "MTSS" pill on
+    // any benchmark row whose code matches an active plan for the
+    // student. Phase 5 will surface a writer in the plan editor;
+    // until then the column stays NULL on every row.
+    fastBenchmarkCode: text("fast_benchmark_code"),
     openedAt: timestamp("opened_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

@@ -95,8 +95,18 @@ export default function StudentBenchmarksPanel({
 }: {
   studentId: string;
 }) {
-  const [subject, setSubject] = useState<SubjectKey>("ela");
+  const [subject, setSubjectRaw] = useState<SubjectKey>("ela");
   const [schoolYear, setSchoolYear] = useState<string | null>(null);
+
+  // Subject changes reset the school-year selection so the next load
+  // re-resolves to "most recent year with data for the NEW subject".
+  // Without this reset, a stale year picked for ELA would suppress
+  // the default when the user switches to Math (and that year might
+  // have no Math data at all).
+  const setSubject = (next: SubjectKey) => {
+    setSubjectRaw(next);
+    setSchoolYear(null);
+  };
   const [activeWindow, setActiveWindow] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [data, setData] = useState<PayloadShape | null>(null);

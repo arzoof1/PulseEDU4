@@ -36,8 +36,9 @@ import {
   schoolSettingsTable,
   schoolsTable,
   studentTrustedAdultsTable,
+  studentMtssPlansTable,
 } from "@workspace/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
@@ -1254,11 +1255,26 @@ router.get(
       byWindow.set(r.window, w);
     }
 
-    // MTSS-tagged placeholder. Phase 5 will replace this with a real
-    // lookup on whichever column persists the benchmark linkage
-    // (likely `student_mtss_plans.fast_benchmark_code` or a join
-    // table). Until then this always returns false — see task spec.
-    const mtssTaggedCodes = new Set<string>();
+    // MTSS-tagged set — real DB read against
+    // student_mtss_plans.fast_benchmark_code. The column is nullable
+    // and stays NULL on every row until Phase 5 surfaces a writer in
+    // the plan editor; today this set is empty in every tenant but
+    // the read path is live, so the pill auto-lights the moment a
+    // Phase 5 write lands. No client / endpoint change needed then.
+    const mtssRows = await db
+      .select({ code: studentMtssPlansTable.fastBenchmarkCode })
+      .from(studentMtssPlansTable)
+      .where(
+        and(
+          eq(studentMtssPlansTable.schoolId, schoolId),
+          eq(studentMtssPlansTable.studentId, studentId),
+          isNull(studentMtssPlansTable.closedAt),
+          isNotNull(studentMtssPlansTable.fastBenchmarkCode),
+        ),
+      );
+    const mtssTaggedCodes = new Set<string>(
+      mtssRows.map((r) => r.code).filter((c): c is string => c != null),
+    );
 
     const WINDOW_RANK: Record<string, number> = { pm1: 0, pm2: 1, pm3: 2 };
     const windows: WindowBlock[] = Array.from(byWindow.entries())

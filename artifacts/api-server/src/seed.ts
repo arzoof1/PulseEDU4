@@ -533,6 +533,12 @@ export async function ensureMtssPlansSchema() {
   await db.execute(
     sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS tier3_goal_slots INTEGER NOT NULL DEFAULT 2`,
   );
+  // FAST Phase 3 — benchmark linkage. Read path lights an "MTSS"
+  // pill on student-profile benchmark rows; Phase 5 will add the
+  // writer in the plan editor. Nullable / additive — safe on prod.
+  await db.execute(
+    sql`ALTER TABLE student_mtss_plans ADD COLUMN IF NOT EXISTS fast_benchmark_code TEXT`,
+  );
   // ---- tier3_goals — version-on-edit goal storage for Tier 3 plans.
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS tier3_goals (
