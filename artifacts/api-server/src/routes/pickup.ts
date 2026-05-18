@@ -1831,8 +1831,7 @@ async function loadTagInputs(
   const auths = await db
     .select()
     .from(studentPickupAuthorizationsTable)
-    .where(and(...conds))
-    .orderBy(asc(studentPickupAuthorizationsTable.pickupNumber));
+    .where(and(...conds));
   if (auths.length === 0) return [];
 
   const studentIds = Array.from(new Set(auths.map((a) => a.studentId)));
@@ -1857,17 +1856,39 @@ async function loadTagInputs(
     .where(eq(schoolSettingsTable.schoolId, schoolId));
   const schoolName = settings?.name ?? "School";
 
-  return auths.map((a) => {
-    const s = studentById.get(a.studentId);
-    const name = s ? `${s.firstName} ${s.lastName}`.trim() : `Student #${a.studentId}`;
-    return {
-      pickupNumber: a.pickupNumber,
-      studentName: name,
-      guardianLabel: a.guardianLabel,
-      restricted: a.restrictedFrom,
-      schoolName,
-    };
-  });
+  // Sort by student last name, then first name, then pickup number
+  // (multi-guardian rows for one student stay grouped together in a
+  // deterministic order). Done in JS rather than SQL because the
+  // student join is loaded via a second query and the row order out
+  // of `inArray` isn't guaranteed. Locale-aware compare so e.g.
+  // "Ñ" sorts after "N" instead of with the Z-tail.
+  const cmp = (a: string, b: string) =>
+    a.localeCompare(b, undefined, { sensitivity: "base" });
+  return auths
+    .map((a) => {
+      const s = studentById.get(a.studentId);
+      const firstName = s?.firstName ?? "";
+      const lastName = s?.lastName ?? "";
+      const name = s
+        ? `${firstName} ${lastName}`.trim()
+        : `Student #${a.studentId}`;
+      return {
+        pickupNumber: a.pickupNumber,
+        studentName: name,
+        guardianLabel: a.guardianLabel,
+        restricted: a.restrictedFrom,
+        schoolName,
+        _sortLast: lastName,
+        _sortFirst: firstName,
+      };
+    })
+    .sort(
+      (a, b) =>
+        cmp(a._sortLast, b._sortLast) ||
+        cmp(a._sortFirst, b._sortFirst) ||
+        cmp(a.pickupNumber, b.pickupNumber),
+    )
+    .map(({ _sortLast: _l, _sortFirst: _f, ...rest }) => rest);
 }
 
 function sendTagsPdf(
