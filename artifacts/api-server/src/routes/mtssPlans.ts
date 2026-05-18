@@ -983,6 +983,14 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
       agg.category,
       agg.benchmarkCode,
     );
+    // Pull the most recent administered pct (windows are sorted
+    // newest-first) so the prefilled goal cites where the student is
+    // starting from — meaningfully better progress-monitoring copy
+    // than a bare "improve to N%".
+    const latestPct = windows.find((w) => w.masteryPct >= 0)?.masteryPct;
+    const latestSnippet =
+      latestPct != null ? `currently ${latestPct}%` : "currently below mastery";
+    const categorySnippet = agg.category ? ` — ${agg.category}` : "";
     provisional.push({
       studentId: agg.studentId,
       studentName: null,
@@ -992,9 +1000,10 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
       benchmarkCategory: agg.category,
       suggestedStrategyCategory: strategy,
       suggestedTitle: `Tier 2 — ${strategy}`,
-      suggestedGoal: `Improve mastery on ${agg.benchmarkCode}${
-        agg.category ? ` (${agg.category})` : ""
-      } to ${thresholdPct}% or higher by next FAST window.`,
+      suggestedGoal:
+        `Improve mastery on FAST benchmark ${agg.benchmarkCode}` +
+        `${categorySnippet} from ${latestSnippet} to ${thresholdPct}% or ` +
+        `higher by the next FAST window using ${strategy} strategies.`,
       windows,
       belowCount,
     });

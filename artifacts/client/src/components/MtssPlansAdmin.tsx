@@ -470,7 +470,7 @@ export default function MtssPlansAdmin({
           </div>
         )}
 
-        {canManage && (suggestions.length > 0 || suggestionsLoading || suggestionsError) && (
+        {canManage && (
           <div
             style={{
               border: "1px solid #fde68a",
