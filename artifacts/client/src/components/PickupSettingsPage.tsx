@@ -425,19 +425,24 @@ export default function PickupSettingsPage() {
             </div>
           </div>
           <div>
-            <label style={label} htmlFor="pickup-walked-secs">
-              Drop-from-list timer (seconds)
+            <label style={label} htmlFor="pickup-walked-mins">
+              Drop-from-list timer (minutes)
             </label>
             <input
-              id="pickup-walked-secs"
+              id="pickup-walked-mins"
               type="number"
-              min={60}
-              max={1800}
-              step={30}
-              value={walkedOutSecs}
+              min={1}
+              max={30}
+              step={1}
+              value={Math.round(walkedOutSecs / 60)}
               onChange={(e) => {
-                const n = Number(e.target.value);
-                if (Number.isFinite(n)) setWalkedOutSecs(n);
+                const mins = Number(e.target.value);
+                if (Number.isFinite(mins)) {
+                  // Store as seconds (backend contract); clamp to the
+                  // same 60..1800s band the server validates.
+                  const secs = Math.max(60, Math.min(1800, Math.round(mins) * 60));
+                  setWalkedOutSecs(secs);
+                }
               }}
               disabled={inCarStep}
               style={{
@@ -455,7 +460,7 @@ export default function PickupSettingsPage() {
             >
               {inCarStep
                 ? "Only used when the 'in car' step is off."
-                : `How long a 'walking out' row stays visible to curb staff before dropping off the live list. 60–1800s (default 300 = 5 min).`}
+                : `How long a 'walking out' row stays visible to curb staff before dropping off the live list. 1–30 minutes (default 5).`}
             </div>
           </div>
         </div>
