@@ -35,6 +35,7 @@ import {
   studentFastItemResponsesTable,
   schoolSettingsTable,
   schoolsTable,
+  studentTrustedAdultsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
@@ -1015,17 +1016,36 @@ function colorForPct(pct: number, threshold: number): string {
 // false until Phase 5 starts persisting benchmark-tagged plans —
 // the read path is in place so the pill turns on automatically the
 // moment Phase 5 ships.
+// Canonical student-profile visibility — must match the gate used by
+// GET /api/insights/students/:studentId/profile EXACTLY so a teacher
+// who can open the profile page can always read its benchmark panel,
+// and vice versa. Three paths:
+//   1) Insights-flavor "core team" — SuperUser / Admin / Behavior
+//      Specialist / MTSS Coordinator / PBIS Coordinator. Intentionally
+//      DIFFERENT from this file's roster-flavor isCoreTeam() — the
+//      profile page deliberately excludes ESE coordinator from the
+//      blanket all-student bucket and routes them through the roster
+//      / trusted-adult paths instead, same as guidance counselor.
+//   2) Roster — student appears in any section taught by this staff.
+//   3) Trusted-adult — student has an explicit trusted-adult link to
+//      this staff (counselor / mentor / ESE case manager assignment).
+function isProfileCoreTeam(s: StaffRow): boolean {
+  return Boolean(
+    s.isSuperUser ||
+      s.isAdmin ||
+      s.isBehaviorSpecialist ||
+      s.isMtssCoordinator ||
+      s.isPbisCoordinator,
+  );
+}
+
 async function resolveStudentVisibility(
   staff: StaffRow,
   schoolId: number,
   studentId: string,
 ): Promise<boolean> {
-  if (isCoreTeam(staff)) return true;
-  // Guidance counselor + ESE coordinator get the same all-student
-  // read access as core team for the profile page (matches the
-  // existing student-profile gate documented in the task spec).
-  if (staff.isGuidanceCounselor || staff.isEseCoordinator) return true;
-  // Else: must be on this student's roster via any taught section.
+  if (isProfileCoreTeam(staff)) return true;
+  // Roster path (any taught section).
   const [rosterHit] = await db
     .select({ id: sectionRosterTable.id })
     .from(sectionRosterTable)
@@ -1043,7 +1063,20 @@ async function resolveStudentVisibility(
       ),
     )
     .limit(1);
-  return Boolean(rosterHit);
+  if (rosterHit) return true;
+  // Trusted-adult path (counselor / ESE case manager / mentor links).
+  const [trustedHit] = await db
+    .select({ id: studentTrustedAdultsTable.id })
+    .from(studentTrustedAdultsTable)
+    .where(
+      and(
+        eq(studentTrustedAdultsTable.schoolId, schoolId),
+        eq(studentTrustedAdultsTable.staffId, staff.id),
+        eq(studentTrustedAdultsTable.studentId, studentId),
+      ),
+    )
+    .limit(1);
+  return Boolean(trustedHit);
 }
 
 router.get(
