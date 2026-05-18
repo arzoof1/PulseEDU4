@@ -3294,13 +3294,16 @@ async function parseFloridaXlsx(
     const testReason = parseCellString(row.getCell(idxTestReason + 1).value);
     const window = detectWindow(testReason);
     if (!window) {
-      if (warnings.length < 50) {
-        warnings.push({
-          row: r,
-          message: `Could not detect PM window from Test Reason "${testReason}".`,
-        });
-      }
-      continue;
+      // Per task requirement: reject the entire file rather than
+      // silently skipping rows when the PM window is ambiguous —
+      // a Florida xlsx with un-tagged rows means the operator picked
+      // the wrong export type and we don't want to half-import.
+      return {
+        ok: false,
+        error:
+          `Row ${r}: could not detect PM window from Test Reason "${testReason}". ` +
+          `Re-export from the state portal with Test Reason populated for every row (expected values: "PM1", "PM2", or "PM3").`,
+      };
     }
     windowsSeen.add(window);
 
@@ -3522,6 +3525,7 @@ router.post(
             school_year: schoolYear,
             grade_label: parsed.gradeLabel ?? "",
             windows_seen: Array.from(parsed.windowsSeen).sort().join(","),
+            items_total: String(parsed.totalItems),
           },
           committedAt: new Date(),
         })
@@ -3650,6 +3654,13 @@ router.post(
       totalStudents: parsed.students.length,
       totalItems: result.items,
       warningCount: parsed.warnings.length,
+      // Aliases to match the generic commit-result contract the
+      // client's success card renders (totalRows / successRows /
+      // errorRows). For Florida, every parsed student row commits
+      // (parser hard-fails on ambiguity), so success == total.
+      totalRows: parsed.students.length,
+      successRows: parsed.students.length,
+      errorRows: 0,
     });
   },
 );

@@ -47,6 +47,11 @@ type PreviewResponse = {
   }>;
   errors: Array<{ row: number; message: string }>;
   readyToCommit: boolean;
+  // FAST Florida only — count of per-benchmark item rows that will be
+  // written to student_fast_item_responses. Surfaced as a "Will import
+  // items" stat on the preview step so admins see the data volume
+  // before commit.
+  totalItems?: number;
   // District-scope preview only.
   perSchool?: Array<{ schoolId: number; schoolName: string; rows: number }>;
   districtSchoolCount?: number;
@@ -1009,7 +1014,11 @@ export default function DataImports({
   // "YY-YY" (e.g. "25-26"). Default fills in after the first /preview
   // response — the server tells us the current year so the dropdown
   // can render relative to today regardless of the client clock.
-  const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>("");
+  // Default to the current school year so the first Florida preview
+  // call after upload has a valid year — the server re-validates.
+  const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>(
+    () => floridaSchoolYearOptions()[0] ?? "",
+  );
   const [availableSchoolYears, setAvailableSchoolYears] = useState<string[]>(
     [],
   );
@@ -1334,6 +1343,7 @@ export default function DataImports({
           totalRows: data.totalStudents ?? 0,
           validRows: data.totalStudents ?? 0,
           errorRows: 0,
+          totalItems: data.totalItems ?? 0,
           sampleRows: (data.sampleStudents ?? []).map(
             (s: {
               studentId: string;
@@ -2591,6 +2601,14 @@ export default function DataImports({
                       accent
                     />
                     <Stat label="Will skip" value={preview.errorRows} warn />
+                    {kind === "fast_florida" &&
+                      typeof preview.totalItems === "number" && (
+                        <Stat
+                          label="Will import items"
+                          value={preview.totalItems}
+                          accent
+                        />
+                      )}
                     {scope === "district" && preview.perSchool && (
                       <Stat
                         label="Schools matched"
@@ -3189,7 +3207,30 @@ export default function DataImports({
                           </span>
                         )}
                       </td>
-                      <td style={{ padding: "0.5rem" }}>{j.kind}</td>
+                      <td style={{ padding: "0.5rem" }}>
+                        {j.kind}
+                        {j.kind === "fast_florida" && j.mapping && (
+                          <div
+                            style={{
+                              fontSize: 11,
+                              color: "var(--text-subtle)",
+                              marginTop: 2,
+                            }}
+                          >
+                            {j.mapping.school_year && (
+                              <span>SY {j.mapping.school_year}</span>
+                            )}
+                            {j.mapping.items_total && (
+                              <span> · {j.mapping.items_total} items</span>
+                            )}
+                            {j.mapping.windows_seen && (
+                              <span>
+                                {" "}· {j.mapping.windows_seen.toUpperCase()}
+                              </span>
+                            )}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: "0.5rem" }}>
                         <span style={statusPillStyle(j.status)}>
                           {j.status.replace("_", " ")}
