@@ -14,7 +14,7 @@
 // starts persisting benchmark-tagged plans. Server returns
 // `mtssTagged: false` for every benchmark today.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { authFetch } from "../lib/authToken";
 
 interface BenchmarkRow {
@@ -47,6 +47,12 @@ interface WindowBlock {
   overallMasteryPct: number | null;
 }
 
+interface HistoryPoint {
+  schoolYear: string;
+  window: string;
+  pct: number;
+}
+
 interface PayloadShape {
   student: {
     studentId: string;
@@ -59,6 +65,70 @@ interface PayloadShape {
   availableSchoolYears: string[];
   thresholdPct: number;
   windows: WindowBlock[];
+  // Phase 4 — chronological mastery% per benchmark across ALL years
+  // this student has data for. Optional so the server can omit it
+  // without breaking the type during older clients.
+  historyByCode?: Record<string, HistoryPoint[]>;
+}
+
+// Tiny inline SVG sparkline. Domain is the count of points; range is
+// 0–100% (FAST mastery). Renders a polyline + endpoint dot colored by
+// the final point's status. Returns null when fewer than 2 points
+// exist — a single point isn't a trend.
+function Sparkline({
+  points,
+  thresholdPct,
+  width = 64,
+  height = 18,
+}: {
+  points: HistoryPoint[];
+  thresholdPct: number;
+  width?: number;
+  height?: number;
+}): ReactElement | null {
+  if (points.length < 2) return null;
+  const padX = 2;
+  const padY = 2;
+  const innerW = width - padX * 2;
+  const innerH = height - padY * 2;
+  const xs = points.map((_, i) =>
+    points.length === 1
+      ? padX + innerW / 2
+      : padX + (i / (points.length - 1)) * innerW,
+  );
+  const ys = points.map(
+    (p) => padY + innerH * (1 - Math.max(0, Math.min(100, p.pct)) / 100),
+  );
+  const path = xs.map((x, i) => `${i === 0 ? "M" : "L"}${x},${ys[i]}`).join(" ");
+  const lastIdx = points.length - 1;
+  const lastPct = points[lastIdx].pct;
+  const endColor = cellColor(lastPct, thresholdPct).fg;
+  // Faint threshold rule so the eye anchors the line against the cut.
+  const thresholdY = padY + innerH * (1 - thresholdPct / 100);
+  const label = points
+    .map((p) => `${p.schoolYear} ${p.window.toUpperCase()}: ${p.pct}%`)
+    .join(" → ");
+  return (
+    <svg
+      width={width}
+      height={height}
+      role="img"
+      aria-label={label}
+    >
+      <title>{label}</title>
+      <line
+        x1={padX}
+        x2={padX + innerW}
+        y1={thresholdY}
+        y2={thresholdY}
+        stroke="#d1d5db"
+        strokeDasharray="2,2"
+        strokeWidth={0.5}
+      />
+      <path d={path} stroke="#475569" strokeWidth={1} fill="none" />
+      <circle cx={xs[lastIdx]} cy={ys[lastIdx]} r={1.8} fill={endColor} />
+    </svg>
+  );
 }
 
 type SubjectKey = "ela" | "math" | "algebra1" | "geometry";
@@ -377,6 +447,12 @@ export default function StudentBenchmarksPanel({
                       <th style={{ textAlign: "right" }}>Attempts</th>
                       <th style={{ textAlign: "right" }}>Earned / Possible</th>
                       <th style={{ textAlign: "right" }}>Mastery</th>
+                      <th
+                        style={{ textAlign: "left", paddingLeft: 8 }}
+                        title="Mastery trend across all windows on file (PM1 → PM3, across years)"
+                      >
+                        Trend
+                      </th>
                       <th style={{ textAlign: "left", paddingLeft: 8 }}>
                         Status
                       </th>
@@ -431,6 +507,31 @@ export default function StudentBenchmarksPanel({
                               }}
                             >
                               {r.masteryPct}%
+                            </td>
+                            <td style={{ paddingLeft: 8 }}>
+                              {(() => {
+                                const hist =
+                                  data.historyByCode?.[r.code] ?? [];
+                                if (hist.length < 2) {
+                                  return (
+                                    <span
+                                      style={{
+                                        color: "#9ca3af",
+                                        fontSize: "0.7rem",
+                                      }}
+                                      title="Need ≥ 2 windows for a trend"
+                                    >
+                                      —
+                                    </span>
+                                  );
+                                }
+                                return (
+                                  <Sparkline
+                                    points={hist}
+                                    thresholdPct={data.thresholdPct}
+                                  />
+                                );
+                              })()}
                             </td>
                             <td style={{ paddingLeft: 8 }}>
                               <span

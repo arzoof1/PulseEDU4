@@ -1,4 +1,4 @@
-import { pgTable, serial, text, integer, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
+import { pgTable, serial, text, integer, real, boolean, uniqueIndex, jsonb } from "drizzle-orm/pg-core";
 
 // Per-school operational settings. As of D4 there is exactly one row per
 // school (enforced by `school_settings_school_id_unique`). Routes
@@ -184,6 +184,15 @@ export const schoolSettingsTable = pgTable(
   fastBenchmarkMasteryThreshold: integer("fast_benchmark_mastery_threshold")
     .notNull()
     .default(80),
+  // FAST Phase 4 — z-score threshold for flagging outlier teachers on
+  // the admin FAST Benchmarks dashboard. A teacher whose class-avg
+  // mastery on the selected benchmark is more than this many standard
+  // deviations below the school-wide grade mean is flagged. Stored as
+  // a REAL so admins can tighten (1.5) or loosen (0.75) the bar.
+  // Default 1.0 = roughly the bottom 16% of teachers per benchmark.
+  fastOutlierZThreshold: real("fast_outlier_z_threshold")
+    .notNull()
+    .default(1.0),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

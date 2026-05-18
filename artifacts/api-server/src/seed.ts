@@ -966,6 +966,16 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_benchmark_mastery_threshold INTEGER NOT NULL DEFAULT 80`,
     ),
   );
+  // FAST Phase 4 — outlier z-score threshold for the admin FAST
+  // Benchmarks dashboard. REAL DEFAULT 1.0 = teachers more than 1
+  // stdev below the school-wide grade mean for the selected
+  // benchmark get flagged. Idempotent ALTER stays harmless across
+  // restarts and deploys.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_outlier_z_threshold REAL NOT NULL DEFAULT 1.0`,
+    ),
+  );
   // Manual on/off kill switch for an entire display URL (separate from
   // the time-window `schedule_enabled`). Defaults TRUE so existing
   // displays keep playing without any admin action. When FALSE the

@@ -68,6 +68,7 @@ import MtssPlansAdmin from "./components/MtssPlansAdmin";
 import TeacherRosterPage from "./components/TeacherRosterPage";
 import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
+import FastBenchmarksDashboard from "./components/FastBenchmarksDashboard";
 import SeparationTagsAdmin from "./components/SeparationTagsAdmin";
 import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
@@ -3987,6 +3988,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "separationSuggestions",
   },
   {
+    id: "fastBenchmarks",
+    icon: "🎯",
+    title: "FAST Benchmarks",
+    subtitle:
+      "School-wide rollups: grade × category mastery, weakest 3 benchmarks, outlier teachers, and year-over-year cohort comparison (prior PM3 → current PM1).",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "fastBenchmarks",
+  },
+  {
     id: "earlyWarning",
     icon: "🚨",
     title: "Early Warning",
@@ -4493,6 +4504,7 @@ function App() {
     | "watchlistCase"
     | "watchlistStudentGraph"
     | "separationSuggestions"
+    | "fastBenchmarks"
     | "spotlight"
     | "houseRankings"
     | "issReporting"
@@ -8108,6 +8120,15 @@ function App() {
     isAdmin ||
     isMtss ||
     isBehaviorSpec;
+  // Mirrors server `isCoreTeam` in routes/fastBenchmarks.ts so the
+  // FAST Benchmarks Insights tile/section gating matches the API guard
+  // (canAccessMtssHub excludes ESE coordinator, which the server allows).
+  const canAccessFastBenchmarksInsights =
+    Boolean(authUser?.isSuperUser) ||
+    isAdmin ||
+    isMtss ||
+    isBehaviorSpec ||
+    Boolean(authUser?.isEseCoordinator);
   const canManageStaffRoles =
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
@@ -20216,6 +20237,12 @@ function App() {
 
       {activeSection === "separationSuggestions" && (
         <SeparationSuggestionsPage onBack={() => setActiveSection("insights")} />
+      )}
+
+      {activeSection === "fastBenchmarks" && canAccessFastBenchmarksInsights && (
+        <FastBenchmarksDashboard
+          onBack={() => setActiveSection("insights")}
+        />
       )}
 
       {activeSection === "parentAccess" && canManageSettings && (

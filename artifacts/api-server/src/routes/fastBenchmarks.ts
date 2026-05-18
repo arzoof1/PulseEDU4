@@ -1360,6 +1360,72 @@ router.get(
         };
       });
 
+    // Phase 4 — cross-year sparkline data. One extra read across ALL
+    // years for this student × subject, pivoted to
+    // historyByCode[code] = [{schoolYear, window, pct}, …] ordered
+    // chronologically. Lets the profile sparkline span prior-year PM3
+    // through this year's PM1→PM2→PM3 without a per-row round trip.
+    // Bounded payload — typical student has ≤ 2 years × 3 windows ×
+    // ~40 benchmarks = ~240 entries.
+    const historyRows = await db
+      .select({
+        schoolYear: studentFastItemResponsesTable.schoolYear,
+        window: studentFastItemResponsesTable.window,
+        benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+        pointsEarned: studentFastItemResponsesTable.pointsEarned,
+        pointsPossible: studentFastItemResponsesTable.pointsPossible,
+      })
+      .from(studentFastItemResponsesTable)
+      .where(
+        and(
+          eq(studentFastItemResponsesTable.schoolId, schoolId),
+          eq(studentFastItemResponsesTable.studentId, studentId),
+          eq(studentFastItemResponsesTable.subject, subject),
+        ),
+      );
+    // Aggregate (schoolYear, window, code) → mastery%.
+    interface HistAgg { earned: number; possible: number }
+    const histAgg = new Map<string, HistAgg>();
+    for (const r of historyRows) {
+      if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
+      const key = `${r.schoolYear}|${r.window}|${r.benchmarkCode}`;
+      const prior = histAgg.get(key) ?? { earned: 0, possible: 0 };
+      prior.earned += r.pointsEarned ?? 0;
+      prior.possible += r.pointsPossible;
+      histAgg.set(key, prior);
+    }
+    const HISTORY_WINDOW_RANK: Record<string, number> = {
+      pm1: 0, pm2: 1, pm3: 2,
+    };
+    const historyByCode: Record<
+      string,
+      Array<{ schoolYear: string; window: string; pct: number }>
+    > = {};
+    for (const [key, agg] of histAgg.entries()) {
+      if (agg.possible === 0) continue;
+      const [sy, win, code] = key.split("|");
+      const list = historyByCode[code] ?? [];
+      list.push({
+        schoolYear: sy,
+        window: win,
+        pct: Math.round((agg.earned / agg.possible) * 100),
+      });
+      historyByCode[code] = list;
+    }
+    // Chronological order — oldest school year first, then PM1→PM3
+    // within a year, so the sparkline reads left-to-right.
+    for (const code of Object.keys(historyByCode)) {
+      historyByCode[code].sort((a, b) => {
+        if (a.schoolYear !== b.schoolYear) {
+          return a.schoolYear.localeCompare(b.schoolYear);
+        }
+        return (
+          (HISTORY_WINDOW_RANK[a.window] ?? 9) -
+          (HISTORY_WINDOW_RANK[b.window] ?? 9)
+        );
+      });
+    }
+
     res.json({
       student: {
         studentId: student.studentId,
@@ -1372,6 +1438,944 @@ router.get(
       availableSchoolYears,
       thresholdPct,
       windows,
+      historyByCode,
+    });
+  },
+);
+
+// ---------------------------------------------------------------------
+// FAST Phase 4 — Growth view + admin rollups.
+// ---------------------------------------------------------------------
+
+// Shared: load all rosters in the school keyed by teacher.
+// Returns: Map<teacherStaffId, { studentIds: string[], displayName }>.
+// Cached at request scope only (no module-level memo) — schools small
+// enough that two queries per request is cheap.
+async function loadAllSchoolRosters(
+  schoolId: number,
+): Promise<
+  Map<number, { studentIds: string[]; displayName: string | null }>
+> {
+  const teachers = await db
+    .select({ id: staffTable.id, displayName: staffTable.displayName })
+    .from(staffTable)
+    .where(and(eq(staffTable.schoolId, schoolId), eq(staffTable.active, true)));
+  const sections = await db
+    .select({
+      sectionId: classSectionsTable.id,
+      teacherStaffId: classSectionsTable.teacherStaffId,
+    })
+    .from(classSectionsTable)
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  const sectionIds = sections.map((s) => s.sectionId);
+  const sectionToTeacher = new Map<number, number>();
+  for (const s of sections) sectionToTeacher.set(s.sectionId, s.teacherStaffId);
+
+  const teacherToStudents = new Map<number, Set<string>>();
+  if (sectionIds.length > 0) {
+    const rosterRows = await db
+      .select({
+        sectionId: sectionRosterTable.sectionId,
+        studentId: sectionRosterTable.studentId,
+      })
+      .from(sectionRosterTable)
+      .where(
+        and(
+          eq(sectionRosterTable.schoolId, schoolId),
+          inArray(sectionRosterTable.sectionId, sectionIds),
+        ),
+      );
+    for (const r of rosterRows) {
+      const tid = sectionToTeacher.get(r.sectionId);
+      if (tid == null) continue;
+      const set = teacherToStudents.get(tid) ?? new Set<string>();
+      set.add(r.studentId);
+      teacherToStudents.set(tid, set);
+    }
+  }
+  const out = new Map<
+    number,
+    { studentIds: string[]; displayName: string | null }
+  >();
+  for (const t of teachers) {
+    const set = teacherToStudents.get(t.id);
+    if (!set || set.size === 0) continue;
+    out.set(t.id, {
+      studentIds: Array.from(set),
+      displayName: t.displayName,
+    });
+  }
+  return out;
+}
+
+// Growth view — per-benchmark + per-student delta between two windows
+// on the same teacher's roster. Reuses resolveContext for the auth +
+// roster pass (same gate as the absolute heatmap).
+router.get(
+  "/teacher-roster/benchmarks/growth",
+  async (req: Request, res: Response) => {
+    const ctx = await resolveContext(req, res);
+    if (!ctx) return;
+
+    const rawWinA = req.query.windowA;
+    const rawSYA = req.query.schoolYearA;
+    const rawWinB = req.query.windowB;
+    const rawSYB = req.query.schoolYearB;
+    if (
+      typeof rawWinA !== "string" ||
+      !VALID_WINDOWS.has(rawWinA) ||
+      typeof rawSYA !== "string" ||
+      rawSYA.length === 0 ||
+      typeof rawWinB !== "string" ||
+      !VALID_WINDOWS.has(rawWinB) ||
+      typeof rawSYB !== "string" ||
+      rawSYB.length === 0
+    ) {
+      res.status(400).json({
+        error: "windowA, schoolYearA, windowB, schoolYearB are required",
+      });
+      return;
+    }
+    const windowA = rawWinA;
+    const schoolYearA = rawSYA;
+    const windowB = rawWinB;
+    const schoolYearB = rawSYB;
+
+    // Same window can't be both endpoints — useless and would always
+    // render zero deltas.
+    if (windowA === windowB && schoolYearA === schoolYearB) {
+      res.status(400).json({ error: "Pick two different windows" });
+      return;
+    }
+
+    const available = await loadAvailableWindows(
+      ctx.schoolId,
+      ctx.subject,
+      ctx.studentIds,
+    );
+
+    const baseResponse = {
+      teacher: {
+        id: ctx.targetTeacher.id,
+        displayName: ctx.targetTeacher.displayName,
+      },
+      subject: ctx.subject,
+      windowA,
+      schoolYearA,
+      windowB,
+      schoolYearB,
+      availableWindows: available,
+      thresholdPct: ctx.thresholdPct,
+    };
+
+    if (ctx.studentIds.length === 0) {
+      res.json({
+        ...baseResponse,
+        students: [],
+        benchmarks: [],
+        topMovers: [],
+        topRegressions: [],
+      });
+      return;
+    }
+
+    const [students, items] = await Promise.all([
+      db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+          grade: studentsTable.grade,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, ctx.schoolId),
+            inArray(studentsTable.studentId, ctx.studentIds),
+          ),
+        ),
+      db
+        .select({
+          studentId: studentFastItemResponsesTable.studentId,
+          schoolYear: studentFastItemResponsesTable.schoolYear,
+          window: studentFastItemResponsesTable.window,
+          category: studentFastItemResponsesTable.category,
+          benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+          pointsEarned: studentFastItemResponsesTable.pointsEarned,
+          pointsPossible: studentFastItemResponsesTable.pointsPossible,
+        })
+        .from(studentFastItemResponsesTable)
+        .where(
+          and(
+            eq(studentFastItemResponsesTable.schoolId, ctx.schoolId),
+            eq(studentFastItemResponsesTable.subject, ctx.subject),
+            inArray(studentFastItemResponsesTable.schoolYear, [
+              schoolYearA,
+              schoolYearB,
+            ]),
+            inArray(studentFastItemResponsesTable.window, [windowA, windowB]),
+            inArray(
+              studentFastItemResponsesTable.studentId,
+              ctx.studentIds,
+            ),
+          ),
+        ),
+    ]);
+
+    // (sliceKey, studentId, code) → {earned, possible}. sliceKey is
+    // "a" or "b" since we only fetched those two slices.
+    interface CellAgg { earned: number; possible: number }
+    const aMap = new Map<string, CellAgg>(); // studentId|code → agg
+    const bMap = new Map<string, CellAgg>();
+    const benchmarkMeta = new Map<string, { category: string | null }>();
+    for (const r of items) {
+      if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
+      if (!benchmarkMeta.has(r.benchmarkCode)) {
+        benchmarkMeta.set(r.benchmarkCode, { category: r.category });
+      }
+      const isA =
+        r.schoolYear === schoolYearA && r.window === windowA;
+      const isB =
+        r.schoolYear === schoolYearB && r.window === windowB;
+      if (!isA && !isB) continue;
+      const dest = isA ? aMap : bMap;
+      const key = `${r.studentId}|${r.benchmarkCode}`;
+      const prior = dest.get(key) ?? { earned: 0, possible: 0 };
+      prior.earned += r.pointsEarned ?? 0;
+      prior.possible += r.pointsPossible;
+      dest.set(key, prior);
+    }
+
+    const benchmarks = Array.from(benchmarkMeta.entries())
+      .map(([code, meta]) => ({ code, category: meta.category }))
+      .sort((a, b) => {
+        const ca = a.category ?? "";
+        const cb = b.category ?? "";
+        if (ca !== cb) return ca.localeCompare(cb);
+        return compareBenchmarkCodes(a.code, b.code);
+      });
+
+    interface DeltaCell {
+      pctA: number | null;
+      pctB: number | null;
+      delta: number | null;
+    }
+    const studentOut = students
+      .map((s) => {
+        const cells: Record<string, DeltaCell> = {};
+        for (const b of benchmarks) {
+          const a = aMap.get(`${s.studentId}|${b.code}`);
+          const bb = bMap.get(`${s.studentId}|${b.code}`);
+          const pctA =
+            a && a.possible > 0
+              ? Math.round((a.earned / a.possible) * 100)
+              : null;
+          const pctB =
+            bb && bb.possible > 0
+              ? Math.round((bb.earned / bb.possible) * 100)
+              : null;
+          cells[b.code] = {
+            pctA,
+            pctB,
+            delta: pctA != null && pctB != null ? pctB - pctA : null,
+          };
+        }
+        return {
+          studentId: s.studentId,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          grade: s.grade,
+          cells,
+        };
+      })
+      .sort((a, b) => {
+        const ln = (a.lastName ?? "").localeCompare(b.lastName ?? "");
+        if (ln !== 0) return ln;
+        return (a.firstName ?? "").localeCompare(b.firstName ?? "");
+      });
+
+    // Per-student overall delta = mean of available cell deltas (drops
+    // benchmarks with no pair). Used to rank top movers + top
+    // regressions tiles.
+    interface MoverEntry {
+      studentId: string;
+      firstName: string | null;
+      lastName: string | null;
+      delta: number;
+      pairs: number;
+    }
+    const movers: MoverEntry[] = [];
+    for (const s of studentOut) {
+      let sum = 0;
+      let n = 0;
+      for (const code of Object.keys(s.cells)) {
+        const c = s.cells[code];
+        if (c.delta != null) {
+          sum += c.delta;
+          n += 1;
+        }
+      }
+      if (n === 0) continue;
+      movers.push({
+        studentId: s.studentId,
+        firstName: s.firstName,
+        lastName: s.lastName,
+        delta: Math.round(sum / n),
+        pairs: n,
+      });
+    }
+    movers.sort((a, b) => b.delta - a.delta);
+    const topMovers = movers.slice(0, 3);
+    const topRegressions = movers
+      .filter((m) => m.delta < 0)
+      .slice(-3)
+      .reverse();
+
+    res.json({
+      ...baseResponse,
+      students: studentOut,
+      benchmarks,
+      topMovers,
+      topRegressions,
+    });
+  },
+);
+
+// Admin: category rollup across the whole school for one window.
+router.get(
+  "/insights/fast-benchmarks/category-rollup",
+  async (req: Request, res: Response) => {
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core team only" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const rawSubject = req.query.subject;
+    const subject = typeof rawSubject === "string" ? rawSubject : "ela";
+    if (!VALID_SUBJECTS.has(subject)) {
+      res.status(400).json({ error: "Invalid subject" });
+      return;
+    }
+    const rawWindow = req.query.window;
+    const rawSY = req.query.schoolYear;
+    if (
+      typeof rawWindow !== "string" ||
+      !VALID_WINDOWS.has(rawWindow) ||
+      typeof rawSY !== "string" ||
+      rawSY.length === 0
+    ) {
+      res
+        .status(400)
+        .json({ error: "subject, window, schoolYear are required" });
+      return;
+    }
+    const window = rawWindow;
+    const schoolYear = rawSY;
+
+    const [settings] = await db
+      .select({
+        thresholdPct: schoolSettingsTable.fastBenchmarkMasteryThreshold,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const thresholdPct = settings?.thresholdPct ?? 80;
+
+    // Need grade for each student — join via studentsTable. Fetch the
+    // raw item rows + the matching student grades in parallel and
+    // pivot in memory.
+    const items = await db
+      .select({
+        studentId: studentFastItemResponsesTable.studentId,
+        category: studentFastItemResponsesTable.category,
+        benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+        pointsEarned: studentFastItemResponsesTable.pointsEarned,
+        pointsPossible: studentFastItemResponsesTable.pointsPossible,
+      })
+      .from(studentFastItemResponsesTable)
+      .where(
+        and(
+          eq(studentFastItemResponsesTable.schoolId, schoolId),
+          eq(studentFastItemResponsesTable.subject, subject),
+          eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+          eq(studentFastItemResponsesTable.window, window),
+        ),
+      );
+
+    if (items.length === 0) {
+      res.json({
+        subject,
+        schoolYear,
+        window,
+        thresholdPct,
+        rollup: [],
+        bottom3: [],
+      });
+      return;
+    }
+
+    const uniqStudentIds = Array.from(new Set(items.map((r) => r.studentId)));
+    const studentRows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, uniqStudentIds),
+        ),
+      );
+    const gradeOf = new Map<string, number>();
+    for (const r of studentRows) gradeOf.set(r.studentId, r.grade);
+
+    // (grade, category) → {earned, possible, codeSet}
+    interface CatAgg {
+      earned: number;
+      possible: number;
+      codes: Set<string>;
+      students: Set<string>;
+    }
+    const byGradeCat = new Map<string, CatAgg>();
+    // (code) → {earned, possible, category} for the school-wide
+    // bottom-3 tile.
+    interface CodeAgg {
+      earned: number;
+      possible: number;
+      category: string | null;
+      students: Set<string>;
+    }
+    const byCode = new Map<string, CodeAgg>();
+    for (const r of items) {
+      if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
+      const grade = gradeOf.get(r.studentId);
+      if (grade == null) continue; // student deleted/transferred
+      const cat = r.category ?? "Uncategorized";
+      const k = `${grade}|${cat}`;
+      const prior =
+        byGradeCat.get(k) ??
+        ({
+          earned: 0,
+          possible: 0,
+          codes: new Set<string>(),
+          students: new Set<string>(),
+        } as CatAgg);
+      prior.earned += r.pointsEarned ?? 0;
+      prior.possible += r.pointsPossible;
+      prior.codes.add(r.benchmarkCode);
+      prior.students.add(r.studentId);
+      byGradeCat.set(k, prior);
+
+      const codePrior =
+        byCode.get(r.benchmarkCode) ??
+        ({
+          earned: 0,
+          possible: 0,
+          category: r.category,
+          students: new Set<string>(),
+        } as CodeAgg);
+      codePrior.earned += r.pointsEarned ?? 0;
+      codePrior.possible += r.pointsPossible;
+      if (!codePrior.category && r.category) codePrior.category = r.category;
+      codePrior.students.add(r.studentId);
+      byCode.set(r.benchmarkCode, codePrior);
+    }
+
+    const rollup = Array.from(byGradeCat.entries())
+      .map(([k, v]) => {
+        const [gradeStr, category] = k.split("|");
+        return {
+          grade: Number(gradeStr),
+          category,
+          masteryPct:
+            v.possible > 0
+              ? Math.round((v.earned / v.possible) * 100)
+              : null,
+          benchmarkCount: v.codes.size,
+          studentCount: v.students.size,
+        };
+      })
+      .sort((a, b) => {
+        if (a.grade !== b.grade) return a.grade - b.grade;
+        return a.category.localeCompare(b.category);
+      });
+
+    const bottom3 = Array.from(byCode.entries())
+      .map(([code, v]) => ({
+        code,
+        category: v.category,
+        masteryPct:
+          v.possible > 0
+            ? Math.round((v.earned / v.possible) * 100)
+            : 0,
+        studentCount: v.students.size,
+      }))
+      .filter((r) => r.studentCount >= 5) // suppress tiny-N noise
+      .sort((a, b) => {
+        if (a.masteryPct !== b.masteryPct) return a.masteryPct - b.masteryPct;
+        return compareBenchmarkCodes(a.code, b.code);
+      })
+      .slice(0, 3);
+
+    res.json({
+      subject,
+      schoolYear,
+      window,
+      thresholdPct,
+      rollup,
+      bottom3,
+    });
+  },
+);
+
+// Admin: outlier teachers for a single benchmark (or the school's
+// weakest benchmark if none supplied) at a given window. Per-teacher
+// class mean is z-scored against the school-wide mean+stdev for that
+// benchmark; teachers with z below −threshold are flagged. Threshold
+// comes from school_settings.fast_outlier_z_threshold (default 1.0).
+router.get(
+  "/insights/fast-benchmarks/outliers",
+  async (req: Request, res: Response) => {
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core team only" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const rawSubject = req.query.subject;
+    const subject = typeof rawSubject === "string" ? rawSubject : "ela";
+    if (!VALID_SUBJECTS.has(subject)) {
+      res.status(400).json({ error: "Invalid subject" });
+      return;
+    }
+    const rawWindow = req.query.window;
+    const rawSY = req.query.schoolYear;
+    if (
+      typeof rawWindow !== "string" ||
+      !VALID_WINDOWS.has(rawWindow) ||
+      typeof rawSY !== "string" ||
+      rawSY.length === 0
+    ) {
+      res
+        .status(400)
+        .json({ error: "subject, window, schoolYear are required" });
+      return;
+    }
+    const window = rawWindow;
+    const schoolYear = rawSY;
+    const rawCode = req.query.benchmarkCode;
+    const benchmarkCode =
+      typeof rawCode === "string" && rawCode.length > 0 ? rawCode : null;
+
+    const [settings] = await db
+      .select({
+        zThreshold: schoolSettingsTable.fastOutlierZThreshold,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const zThreshold = settings?.zThreshold ?? 1.0;
+
+    const rosters = await loadAllSchoolRosters(schoolId);
+    if (rosters.size === 0) {
+      res.json({
+        subject,
+        schoolYear,
+        window,
+        zThreshold,
+        benchmarkCode: benchmarkCode ?? null,
+        benchmarkCategory: null,
+        teachers: [],
+        availableBenchmarks: [],
+      });
+      return;
+    }
+
+    const allStudentIds = Array.from(
+      new Set(
+        Array.from(rosters.values()).flatMap((v) => v.studentIds),
+      ),
+    );
+    if (allStudentIds.length === 0) {
+      res.json({
+        subject,
+        schoolYear,
+        window,
+        zThreshold,
+        benchmarkCode: benchmarkCode ?? null,
+        benchmarkCategory: null,
+        teachers: [],
+        availableBenchmarks: [],
+      });
+      return;
+    }
+
+    const items = await db
+      .select({
+        studentId: studentFastItemResponsesTable.studentId,
+        category: studentFastItemResponsesTable.category,
+        benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+        pointsEarned: studentFastItemResponsesTable.pointsEarned,
+        pointsPossible: studentFastItemResponsesTable.pointsPossible,
+      })
+      .from(studentFastItemResponsesTable)
+      .where(
+        and(
+          eq(studentFastItemResponsesTable.schoolId, schoolId),
+          eq(studentFastItemResponsesTable.subject, subject),
+          eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+          eq(studentFastItemResponsesTable.window, window),
+          inArray(studentFastItemResponsesTable.studentId, allStudentIds),
+        ),
+      );
+
+    // (code) → category + (studentId → mastery%). Pivot once so we
+    // can both pick the weakest benchmark (when none was passed) and
+    // compute per-teacher means.
+    interface CodeBucket {
+      category: string | null;
+      // studentId → {earned, possible}
+      perStudent: Map<string, { earned: number; possible: number }>;
+    }
+    const byCode = new Map<string, CodeBucket>();
+    for (const r of items) {
+      if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
+      const bucket =
+        byCode.get(r.benchmarkCode) ??
+        ({
+          category: r.category,
+          perStudent: new Map<
+            string,
+            { earned: number; possible: number }
+          >(),
+        } as CodeBucket);
+      if (!bucket.category && r.category) bucket.category = r.category;
+      const ps =
+        bucket.perStudent.get(r.studentId) ?? { earned: 0, possible: 0 };
+      ps.earned += r.pointsEarned ?? 0;
+      ps.possible += r.pointsPossible;
+      bucket.perStudent.set(r.studentId, ps);
+      byCode.set(r.benchmarkCode, bucket);
+    }
+
+    // Available benchmarks (for the picker) sorted by school-wide
+    // mastery ascending — the weakest naturally rises to the top.
+    const availableBenchmarks = Array.from(byCode.entries())
+      .map(([code, b]) => {
+        let earned = 0;
+        let possible = 0;
+        for (const ps of b.perStudent.values()) {
+          earned += ps.earned;
+          possible += ps.possible;
+        }
+        return {
+          code,
+          category: b.category,
+          schoolMasteryPct:
+            possible > 0 ? Math.round((earned / possible) * 100) : 0,
+          studentCount: b.perStudent.size,
+        };
+      })
+      .filter((r) => r.studentCount >= 5)
+      .sort((a, b) => {
+        if (a.schoolMasteryPct !== b.schoolMasteryPct) {
+          return a.schoolMasteryPct - b.schoolMasteryPct;
+        }
+        return compareBenchmarkCodes(a.code, b.code);
+      });
+
+    const targetCode =
+      benchmarkCode ?? availableBenchmarks[0]?.code ?? null;
+    if (!targetCode || !byCode.has(targetCode)) {
+      res.json({
+        subject,
+        schoolYear,
+        window,
+        zThreshold,
+        benchmarkCode: targetCode,
+        benchmarkCategory: null,
+        teachers: [],
+        availableBenchmarks,
+      });
+      return;
+    }
+
+    const bucket = byCode.get(targetCode)!;
+    // Per-teacher: class-avg mastery on this benchmark + n students.
+    interface TeacherStat {
+      teacherId: number;
+      displayName: string | null;
+      meanPct: number;
+      studentCount: number;
+    }
+    const teacherStats: TeacherStat[] = [];
+    for (const [teacherId, roster] of rosters.entries()) {
+      let earned = 0;
+      let possible = 0;
+      let n = 0;
+      for (const sid of roster.studentIds) {
+        const ps = bucket.perStudent.get(sid);
+        if (!ps || ps.possible <= 0) continue;
+        earned += ps.earned;
+        possible += ps.possible;
+        n += 1;
+      }
+      if (n < 5) continue; // suppress tiny-N teachers
+      teacherStats.push({
+        teacherId,
+        displayName: roster.displayName,
+        meanPct: Math.round((earned / possible) * 100),
+        studentCount: n,
+      });
+    }
+
+    // School-wide mean + stdev for the z-score. Use the per-teacher
+    // mean distribution (one observation per teacher) — that's the
+    // distribution the admin is comparing against when they ask
+    // "which teachers look unusually low here".
+    let schoolMean = 0;
+    let stdev = 0;
+    if (teacherStats.length > 0) {
+      const sum = teacherStats.reduce((a, t) => a + t.meanPct, 0);
+      schoolMean = sum / teacherStats.length;
+      const sqSum = teacherStats.reduce(
+        (a, t) => a + (t.meanPct - schoolMean) ** 2,
+        0,
+      );
+      stdev =
+        teacherStats.length > 1
+          ? Math.sqrt(sqSum / (teacherStats.length - 1))
+          : 0;
+    }
+
+    const teachers = teacherStats
+      .map((t) => {
+        const z = stdev > 0 ? (t.meanPct - schoolMean) / stdev : 0;
+        return {
+          teacherId: t.teacherId,
+          displayName: t.displayName,
+          meanPct: t.meanPct,
+          studentCount: t.studentCount,
+          zScore: Math.round(z * 100) / 100,
+          flagged: stdev > 0 && z < -zThreshold,
+        };
+      })
+      .sort((a, b) => a.meanPct - b.meanPct);
+
+    res.json({
+      subject,
+      schoolYear,
+      window,
+      zThreshold,
+      schoolMeanPct: Math.round(schoolMean * 10) / 10,
+      stdevPct: Math.round(stdev * 10) / 10,
+      benchmarkCode: targetCode,
+      benchmarkCategory: bucket.category,
+      teachers,
+      availableBenchmarks,
+    });
+  },
+);
+
+// Admin: year-over-year cohort comparison for one (subject, current
+// grade, current school year). Compares prior-year G-1 PM3 against
+// current-year G PM1 by benchmark — the grade-aligned comparison
+// admins use to spot summer slide and identify which benchmarks
+// didn't transfer over.
+router.get(
+  "/insights/fast-benchmarks/year-over-year",
+  async (req: Request, res: Response) => {
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core team only" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const rawSubject = req.query.subject;
+    const subject = typeof rawSubject === "string" ? rawSubject : "ela";
+    if (!VALID_SUBJECTS.has(subject)) {
+      res.status(400).json({ error: "Invalid subject" });
+      return;
+    }
+    const rawGrade = req.query.grade;
+    const grade = Number(rawGrade);
+    if (!Number.isInteger(grade) || grade < 0 || grade > 12) {
+      res.status(400).json({ error: "grade (0–12) required" });
+      return;
+    }
+    const rawSY = req.query.schoolYear;
+    const SY_FORMAT = /^\d{2}-\d{2}$/;
+    if (typeof rawSY !== "string" || !SY_FORMAT.test(rawSY)) {
+      res.status(400).json({ error: "schoolYear (YY-YY) required" });
+      return;
+    }
+    const currentYear = rawSY;
+    // Prior year = "(YY-1)-(YY-1+1)". The Phase 3 schoolYear format
+    // is "24-25" / "25-26"; subtract 1 from both halves.
+    const [a, b] = currentYear.split("-");
+    const priorYear = `${String(Number(a) - 1).padStart(2, "0")}-${String(
+      Number(b) - 1,
+    ).padStart(2, "0")}`;
+
+    // Current-year cohort: students at the requested grade right now.
+    const currentRoster = await db
+      .select({ studentId: studentsTable.studentId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.grade, grade),
+        ),
+      );
+    const currentIds = currentRoster.map((r) => r.studentId);
+
+    const baseResponse = {
+      subject,
+      grade,
+      currentSchoolYear: currentYear,
+      priorSchoolYear: priorYear,
+      currentWindow: "pm1" as const,
+      priorWindow: "pm3" as const,
+    };
+
+    if (currentIds.length === 0) {
+      res.json({
+        ...baseResponse,
+        benchmarks: [],
+        cohortSize: 0,
+        priorCohortMatchCount: 0,
+      });
+      return;
+    }
+
+    // One read for both slices (prior PM3 + current PM1, scoped to
+    // the current grade's roster — the same student ids on both
+    // sides since student_id is stable across years).
+    const items = await db
+      .select({
+        studentId: studentFastItemResponsesTable.studentId,
+        schoolYear: studentFastItemResponsesTable.schoolYear,
+        window: studentFastItemResponsesTable.window,
+        category: studentFastItemResponsesTable.category,
+        benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+        pointsEarned: studentFastItemResponsesTable.pointsEarned,
+        pointsPossible: studentFastItemResponsesTable.pointsPossible,
+      })
+      .from(studentFastItemResponsesTable)
+      .where(
+        and(
+          eq(studentFastItemResponsesTable.schoolId, schoolId),
+          eq(studentFastItemResponsesTable.subject, subject),
+          inArray(studentFastItemResponsesTable.studentId, currentIds),
+          inArray(studentFastItemResponsesTable.schoolYear, [
+            priorYear,
+            currentYear,
+          ]),
+          inArray(studentFastItemResponsesTable.window, ["pm1", "pm3"]),
+        ),
+      );
+
+    interface SideAgg {
+      earned: number;
+      possible: number;
+      category: string | null;
+      students: Set<string>;
+    }
+    const priorByCode = new Map<string, SideAgg>();
+    const currentByCode = new Map<string, SideAgg>();
+    const priorMatchSet = new Set<string>();
+    for (const r of items) {
+      if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
+      const isPrior =
+        r.schoolYear === priorYear && r.window === "pm3";
+      const isCurr =
+        r.schoolYear === currentYear && r.window === "pm1";
+      if (!isPrior && !isCurr) continue;
+      const dest = isPrior ? priorByCode : currentByCode;
+      const prior =
+        dest.get(r.benchmarkCode) ??
+        ({
+          earned: 0,
+          possible: 0,
+          category: r.category,
+          students: new Set<string>(),
+        } as SideAgg);
+      prior.earned += r.pointsEarned ?? 0;
+      prior.possible += r.pointsPossible;
+      if (!prior.category && r.category) prior.category = r.category;
+      prior.students.add(r.studentId);
+      dest.set(r.benchmarkCode, prior);
+      if (isPrior) priorMatchSet.add(r.studentId);
+    }
+
+    const codes = new Set<string>([
+      ...priorByCode.keys(),
+      ...currentByCode.keys(),
+    ]);
+    const benchmarks = Array.from(codes)
+      .map((code) => {
+        const p = priorByCode.get(code);
+        const c = currentByCode.get(code);
+        const priorPct =
+          p && p.possible > 0
+            ? Math.round((p.earned / p.possible) * 100)
+            : null;
+        const currentPct =
+          c && c.possible > 0
+            ? Math.round((c.earned / c.possible) * 100)
+            : null;
+        return {
+          code,
+          category: c?.category ?? p?.category ?? null,
+          priorPct,
+          currentPct,
+          delta:
+            priorPct != null && currentPct != null
+              ? currentPct - priorPct
+              : null,
+          priorN: p?.students.size ?? 0,
+          currentN: c?.students.size ?? 0,
+        };
+      })
+      .sort((a, b) => {
+        // Biggest regressions first — that's the actionable view.
+        // Push code rows missing a side to the bottom.
+        if (a.delta == null && b.delta == null) {
+          return compareBenchmarkCodes(a.code, b.code);
+        }
+        if (a.delta == null) return 1;
+        if (b.delta == null) return -1;
+        return a.delta - b.delta;
+      });
+
+    res.json({
+      ...baseResponse,
+      benchmarks,
+      cohortSize: currentIds.length,
+      priorCohortMatchCount: priorMatchSet.size,
     });
   },
 );

@@ -56,6 +56,43 @@ interface MatrixResponse {
   bottom3: BottomEntry[];
 }
 
+interface GrowthCell {
+  pctA: number | null;
+  pctB: number | null;
+  delta: number | null;
+}
+
+interface GrowthStudentRow {
+  studentId: string;
+  firstName: string | null;
+  lastName: string | null;
+  grade: number | string;
+  cells: Record<string, GrowthCell>;
+}
+
+interface GrowthMover {
+  studentId: string;
+  firstName: string | null;
+  lastName: string | null;
+  delta: number;
+  pairs: number;
+}
+
+interface GrowthResponse {
+  teacher: { id: number; displayName: string | null };
+  subject: string;
+  windowA: string;
+  schoolYearA: string;
+  windowB: string;
+  schoolYearB: string;
+  availableWindows: WindowOpt[];
+  thresholdPct: number;
+  benchmarks: Benchmark[];
+  students: GrowthStudentRow[];
+  topMovers: GrowthMover[];
+  topRegressions: GrowthMover[];
+}
+
 interface DrillItem {
   itemSeq: number;
   pointsEarned: number | null;
@@ -96,6 +133,20 @@ function cellColor(pct: number, threshold: number): {
   return { bg: "#fecaca", fg: "#991b1b" };
 }
 
+// Growth mode — diverging palette. Green for gains, neutral gray for
+// flat (|delta| < 3), red for regressions. Intensity ramps in 3 steps
+// so the eye can scan the magnitude of the move without reading the
+// number.
+function deltaColor(delta: number): { bg: string; fg: string } {
+  if (delta >= 15) return { bg: "#86efac", fg: "#064e3b" };
+  if (delta >= 7) return { bg: "#bbf7d0", fg: "#065f46" };
+  if (delta >= 3) return { bg: "#dcfce7", fg: "#166534" };
+  if (delta > -3) return { bg: "#e5e7eb", fg: "#374151" };
+  if (delta > -7) return { bg: "#fecaca", fg: "#991b1b" };
+  if (delta > -15) return { bg: "#fca5a5", fg: "#7f1d1d" };
+  return { bg: "#f87171", fg: "#7f1d1d" };
+}
+
 export default function TeacherBenchmarksTab({
   teacherId,
   isOwnRoster,
@@ -114,6 +165,14 @@ export default function TeacherBenchmarksTab({
   const [data, setData] = useState<MatrixResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+
+  // Phase 4 — Growth mode. When on, the heatmap shows the delta
+  // between two selected windows on the same roster. Second window
+  // key uses the same "sy|win" packing as windowKey.
+  const [mode, setMode] = useState<"absolute" | "growth">("absolute");
+  const [windowKeyB, setWindowKeyB] = useState<string>("");
+  const [growth, setGrowth] = useState<GrowthResponse | null>(null);
+  const [growthLoading, setGrowthLoading] = useState(false);
 
   const [drillCode, setDrillCode] = useState<string | null>(null);
   const [drill, setDrill] = useState<DrillResponse | null>(null);
@@ -164,6 +223,85 @@ export default function TeacherBenchmarksTab({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacherId, subject, windowKey]);
+
+  // Phase 4 — Growth fetch. Only fires when the toggle is on AND both
+  // windows are picked. When the user toggles ON for the first time
+  // we auto-pick a sensible default for windowKeyB: the SECOND option
+  // in the available-windows list (i.e. one window older than the
+  // current absolute selection, since the server returns newest-first).
+  useEffect(() => {
+    if (mode !== "growth") {
+      setGrowth(null);
+      return;
+    }
+    if (
+      teacherId == null ||
+      !data ||
+      data.availableWindows.length < 2 ||
+      !windowKey.includes("|")
+    ) {
+      return;
+    }
+    // Default windowKeyB on first activation OR when the user changes
+    // windowKey to the value currently in windowKeyB.
+    let effectiveB = windowKeyB;
+    if (!effectiveB.includes("|") || effectiveB === windowKey) {
+      const fallback = data.availableWindows.find(
+        (w) => `${w.schoolYear}|${w.window}` !== windowKey,
+      );
+      if (!fallback) return;
+      effectiveB = `${fallback.schoolYear}|${fallback.window}`;
+      setWindowKeyB(effectiveB);
+      return; // wait for the state update + re-run.
+    }
+    let cancelled = false;
+    setGrowthLoading(true);
+    setError("");
+    // Convention: "A" is the older window, "B" is the newer one, so
+    // delta = B - A reads as "growth from A to B". We sort by the
+    // server-supplied ordering — availableWindows is newest-first, so
+    // whichever of the two has a higher index in that list is older.
+    const idx = (k: string) =>
+      data.availableWindows.findIndex(
+        (w) => `${w.schoolYear}|${w.window}` === k,
+      );
+    const iA = idx(windowKey);
+    const iB = idx(effectiveB);
+    const older = iA > iB ? windowKey : effectiveB;
+    const newer = iA > iB ? effectiveB : windowKey;
+    const [syA, wA] = older.split("|");
+    const [syB, wB] = newer.split("|");
+    const params = new URLSearchParams();
+    params.set("teacherId", String(teacherId));
+    params.set("subject", subject);
+    params.set("schoolYearA", syA);
+    params.set("windowA", wA);
+    params.set("schoolYearB", syB);
+    params.set("windowB", wB);
+    authFetch(`/api/teacher-roster/benchmarks/growth?${params.toString()}`)
+      .then(async (r) => {
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(
+            (body as { error?: string }).error ?? `HTTP ${r.status}`,
+          );
+        }
+        return (await r.json()) as GrowthResponse;
+      })
+      .then((j) => {
+        if (cancelled) return;
+        setGrowth(j);
+      })
+      .catch((e: Error) => {
+        if (!cancelled) setError(e.message);
+      })
+      .finally(() => {
+        if (!cancelled) setGrowthLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [mode, teacherId, subject, windowKey, windowKeyB, data]);
 
   // Drill modal data load.
   useEffect(() => {
@@ -279,7 +417,7 @@ export default function TeacherBenchmarksTab({
           </select>
         </label>
         <label style={{ display: "inline-flex", alignItems: "center", gap: 6 }}>
-          Window:
+          {mode === "growth" ? "Window A:" : "Window:"}
           <select
             value={windowKey}
             onChange={(e) => setWindowKey(e.target.value)}
@@ -298,6 +436,48 @@ export default function TeacherBenchmarksTab({
             ))}
           </select>
         </label>
+        {mode === "growth" && (
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          >
+            Window B:
+            <select
+              value={windowKeyB}
+              onChange={(e) => setWindowKeyB(e.target.value)}
+              disabled={!data || data.availableWindows.length < 2}
+            >
+              {data?.availableWindows
+                .filter(
+                  (w) => `${w.schoolYear}|${w.window}` !== windowKey,
+                )
+                .map((w) => (
+                  <option
+                    key={`${w.schoolYear}|${w.window}`}
+                    value={`${w.schoolYear}|${w.window}`}
+                  >
+                    {w.label}
+                  </option>
+                ))}
+            </select>
+          </label>
+        )}
+        {/* Growth toggle — disabled until at least 2 windows exist. */}
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+          title={
+            data && data.availableWindows.length < 2
+              ? "Need two windows of data on this roster to compute growth"
+              : "Toggle delta view between two windows"
+          }
+        >
+          <input
+            type="checkbox"
+            checked={mode === "growth"}
+            disabled={!data || data.availableWindows.length < 2}
+            onChange={(e) => setMode(e.target.checked ? "growth" : "absolute")}
+          />
+          Growth
+        </label>
         {data && (
           <span style={{ color: "#6b7280" }}>
             Mastery threshold: <strong>{data.thresholdPct}%</strong>
@@ -314,8 +494,8 @@ export default function TeacherBenchmarksTab({
         </button>
       </div>
 
-      {/* Color legend */}
-      {data && (
+      {/* Color legend — only relevant in absolute mode. */}
+      {data && mode === "absolute" && (
         <div
           style={{
             display: "flex",
@@ -379,7 +559,60 @@ export default function TeacherBenchmarksTab({
         </div>
       )}
 
+      {/* Growth legend */}
+      {mode === "growth" && (
+        <div
+          style={{
+            display: "flex",
+            gap: 14,
+            alignItems: "center",
+            flexWrap: "wrap",
+            fontSize: 12,
+            color: "#374151",
+            marginBottom: 10,
+          }}
+          title="Cell = (Window B − Window A) percentage-point change in mastery"
+        >
+          {[
+            { label: "+15 or more", delta: 15 },
+            { label: "+7 to +14", delta: 8 },
+            { label: "+3 to +6", delta: 3 },
+            { label: "flat (±2)", delta: 0 },
+            { label: "−3 to −6", delta: -3 },
+            { label: "−7 to −14", delta: -8 },
+            { label: "−15 or worse", delta: -20 },
+          ].map((sw) => {
+            const c = deltaColor(sw.delta);
+            return (
+              <span
+                key={sw.label}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                }}
+              >
+                <span
+                  style={{
+                    display: "inline-block",
+                    width: 16,
+                    height: 16,
+                    background: c.bg,
+                    border: "1px solid #d4d4d4",
+                    borderRadius: 3,
+                  }}
+                />
+                {sw.label}
+              </span>
+            );
+          })}
+        </div>
+      )}
+
       {loading && <div>Loading benchmarks…</div>}
+      {growthLoading && mode === "growth" && (
+        <div>Loading growth view…</div>
+      )}
 
       {/* Empty states */}
       {!loading && data && data.availableWindows.length === 0 && (
@@ -420,8 +653,9 @@ export default function TeacherBenchmarksTab({
           </div>
         )}
 
-      {/* Bottom-3 tile */}
-      {!loading && data && data.bottom3.length > 0 && (
+      {/* Bottom-3 tile (absolute mode only — growth mode uses movers
+          tiles instead). */}
+      {!loading && mode === "absolute" && data && data.bottom3.length > 0 && (
         <div
           style={{
             border: "1px solid #fecaca",
@@ -474,8 +708,215 @@ export default function TeacherBenchmarksTab({
         </div>
       )}
 
-      {/* Heatmap */}
-      {!loading &&
+      {/* Top movers / Top regressions (growth mode). */}
+      {mode === "growth" && !growthLoading && growth && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1fr 1fr",
+            gap: 12,
+            marginBottom: 14,
+          }}
+        >
+          {[
+            {
+              title: "Top movers",
+              entries: growth.topMovers,
+              border: "#bbf7d0",
+              bg: "#f0fdf4",
+              fg: "#065f46",
+              sign: "+",
+            },
+            {
+              title: "Top regressions",
+              entries: growth.topRegressions,
+              border: "#fecaca",
+              bg: "#fef2f2",
+              fg: "#991b1b",
+              sign: "",
+            },
+          ].map((tile) => (
+            <div
+              key={tile.title}
+              style={{
+                border: `1px solid ${tile.border}`,
+                background: tile.bg,
+                borderRadius: 8,
+                padding: "10px 12px",
+              }}
+            >
+              <div
+                style={{
+                  fontSize: 11,
+                  fontWeight: 700,
+                  textTransform: "uppercase",
+                  letterSpacing: 0.6,
+                  color: tile.fg,
+                  marginBottom: 6,
+                }}
+              >
+                {tile.title}
+              </div>
+              {tile.entries.length === 0 ? (
+                <div style={{ color: "#6b7280", fontSize: 12 }}>
+                  None to flag.
+                </div>
+              ) : (
+                <ol style={{ margin: 0, paddingLeft: 18 }}>
+                  {tile.entries.map((m) => (
+                    <li key={m.studentId} style={{ marginBottom: 4 }}>
+                      {m.lastName}, {m.firstName} —{" "}
+                      <strong>
+                        {tile.sign}
+                        {m.delta} pts
+                      </strong>{" "}
+                      <span style={{ color: "#6b7280" }}>
+                        across {m.pairs} benchmark{m.pairs === 1 ? "" : "s"}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Growth heatmap */}
+      {mode === "growth" &&
+        !growthLoading &&
+        growth &&
+        growth.students.length > 0 &&
+        growth.benchmarks.length > 0 && (
+          <div
+            style={{
+              overflowX: "auto",
+              border: "1px solid #e5e7eb",
+              borderRadius: 6,
+            }}
+          >
+            <table
+              style={{
+                borderCollapse: "collapse",
+                fontSize: 11,
+                tableLayout: "fixed",
+              }}
+            >
+              <thead>
+                <tr style={{ background: "#f3f4f6" }}>
+                  <th
+                    style={{
+                      padding: "6px 8px",
+                      textAlign: "left",
+                      position: "sticky",
+                      left: 0,
+                      background: "#f3f4f6",
+                      minWidth: 160,
+                      borderRight: "1px solid #d4d4d4",
+                      zIndex: 2,
+                    }}
+                  >
+                    Student
+                  </th>
+                  {growth.benchmarks.map((b) => (
+                    <th
+                      key={b.code}
+                      style={{
+                        padding: "4px 2px",
+                        fontSize: 9,
+                        fontFamily: "monospace",
+                        fontWeight: 600,
+                        width: 44,
+                        minWidth: 44,
+                        textAlign: "center",
+                        borderLeft: "1px solid #e5e7eb",
+                        whiteSpace: "nowrap",
+                        color: "#374151",
+                      }}
+                      title={`${b.code}${b.category ? ` · ${b.category}` : ""}`}
+                    >
+                      {b.code.split(".").slice(-2).join(".")}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {growth.students.map((s) => (
+                  <tr
+                    key={s.studentId}
+                    style={{ borderTop: "1px solid #f3f4f6" }}
+                  >
+                    <td
+                      style={{
+                        padding: "4px 8px",
+                        position: "sticky",
+                        left: 0,
+                        background: "white",
+                        borderRight: "1px solid #d4d4d4",
+                        whiteSpace: "nowrap",
+                        zIndex: 1,
+                      }}
+                    >
+                      {s.lastName}, {s.firstName}
+                    </td>
+                    {growth.benchmarks.map((b) => {
+                      const cell = s.cells[b.code];
+                      if (!cell || cell.delta == null) {
+                        return (
+                          <td
+                            key={b.code}
+                            style={{
+                              padding: 0,
+                              textAlign: "center",
+                              background: "#f3f4f6",
+                              color: "#9ca3af",
+                              borderLeft: "1px solid #e5e7eb",
+                            }}
+                            title={`${b.code}: missing a window`}
+                          >
+                            —
+                          </td>
+                        );
+                      }
+                      const c = deltaColor(cell.delta);
+                      const sign = cell.delta > 0 ? "+" : "";
+                      return (
+                        <td
+                          key={b.code}
+                          style={{
+                            padding: "4px 2px",
+                            textAlign: "center",
+                            background: c.bg,
+                            color: c.fg,
+                            fontWeight: 600,
+                            borderLeft: "1px solid #e5e7eb",
+                            cursor: "help",
+                          }}
+                          title={`${b.code}: ${cell.pctA}% → ${cell.pctB}% (${sign}${cell.delta})`}
+                        >
+                          {sign}
+                          {cell.delta}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      {mode === "growth" &&
+        !growthLoading &&
+        growth &&
+        growth.benchmarks.length === 0 && (
+          <div style={{ color: "#6b7280", marginBottom: 12 }}>
+            No benchmarks have data in both windows for this roster.
+          </div>
+        )}
+
+      {/* Absolute heatmap */}
+      {mode === "absolute" &&
+        !loading &&
         data &&
         data.students.length > 0 &&
         data.benchmarks.length > 0 && (
