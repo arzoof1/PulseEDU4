@@ -39,6 +39,7 @@ import {
 } from "@workspace/db";
 import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   bucketFor,
   hasChart,
@@ -335,6 +336,15 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
         and(
           eq(studentFastScoresTable.schoolId, schoolId),
           inArray(studentFastScoresTable.studentId, studentIds),
+          // FAST Phase 1: scores are now keyed by school_year. Filter
+          // to current SY so prior-year backfill rows don't shadow
+          // current-year rows in the per-(student, subject) map below.
+          // Legacy rows were backfilled to the current SY by the
+          // ensureFastScoresSchema migration, so this is safe.
+          eq(
+            studentFastScoresTable.schoolYear,
+            schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+          ),
         ),
       ),
     db

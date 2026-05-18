@@ -1019,9 +1019,6 @@ export default function DataImports({
   const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>(
     () => floridaSchoolYearOptions()[0] ?? "",
   );
-  const [availableSchoolYears, setAvailableSchoolYears] = useState<string[]>(
-    [],
-  );
   const [dragActive, setDragActive] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -2307,10 +2304,7 @@ export default function DataImports({
                         }}
                       >
                         <option value="">— pick a year —</option>
-                        {(availableSchoolYears.length > 0
-                          ? availableSchoolYears
-                          : floridaSchoolYearOptions()
-                        ).map((y) => (
+                        {floridaSchoolYearOptions().map((y) => (
                           <option key={y} value={y}>
                             20{y.slice(0, 2)}–20{y.slice(3, 5)}
                           </option>

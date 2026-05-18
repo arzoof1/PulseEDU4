@@ -30,6 +30,7 @@ import {
   bellSchedulePeriodsTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
 
 // Returns the YYYY-MM-DD bounds of the current school year. The cutover
 // is Aug 1 — anything before that rolls back to the previous Aug 1 so a
@@ -612,6 +613,13 @@ export async function buildParentSnapshot(
           and(
             eq(studentFastScoresTable.schoolId, student.schoolId),
             eq(studentFastScoresTable.studentId, student.studentId),
+            // FAST Phase 1: filter to current SY — parent snapshot
+            // is intended for current-year data; prior-year backfill
+            // rows should not surface in the parent portal.
+            eq(
+              studentFastScoresTable.schoolYear,
+              schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+            ),
           ),
         )
     : [];

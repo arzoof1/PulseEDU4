@@ -49,6 +49,7 @@ import {
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   parseInsightsFilters,
   applyInsightsFilters,
@@ -308,6 +309,13 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
       and(
         eq(studentFastScoresTable.schoolId, schoolId),
         eq(studentFastScoresTable.studentId, studentId),
+        // FAST Phase 1: scope to current SY — student profile shows
+        // current-year scores; prior-year Florida backfill rows live
+        // on separate (school_year)-keyed rows.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
   const assessments = await db
@@ -1341,6 +1349,11 @@ router.get("/insights/watchlist", async (req, res) => {
       and(
         eq(studentFastScoresTable.schoolId, schoolId),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: BQ flag lives on current-SY row.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
   const bqByStudent = new Map<string, { ela: boolean; math: boolean }>();
@@ -2383,6 +2396,11 @@ router.get("/insights/academics", async (req, res) => {
       and(
         eq(studentFastScoresTable.schoolId, schoolId),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: aggregate current SY only.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
 
@@ -2718,6 +2736,11 @@ router.get("/insights/academics/band", async (req, res) => {
         eq(studentFastScoresTable.schoolId, schoolId),
         eq(studentFastScoresTable.subject, subject),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: current SY only.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
 
@@ -3046,6 +3069,11 @@ async function loadTrajectoryRecs(
         eq(studentFastScoresTable.schoolId, schoolId),
         eq(studentFastScoresTable.subject, subject),
         inArray(studentFastScoresTable.studentId, studentIds),
+        // FAST Phase 1: current SY only.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
       ),
     );
   // Explicit Map<K, V> typing -- fastRows flows from a Drizzle .select()

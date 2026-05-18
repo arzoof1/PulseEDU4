@@ -28,6 +28,7 @@ import {
 import { and, eq, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { hasChart, SUBJECT_KEYS, type Subject } from "../lib/fastCutScores.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
 const router: IRouter = Router();
 
@@ -100,7 +101,18 @@ router.get("/insights/fast-coverage", async (req, res) => {
         eq(studentsTable.studentId, studentFastScoresTable.studentId),
       ),
     )
-    .where(eq(studentFastScoresTable.schoolId, schoolId))
+    .where(
+      and(
+        eq(studentFastScoresTable.schoolId, schoolId),
+        // FAST Phase 1: count only current-SY rows so prior-year
+        // Florida backfill doesn't inflate coverage. Legacy rows
+        // were stamped with current SY by the migration.
+        eq(
+          studentFastScoresTable.schoolYear,
+          schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+        ),
+      ),
+    )
     .groupBy(studentsTable.grade, studentFastScoresTable.subject);
 
   // 3) Build the cross-product (every grade present × every known
