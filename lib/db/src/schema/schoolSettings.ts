@@ -176,6 +176,24 @@ export const schoolSettingsTable = pgTable(
     .notNull()
     .default("all_students"),
   // -----------------------------------------------------------------
+  // "In car" terminal step toggle. When TRUE (default — preserves
+  // existing behavior), curb staff tap "in_car" to remove a student
+  // from the live queue. When FALSE, the workflow ends at
+  // released_to_walk ("walking out") — no curb tap required. The
+  // student's row stays visible on the live queue for
+  // pickupWalkedOutDisplaySeconds after release so road staff can
+  // see who's on the way, then drops from the *display* (the
+  // released_to_walk audit row is preserved forever).
+  // Reconciliation treats released_to_walk as a terminal pickup
+  // signal when this toggle is OFF.
+  // -----------------------------------------------------------------
+  pickupInCarStepEnabled: boolean("pickup_in_car_step_enabled")
+    .notNull()
+    .default(true),
+  pickupWalkedOutDisplaySeconds: integer("pickup_walked_out_display_seconds")
+    .notNull()
+    .default(300),
+  // -----------------------------------------------------------------
   // Kiosk welcome messages (Phase 3 — "Sign in to class" flow).
   //   kioskWelcomeTemplate  — default template shown to every student
   //     after they sign in. Supports {firstName}, {lastName}, {house},

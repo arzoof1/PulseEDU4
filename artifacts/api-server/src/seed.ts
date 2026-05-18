@@ -5496,6 +5496,17 @@ export async function ensurePickupSchema(): Promise<void> {
     ALTER TABLE school_settings
       ADD COLUMN IF NOT EXISTS pickup_teacher_view_scope TEXT NOT NULL DEFAULT 'all_students'
   `);
+  // "In car" terminal step toggle + display-window for "walking out"
+  // rows when the toggle is OFF. Additive — defaults preserve the
+  // existing curb-tap-required workflow for every school.
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_in_car_step_enabled BOOLEAN NOT NULL DEFAULT TRUE
+  `);
+  await db.execute(sql`
+    ALTER TABLE school_settings
+      ADD COLUMN IF NOT EXISTS pickup_walked_out_display_seconds INTEGER NOT NULL DEFAULT 300
+  `);
 }
 
 // ---------------------------------------------------------------------------

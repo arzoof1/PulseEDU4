@@ -120,6 +120,8 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     strictHouseNameMatch,
     pickupCutoffTime,
     pickupTeacherViewScope,
+    pickupInCarStepEnabled,
+    pickupWalkedOutDisplaySeconds,
     kioskWelcomeTemplate,
     kioskWelcomeMessages,
   } = req.body ?? {};
@@ -461,6 +463,34 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       return;
     }
     updates.pickupTeacherViewScope = pickupTeacherViewScope;
+  }
+  // "In car" terminal step toggle. When false, walking_out becomes the
+  // terminal staff action and rows drop from the live display after
+  // pickupWalkedOutDisplaySeconds. The release event itself is kept
+  // in the audit log forever.
+  if (pickupInCarStepEnabled !== undefined) {
+    if (typeof pickupInCarStepEnabled !== "boolean") {
+      res
+        .status(400)
+        .json({ error: "pickupInCarStepEnabled must be a boolean" });
+      return;
+    }
+    updates.pickupInCarStepEnabled = pickupInCarStepEnabled;
+  }
+  if (pickupWalkedOutDisplaySeconds !== undefined) {
+    if (
+      typeof pickupWalkedOutDisplaySeconds !== "number" ||
+      !Number.isInteger(pickupWalkedOutDisplaySeconds) ||
+      pickupWalkedOutDisplaySeconds < 60 ||
+      pickupWalkedOutDisplaySeconds > 1800
+    ) {
+      res.status(400).json({
+        error:
+          "pickupWalkedOutDisplaySeconds must be an integer between 60 and 1800",
+      });
+      return;
+    }
+    updates.pickupWalkedOutDisplaySeconds = pickupWalkedOutDisplaySeconds;
   }
   if (issCapacityBehavior !== undefined) {
     if (issCapacityBehavior !== "soft" && issCapacityBehavior !== "hard") {

@@ -101,18 +101,31 @@ async function loadOwnRosterStudentIds(
 async function loadPickupSettings(schoolId: number): Promise<{
   cutoffTime: string;
   teacherViewScope: "all_students" | "own_roster";
+  inCarStepEnabled: boolean;
+  walkedOutDisplaySeconds: number;
 }> {
   const [row] = await db
     .select({
       cutoffTime: schoolSettingsTable.pickupCutoffTime,
       teacherViewScope: schoolSettingsTable.pickupTeacherViewScope,
+      inCarStepEnabled: schoolSettingsTable.pickupInCarStepEnabled,
+      walkedOutDisplaySeconds:
+        schoolSettingsTable.pickupWalkedOutDisplaySeconds,
     })
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, schoolId));
+  // Clamp walked-out window to a sane band even if a bad value snuck
+  // into the DB. 60s minimum (anything shorter races the next poll);
+  // 1800s = 30min ceiling (longer means the kid never falls off and
+  // reconciliation is meaningless).
+  const rawSeconds = row?.walkedOutDisplaySeconds ?? 300;
+  const clampedSeconds = Math.max(60, Math.min(1800, rawSeconds));
   return {
     cutoffTime: row?.cutoffTime ?? "15:30",
     teacherViewScope:
       row?.teacherViewScope === "own_roster" ? "own_roster" : "all_students",
+    inCarStepEnabled: row?.inCarStepEnabled ?? true,
+    walkedOutDisplaySeconds: clampedSeconds,
   };
 }
 
@@ -186,6 +199,7 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
   const sinceIso = startOfTodayIso();
+  const settings = await loadPickupSettings(schoolId);
 
   // Pull every event today, then derive state in one pass. Cheap because
   // a school sees ~150 dismissal events/day max.
@@ -201,13 +215,22 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
     .orderBy(asc(pickupQueueEventsTable.occurredAt));
 
   // Per-student state machine — keep the most recent event of interest.
+  // walkingOutSince is set when the student is released_to_walk. When
+  // the school has the "in car" terminal step DISABLED, we use it to
+  // drop the row from the display N seconds after release — the curb
+  // staff still see "walking out" for the configured window so they
+  // know who's on the way. The release event itself stays in the audit
+  // log forever; only the *display* expires.
   type Entry = {
     studentId: number;
     addedAt: string;
     status: "in_queue" | "walking_out";
     pickupAuthorizationId: number | null;
+    walkingOutSince: string | null;
   };
   const byStudent = new Map<number, Entry>();
+  const nowMs = Date.now();
+  const expiryWindowMs = settings.walkedOutDisplaySeconds * 1000;
   for (const e of events) {
     const action = e.action;
     const sid = e.studentId;
@@ -221,11 +244,22 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
         addedAt: e.occurredAt.toISOString(),
         status: "in_queue",
         pickupAuthorizationId: e.pickupAuthorizationId,
+        walkingOutSince: null,
       });
     } else if (action === "released_to_walk") {
       const existing = byStudent.get(sid);
       if (existing) {
         existing.status = "walking_out";
+        existing.walkingOutSince = e.occurredAt.toISOString();
+        // When the "in car" terminal step is OFF, released_to_walk is
+        // the terminal staff action — expire the row after the
+        // configured window so the live display self-cleans.
+        if (
+          !settings.inCarStepEnabled &&
+          nowMs - e.occurredAt.getTime() >= expiryWindowMs
+        ) {
+          byStudent.delete(sid);
+        }
       }
     } else if (action === "release_undone") {
       // Teacher hit Undo within the 10s window. Flip back to in_queue
@@ -234,6 +268,7 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
       const existing = byStudent.get(sid);
       if (existing) {
         existing.status = "in_queue";
+        existing.walkingOutSince = null;
       }
     }
   }
@@ -272,6 +307,15 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
 
   const queue = entries.map((e, idx) => {
     const s = studentById.get(e.studentId);
+    // expiresAt is non-null only when the "in car" step is disabled
+    // AND this row is in walking_out — lets clients render a fade /
+    // countdown without re-deriving the window themselves.
+    const expiresAt =
+      !settings.inCarStepEnabled && e.walkingOutSince
+        ? new Date(
+            new Date(e.walkingOutSince).getTime() + expiryWindowMs,
+          ).toISOString()
+        : null;
     return {
       position: idx + 1,
       studentId: s?.studentId ?? String(e.studentId),
@@ -282,10 +326,17 @@ router.get("/pickup/queue", requireStaff, async (req, res) => {
       addedAt: e.addedAt,
       status: e.status,
       pickupAuthorizationId: e.pickupAuthorizationId,
+      walkingOutSince: e.walkingOutSince,
+      expiresAt,
     };
   });
 
-  res.json({ queue, asOf: new Date().toISOString() });
+  res.json({
+    queue,
+    asOf: new Date().toISOString(),
+    inCarStepEnabled: settings.inCarStepEnabled,
+    walkedOutDisplaySeconds: settings.walkedOutDisplaySeconds,
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -783,6 +834,10 @@ router.get("/pickup/teacher-queue", requireStaff, async (req, res) => {
     pickupAuthorizationId: number | null;
   };
   const byStudent = new Map<number, Entry>();
+  // Same display-only expiry rule as /pickup/queue so the teacher tile
+  // and the curb display stay in sync when "in car" step is OFF.
+  const tqNowMs = Date.now();
+  const tqExpiryWindowMs = settings.walkedOutDisplaySeconds * 1000;
   for (const e of events) {
     if (TERMINAL.has(e.action)) {
       byStudent.delete(e.studentId);
@@ -797,7 +852,15 @@ router.get("/pickup/teacher-queue", requireStaff, async (req, res) => {
       });
     } else if (e.action === "released_to_walk") {
       const ex = byStudent.get(e.studentId);
-      if (ex) ex.status = "walking_out";
+      if (ex) {
+        ex.status = "walking_out";
+        if (
+          !settings.inCarStepEnabled &&
+          tqNowMs - e.occurredAt.getTime() >= tqExpiryWindowMs
+        ) {
+          byStudent.delete(e.studentId);
+        }
+      }
     } else if (e.action === "release_undone") {
       const ex = byStudent.get(e.studentId);
       if (ex) ex.status = "in_queue";
@@ -1209,6 +1272,14 @@ router.get("/pickup/reconciliation", requireStaff, async (req, res) => {
   }
 
   const sinceIso = startOfTodayIso();
+  const reconSettings = await loadPickupSettings(schoolId);
+  // When the "in car" terminal step is OFF, released_to_walk IS the
+  // pickup confirmation — count it as a terminal event for the
+  // "still on campus" rollup so we don't false-positive students whose
+  // teacher already released them.
+  const terminalActions = reconSettings.inCarStepEnabled
+    ? ["in_car", "walker_released", "auto_cleared"]
+    : ["in_car", "walker_released", "auto_cleared", "released_to_walk"];
   const released = await db
     .select({ studentId: pickupQueueEventsTable.studentId })
     .from(pickupQueueEventsTable)
@@ -1216,11 +1287,7 @@ router.get("/pickup/reconciliation", requireStaff, async (req, res) => {
       and(
         eq(pickupQueueEventsTable.schoolId, schoolId),
         gte(pickupQueueEventsTable.occurredAt, new Date(sinceIso)),
-        inArray(pickupQueueEventsTable.action, [
-          "in_car",
-          "walker_released",
-          "auto_cleared",
-        ]),
+        inArray(pickupQueueEventsTable.action, terminalActions),
       ),
     );
   const releasedSet = new Set(released.map((r) => r.studentId));

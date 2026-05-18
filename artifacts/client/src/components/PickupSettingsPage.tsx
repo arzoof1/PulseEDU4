@@ -27,6 +27,8 @@ import {
 interface SettingsResp {
   pickupCutoffTime?: string | null;
   pickupTeacherViewScope?: "all_students" | "own_roster" | null;
+  pickupInCarStepEnabled?: boolean | null;
+  pickupWalkedOutDisplaySeconds?: number | null;
 }
 
 // /api/auth/me spreads the staff fields at the TOP level (see
@@ -205,6 +207,8 @@ export default function PickupSettingsPage() {
   const [scope, setScope] = useState<"all_students" | "own_roster">(
     "all_students",
   );
+  const [inCarStep, setInCarStep] = useState<boolean>(true);
+  const [walkedOutSecs, setWalkedOutSecs] = useState<number>(300);
   const [playlists, setPlaylists] = useState<PlaylistRow[]>([]);
   const [saved, setSaved] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -241,6 +245,15 @@ export default function PickupSettingsPage() {
         ) {
           setScope(d.pickupTeacherViewScope);
         }
+        if (typeof d.pickupInCarStepEnabled === "boolean") {
+          setInCarStep(d.pickupInCarStepEnabled);
+        }
+        if (
+          typeof d.pickupWalkedOutDisplaySeconds === "number" &&
+          Number.isFinite(d.pickupWalkedOutDisplaySeconds)
+        ) {
+          setWalkedOutSecs(d.pickupWalkedOutDisplaySeconds);
+        }
       }
       if (p.ok) {
         const j = (await p.json()) as { playlists?: PlaylistRow[] };
@@ -260,6 +273,8 @@ export default function PickupSettingsPage() {
         body: JSON.stringify({
           pickupCutoffTime: cutoff,
           pickupTeacherViewScope: scope,
+          pickupInCarStepEnabled: inCarStep,
+          pickupWalkedOutDisplaySeconds: walkedOutSecs,
         }),
       });
       if (!r.ok) {
@@ -377,6 +392,70 @@ export default function PickupSettingsPage() {
               }}
             >
               Enforced server-side on every release.
+            </div>
+          </div>
+          <div>
+            <label style={label} htmlFor="pickup-in-car">
+              "In car" terminal step
+            </label>
+            <select
+              id="pickup-in-car"
+              value={inCarStep ? "on" : "off"}
+              onChange={(e) => setInCarStep(e.target.value === "on")}
+              style={inputStyle}
+            >
+              <option value="on">
+                On — curb staff tap "in car" to clear the row
+              </option>
+              <option value="off">
+                Off — "walking out" is the final step
+              </option>
+            </select>
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-subtle)",
+                marginTop: 4,
+              }}
+            >
+              Turn off if your school has no one tapping at the curb.
+              The audit log still records every release. Avoid changing
+              this during active dismissal — the reconciliation tile uses
+              the current setting to interpret today's events.
+            </div>
+          </div>
+          <div>
+            <label style={label} htmlFor="pickup-walked-secs">
+              Drop-from-list timer (seconds)
+            </label>
+            <input
+              id="pickup-walked-secs"
+              type="number"
+              min={60}
+              max={1800}
+              step={30}
+              value={walkedOutSecs}
+              onChange={(e) => {
+                const n = Number(e.target.value);
+                if (Number.isFinite(n)) setWalkedOutSecs(n);
+              }}
+              disabled={inCarStep}
+              style={{
+                ...inputStyle,
+                opacity: inCarStep ? 0.5 : 1,
+                minWidth: 100,
+              }}
+            />
+            <div
+              style={{
+                fontSize: 11,
+                color: "var(--text-subtle)",
+                marginTop: 4,
+              }}
+            >
+              {inCarStep
+                ? "Only used when the 'in car' step is off."
+                : `How long a 'walking out' row stays visible to curb staff before dropping off the live list. 60–1800s (default 300 = 5 min).`}
             </div>
           </div>
         </div>
