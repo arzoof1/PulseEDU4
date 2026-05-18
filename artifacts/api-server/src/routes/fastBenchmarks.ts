@@ -753,7 +753,10 @@ router.get(
       .fontSize(9)
       .fillColor("#666")
       .text(
-        `${ctx.subject.toUpperCase()} · ${schoolYear} ${window.toUpperCase()} · Mastery threshold ${ctx.thresholdPct}% · Generated ${new Date().toLocaleString()}`,
+        `${ctx.subject.toUpperCase()} · ${schoolYear} ${window.toUpperCase()} · ` +
+          `All class periods (union of roster) · ` +
+          `Mastery threshold ${ctx.thresholdPct}% · ` +
+          `Generated ${new Date().toLocaleString()}`,
       )
       .fillColor("black")
       .moveDown(0.4);
