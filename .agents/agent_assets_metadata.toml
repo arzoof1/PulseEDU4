@@ -228,3 +228,9 @@ id = "-hgjircQ3aLXs2DCb51Jj"
 uri = "file://attached_assets/PulseEDU_Workflow_Guide_v3.pdf"
 type = "pdf"
 title = "PulseEDU Workflow Guide v3"
+
+[[outputs]]
+id = "oWMko7gJdGFnIcnr2Loxt"
+uri = "file://attached_assets/PulseEDU_Workflow_Guide_v4.pdf"
+type = "pdf"
+title = "PulseEDU Workflow Guide v4 (with 4 new roles)"

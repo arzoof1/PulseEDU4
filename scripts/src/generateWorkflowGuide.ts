@@ -9,7 +9,7 @@ import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
-const OUT = resolve(HERE, "..", "..", "attached_assets", "PulseEDU_Workflow_Guide_v3.pdf");
+const OUT = resolve(HERE, "..", "..", "attached_assets", "PulseEDU_Workflow_Guide_v4.pdf");
 mkdirSync(dirname(OUT), { recursive: true });
 
 const COLORS = {
@@ -35,6 +35,10 @@ type Role =
   | "Guidance Counselor"
   | "PBIS Coordinator"
   | "Teacher"
+  | "Non-Exempt"
+  | "Front Office"
+  | "SRO"
+  | "Guardian"
   | "Parent";
 
 interface RoleAction {
@@ -131,6 +135,30 @@ const ROLE_GLOSSARY: { role: Role; scope: string; summary: string }[] = [
     scope: "Their classes / their roster",
     summary:
       "Default staff role. Logs hall passes, tardies, PBIS points, accommodation events, interventions for their own students. Read-only on School Store and most catalogs. Sees their Teacher Roster.",
+  },
+  {
+    role: "Non-Exempt",
+    scope: "Single school",
+    summary:
+      "FLSA non-exempt staff whose entire app surface is timekeeping. Sidebar collapses to Hall Pass + Tardy Pass + Comp Time ONLY (including Quick Access — Teacher Roster, PBIS, Request Pullout, etc. all hidden). Applying the preset auto-flips exempt_status='non_exempt' so Comp Time accrues. Admin tier escapes the sidebar collapse if accidentally marked Non-Exempt. exempt_status is also an independent admin toggle for staff who are non-exempt but don't take this role bundle (e.g., a non-exempt aide who is also a Behavior Specialist).",
+  },
+  {
+    role: "Front Office",
+    scope: "Single school",
+    summary:
+      "Clerical / receptionist staff. Sees everything a Teacher sees (Hall Pass, Tardy Pass, Family Communication, PBIS Points, School Store, Accommodations, Log/My Interventions, AST, Comp Time) EXCEPT Request Pullout — pullouts are a teacher referral, not a front-desk action. Watchlists and Accommodations come through the teacher baseline. Does NOT grant AST or Comp Time approval rights; Confidential Secretary keeps its existing canApproveAst grant unchanged.",
+  },
+  {
+    role: "SRO",
+    scope: "Single school",
+    summary:
+      "School Resource Officer (sworn officer assigned to the school). Same capability bundle as Teacher — action-capable on Hall Pass, Tardy Pass, PBIS award, Family Communication, etc. Broken out as its own role so future SRO-specific surfaces (incident logs, weapon screenings) can target it cleanly.",
+  },
+  {
+    role: "Guardian",
+    scope: "Single school",
+    summary:
+      "Hall monitor / security aide / campus guardian. Same capability bundle as Teacher today. Broken out as a distinct role for reporting and future role-targeted features.",
   },
   {
     role: "Parent",
@@ -1821,9 +1849,9 @@ const SECTIONS: Section[] = [
   },
   // =====================================================================
   {
-    title: "17. AST — Alternate Schedule Time (Staff Time Bank)",
+    title: "17. AST + Comp Time — Staff Time Banks",
     blurb:
-      "Earn-then-use time bank for the HCTA staff contract. Stored in quarter-hour INTEGER units (no float drift). staff_ast_requests holds the state machine; staff_ast_ledger is the append-only source-of-truth for balances. The bank is keyed to staff_id (not (school_id, staff_id)) so a balance follows a staff member across schools within the same district.",
+      "Two parallel time banks. AST (Alternate Schedule Time) is the HCTA-contract earn-then-use bank for exempt instructional staff. Comp Time (FLSA compensatory time, 1.5x earn rate, 240h cap) is the non-exempt bank — visible only to staff whose exempt_status='non_exempt'. Exempt staff hitting /comp see a 'not eligible — use AST instead' splash. Both banks store quarter-hour INTEGER units (no float drift); both are keyed to staff_id (not (school_id, staff_id)) so balances follow a staff member across schools within the same district. The Non-Exempt role preset collapses the sidebar to Hall Pass + Tardy Pass + Comp Time only, since those are the only three surfaces this role ever uses.",
     screens: [
       {
         id: "ast-staff",
