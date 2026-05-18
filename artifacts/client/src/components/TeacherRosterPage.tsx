@@ -17,7 +17,13 @@ import { Fragment, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
 import StudentPhoto from "./StudentPhoto";
+import TeacherBenchmarksTab from "./TeacherBenchmarksTab";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
+
+// Top-level tab in this page. "roster" is the original FAST PM
+// pills + flags table; "benchmarks" is the FAST Phase 2 per-item
+// mastery heatmap + bottom-3 tile.
+type RosterTab = "roster" | "benchmarks";
 
 interface TeacherOpt {
   id: number;
@@ -988,6 +994,7 @@ export default function TeacherRosterPage({
     defaultTeacherId,
   );
   const [period, setPeriod] = useState<number | null>(null);
+  const [tab, setTab] = useState<RosterTab>("roster");
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1310,6 +1317,60 @@ export default function TeacherRosterPage({
         </RoleSection>
       </HowToUseHelp>
 
+      {/* Top-level tabs: classic roster vs FAST Phase 2 benchmark
+          heatmap. Hidden state (period, visibility toggles) is
+          preserved across tab switches so a user can flip back to
+          the roster with their period chip still set. */}
+      <div
+        style={{
+          display: "flex",
+          gap: 4,
+          borderBottom: "1px solid #d4d4d4",
+          marginBottom: 12,
+        }}
+        role="tablist"
+        aria-label="Teacher Roster views"
+      >
+        {(
+          [
+            { value: "roster", label: "Roster" },
+            { value: "benchmarks", label: "Benchmarks" },
+          ] as Array<{ value: RosterTab; label: string }>
+        ).map((t) => {
+          const active = tab === t.value;
+          return (
+            <button
+              key={t.value}
+              role="tab"
+              aria-selected={active}
+              onClick={() => setTab(t.value)}
+              style={{
+                padding: "8px 14px",
+                border: "1px solid #d4d4d4",
+                borderBottom: active ? "1px solid white" : "1px solid #d4d4d4",
+                borderRadius: "6px 6px 0 0",
+                background: active ? "white" : "#f3f4f6",
+                color: active ? "#111827" : "#374151",
+                fontWeight: active ? 600 : 500,
+                cursor: "pointer",
+                marginBottom: -1,
+              }}
+            >
+              {t.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {tab === "benchmarks" && (
+        <TeacherBenchmarksTab
+          teacherId={teacherId}
+          isOwnRoster={isOwnRoster}
+        />
+      )}
+
+      {tab === "roster" && (
+      <>
       {/* Period selector — chip row */}
       <div
         style={{
@@ -1947,6 +2008,8 @@ export default function TeacherRosterPage({
             </tbody>
           </table>
         </div>
+      )}
+      </>
       )}
       {sepTarget && sepSectionId != null && (
         <SuggestSeparationModal

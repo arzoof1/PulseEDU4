@@ -952,6 +952,14 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS tier_preset_id INTEGER`,
     ),
   );
+  // FAST Phase 2 — per-benchmark mastery threshold (percent, default 80).
+  // Drives the Teacher Roster → Benchmarks heatmap color buckets and
+  // the bottom-3 tile. Configurable per school.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_benchmark_mastery_threshold INTEGER NOT NULL DEFAULT 80`,
+    ),
+  );
   // Manual on/off kill switch for an entire display URL (separate from
   // the time-window `schedule_enabled`). Defaults TRUE so existing
   // displays keep playing without any admin action. When FALSE the

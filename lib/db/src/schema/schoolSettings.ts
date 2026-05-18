@@ -175,6 +175,15 @@ export const schoolSettingsTable = pgTable(
     .notNull()
     .default(true),
   compTimeAuthFormObjectKey: text("comp_time_auth_form_object_key"),
+  // FAST Phase 2 — per-benchmark mastery threshold (percentage 0–100).
+  // A student is considered to have mastered a benchmark when their
+  // (points_earned / points_possible) on that benchmark in the selected
+  // window is >= this threshold. Drives the heatmap color buckets and
+  // the bottom-3 tile on Teacher Roster → Benchmarks tab. Configurable
+  // per school so a building can tune the bar with its own data.
+  fastBenchmarkMasteryThreshold: integer("fast_benchmark_mastery_threshold")
+    .notNull()
+    .default(80),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.
