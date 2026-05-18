@@ -976,6 +976,45 @@ export async function ensureSchoolSettingsFeatureFlagsSchema() {
       `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_outlier_z_threshold REAL NOT NULL DEFAULT 1.0`,
     ),
   );
+  // FAST Phase 5 — minimum number of below-threshold windows (out of
+  // the most recent 3) required for a student×benchmark pair to surface
+  // as a Tier 2 auto-suggestion on the MTSS hub. Default 2 mirrors the
+  // common "two consecutive misses" rule of thumb. Threshold (% mastery)
+  // reuses the existing `fast_benchmark_mastery_threshold` column so
+  // admins only tune one number.
+  await db.execute(
+    sql.raw(
+      `ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_tier2_min_windows INTEGER NOT NULL DEFAULT 2`,
+    ),
+  );
+  // FAST Phase 5 — dismissals ledger for the MTSS Tier 2 auto-suggest
+  // tile. One row per (school, student, benchmark, school_year);
+  // dismissals auto-expire when the school year rolls.
+  await db.execute(
+    sql.raw(
+      `CREATE TABLE IF NOT EXISTS mtss_fast_suggestion_dismissals (
+         id SERIAL PRIMARY KEY,
+         school_id INTEGER NOT NULL,
+         student_id TEXT NOT NULL,
+         benchmark_code TEXT NOT NULL,
+         school_year TEXT NOT NULL,
+         dismissed_by_staff_id INTEGER,
+         dismissed_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+       )`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE UNIQUE INDEX IF NOT EXISTS mtss_fast_suggestion_dismissals_unique
+         ON mtss_fast_suggestion_dismissals (school_id, student_id, benchmark_code, school_year)`,
+    ),
+  );
+  await db.execute(
+    sql.raw(
+      `CREATE INDEX IF NOT EXISTS mtss_fast_suggestion_dismissals_school_idx
+         ON mtss_fast_suggestion_dismissals (school_id, school_year)`,
+    ),
+  );
   // Manual on/off kill switch for an entire display URL (separate from
   // the time-window `schedule_enabled`). Defaults TRUE so existing
   // displays keep playing without any admin action. When FALSE the

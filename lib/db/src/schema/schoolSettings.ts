@@ -193,6 +193,16 @@ export const schoolSettingsTable = pgTable(
   fastOutlierZThreshold: real("fast_outlier_z_threshold")
     .notNull()
     .default(1.0),
+  // FAST Phase 5 — minimum number of below-threshold windows (out of
+  // the most recent 3 administered windows for that subject) required
+  // before a (student, benchmark_code) pair surfaces as a Tier 2
+  // auto-suggestion on the MTSS hub. Default 2 mirrors the common
+  // "missed twice in a row" rule of thumb. Mastery threshold itself
+  // reuses `fastBenchmarkMasteryThreshold` above so admins only tune
+  // one number.
+  fastTier2MinWindows: integer("fast_tier2_min_windows")
+    .notNull()
+    .default(2),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

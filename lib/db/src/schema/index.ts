@@ -48,6 +48,7 @@ export * from "./weatherDay";
 export * from "./classroomStoreItems";
 export * from "./schoolStoreItems";
 export * from "./studentMtssPlans";
+export * from "./mtssFastSuggestionDismissals";
 export * from "./studentTrustedAdults";
 export * from "./imports";
 export * from "./studentImportSnapshots";
