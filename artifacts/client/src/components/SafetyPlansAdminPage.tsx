@@ -12,6 +12,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import SafetyPlanEditor from "./SafetyPlanEditor";
+import StudentPhoto from "./StudentPhoto";
 
 type StatusFilter = "active" | "inactive" | "all";
 
@@ -40,6 +41,10 @@ interface Student {
   firstName: string;
   lastName: string;
   grade: number;
+  // Server-supplied photo fields — rendered via <StudentPhoto/>, which
+  // falls back to a colored initials bubble when null or consent=false.
+  photoObjectKey?: string | null;
+  photoConsent?: boolean | null;
 }
 
 interface Props {
@@ -545,18 +550,33 @@ export default function SafetyPlansAdminPage({ canManage, onBack }: Props) {
                               : `Create safety plan for ${s.firstName} ${s.lastName}`
                           }
                         >
-                          <span>
-                            <strong>
-                              {s.lastName}, {s.firstName}
-                            </strong>
-                            <span
-                              style={{
-                                color: "#64748b",
-                                marginLeft: 8,
-                                fontSize: "0.78rem",
-                              }}
-                            >
-                              Gr {s.grade} · ID {s.studentId}
+                          <span
+                            style={{
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 10,
+                            }}
+                          >
+                            <StudentPhoto
+                              firstName={s.firstName}
+                              lastName={s.lastName}
+                              photoObjectKey={s.photoObjectKey ?? null}
+                              photoConsent={s.photoConsent ?? true}
+                              size={32}
+                            />
+                            <span>
+                              <strong>
+                                {s.lastName}, {s.firstName}
+                              </strong>
+                              <span
+                                style={{
+                                  color: "#64748b",
+                                  marginLeft: 8,
+                                  fontSize: "0.78rem",
+                                }}
+                              >
+                                Gr {s.grade} · ID {s.studentId}
+                              </span>
                             </span>
                           </span>
                           {hasActive && (
