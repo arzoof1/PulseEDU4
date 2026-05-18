@@ -73,6 +73,26 @@ export const staffTable = pgTable("staff", {
   isGuidanceCounselor: boolean("is_guidance_counselor")
     .notNull()
     .default(false),
+  // Non-Exempt role: a descriptive role flag distinct from
+  // `exemptStatus`. Assigning the role via the preset bundle also
+  // flips exemptStatus to 'non_exempt' so Comp Time accrues, but
+  // admins can independently mark anyone non-exempt without applying
+  // this role (some non-exempt staff hold other roles). When true,
+  // the sidebar collapses to Hall Pass + Tardy Pass + Comp Time —
+  // these are the only three surfaces this role uses.
+  isNonExemptRole: boolean("is_non_exempt_role").notNull().default(false),
+  // Front Office: clerical staff who run the front desk. Same view as
+  // a teacher, plus AST (submit only), Watchlists, Accommodations.
+  // Explicitly excludes Request Pullout (pullouts are a teacher
+  // referral). Confidential Secretary keeps its own approver rights
+  // — this role does NOT grant approval.
+  isFrontOffice: boolean("is_front_office").notNull().default(false),
+  // School Resource Officer — sworn officer assigned to the school.
+  // Currently identical to teacher view; broken out so reports and
+  // future surfaces (incident logs, etc) can target it cleanly.
+  isSro: boolean("is_sro").notNull().default(false),
+  // Guardian / hall monitor / security aide. Same as teacher today.
+  isGuardian: boolean("is_guardian").notNull().default(false),
 
   // ---- Per-page capability flags ----
   // Pages everyone uses by default — defaulted true so new staff land with

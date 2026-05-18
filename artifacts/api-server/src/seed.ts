@@ -5639,6 +5639,19 @@ export async function ensureFeaturePlansColumns() {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS comp_time_paid_out_at TIMESTAMPTZ`,
   );
+  // Four new descriptive role flags. Additive, idempotent.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_non_exempt_role BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_front_office BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_sro BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS is_guardian BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
   // Backfill: any admin tier (school admin / district admin / super
   // user) gets canApproveCompTime so the rollout doesn't break.
   // Principals + Assistant Principals carry isAdmin, so this also

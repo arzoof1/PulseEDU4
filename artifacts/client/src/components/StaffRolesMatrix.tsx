@@ -65,6 +65,20 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
 ];
 
+const TEACHER_BASELINE: BoolKey[] = [
+  "capHallPasses",
+  "capTardies",
+  "capStudentActivity",
+  "capPbisAward",
+  "capParentEmail",
+  "capSupportNotes",
+  "capAccommodationLog",
+  "capPulloutsRequest",
+  "capInterventionLog",
+  "capReports",
+  "capKioskActivate",
+];
+
 // Built-in roles that act as "preset" buttons. Clicking applies the
 // capability bundle to the staff member.
 const ROLE_PRESETS: {
@@ -187,20 +201,50 @@ const ROLE_PRESETS: {
       "capSupportNotes",
     ],
   },
-];
-
-const TEACHER_BASELINE: BoolKey[] = [
-  "capHallPasses",
-  "capTardies",
-  "capStudentActivity",
-  "capPbisAward",
-  "capParentEmail",
-  "capSupportNotes",
-  "capAccommodationLog",
-  "capPulloutsRequest",
-  "capInterventionLog",
-  "capReports",
-  "capKioskActivate",
+  // Non-Exempt: minimal capability bundle. The sidebar collapses to
+  // Hall Pass + Tardy Pass + Comp Time when this flag is on (App.tsx
+  // nav filter). The preset also flips exemptStatus to 'non_exempt'
+  // server-side so Comp Time accrual works — admins can independently
+  // mark other staff non-exempt without applying this role.
+  {
+    flag: "isNonExemptRole",
+    label: "Non-Exempt",
+    capabilities: ["capHallPasses", "capTardies"],
+  },
+  // Front Office: teacher baseline + ISS dashboard for student lookups,
+  // minus Request Pullout (pullouts are a teacher referral). Watchlists
+  // and Accommodations come through the teacher baseline. AST submit
+  // and Comp Time visibility are governed by exemptStatus / feature
+  // flags, not capability flags.
+  {
+    flag: "isFrontOffice",
+    label: "Front Office",
+    capabilities: [
+      "capHallPasses",
+      "capTardies",
+      "capStudentActivity",
+      "capPbisAward",
+      "capParentEmail",
+      "capSupportNotes",
+      "capAccommodationLog",
+      "capInterventionLog",
+      "capReports",
+      "capKioskActivate",
+    ],
+  },
+  // SRO: full teacher view, action-capable. Broken out as its own role
+  // so future SRO-specific surfaces (incident logs, etc) can target it.
+  {
+    flag: "isSro",
+    label: "SRO",
+    capabilities: [...TEACHER_BASELINE],
+  },
+  // Guardian / hall monitor: full teacher view, action-capable.
+  {
+    flag: "isGuardian",
+    label: "Guardian",
+    capabilities: [...TEACHER_BASELINE],
+  },
 ];
 
 export default function StaffRolesMatrix({ currentUser }: Props) {

@@ -4322,6 +4322,10 @@ function App() {
     isSocialWorker?: boolean;
     isSchoolPsychologist?: boolean;
     isGuidanceCounselor?: boolean;
+    isNonExemptRole?: boolean;
+    isFrontOffice?: boolean;
+    isSro?: boolean;
+    isGuardian?: boolean;
     capStaffRoles?: boolean;
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
@@ -8416,7 +8420,25 @@ function App() {
     bellSchedule: "BellSchedule",
     displays: "Displays",
   };
+  // Role-specific sidebar gates. Layered on top of the feature-flag
+  // filter below.
+  //   - Non-Exempt: this role's entire UX is timekeeping. Collapse to
+  //     Hall Pass / Tardy Pass / Comp Time only. (Admin-tier users
+  //     are exempt from this collapse so a sysadmin who is somehow
+  //     marked non-exempt can still administer the school.)
+  //   - Front Office: clerical staff don't issue pullout referrals
+  //     (that's a teacher action). Hide the Request Pullout item;
+  //     everything else stays.
+  const isNonExemptOnly =
+    Boolean(authUser?.isNonExemptRole) &&
+    !authUser?.isAdmin &&
+    !authUser?.isSuperUser &&
+    !authUser?.isDistrictAdmin;
+  const isFrontOfficeOnly = Boolean(authUser?.isFrontOffice);
+  const NON_EXEMPT_ALLOWED_KEYS = new Set(["hallPasses", "tardies", "comp"]);
   const baseNavSections: NavSection[] = allBaseNavSections.filter((s) => {
+    if (isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(s.key)) return false;
+    if (isFrontOfficeOnly && s.key === "requestPullout") return false;
     const featureKey = navKeyFeatureMap[s.key];
     if (!featureKey) return true;
     return effectiveFeatures[featureKey];
@@ -8514,18 +8536,30 @@ function App() {
     }
     return null;
   };
-  const renderNavItem = (s: NavSection) => (
-    <button
-      key={s.key}
-      type="button"
-      className={"nav-item" + (activeSection === s.key ? " active" : "")}
-      onClick={() => setActiveSection(s.key)}
-    >
-      <span className="nav-icon">{s.icon}</span>
-      {s.label}
-      {navBadge(s.key)}
-    </button>
-  );
+  const renderNavItem = (s: NavSection) => {
+    // Centralized role gate. Applied here (not at each call site) so
+    // every sidebar surface — Quick Access, themed accordions, admin
+    // group — automatically respects the role restrictions. New nav
+    // items added later inherit the gate for free.
+    //   - Non-Exempt: hard allowlist of [hallPasses, tardies, comp].
+    //     Admin tier escapes the collapse so a sysadmin mistakenly
+    //     flagged non-exempt can still administer.
+    //   - Front Office: clerical staff don't issue pullout referrals.
+    if (isNonExemptOnly && !NON_EXEMPT_ALLOWED_KEYS.has(s.key)) return null;
+    if (isFrontOfficeOnly && s.key === "requestPullout") return null;
+    return (
+      <button
+        key={s.key}
+        type="button"
+        className={"nav-item" + (activeSection === s.key ? " active" : "")}
+        onClick={() => setActiveSection(s.key)}
+      >
+        <span className="nav-icon">{s.icon}</span>
+        {s.label}
+        {navBadge(s.key)}
+      </button>
+    );
+  };
   // Phase 2 of feature licensing — hoisted visibility states for the
   // nav entries whose PAGES are already wrapped in <FeatureGate>. The
   // page-side gate alone would render blank when the feature is off

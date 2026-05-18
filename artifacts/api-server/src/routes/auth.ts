@@ -41,6 +41,10 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     canApproveAst: row.canApproveAst,
     canApproveCompTime: row.canApproveCompTime,
     exemptStatus: row.exemptStatus,
+    isNonExemptRole: row.isNonExemptRole,
+    isFrontOffice: row.isFrontOffice,
+    isSro: row.isSro,
+    isGuardian: row.isGuardian,
     defaultRoom: row.defaultRoom,
   };
 }

@@ -69,6 +69,10 @@ const ROLE_FLAGS = [
   "isSocialWorker",
   "isSchoolPsychologist",
   "isGuidanceCounselor",
+  "isNonExemptRole",
+  "isFrontOffice",
+  "isSro",
+  "isGuardian",
 ] as const;
 type RoleFlag = (typeof ROLE_FLAGS)[number];
 
@@ -132,6 +136,11 @@ const STAFF_SELECT = {
   isSocialWorker: staffTable.isSocialWorker,
   isSchoolPsychologist: staffTable.isSchoolPsychologist,
   isGuidanceCounselor: staffTable.isGuidanceCounselor,
+  isNonExemptRole: staffTable.isNonExemptRole,
+  isFrontOffice: staffTable.isFrontOffice,
+  isSro: staffTable.isSro,
+  isGuardian: staffTable.isGuardian,
+  exemptStatus: staffTable.exemptStatus,
   capHallPasses: staffTable.capHallPasses,
   capTardies: staffTable.capTardies,
   capStudentActivity: staffTable.capStudentActivity,
@@ -237,6 +246,34 @@ router.patch(
           .json({ error: "houseId must be a positive integer or null" });
         return;
       }
+    }
+    // exemptStatus: nullable text ('exempt' | 'non_exempt' | null). Admins
+    // toggle this independently of the Non-Exempt role preset — some
+    // non-exempt staff hold other roles. The Non-Exempt preset additionally
+    // auto-flips this below if the field wasn't explicitly set in the same
+    // request, so applying the preset "just works" for Comp Time accrual.
+    if ("exemptStatus" in body) {
+      const v = body.exemptStatus;
+      if (v === null || (typeof v === "string" && v.trim() === "")) {
+        updates.exemptStatus = null;
+      } else if (
+        typeof v === "string" &&
+        (v === "exempt" || v === "non_exempt")
+      ) {
+        updates.exemptStatus = v;
+      } else {
+        res.status(400).json({
+          error: "exemptStatus must be 'exempt', 'non_exempt', or null",
+        });
+        return;
+      }
+    }
+    // Auto-flip exempt_status when the Non-Exempt role preset is applied.
+    // Only fires when the field wasn't explicitly set in the same request,
+    // so an admin can still override (e.g. apply the role bundle but keep
+    // them marked 'exempt' for some unusual reason).
+    if (updates.isNonExemptRole === true && !("exemptStatus" in body)) {
+      updates.exemptStatus = "non_exempt";
     }
     if (Object.keys(updates).length === 0) {
       res.status(400).json({ error: "No valid fields in request body" });
