@@ -6077,6 +6077,12 @@ export async function ensureStudentPhotoColumns(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS photo_consent BOOLEAN NOT NULL DEFAULT true`,
   );
+  // District-issued local SIS number (FAST file "Local ID"). Nullable;
+  // canonical student_id is still the FLEID. Additive ALTER per the
+  // "non-interactive schema change" convention.
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS local_sis_id TEXT`,
+  );
 }
 
 export async function ensureBadgePrintEventsSchema(): Promise<void> {

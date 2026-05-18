@@ -10,6 +10,7 @@
     "user-guide": "tsx ./src/generateUserGuide.ts",
     "workflow-guide": "tsx ./src/generateWorkflowGuide.ts",
     "seed-pickup-badges": "tsx ./src/seedPickupBadges.ts",
+    "reseed-dsp": "tsx ./src/dspParrottReseed.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
@@ -21,6 +22,7 @@
     "@types/pdfkit": "^0.17.6",
     "@workspace/db": "workspace:*",
     "drizzle-orm": "catalog:",
+    "exceljs": "^4.4.0",
     "pdfkit": "^0.18.0"
   }
 }

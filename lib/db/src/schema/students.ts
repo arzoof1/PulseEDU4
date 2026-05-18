@@ -57,6 +57,12 @@ export const studentsTable = pgTable("students", {
   // student profile page. Bytes are NOT deleted on consent revocation
   // (schools sometimes flip it back), only render-gated.
   photoConsent: boolean("photo_consent").notNull().default(true),
+  // District-issued local SIS number (FAST file "Local ID" column / Skyward /
+  // Focus). Nullable because the canonical student_id is the FLEID — this is
+  // just a friendlier display string ("12345") that some district reports
+  // and parent letters reference. Not unique (different districts can
+  // reuse numbers); not indexed unless a future search surface needs it.
+  localSisId: text("local_sis_id"),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

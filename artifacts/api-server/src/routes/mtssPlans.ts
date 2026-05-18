@@ -735,15 +735,21 @@ function strategyCategoryForBenchmark(
   const c = (category ?? "").toLowerCase();
   if (c.includes("reading prose")) return "Reading Comprehension";
   if (c.includes("reading informational")) return "Reading Comprehension";
+  if (c.includes("across genres")) return "Reading Comprehension";
   if (c.includes("vocabulary")) return "Vocabulary";
   if (c.includes("foundational")) return "Reading Foundations";
+  // Grade 7 Math: "Proportional Reasoning and Relationships".
+  if (c.includes("proportional")) return "Math — Ratios & Proportions";
+  // Grade 8 Math: "Linear Relationships, Data Analysis and Functions" —
+  // matches "linear" before the generic "data" branch.
+  if (c.includes("linear")) return "Math — Linear Relationships & Functions";
   if (c.includes("number sense") || c.includes("number and operations"))
     return "Math — Numbers & Operations";
   if (c.includes("algebraic") || c.includes("algebra"))
     return "Math — Algebraic Reasoning";
   if (c.includes("geometric") || c.includes("geometry"))
     return "Math — Geometry & Measurement";
-  if (c.includes("data") || c.includes("statistic"))
+  if (c.includes("data") || c.includes("statistic") || c.includes("probability"))
     return "Math — Data & Statistics";
   if (category && category.trim()) return category.trim();
   // Last resort: derive from benchmark code prefix.
