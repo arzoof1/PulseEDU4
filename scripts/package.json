@@ -8,6 +8,7 @@
     "demo-guide": "tsx ./src/generateDemoGuide.ts",
     "overview": "tsx ./src/generateOverviewOnePager.ts",
     "user-guide": "tsx ./src/generateUserGuide.ts",
+    "seed-pickup-badges": "tsx ./src/seedPickupBadges.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
@@ -17,6 +18,8 @@
   },
   "dependencies": {
     "@types/pdfkit": "^0.17.6",
+    "@workspace/db": "workspace:*",
+    "drizzle-orm": "catalog:",
     "pdfkit": "^0.18.0"
   }
 }
