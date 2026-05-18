@@ -41,6 +41,7 @@ import {
 import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
+import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
 const router: IRouter = Router();
@@ -57,14 +58,14 @@ async function resolveStaff(req: Request): Promise<StaffRow | null> {
   return s && s.active ? s : null;
 }
 
+// Reuse the canonical Core Team predicate from lib/coreTeam.ts so
+// Insights authorization is a single source of truth (no role drift
+// between this file and the rest of the server). Membership: SuperUser,
+// District Admin, school Admin, Behavior Specialist, MTSS Coordinator,
+// School Psychologist. ESE Coordinator is intentionally NOT a member
+// per the canonical definition.
 function isCoreTeam(s: StaffRow): boolean {
-  return Boolean(
-    s.isSuperUser ||
-      s.isAdmin ||
-      s.isEseCoordinator ||
-      s.isMtssCoordinator ||
-      s.isBehaviorSpecialist,
-  );
+  return isCoreTeamShared(s);
 }
 
 // Natural sort for Florida benchmark codes like "ELA.6.R.1.10" vs
