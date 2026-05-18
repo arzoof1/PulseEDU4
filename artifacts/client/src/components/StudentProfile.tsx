@@ -8,6 +8,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import StudentPhoto from "./StudentPhoto";
+import StudentBenchmarksPanel from "./StudentBenchmarksPanel";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 import {
   Radar,
@@ -2668,6 +2669,11 @@ export default function StudentProfile({
               </ul>
             </div>
           )}
+          {/* FAST Phase 3 — per-benchmark history. Mounts inside the
+              Academics pillar (rather than a separate sub-tab) so it
+              sits next to FAST PM scores and reads as the "deep" view
+              of the same data. Visibility check happens server-side. */}
+          <StudentBenchmarksPanel studentId={data.header.studentId} />
         </Card>
 
         <Card

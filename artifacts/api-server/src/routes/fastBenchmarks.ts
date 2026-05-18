@@ -1002,4 +1002,317 @@ function colorForPct(pct: number, threshold: number): string {
   return "#fecaca"; // red
 }
 
+// ---------------------------------------------------------------------------
+// FAST Phase 3 — Student profile benchmark history
+// ---------------------------------------------------------------------------
+//
+// GET /api/student-benchmarks?studentId=&subject=&schoolYear=
+//
+// One call returns every window (pm1/pm2/pm3) the student has data
+// for in the requested (subject, schoolYear), along with category
+// rollups, so the panel can switch windows client-side without a
+// round-trip. The MTSS-tagged flag is wired here but always returns
+// false until Phase 5 starts persisting benchmark-tagged plans —
+// the read path is in place so the pill turns on automatically the
+// moment Phase 5 ships.
+async function resolveStudentVisibility(
+  staff: StaffRow,
+  schoolId: number,
+  studentId: string,
+): Promise<boolean> {
+  if (isCoreTeam(staff)) return true;
+  // Guidance counselor + ESE coordinator get the same all-student
+  // read access as core team for the profile page (matches the
+  // existing student-profile gate documented in the task spec).
+  if (staff.isGuidanceCounselor || staff.isEseCoordinator) return true;
+  // Else: must be on this student's roster via any taught section.
+  const [rosterHit] = await db
+    .select({ id: sectionRosterTable.id })
+    .from(sectionRosterTable)
+    .innerJoin(
+      classSectionsTable,
+      eq(classSectionsTable.id, sectionRosterTable.sectionId),
+    )
+    .where(
+      and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(sectionRosterTable.studentId, studentId),
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, staff.id),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    )
+    .limit(1);
+  return Boolean(rosterHit);
+}
+
+router.get(
+  "/student-benchmarks",
+  async (req: Request, res: Response) => {
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+
+    const studentId =
+      typeof req.query.studentId === "string"
+        ? req.query.studentId.trim()
+        : "";
+    if (!studentId) {
+      res.status(400).json({ error: "Missing studentId" });
+      return;
+    }
+    const subject =
+      typeof req.query.subject === "string" ? req.query.subject : "ela";
+    if (!VALID_SUBJECTS.has(subject)) {
+      res.status(400).json({ error: "Invalid subject" });
+      return;
+    }
+
+    // Defense-in-depth: student must exist in this school AND caller
+    // must be allowed to see them. Order matters — visibility check
+    // first so we don't leak existence to non-authorized callers.
+    const allowed = await resolveStudentVisibility(staff, schoolId, studentId);
+    if (!allowed) {
+      res.status(403).json({
+        error: "Not in your roster or trusted-adult list",
+      });
+      return;
+    }
+    const [student] = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          eq(studentsTable.studentId, studentId),
+        ),
+      );
+    if (!student) {
+      res.status(404).json({ error: "Student not found in this school" });
+      return;
+    }
+
+    // School threshold (same column as Phase 2 — single source of
+    // truth so heatmap + profile color identically).
+    const [settings] = await db
+      .select({ thresholdPct: schoolSettingsTable.fastBenchmarkMasteryThreshold })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    const thresholdPct = settings?.thresholdPct ?? 80;
+
+    // Available school years for the picker (newest first). Cheap
+    // distinct over the per-(student, subject) slice.
+    const yearRows = await db
+      .selectDistinct({
+        schoolYear: studentFastItemResponsesTable.schoolYear,
+      })
+      .from(studentFastItemResponsesTable)
+      .where(
+        and(
+          eq(studentFastItemResponsesTable.schoolId, schoolId),
+          eq(studentFastItemResponsesTable.studentId, studentId),
+          eq(studentFastItemResponsesTable.subject, subject),
+        ),
+      );
+    const availableSchoolYears = yearRows
+      .map((r) => r.schoolYear)
+      .sort((a, b) => b.localeCompare(a));
+
+    // Resolve the school year — explicit param if valid; else most
+    // recent with data; else current SY for an empty render.
+    const rawSY = req.query.schoolYear;
+    let schoolYear: string;
+    if (typeof rawSY === "string" && rawSY.length > 0) {
+      schoolYear = rawSY;
+    } else if (availableSchoolYears.length > 0) {
+      schoolYear = availableSchoolYears[0]!;
+    } else {
+      schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    }
+
+    // One read for the whole year × subject — small (≤ 3 windows ×
+    // ~40 benchmarks = ~120 rows per student per subject per year).
+    const items = await db
+      .select({
+        window: studentFastItemResponsesTable.window,
+        category: studentFastItemResponsesTable.category,
+        benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+        pointsEarned: studentFastItemResponsesTable.pointsEarned,
+        pointsPossible: studentFastItemResponsesTable.pointsPossible,
+      })
+      .from(studentFastItemResponsesTable)
+      .where(
+        and(
+          eq(studentFastItemResponsesTable.schoolId, schoolId),
+          eq(studentFastItemResponsesTable.studentId, studentId),
+          eq(studentFastItemResponsesTable.subject, subject),
+          eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+        ),
+      );
+
+    // Status bucket — three-tier label aligned with the heatmap
+    // palette: At/Above (green) ≥ threshold, Near (yellow) within
+    // 10 points, Below (orange/red) otherwise.
+    const statusFor = (pct: number): "below" | "near" | "at_above" => {
+      if (pct >= thresholdPct) return "at_above";
+      if (pct >= Math.max(0, thresholdPct - 10)) return "near";
+      return "below";
+    };
+
+    interface BenchmarkRow {
+      code: string;
+      category: string | null;
+      attempts: number;
+      earned: number;
+      possible: number;
+      masteryPct: number;
+      status: "below" | "near" | "at_above";
+      mtssTagged: boolean;
+    }
+    interface CategoryRollup {
+      category: string;
+      earned: number;
+      possible: number;
+      masteryPct: number;
+      benchmarkCount: number;
+      status: "below" | "near" | "at_above";
+    }
+    interface WindowBlock {
+      window: string; // "pm1"|"pm2"|"pm3"
+      label: string;
+      benchmarks: BenchmarkRow[];
+      categoryRollups: CategoryRollup[];
+      totalEarned: number;
+      totalPossible: number;
+      overallMasteryPct: number | null;
+    }
+
+    // Pivot: window → benchmarkCode → agg.
+    const byWindow = new Map<
+      string,
+      Map<string, { category: string | null; earned: number; possible: number; attempts: number }>
+    >();
+    for (const r of items) {
+      if (r.pointsPossible == null) continue;
+      const w = byWindow.get(r.window) ?? new Map();
+      const prior =
+        w.get(r.benchmarkCode) ?? {
+          category: r.category,
+          earned: 0,
+          possible: 0,
+          attempts: 0,
+        };
+      prior.earned += r.pointsEarned ?? 0;
+      prior.possible += r.pointsPossible;
+      prior.attempts += 1;
+      // Prefer first non-null category we see (Florida is consistent
+      // within a code, but defensive).
+      if (!prior.category && r.category) prior.category = r.category;
+      w.set(r.benchmarkCode, prior);
+      byWindow.set(r.window, w);
+    }
+
+    // MTSS-tagged placeholder. Phase 5 will replace this with a real
+    // lookup on whichever column persists the benchmark linkage
+    // (likely `student_mtss_plans.fast_benchmark_code` or a join
+    // table). Until then this always returns false — see task spec.
+    const mtssTaggedCodes = new Set<string>();
+
+    const WINDOW_RANK: Record<string, number> = { pm1: 0, pm2: 1, pm3: 2 };
+    const windows: WindowBlock[] = Array.from(byWindow.entries())
+      .sort((a, b) => (WINDOW_RANK[a[0]] ?? 9) - (WINDOW_RANK[b[0]] ?? 9))
+      .map(([win, map]) => {
+        const benchmarks: BenchmarkRow[] = Array.from(map.entries())
+          .map(([code, agg]) => {
+            const pct = Math.round((agg.earned / agg.possible) * 100);
+            return {
+              code,
+              category: agg.category,
+              attempts: agg.attempts,
+              earned: agg.earned,
+              possible: agg.possible,
+              masteryPct: pct,
+              status: statusFor(pct),
+              mtssTagged: mtssTaggedCodes.has(code),
+            };
+          })
+          .sort((a, b) => {
+            const ca = a.category ?? "";
+            const cb = b.category ?? "";
+            if (ca !== cb) return ca.localeCompare(cb);
+            return compareBenchmarkCodes(a.code, b.code);
+          });
+
+        // Category rollups — earned/possible summed across the
+        // category's benchmarks (NOT a simple average of percents,
+        // so a high-point-value benchmark weights correctly).
+        const catAgg = new Map<
+          string,
+          { earned: number; possible: number; count: number }
+        >();
+        let totalEarned = 0;
+        let totalPossible = 0;
+        for (const b of benchmarks) {
+          totalEarned += b.earned;
+          totalPossible += b.possible;
+          const key = b.category ?? "Uncategorized";
+          const prior = catAgg.get(key) ?? { earned: 0, possible: 0, count: 0 };
+          prior.earned += b.earned;
+          prior.possible += b.possible;
+          prior.count += 1;
+          catAgg.set(key, prior);
+        }
+        const categoryRollups: CategoryRollup[] = Array.from(catAgg.entries())
+          .map(([category, a]) => {
+            const pct = Math.round((a.earned / a.possible) * 100);
+            return {
+              category,
+              earned: a.earned,
+              possible: a.possible,
+              masteryPct: pct,
+              benchmarkCount: a.count,
+              status: statusFor(pct),
+            };
+          })
+          .sort((a, b) => a.category.localeCompare(b.category));
+
+        return {
+          window: win,
+          label: win.toUpperCase(),
+          benchmarks,
+          categoryRollups,
+          totalEarned,
+          totalPossible,
+          overallMasteryPct:
+            totalPossible > 0
+              ? Math.round((totalEarned / totalPossible) * 100)
+              : null,
+        };
+      });
+
+    res.json({
+      student: {
+        studentId: student.studentId,
+        firstName: student.firstName,
+        lastName: student.lastName,
+        grade: student.grade,
+      },
+      subject,
+      schoolYear,
+      availableSchoolYears,
+      thresholdPct,
+      windows,
+    });
+  },
+);
+
 export default router;
