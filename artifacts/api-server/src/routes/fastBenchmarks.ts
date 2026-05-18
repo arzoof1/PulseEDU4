@@ -34,6 +34,7 @@ import {
   studentsTable,
   studentFastItemResponsesTable,
   schoolSettingsTable,
+  schoolsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
@@ -503,6 +504,7 @@ router.get(
         .select({
           studentId: studentFastItemResponsesTable.studentId,
           category: studentFastItemResponsesTable.category,
+          itemSeq: studentFastItemResponsesTable.itemSeq,
           pointsEarned: studentFastItemResponsesTable.pointsEarned,
           pointsPossible: studentFastItemResponsesTable.pointsPossible,
         })
@@ -522,10 +524,28 @@ router.get(
         ),
     ]);
 
+    // Per-student aggregation AND per-item raw rows. The Florida xlsx
+    // typically repeats a benchmark code across 1–3 item_seq rows in
+    // one PM (multi-item benchmark). The drill modal needs each item
+    // visible so the teacher can see "missed item 1, got item 2" —
+    // not just a rolled-up percent.
+    interface ItemDetail {
+      itemSeq: number;
+      pointsEarned: number | null;
+      pointsPossible: number | null;
+    }
     let category: string | null = null;
     const agg = new Map<string, { earned: number; possible: number }>();
+    const itemsByStudent = new Map<string, ItemDetail[]>();
     for (const r of items) {
       if (r.category && !category) category = r.category;
+      const arr = itemsByStudent.get(r.studentId) ?? [];
+      arr.push({
+        itemSeq: r.itemSeq,
+        pointsEarned: r.pointsEarned,
+        pointsPossible: r.pointsPossible,
+      });
+      itemsByStudent.set(r.studentId, arr);
       if (r.pointsPossible == null) continue;
       const prior = agg.get(r.studentId) ?? { earned: 0, possible: 0 };
       prior.earned += r.pointsEarned ?? 0;
@@ -536,22 +556,26 @@ router.get(
     const out = students
       .map((s) => {
         const a = agg.get(s.studentId);
+        const rawItems = (itemsByStudent.get(s.studentId) ?? []).sort(
+          (x, y) => x.itemSeq - y.itemSeq,
+        );
+        const base = {
+          studentId: s.studentId,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          grade: s.grade,
+          items: rawItems,
+        };
         if (!a || a.possible === 0) {
           return {
-            studentId: s.studentId,
-            firstName: s.firstName,
-            lastName: s.lastName,
-            grade: s.grade,
+            ...base,
             pct: null as number | null,
             earned: null as number | null,
             possible: null as number | null,
           };
         }
         return {
-          studentId: s.studentId,
-          firstName: s.firstName,
-          lastName: s.lastName,
-          grade: s.grade,
+          ...base,
           pct: Math.round((a.earned / a.possible) * 100),
           earned: a.earned,
           possible: a.possible,
@@ -597,6 +621,14 @@ router.get(
     }
     const window = rawWindow;
     const schoolYear = rawSY;
+
+    // Fetch school for the printable header (name appears above the
+    // teacher line so printed copies have unambiguous provenance
+    // when they sit on a desk).
+    const [schoolRow] = await db
+      .select({ name: schoolsTable.name })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.id, ctx.schoolId));
 
     // Reuse the matrix-build path inline (kept here rather than
     // factored out to keep the route file self-contained — the
@@ -699,6 +731,17 @@ router.get(
     );
     doc.pipe(res);
 
+    // Header band: school name (top), teacher + class context, then
+    // subject/window/threshold/timestamp line. Printed copies often
+    // get filed; this gives the reader full provenance at a glance.
+    if (schoolRow?.name) {
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(11)
+        .fillColor("#374151")
+        .text(schoolRow.name)
+        .fillColor("black");
+    }
     doc
       .font("Helvetica-Bold")
       .fontSize(15)
@@ -713,7 +756,89 @@ router.get(
         `${ctx.subject.toUpperCase()} · ${schoolYear} ${window.toUpperCase()} · Mastery threshold ${ctx.thresholdPct}% · Generated ${new Date().toLocaleString()}`,
       )
       .fillColor("black")
-      .moveDown(0.5);
+      .moveDown(0.4);
+
+    // Bottom-3 tile — printed above the heatmap so the reader gets
+    // the "what should I act on" answer before the wall of cells.
+    // Computed inline from the same cellMap used for the grid so the
+    // PDF cannot drift from the on-screen view.
+    interface BotEntry {
+      code: string;
+      category: string | null;
+      avgPct: number;
+      below: number;
+      n: number;
+    }
+    const botCandidates: BotEntry[] = [];
+    for (const b of benchmarks) {
+      let sumPct = 0;
+      let n = 0;
+      let below = 0;
+      for (const s of sortedStudents) {
+        const agg = cellMap.get(`${s.studentId}|${b.code}`);
+        if (!agg || agg.possible === 0) continue;
+        const pct = Math.round((agg.earned / agg.possible) * 100);
+        sumPct += pct;
+        n += 1;
+        if (pct < ctx.thresholdPct) below += 1;
+      }
+      if (n > 0) {
+        botCandidates.push({
+          code: b.code,
+          category: b.category,
+          avgPct: Math.round(sumPct / n),
+          below,
+          n,
+        });
+      }
+    }
+    botCandidates.sort((a, b) => {
+      if (a.avgPct !== b.avgPct) return a.avgPct - b.avgPct;
+      if (a.below !== b.below) return b.below - a.below;
+      return compareBenchmarkCodes(a.code, b.code);
+    });
+    const bottom3 = botCandidates.slice(0, 3);
+    if (bottom3.length > 0) {
+      const tileTop = doc.y;
+      const tileH = 12 + bottom3.length * 12 + 6;
+      const tileW =
+        doc.page.width - doc.page.margins.left - doc.page.margins.right;
+      doc
+        .save()
+        .rect(doc.page.margins.left, tileTop, tileW, tileH)
+        .fillColor("#fef2f2")
+        .fill()
+        .restore();
+      doc
+        .strokeColor("#fecaca")
+        .lineWidth(1)
+        .rect(doc.page.margins.left, tileTop, tileW, tileH)
+        .stroke();
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .fillColor("#991b1b")
+        .text(
+          `BOTTOM 3 BENCHMARKS — ${schoolYear} ${window.toUpperCase()}`,
+          doc.page.margins.left + 6,
+          tileTop + 4,
+        );
+      let lineY = tileTop + 16;
+      bottom3.forEach((b) => {
+        doc
+          .font("Helvetica")
+          .fontSize(9)
+          .fillColor("#111")
+          .text(
+            `${b.code}${b.category ? ` · ${b.category}` : ""} — class avg ${b.avgPct}% · ${b.below}/${b.n} below ${ctx.thresholdPct}%`,
+            doc.page.margins.left + 8,
+            lineY,
+          );
+        lineY += 12;
+      });
+      doc.fillColor("black");
+      doc.y = tileTop + tileH + 6;
+    }
 
     if (sortedStudents.length === 0) {
       doc

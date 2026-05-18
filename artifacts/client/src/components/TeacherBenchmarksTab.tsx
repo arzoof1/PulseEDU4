@@ -56,6 +56,12 @@ interface MatrixResponse {
   bottom3: BottomEntry[];
 }
 
+interface DrillItem {
+  itemSeq: number;
+  pointsEarned: number | null;
+  pointsPossible: number | null;
+}
+
 interface DrillStudent {
   studentId: string;
   firstName: string;
@@ -64,6 +70,7 @@ interface DrillStudent {
   pct: number | null;
   earned: number | null;
   possible: number | null;
+  items: DrillItem[];
 }
 
 interface DrillResponse {
@@ -706,7 +713,8 @@ export default function TeacherBenchmarksTab({
                   <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
                     <th style={{ padding: "6px 8px" }}>Student</th>
                     <th style={{ padding: "6px 8px" }}>Grade</th>
-                    <th style={{ padding: "6px 8px", textAlign: "right" }}>Score</th>
+                    <th style={{ padding: "6px 8px" }}>Items</th>
+                    <th style={{ padding: "6px 8px", textAlign: "right" }}>Total</th>
                     <th style={{ padding: "6px 8px", textAlign: "right" }}>%</th>
                   </tr>
                 </thead>
@@ -714,12 +722,64 @@ export default function TeacherBenchmarksTab({
                   {drill.students.map((s) => (
                     <tr
                       key={s.studentId}
-                      style={{ borderTop: "1px solid #f3f4f6" }}
+                      style={{ borderTop: "1px solid #f3f4f6", verticalAlign: "top" }}
                     >
                       <td style={{ padding: "6px 8px" }}>
                         {s.lastName}, {s.firstName}
                       </td>
                       <td style={{ padding: "6px 8px" }}>{s.grade}</td>
+                      <td
+                        style={{
+                          padding: "6px 8px",
+                          fontFamily: "monospace",
+                          fontSize: 12,
+                          color: "#374151",
+                        }}
+                      >
+                        {s.items.length === 0 ? (
+                          <span style={{ color: "#9ca3af" }}>no items</span>
+                        ) : (
+                          // Per-item performance: each chip shows
+                          // "item#: earned/possible" so the teacher
+                          // can see exactly which item(s) tripped
+                          // the student up (multi-item benchmarks
+                          // are common in Florida xlsx).
+                          <div style={{ display: "flex", flexWrap: "wrap", gap: 4 }}>
+                            {s.items.map((it) => {
+                              const correct =
+                                it.pointsPossible != null &&
+                                it.pointsEarned != null &&
+                                it.pointsEarned >= it.pointsPossible;
+                              const missing = it.pointsPossible == null;
+                              return (
+                                <span
+                                  key={it.itemSeq}
+                                  title={`Item ${it.itemSeq + 1}: ${it.pointsEarned ?? "—"}/${it.pointsPossible ?? "—"}`}
+                                  style={{
+                                    padding: "1px 6px",
+                                    borderRadius: 4,
+                                    background: missing
+                                      ? "#f3f4f6"
+                                      : correct
+                                        ? "#dcfce7"
+                                        : "#fee2e2",
+                                    color: missing
+                                      ? "#6b7280"
+                                      : correct
+                                        ? "#166534"
+                                        : "#991b1b",
+                                    fontSize: 11,
+                                  }}
+                                >
+                                  #{it.itemSeq + 1}:{" "}
+                                  {it.pointsEarned ?? "—"}/
+                                  {it.pointsPossible ?? "—"}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </td>
                       <td style={{ padding: "6px 8px", textAlign: "right" }}>
                         {s.earned != null && s.possible != null
                           ? `${s.earned}/${s.possible}`
