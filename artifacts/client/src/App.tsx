@@ -8120,15 +8120,12 @@ function App() {
     isAdmin ||
     isMtss ||
     isBehaviorSpec;
-  // Mirrors server `isCoreTeam` in routes/fastBenchmarks.ts so the
-  // FAST Benchmarks Insights tile/section gating matches the API guard
-  // (canAccessMtssHub excludes ESE coordinator, which the server allows).
-  const canAccessFastBenchmarksInsights =
-    Boolean(authUser?.isSuperUser) ||
-    isAdmin ||
-    isMtss ||
-    isBehaviorSpec ||
-    Boolean(authUser?.isEseCoordinator);
+  // FAST Benchmarks Insights reuses the Insights-hub capability so
+  // tile visibility and page access share one source of truth. Server
+  // route guard (`isCoreTeam` in routes/fastBenchmarks.ts) is a
+  // superset — that's intentional: under-permissive UI is safer than
+  // over-permissive, and ESE coordinator doesn't see the hub anyway.
+  const canAccessFastBenchmarksInsights = canAccessMtssHub;
   const canManageStaffRoles =
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
