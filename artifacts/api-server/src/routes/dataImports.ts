@@ -31,6 +31,7 @@ import {
   studentsTable,
   supportNotesTable,
   studentFastScoresTable,
+  studentFastItemResponsesTable,
   studentImportSnapshotsTable,
   schoolSettingsTable,
   housesTable,
@@ -44,7 +45,24 @@ import {
   canActAsDistrict,
   getDistrictIdForSchool,
 } from "../lib/scope.js";
+import {
+  DEFAULT_SCHOOL_TZ,
+  getSchoolTimezone,
+  schoolYearLabelFor,
+} from "../lib/schoolYear.js";
 import Papa from "papaparse";
+import ExcelJS from "exceljs";
+
+// Resolve the "YY-YY" school-year label for a given school, honoring the
+// per-school IANA timezone column (falls back to DEFAULT_SCHOOL_TZ).
+// Cached at the schoolYear module level so repeat calls inside one
+// import are free.
+async function currentSchoolYearLabelForSchool(
+  schoolId: number,
+): Promise<string> {
+  const tz = await getSchoolTimezone(schoolId).catch(() => DEFAULT_SCHOOL_TZ);
+  return schoolYearLabelFor(new Date(), tz);
+}
 
 const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
@@ -1535,6 +1553,32 @@ router.post(
       const cfg = KIND_CONFIGS[job.kind];
       if (cfg && job.schoolId != null) {
         count = await cfg.rollback(tx, id, job.schoolId);
+      } else if (job.kind === "fast_florida" && job.schoolId != null) {
+        // FAST Phase 1 — rolling back a Florida xlsx import deletes
+        // every item_response row stamped with this jobId, then
+        // deletes any student_fast_scores row whose import_job_id
+        // matches (defense-in-depth on schoolId). Pre-existing PM
+        // values written by an earlier job survive because their
+        // import_job_id points at that earlier job.
+        const itemRes = await tx
+          .delete(studentFastItemResponsesTable)
+          .where(
+            and(
+              eq(studentFastItemResponsesTable.importJobId, id),
+              eq(studentFastItemResponsesTable.schoolId, job.schoolId),
+            ),
+          );
+        const scoreRes = await tx
+          .delete(studentFastScoresTable)
+          .where(
+            and(
+              eq(studentFastScoresTable.importJobId, id),
+              eq(studentFastScoresTable.schoolId, job.schoolId),
+            ),
+          );
+        count =
+          ((itemRes as unknown as { rowCount?: number }).rowCount ?? 0) +
+          ((scoreRes as unknown as { rowCount?: number }).rowCount ?? 0);
       } else if (job.kind === "assessments") {
         if (job.districtId != null && job.schoolId == null) {
           // District-scope rollback: rows span multiple schools. We
@@ -2678,9 +2722,13 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
   },
   async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
-    // Upsert against (school_id, student_id, subject). Numeric PMs and
-    // prior_year_score use COALESCE so a partial CSV (PM1-only mid-year)
-    // doesn't clobber later PMs back to null.
+    // Upsert against (school_id, student_id, subject, school_year). The
+    // school_year column was added in FAST Phase 1 (Florida xlsx
+    // parser) — the CSV importer always writes the current school
+    // year so it never collides with prior-year backfill rows.
+    //
+    // Per-row PMs / prior_year_score use COALESCE so a partial CSV
+    // (PM1-only mid-year) doesn't clobber later PMs back to null.
     //
     // Every row — insert OR conflict-update — gets stamped with the
     // current jobId via `import_job_id`. Rollback DELETES rows whose
@@ -2699,6 +2747,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
     //     itself so the existing DB value is preserved.
     // This guarantees a PM-only CSV upload cannot wipe an existing
     // true BQ flag back to false.
+    const schoolYear = await currentSchoolYearLabelForSchool(schoolId);
     const withBq = parsed.filter((p) => p.priorYearBq !== null);
     const withoutBq = parsed.filter((p) => p.priorYearBq === null);
     const now = new Date();
@@ -2710,6 +2759,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             pm1: p.pm1,
             pm2: p.pm2,
             pm3: p.pm3,
@@ -2724,6 +2774,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
@@ -2744,6 +2795,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             pm1: p.pm1,
             pm2: p.pm2,
             pm3: p.pm3,
@@ -2760,6 +2812,7 @@ const FAST_SCORES_CONFIG: KindConfig<ParsedFastScore> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
@@ -2910,13 +2963,14 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
   },
   async insertChunk(tx, parsed, schoolId, jobId) {
     if (parsed.length === 0) return 0;
-    // Upsert against (school_id, student_id, subject). The SET clause
-    // ONLY touches prior-year columns — PM1/PM2/PM3 are intentionally
-    // not in `set` so they remain whatever value the row already had.
-    // Same withBq / withoutBq partition as FAST_SCORES_CONFIG so a
-    // CSV without a BQ column can't wipe an existing true BQ flag.
-    // import_job_id is overwritten on conflict, same ownership model
-    // as FAST_SCORES_CONFIG: most recent import owns the row.
+    // Upsert against (school_id, student_id, subject, school_year).
+    // The SET clause ONLY touches prior-year columns — PM1/PM2/PM3
+    // are intentionally not in `set` so they remain whatever value
+    // the row already had. Same withBq / withoutBq partition as
+    // FAST_SCORES_CONFIG so a CSV without a BQ column can't wipe
+    // an existing true BQ flag. import_job_id is overwritten on
+    // conflict — same ownership model as FAST_SCORES_CONFIG.
+    const schoolYear = await currentSchoolYearLabelForSchool(schoolId);
     const withBq = parsed.filter((p) => p.priorYearBq !== null);
     const withoutBq = parsed.filter((p) => p.priorYearBq === null);
     const now = new Date();
@@ -2928,6 +2982,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             priorYearScore: p.priorYearScore,
             priorYearBq: p.priorYearBq as boolean,
             importJobId: jobId,
@@ -2939,6 +2994,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             priorYearScore: sql`EXCLUDED.prior_year_score`,
@@ -2956,6 +3012,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             schoolId,
             studentId: p.studentId,
             subject: p.subject,
+            schoolYear,
             priorYearScore: p.priorYearScore,
             // NOT NULL — only used for brand-new rows. On conflict the
             // SET clause below preserves the existing value.
@@ -2969,6 +3026,7 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
             studentFastScoresTable.schoolId,
             studentFastScoresTable.studentId,
             studentFastScoresTable.subject,
+            studentFastScoresTable.schoolYear,
           ],
           set: {
             priorYearScore: sql`EXCLUDED.prior_year_score`,
@@ -2993,6 +3051,608 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
     return (r as unknown as { rowCount?: number }).rowCount ?? 0;
   },
 };
+
+// ---------------------------------------------------------------------------
+// FAST Phase 1 — Florida per-student xlsx parser.
+//
+// The state ships a wide xlsx where each row is one student × one
+// administration. Columns 1-18 are demographics + test metadata
+// (Student ID, Test Reason, Test Completion Date, …), col 19 is the
+// scale score ("Grade N FAST ELA Reading Scale Score"), and then
+// ~40 repeating Category / Benchmark / Points Earned / Points Possible
+// quadruplets per student.
+//
+// Phase 1 scope: ELA Reading only. Math + Writing variants ship in
+// Phase 6 — the detector returns a clear "subject not yet supported"
+// message for those headers so admins know to wait.
+//
+// Storage model:
+//   - One row in student_fast_scores per (student, subject,
+//     school_year) — the scale score lands in pm1/pm2/pm3 based on the
+//     window column.
+//   - One row in student_fast_item_responses per (student × benchmark).
+//     ~40 rows per administration.
+//
+// Idempotency: re-uploading the same PM window for the same school
+// year DELETEs the prior item-response rows for the student set
+// before re-inserting (the scale-score upsert in student_fast_scores
+// is conflict-keyed and handles itself).
+// ---------------------------------------------------------------------------
+type FloridaItemResponse = {
+  category: string | null;
+  benchmarkCode: string;
+  pointsEarned: number | null;
+  pointsPossible: number | null;
+  itemSeq: number;
+};
+
+type FloridaStudentRow = {
+  studentId: string;
+  studentName: string | null;
+  window: "pm1" | "pm2" | "pm3";
+  administeredAt: Date | null;
+  scaleScore: number | null;
+  achievementLevel: string | null;
+  items: FloridaItemResponse[];
+};
+
+type FloridaParse =
+  | { ok: false; error: string }
+  | {
+      ok: true;
+      subject: "ela";
+      gradeLabel: string | null;
+      windowsSeen: Set<string>;
+      students: FloridaStudentRow[];
+      warnings: Array<{ row: number; message: string }>;
+      totalItems: number;
+    };
+
+// Florida occasionally prefixes a benchmark with a strand code:
+//   "RP|ELA.6.R.1.1" → "ELA.6.R.1.1"
+// We store the bare code so heatmap aggregations can group cleanly.
+function stripBenchmarkStrand(raw: string): string {
+  const i = raw.indexOf("|");
+  return (i >= 0 ? raw.slice(i + 1) : raw).trim();
+}
+
+function parseCellString(v: unknown): string {
+  if (v === null || v === undefined) return "";
+  if (typeof v === "string") return v.trim();
+  if (typeof v === "number") return String(v);
+  if (typeof v === "boolean") return v ? "true" : "false";
+  if (v instanceof Date) return v.toISOString();
+  // exceljs sometimes wraps rich text / hyperlink values.
+  const obj = v as { text?: unknown; result?: unknown };
+  if (obj && typeof obj.text === "string") return obj.text.trim();
+  if (obj && typeof obj.result === "string") return obj.result.trim();
+  return String(v).trim();
+}
+
+function parseCellNumber(v: unknown): number | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (typeof v === "number") return Number.isFinite(v) ? v : null;
+  const s = parseCellString(v);
+  if (!s) return null;
+  const n = Number(s);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseCellDate(v: unknown): Date | null {
+  if (v === null || v === undefined || v === "") return null;
+  if (v instanceof Date) return Number.isFinite(v.getTime()) ? v : null;
+  const s = parseCellString(v);
+  if (!s) return null;
+  // Florida exports use M/D/YYYY. Date.parse handles that.
+  const t = Date.parse(s);
+  return Number.isFinite(t) ? new Date(t) : null;
+}
+
+function detectWindow(testReason: string): "pm1" | "pm2" | "pm3" | null {
+  const m = /(?:^|[^A-Za-z])PM\s*([123])\b/i.exec(testReason);
+  if (!m) return null;
+  return (`pm${m[1]}`) as "pm1" | "pm2" | "pm3";
+}
+
+// Phase 1 only recognizes ELA Reading. Math and Writing parsers ship
+// in Phase 6 — when the scale-score header points at one of those
+// subjects we still return a structured "unsupported" error rather
+// than mis-importing into the ELA column.
+function detectSubjectFromScaleHeader(
+  header: string,
+): { subject: "ela"; grade: string | null } | { error: string } {
+  // Examples we accept:
+  //   "Grade 6 FAST ELA Reading Scale Score"
+  //   "FAST ELA Reading Scale Score"
+  const gradeMatch = /Grade\s+(\d+)/i.exec(header);
+  const grade = gradeMatch ? gradeMatch[1] : null;
+  if (/ELA\s+Reading/i.test(header)) {
+    return { subject: "ela", grade };
+  }
+  if (/Mathematics|\bMath\b/i.test(header)) {
+    return {
+      error:
+        "Florida FAST Mathematics xlsx parsing is on the FAST Phase 6 roadmap. For now, upload Math scores through the generic CSV importer or the dedicated FAST Scores CSV importer.",
+    };
+  }
+  if (/Writing/i.test(header)) {
+    return {
+      error:
+        "Florida FAST Writing xlsx parsing is on the FAST Phase 6 roadmap.",
+    };
+  }
+  return {
+    error: `Could not recognize subject from header "${header}". Phase 1 supports ELA Reading only.`,
+  };
+}
+
+async function parseFloridaXlsx(
+  buffer: Buffer,
+): Promise<FloridaParse> {
+  let wb: ExcelJS.Workbook;
+  try {
+    wb = new ExcelJS.Workbook();
+    // exceljs typings prefer ArrayBuffer here; Node Buffer's .buffer
+    // is fine in practice but we slice to the right window in case
+    // the Buffer is a view into a larger pool.
+    const ab = buffer.buffer.slice(
+      buffer.byteOffset,
+      buffer.byteOffset + buffer.byteLength,
+    );
+    await wb.xlsx.load(ab as ArrayBuffer);
+  } catch (e) {
+    return {
+      ok: false,
+      error: `Could not read xlsx: ${(e as Error).message}`,
+    };
+  }
+  const ws = wb.worksheets[0];
+  if (!ws || ws.rowCount < 2) {
+    return { ok: false, error: "xlsx is empty (no data rows)." };
+  }
+
+  const headerRow = ws.getRow(1);
+  const headers: string[] = [];
+  for (let c = 1; c <= ws.columnCount; c++) {
+    headers.push(parseCellString(headerRow.getCell(c).value));
+  }
+
+  // Required columns (case-insensitive exact match).
+  const findIdx = (predicate: (h: string) => boolean): number =>
+    headers.findIndex(predicate);
+  const idxStudentId = findIdx((h) => /^student id$/i.test(h));
+  const idxStudentName = findIdx((h) => /^student name$/i.test(h));
+  const idxTestReason = findIdx((h) => /^test reason$/i.test(h));
+  const idxCompletionDate = findIdx(
+    (h) => /^test completion date$/i.test(h) || /^date taken$/i.test(h),
+  );
+  const idxScaleScore = findIdx((h) =>
+    /FAST.*Scale Score/i.test(h),
+  );
+  const idxAchievement = findIdx((h) =>
+    /FAST.*Achievement Level/i.test(h),
+  );
+
+  if (idxStudentId < 0) {
+    return {
+      ok: false,
+      error: "Missing 'Student ID' column — this does not look like a Florida FAST per-student xlsx export.",
+    };
+  }
+  if (idxTestReason < 0) {
+    return {
+      ok: false,
+      error: "Missing 'Test Reason' column (required to derive the PM window).",
+    };
+  }
+  if (idxScaleScore < 0) {
+    return {
+      ok: false,
+      error:
+        "Missing 'Grade N FAST … Scale Score' column. Re-export from the state portal with the Scale Score column included.",
+    };
+  }
+  const subjectDetect = detectSubjectFromScaleHeader(headers[idxScaleScore]);
+  if ("error" in subjectDetect) {
+    return { ok: false, error: subjectDetect.error };
+  }
+
+  // Walk header row to find repeating Category / Benchmark / Points
+  // Earned / Points Possible quadruplets. Each quad starts where a
+  // "Category" header is followed by Benchmark / Points Earned /
+  // Points Possible in that exact order.
+  const quadStarts: number[] = [];
+  for (let i = 0; i + 3 < headers.length; i++) {
+    if (
+      /^category$/i.test(headers[i]) &&
+      /^benchmark$/i.test(headers[i + 1]) &&
+      /^points earned$/i.test(headers[i + 2]) &&
+      /^points possible$/i.test(headers[i + 3])
+    ) {
+      quadStarts.push(i);
+    }
+  }
+  if (quadStarts.length === 0) {
+    return {
+      ok: false,
+      error:
+        "No 'Category / Benchmark / Points Earned / Points Possible' quadruplets found. Re-export from the state portal with the per-benchmark detail columns included.",
+    };
+  }
+
+  const students: FloridaStudentRow[] = [];
+  const warnings: Array<{ row: number; message: string }> = [];
+  let totalItems = 0;
+  const windowsSeen = new Set<string>();
+
+  for (let r = 2; r <= ws.rowCount; r++) {
+    const row = ws.getRow(r);
+    // exceljs treats trailing empty cells lazily; skip rows where
+    // the Student ID cell is blank.
+    const studentId = parseCellString(row.getCell(idxStudentId + 1).value);
+    if (!studentId) continue;
+    const testReason = parseCellString(row.getCell(idxTestReason + 1).value);
+    const window = detectWindow(testReason);
+    if (!window) {
+      if (warnings.length < 50) {
+        warnings.push({
+          row: r,
+          message: `Could not detect PM window from Test Reason "${testReason}".`,
+        });
+      }
+      continue;
+    }
+    windowsSeen.add(window);
+
+    const scaleScore = parseCellNumber(row.getCell(idxScaleScore + 1).value);
+    const achievement = idxAchievement >= 0
+      ? parseCellString(row.getCell(idxAchievement + 1).value) || null
+      : null;
+    const administeredAt = idxCompletionDate >= 0
+      ? parseCellDate(row.getCell(idxCompletionDate + 1).value)
+      : null;
+    const studentName = idxStudentName >= 0
+      ? parseCellString(row.getCell(idxStudentName + 1).value) || null
+      : null;
+
+    const items: FloridaItemResponse[] = [];
+    for (let qi = 0; qi < quadStarts.length; qi++) {
+      const base = quadStarts[qi];
+      const benchmarkRaw = parseCellString(row.getCell(base + 2).value);
+      if (!benchmarkRaw) continue; // blank item slot
+      const category = parseCellString(row.getCell(base + 1).value) || null;
+      const pe = parseCellNumber(row.getCell(base + 3).value);
+      const pp = parseCellNumber(row.getCell(base + 4).value);
+      items.push({
+        category,
+        benchmarkCode: stripBenchmarkStrand(benchmarkRaw),
+        pointsEarned: pe !== null ? Math.round(pe) : null,
+        pointsPossible: pp !== null ? Math.round(pp) : null,
+        itemSeq: qi,
+      });
+    }
+    totalItems += items.length;
+
+    students.push({
+      studentId,
+      studentName,
+      window,
+      administeredAt,
+      scaleScore,
+      achievementLevel: achievement,
+      items,
+    });
+  }
+
+  if (students.length === 0) {
+    return {
+      ok: false,
+      error: "No student data rows found.",
+    };
+  }
+
+  return {
+    ok: true,
+    subject: subjectDetect.subject,
+    gradeLabel: subjectDetect.grade,
+    windowsSeen,
+    students,
+    warnings,
+    totalItems,
+  };
+}
+
+// Pull the xlsx bytes off a JSON body. Accepts `xlsxBase64` (string) —
+// matches the existing CSV-as-string pattern so we don't have to wire
+// multipart middleware just for this one route. Capped at ~12 MB pre
+// base-64 (which our 15 MB JSON body limit accommodates).
+function decodeXlsxBody(body: unknown): Buffer | string {
+  const b = body as { xlsxBase64?: unknown } | null;
+  const raw = b && typeof b.xlsxBase64 === "string" ? b.xlsxBase64 : "";
+  if (!raw) return "Missing xlsxBase64 in request body.";
+  // Strip a `data:…;base64,` prefix if the client included one.
+  const stripped = raw.replace(/^data:[^;]+;base64,/, "");
+  let buf: Buffer;
+  try {
+    buf = Buffer.from(stripped, "base64");
+  } catch {
+    return "xlsxBase64 is not valid base64.";
+  }
+  if (buf.length === 0) return "xlsxBase64 decoded to 0 bytes.";
+  if (buf.length > 12 * 1024 * 1024) {
+    return "xlsx exceeds the 12 MB limit. Split the file by grade and try again.";
+  }
+  return buf;
+}
+
+// Validate the admin-supplied school-year label. Allow the current
+// year plus three previous (matches the dropdown the client renders).
+function validateSchoolYearLabel(
+  raw: unknown,
+  current: string,
+): string | null {
+  if (typeof raw !== "string") return null;
+  const m = /^(\d{2})-(\d{2})$/.exec(raw.trim());
+  if (!m) return null;
+  const start = Number(m[1]);
+  const end = Number(m[2]);
+  if (end !== (start + 1) % 100) return null;
+  // Build the allowed set: current + 3 previous.
+  const cm = /^(\d{2})-(\d{2})$/.exec(current);
+  if (!cm) return raw.trim(); // fail open — current isn't well-formed
+  const curStart = Number(cm[1]);
+  const allowed = new Set<string>();
+  for (let off = 0; off <= 3; off++) {
+    const s = (curStart - off + 100) % 100;
+    const e = (s + 1) % 100;
+    const pad = (n: number) => String(n).padStart(2, "0");
+    allowed.add(`${pad(s)}-${pad(e)}`);
+  }
+  return allowed.has(raw.trim()) ? raw.trim() : null;
+}
+
+router.post(
+  "/data-imports/fast_florida/preview",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const decoded = decodeXlsxBody(req.body);
+    if (typeof decoded === "string") {
+      res.status(400).json({ error: decoded });
+      return;
+    }
+    const current = await currentSchoolYearLabelForSchool(schoolId);
+    const schoolYear = validateSchoolYearLabel(
+      (req.body as { schoolYear?: unknown })?.schoolYear,
+      current,
+    );
+    if (!schoolYear) {
+      res.status(400).json({
+        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the three preceding years.`,
+      });
+      return;
+    }
+    const parsed = await parseFloridaXlsx(decoded);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    res.json({
+      kind: "fast_florida",
+      subject: parsed.subject,
+      gradeLabel: parsed.gradeLabel,
+      schoolYear,
+      windowsSeen: Array.from(parsed.windowsSeen).sort(),
+      totalStudents: parsed.students.length,
+      totalItems: parsed.totalItems,
+      warnings: parsed.warnings,
+      // Sample for the wizard's review pane — first 5 students + first
+      // 3 items each. Keeps payload small for the 30+MB raw files.
+      sampleStudents: parsed.students.slice(0, 5).map((s) => ({
+        studentId: s.studentId,
+        studentName: s.studentName,
+        window: s.window,
+        scaleScore: s.scaleScore,
+        achievementLevel: s.achievementLevel,
+        sampleItems: s.items.slice(0, 3),
+      })),
+      readyToCommit: parsed.students.length > 0,
+    });
+  },
+);
+
+router.post(
+  "/data-imports/fast_florida/commit",
+  requireImporter(),
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: StaffRow }).staff;
+    const decoded = decodeXlsxBody(req.body);
+    if (typeof decoded === "string") {
+      res.status(400).json({ error: decoded });
+      return;
+    }
+    const current = await currentSchoolYearLabelForSchool(schoolId);
+    const schoolYear = validateSchoolYearLabel(
+      (req.body as { schoolYear?: unknown })?.schoolYear,
+      current,
+    );
+    if (!schoolYear) {
+      res.status(400).json({
+        error: `Invalid or out-of-range school year. Pick from the current year (${current}) or one of the three preceding years.`,
+      });
+      return;
+    }
+    const filename = typeof (req.body as { filename?: unknown })?.filename ===
+        "string" &&
+      (req.body as { filename: string }).filename.trim()
+      ? (req.body as { filename: string }).filename.trim().slice(0, 200)
+      : "florida.xlsx";
+    const parsed = await parseFloridaXlsx(decoded);
+    if (!parsed.ok) {
+      res.status(400).json({ error: parsed.error });
+      return;
+    }
+    const subject = parsed.subject;
+
+    const result = await db.transaction(async (tx) => {
+      const [job] = await tx
+        .insert(importJobsTable)
+        .values({
+          schoolId,
+          districtId: null,
+          kind: "fast_florida",
+          filename,
+          uploadedBy: staff.id,
+          status: "committed",
+          totalRows: parsed.students.length,
+          successRows: 0,
+          errorRows: 0,
+          errorLog: parsed.warnings,
+          // Snapshot the admin-supplied year + detected windows so
+          // History can render "PM2 25-26 for Reading" without
+          // re-parsing the xlsx.
+          // mapping is typed Record<string, string>; serialize the
+          // detected metadata so History can render it without
+          // re-parsing the xlsx.
+          mapping: {
+            subject,
+            school_year: schoolYear,
+            grade_label: parsed.gradeLabel ?? "",
+            windows_seen: Array.from(parsed.windowsSeen).sort().join(","),
+          },
+          committedAt: new Date(),
+        })
+        .returning({ id: importJobsTable.id });
+
+      // 1) Upsert student_fast_scores — one row per student. The scale
+      //    score lands in pm1/pm2/pm3 based on the window column.
+      //    COALESCE means a PM1-only file doesn't wipe PM2/PM3.
+      const now = new Date();
+      const scoreValues = parsed.students.map((s) => ({
+        schoolId,
+        studentId: s.studentId,
+        subject,
+        schoolYear,
+        pm1: s.window === "pm1" ? s.scaleScore : null,
+        pm2: s.window === "pm2" ? s.scaleScore : null,
+        pm3: s.window === "pm3" ? s.scaleScore : null,
+        priorYearScore: null,
+        priorYearBq: false,
+        importJobId: job.id,
+        updatedAt: now,
+      }));
+      for (let i = 0; i < scoreValues.length; i += 500) {
+        await tx
+          .insert(studentFastScoresTable)
+          .values(scoreValues.slice(i, i + 500))
+          .onConflictDoUpdate({
+            target: [
+              studentFastScoresTable.schoolId,
+              studentFastScoresTable.studentId,
+              studentFastScoresTable.subject,
+              studentFastScoresTable.schoolYear,
+            ],
+            set: {
+              pm1: sql`COALESCE(EXCLUDED.pm1, ${studentFastScoresTable.pm1})`,
+              pm2: sql`COALESCE(EXCLUDED.pm2, ${studentFastScoresTable.pm2})`,
+              pm3: sql`COALESCE(EXCLUDED.pm3, ${studentFastScoresTable.pm3})`,
+              // Preserve existing BQ + prior_year_score — this importer
+              // doesn't carry them.
+              priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
+              priorYearScore: sql`${studentFastScoresTable.priorYearScore}`,
+              importJobId: sql`EXCLUDED.import_job_id`,
+              updatedAt: now,
+            },
+          });
+      }
+
+      // 2) Item responses. For idempotency on re-upload, DELETE any
+      //    existing rows for (school, subject, school_year, window)
+      //    scoped to the student set in the file, then bulk insert
+      //    fresh rows. Rollback then walks import_job_id.
+      const studentIds = parsed.students.map((s) => s.studentId);
+      const uniqueStudentIds = Array.from(new Set(studentIds));
+      const windows = Array.from(parsed.windowsSeen);
+      if (uniqueStudentIds.length > 0 && windows.length > 0) {
+        // Postgres caps single IN(...) lists at 32k params; we chunk
+        // student ids to stay well clear.
+        for (let i = 0; i < uniqueStudentIds.length; i += 1000) {
+          const chunk = uniqueStudentIds.slice(i, i + 1000);
+          await tx.delete(studentFastItemResponsesTable).where(
+            and(
+              eq(studentFastItemResponsesTable.schoolId, schoolId),
+              eq(studentFastItemResponsesTable.subject, subject),
+              eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+              inArray(studentFastItemResponsesTable.window, windows),
+              inArray(studentFastItemResponsesTable.studentId, chunk),
+            ),
+          );
+        }
+      }
+
+      const itemRows: (typeof studentFastItemResponsesTable.$inferInsert)[] =
+        [];
+      for (const s of parsed.students) {
+        for (const it of s.items) {
+          itemRows.push({
+            schoolId,
+            studentId: s.studentId,
+            subject,
+            schoolYear,
+            window: s.window,
+            administeredAt: s.administeredAt,
+            category: it.category,
+            benchmarkCode: it.benchmarkCode,
+            pointsEarned: it.pointsEarned,
+            pointsPossible: it.pointsPossible,
+            itemSeq: it.itemSeq,
+            importJobId: job.id,
+          });
+        }
+      }
+      for (let i = 0; i < itemRows.length; i += 1000) {
+        await tx
+          .insert(studentFastItemResponsesTable)
+          .values(itemRows.slice(i, i + 1000));
+      }
+
+      await tx
+        .update(importJobsTable)
+        .set({
+          successRows: parsed.students.length,
+        })
+        .where(eq(importJobsTable.id, job.id));
+
+      return { id: job.id, items: itemRows.length };
+    });
+
+    req.log.info(
+      {
+        jobId: result.id,
+        students: parsed.students.length,
+        items: result.items,
+        subject,
+        schoolYear,
+        windowsSeen: Array.from(parsed.windowsSeen),
+      },
+      "[fast_florida] committed",
+    );
+
+    res.json({
+      jobId: result.id,
+      subject,
+      schoolYear,
+      gradeLabel: parsed.gradeLabel,
+      windowsSeen: Array.from(parsed.windowsSeen).sort(),
+      totalStudents: parsed.students.length,
+      totalItems: result.items,
+      warningCount: parsed.warnings.length,
+    });
+  },
+);
 
 const KIND_CONFIGS: Record<string, KindConfig<any>> = {
   rosters: ROSTERS_CONFIG,

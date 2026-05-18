@@ -22,7 +22,8 @@ type Kind =
   | "rosters"
   | "behavior"
   | "fast_scores"
-  | "fast_prior_year";
+  | "fast_prior_year"
+  | "fast_florida";
 type Scope = "school" | "district";
 
 type PreviewResponse = {
@@ -543,12 +544,52 @@ const KIND_DEFS: Record<Kind, KindDef> = {
       "Subject 'Reading' is normalized to 'ela' to match Florida FAST exports.",
     ],
   },
+  fast_florida: {
+    label: "Florida FAST (state xlsx — ELA Reading)",
+    // This importer doesn't use the column-mapping flow — the xlsx layout
+    // is known a priori. Empty targets means the mapping step is skipped.
+    targetsFor: () => [],
+    supportsDistrict: false,
+    helpText:
+      "Per-student xlsx export from the Florida FAST state portal. Captures scale score + every per-benchmark item response. Phase 1: ELA Reading only. Pick the school year to back-fill prior years.",
+    description:
+      "Drop in the state's per-student xlsx (the one with ~180 columns: demographics, scale score, achievement level, then 40 repeating Category / Benchmark / Points Earned / Points Possible quadruplets). No column mapping needed — the layout is fixed. The importer stamps the school year you choose, lands the scale score in PM1/PM2/PM3 based on the file's Test Reason column, and records every benchmark response for the new item-level heatmap. Re-uploading the same PM + school year DELETEs the prior item-response rows for those students before reinserting (idempotent). Math and Writing xlsx parsers ship in a future phase — upload those through the generic FAST scores CSV importer for now.",
+    columns: [],
+    sampleCsv: "",
+    notes: [
+      "School-scope only. Phase 1 supports ELA Reading only.",
+      "Pick the school year on the upload step — the current year plus the three preceding years are allowed (for prior-year back-fill).",
+      "Rollback DELETEs every benchmark response stamped with this import job, plus any scale-score row the same job created. PM values written by an earlier job survive.",
+      "12 MB file limit. Split by grade if the state export exceeds it.",
+    ],
+  },
 };
 
 // Headers list "ignore" as a sentinel — when a CSV column isn't in the
 // mapping at all, it's effectively ignored. We surface "ignore" as a
 // menu option so the admin can explicitly drop a noisy column.
 const IGNORE_VALUE = "__ignore__";
+
+// Build the school-year dropdown options for the Florida xlsx
+// importer: current year plus the three preceding years. Returns
+// "YY-YY" strings (e.g. ["25-26", "24-25", "23-24", "22-23"]).
+// School year transitions on Jul 1 to match schoolYearLabelFor on
+// the server (Eastern timezone is acceptable for the client-side
+// fallback — the server re-validates the picked year on submit).
+function floridaSchoolYearOptions(): string[] {
+  const now = new Date();
+  const month = now.getMonth(); // 0-11
+  const year = now.getFullYear();
+  // Year starts in Jul. Before Jul → previous SY is "current".
+  const startYear = month >= 6 ? year : year - 1;
+  const pad = (n: number) => String(n % 100).padStart(2, "0");
+  const out: string[] = [];
+  for (let off = 0; off <= 3; off++) {
+    const s = startYear - off;
+    out.push(`${pad(s)}-${pad(s + 1)}`);
+  }
+  return out;
+}
 
 const dropZoneStyle: CSSProperties = {
   border: "2px dashed var(--border, #2a3447)",
@@ -960,6 +1001,18 @@ export default function DataImports({
   // Upload state
   const [filename, setFilename] = useState<string>("");
   const [csvText, setCsvText] = useState<string>("");
+  // FAST Phase 1 Florida xlsx flow — holds the base64-encoded xlsx
+  // bytes (empty for all other kinds). Separated from csvText so the
+  // CSV path never accidentally sends binary data and vice versa.
+  const [xlsxBase64, setXlsxBase64] = useState<string>("");
+  // School-year label the operator picked for the Florida import.
+  // "YY-YY" (e.g. "25-26"). Default fills in after the first /preview
+  // response — the server tells us the current year so the dropdown
+  // can render relative to today regardless of the client clock.
+  const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>("");
+  const [availableSchoolYears, setAvailableSchoolYears] = useState<string[]>(
+    [],
+  );
   const [dragActive, setDragActive] = useState(false);
   const [preview, setPreview] = useState<PreviewResponse | null>(null);
   const [mapping, setMapping] = useState<Record<string, string>>({});
@@ -1034,6 +1087,7 @@ export default function DataImports({
     behavior: "BEHAVIOR",
     fast_scores: "FAST",
     fast_prior_year: "FAST",
+    fast_florida: "FLORIDA",
   };
   const echoWord = KIND_ECHO_WORDS[kind];
 
@@ -1167,6 +1221,7 @@ export default function DataImports({
     previewTokenRef.current++;
     setFilename("");
     setCsvText("");
+    setXlsxBase64("");
     setPreview(null);
     setMapping({});
     setError("");
@@ -1180,6 +1235,34 @@ export default function DataImports({
   const handleFile = async (file: File) => {
     setError("");
     setCommitResult(null);
+    if (kind === "fast_florida") {
+      if (!/\.xlsx$/i.test(file.name)) {
+        setError("Please choose a .xlsx file exported from the Florida FAST portal.");
+        return;
+      }
+      if (file.size > 12 * 1024 * 1024) {
+        setError("xlsx exceeds the 12 MB limit. Split by grade and try again.");
+        return;
+      }
+      const buf = await file.arrayBuffer();
+      // Base64 encode in chunks to avoid blowing the call stack on big
+      // arrays (btoa is per-character).
+      const bytes = new Uint8Array(buf);
+      let binary = "";
+      const CHUNK = 0x8000;
+      for (let i = 0; i < bytes.length; i += CHUNK) {
+        binary += String.fromCharCode.apply(
+          null,
+          Array.from(bytes.subarray(i, i + CHUNK)),
+        );
+      }
+      const b64 = btoa(binary);
+      setFilename(file.name);
+      setXlsxBase64(b64);
+      setCsvText(""); // not used in this flow but keep it clean
+      await runPreview("", {}, { xlsxBase64: b64 });
+      return;
+    }
     if (!/\.csv$/i.test(file.name)) {
       setError("Please choose a .csv file.");
       return;
@@ -1197,7 +1280,14 @@ export default function DataImports({
   const runPreview = async (
     text: string,
     overrideMapping: Record<string, string>,
+    floridaOverride?: { xlsxBase64?: string; schoolYear?: string },
   ) => {
+    // Callers that have just called setXlsxBase64 / setSelectedSchoolYear
+    // can pass the fresh values via `floridaOverride` to avoid a stale-
+    // state race (React batches setState so the next read in this tick
+    // returns the *previous* value).
+    const floridaXlsx = floridaOverride?.xlsxBase64 ?? xlsxBase64;
+    const floridaYear = floridaOverride?.schoolYear ?? selectedSchoolYear;
     // Snapshot the token + scope at call time. After the network round
     // trip we only commit state if (a) no newer preview has been kicked
     // off and (b) the scope hasn't been toggled in flight — otherwise a
@@ -1207,6 +1297,72 @@ export default function DataImports({
     setPreviewing(true);
     setError("");
     try {
+      // FAST Florida path — different body shape, different response
+      // shape. We adapt the response onto the PreviewResponse the wizard
+      // expects (just enough so step 3 can render counts + samples).
+      if (kind === "fast_florida") {
+        const r = await authFetch(endpoints.preview, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            xlsxBase64: floridaXlsx,
+            schoolYear: floridaYear || undefined,
+            filename,
+          }),
+        });
+        if (previewTokenRef.current !== myToken || callScope !== scope) return;
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          setError(j.error ?? `Preview failed (HTTP ${r.status})`);
+          setPreview(null);
+          return;
+        }
+        const data = await r.json();
+        // Adapt — totalRows = #students, validRows = same (each row is
+        // already validated by the parser). sampleRows mirrors the
+        // generic shape minimally.
+        const adapted: PreviewResponse = {
+          headers: [
+            "student_id",
+            "window",
+            "scale_score",
+            "achievement_level",
+          ],
+          autoMapping: {},
+          suggestedMapping: {},
+          unmappedCsvColumns: [],
+          totalRows: data.totalStudents ?? 0,
+          validRows: data.totalStudents ?? 0,
+          errorRows: 0,
+          sampleRows: (data.sampleStudents ?? []).map(
+            (s: {
+              studentId: string;
+              window: string;
+              scaleScore: number | null;
+              achievementLevel: string | null;
+            }) => ({
+              studentId: s.studentId,
+              assessmentName:
+                `Florida FAST ELA ${s.window.toUpperCase()}` +
+                (data.gradeLabel ? ` · Grade ${data.gradeLabel}` : ""),
+              score: s.scaleScore,
+              scoreLevel: s.achievementLevel,
+              administeredAt: "",
+              source: "FL FAST",
+            }),
+          ),
+          errors: (data.warnings ?? []).map(
+            (w: { row: number; message: string }) => ({
+              row: w.row,
+              message: w.message,
+            }),
+          ),
+          readyToCommit: !!data.readyToCommit,
+        };
+        setPreview(adapted);
+        setMapping({});
+        return;
+      }
       const r = await authFetch(endpoints.preview, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -1248,14 +1404,23 @@ export default function DataImports({
   };
 
   const handleCommit = async () => {
-    if (!preview || !csvText) return;
+    if (!preview) return;
+    if (kind !== "fast_florida" && !csvText) return;
+    if (kind === "fast_florida" && !xlsxBase64) return;
     setCommitting(true);
     setError("");
     try {
       const r = await authFetch(endpoints.commit, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ csv: csvText, filename, mapping }),
+        body:
+          kind === "fast_florida"
+            ? JSON.stringify({
+                xlsxBase64,
+                schoolYear: selectedSchoolYear || undefined,
+                filename,
+              })
+            : JSON.stringify({ csv: csvText, filename, mapping }),
       });
       const j = await r.json();
       if (!r.ok) {
@@ -1343,8 +1508,16 @@ export default function DataImports({
       if (kind === "rosters" && rosterEnabled === false) return false;
       return true;
     }
-    if (step === 1) return preview !== null;
+    if (step === 1) {
+      if (kind === "fast_florida") {
+        // Need both a parsed preview and a chosen school year.
+        return preview !== null && !!selectedSchoolYear;
+      }
+      return preview !== null;
+    }
     if (step === 2) {
+      // Florida xlsx skips column mapping entirely.
+      if (kind === "fast_florida") return true;
       if (!preview) return false;
       if (missingRequired.length > 0) return false;
       // Defense against an all-Ignore mapping — at least one column
@@ -1358,10 +1531,18 @@ export default function DataImports({
   };
   const goNext = () => {
     if (!canAdvance()) return;
-    setStep((s) => (Math.min(4, s + 1) as 0 | 1 | 2 | 3 | 4));
+    setStep((s) => {
+      // FAST Florida skips the mapping step (1 → 3 directly).
+      if (kind === "fast_florida" && s === 1) return 3;
+      return (Math.min(4, s + 1) as 0 | 1 | 2 | 3 | 4);
+    });
   };
   const goBack = () => {
-    setStep((s) => (Math.max(0, s - 1) as 0 | 1 | 2 | 3 | 4));
+    setStep((s) => {
+      // Mirror goNext: FAST Florida back from preview goes to upload.
+      if (kind === "fast_florida" && s === 3) return 1;
+      return (Math.max(0, s - 1) as 0 | 1 | 2 | 3 | 4);
+    });
   };
 
   const STEP_LABELS = [
@@ -1928,8 +2109,17 @@ export default function DataImports({
                         file: "pulseedu-fast-prior-year-sample.csv",
                         label: "Sample FAST prior-year CSV",
                       },
+                      // Florida xlsx has no sample we can ship — admins
+                      // supply their own state-portal export. The
+                      // download bar below is conditionally hidden for
+                      // this kind via the `sample` null-check.
+                      fast_florida: null as unknown as {
+                        file: string;
+                        label: string;
+                      },
                     };
                     const sample = SAMPLES[kind];
+                    if (!sample) return null;
                     return (
                       <div
                         style={{
@@ -2046,13 +2236,83 @@ export default function DataImports({
                   <input
                     ref={fileInputRef}
                     type="file"
-                    accept=".csv,text/csv"
+                    accept={
+                      kind === "fast_florida"
+                        ? ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                        : ".csv,text/csv"
+                    }
                     style={{ display: "none" }}
                     onChange={(e) => {
                       const f = e.target.files?.[0];
                       if (f) void handleFile(f);
                     }}
                   />
+                  {/* Florida xlsx school-year picker. Sits below the
+                      drop zone so it's visible whether or not a file
+                      is already loaded. The current year plus three
+                      prior years are accepted (mirrors the server
+                      validateSchoolYearLabel). */}
+                  {kind === "fast_florida" && (
+                    <div
+                      style={{
+                        marginTop: "0.75rem",
+                        padding: "0.75rem",
+                        border: "1px solid var(--border, #2a3447)",
+                        borderRadius: 8,
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "0.75rem",
+                        fontSize: 13,
+                      }}
+                    >
+                      <label
+                        htmlFor="fast-florida-school-year"
+                        style={{ fontWeight: 600 }}
+                      >
+                        School year:
+                      </label>
+                      <select
+                        id="fast-florida-school-year"
+                        value={selectedSchoolYear}
+                        onChange={(e) => {
+                          const nextYear = e.target.value;
+                          setSelectedSchoolYear(nextYear);
+                          // Re-preview against the new year — the server
+                          // re-validates the label and the operator
+                          // sees row counts before committing.
+                          if (xlsxBase64)
+                            void runPreview("", {}, {
+                              xlsxBase64,
+                              schoolYear: nextYear,
+                            });
+                        }}
+                        style={{
+                          padding: "0.4rem 0.6rem",
+                          border: "1px solid var(--border, #2a3447)",
+                          borderRadius: 6,
+                          background: "var(--surface)",
+                          color: "inherit",
+                          font: "inherit",
+                          fontSize: 13,
+                        }}
+                      >
+                        <option value="">— pick a year —</option>
+                        {(availableSchoolYears.length > 0
+                          ? availableSchoolYears
+                          : floridaSchoolYearOptions()
+                        ).map((y) => (
+                          <option key={y} value={y}>
+                            20{y.slice(0, 2)}–20{y.slice(3, 5)}
+                          </option>
+                        ))}
+                      </select>
+                      <span style={{ color: "var(--text-subtle)" }}>
+                        Pick the year these scores belong to. Use the
+                        current year for a fresh PM; pick a prior year
+                        to back-fill.
+                      </span>
+                    </div>
+                  )}
                 </div>
               )}
 

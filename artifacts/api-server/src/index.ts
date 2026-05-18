@@ -30,6 +30,7 @@ import {
   ensureKioskCardsSchema,
   ensureKioskWelcomeSchema,
   ensureBadgePrintEventsSchema,
+  ensureFastItemResponsesSchema,
   ensureSchoolsTimezoneColumn,
   ensureStudentPhotoColumns,
   ensureFeaturePlansColumns,
@@ -183,6 +184,9 @@ async function runSeed(): Promise<void> {
   await ensureKioskWelcomeSchema();
   // Phase 4 — Badge print event audit ledger. Idempotent.
   await ensureBadgePrintEventsSchema();
+  // FAST Phase 1 — per-item benchmark response storage for the Florida
+  // xlsx parser. Idempotent.
+  await ensureFastItemResponsesSchema();
   // Packet A — Per-school IANA timezone column on schools (pre-2026
   // tenants may be missing it). Idempotent.
   await ensureSchoolsTimezoneColumn();

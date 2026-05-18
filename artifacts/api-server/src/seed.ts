@@ -54,7 +54,7 @@ import bcrypt from "bcryptjs";
 import { eq, sql, and, inArray, isNull } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
-import { schoolYearLabelFor } from "./lib/schoolYear.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -2072,8 +2072,70 @@ export async function ensureFastScoresSchema() {
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS student_fast_scores_school_idx ON student_fast_scores (school_id)`,
   );
+  // ---------------------------------------------------------------------------
+  // FAST Phase 1 (Florida xlsx parser): widen the upsert key to include
+  // school_year so admins can backfill prior PM windows without
+  // clobbering current-year rows.
+  //
+  // 1. Add the school_year TEXT column (default '' for legacy rows).
+  // 2. Backfill legacy rows to the current school-year label so the
+  //    new unique index has a sane partition. Done once — the WHERE
+  //    school_year = '' guard makes subsequent boots a no-op.
+  // 3. Drop the old (school_id, student_id, subject) unique index and
+  //    create the wider one. Drizzle-kit would prompt to "rename" —
+  //    direct SQL sidesteps that.
+  // ---------------------------------------------------------------------------
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_fast_scores_student_subject_unique ON student_fast_scores (school_id, student_id, subject)`,
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS school_year TEXT NOT NULL DEFAULT ''`,
+  );
+  const currentYearLabel = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  await db.execute(
+    sql`UPDATE student_fast_scores SET school_year = ${currentYearLabel} WHERE school_year = ''`,
+  );
+  await db.execute(
+    sql`DROP INDEX IF EXISTS student_fast_scores_student_subject_unique`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS student_fast_scores_student_subject_year_unique ON student_fast_scores (school_id, student_id, subject, school_year)`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// FAST Phase 1: per-item benchmark response storage for the Florida
+// xlsx parser. One row per (student × administration × benchmark).
+// Indexed for the two read patterns: per-student profile drill-down and
+// per-benchmark heatmap.
+// ---------------------------------------------------------------------------
+export async function ensureFastItemResponsesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS student_fast_item_responses (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      school_year TEXT NOT NULL,
+      "window" TEXT NOT NULL,
+      administered_at TIMESTAMPTZ,
+      category TEXT,
+      benchmark_code TEXT NOT NULL,
+      points_earned INTEGER,
+      points_possible INTEGER,
+      item_seq INTEGER NOT NULL,
+      import_job_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_school_idx ON student_fast_item_responses (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_student_idx ON student_fast_item_responses (school_id, student_id, subject, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_benchmark_idx ON student_fast_item_responses (school_id, benchmark_code, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS student_fast_item_responses_job_idx ON student_fast_item_responses (import_job_id)`,
   );
 }
 

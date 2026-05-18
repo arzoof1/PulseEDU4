@@ -34,6 +34,12 @@ export const studentFastScoresTable = pgTable(
     // convention as student_mtss_plans — JS-side join + AND-school.
     studentId: text("student_id").notNull(),
     subject: text("subject").notNull(), // "ela" | "math" | "algebra1" | "geometry"
+    // "YY-YY" label, e.g. "25-26". Added in Phase 1 of the Florida
+    // xlsx parser work so admins can backfill prior-year PM data
+    // without colliding with current-year rows. The unique index
+    // below extends to include school_year; existing rows are
+    // backfilled to the current school year on first boot.
+    schoolYear: text("school_year").notNull().default(""),
     pm1: integer("pm1"),
     pm2: integer("pm2"),
     pm3: integer("pm3"),
@@ -53,10 +59,15 @@ export const studentFastScoresTable = pgTable(
   },
   (t) => ({
     schoolIdx: index("student_fast_scores_school_idx").on(t.schoolId),
-    // One row per (student, subject). CSV import upserts on this key.
-    studentSubjectUnique: uniqueIndex(
-      "student_fast_scores_student_subject_unique",
-    ).on(t.schoolId, t.studentId, t.subject),
+    // One row per (student, subject, school_year). CSV import upserts
+    // on this key. The school_year column was added in Phase 1 of the
+    // Florida xlsx parser work; the prior unique index (without
+    // school_year) is dropped at boot in seed.ts and recreated with
+    // the wider composite so prior-year backfill doesn't overwrite
+    // current-year rows.
+    studentSubjectYearUnique: uniqueIndex(
+      "student_fast_scores_student_subject_year_unique",
+    ).on(t.schoolId, t.studentId, t.subject, t.schoolYear),
   }),
 );
 
