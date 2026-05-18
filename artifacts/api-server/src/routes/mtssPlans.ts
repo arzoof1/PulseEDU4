@@ -968,12 +968,16 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
           below: false,
         };
       }
-      const pct = Math.round((slot.earned / slot.possible) * 100);
+      // Compare on the raw ratio against the threshold so a student
+      // sitting at 79.5% still counts as "below 80" — only the displayed
+      // pct is rounded. (Rounding the comparison side previously let
+      // borderline cases sneak past qualification.)
+      const ratioPct = (slot.earned / slot.possible) * 100;
       return {
         schoolYear: w.schoolYear,
         window: w.window,
-        masteryPct: pct,
-        below: pct < thresholdPct,
+        masteryPct: Math.round(ratioPct),
+        below: ratioPct < thresholdPct,
       };
     });
     const belowCount = windows.filter((w) => w.below).length;
@@ -990,7 +994,18 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     const latestPct = windows.find((w) => w.masteryPct >= 0)?.masteryPct;
     const latestSnippet =
       latestPct != null ? `currently ${latestPct}%` : "currently below mastery";
-    const categorySnippet = agg.category ? ` — ${agg.category}` : "";
+    // The FAST item-response feed gives us a `category` label (the
+    // state-printed reporting category, e.g. "Reading Prose and
+    // Poetry") but no full benchmark statement text — Florida's
+    // benchmark catalog isn't ingested in this codebase. We surface
+    // category prominently so the goal reads as a real statement
+    // rather than a bare code, and tag the strategy approach in the
+    // same sentence so Tier 2 plans created from suggestions document
+    // the "why" inline (the plan schema has no separate
+    // strategy_category column at Tier 2 — that lives on Tier 3).
+    const benchmarkPhrase = agg.category
+      ? `${agg.benchmarkCode} (${agg.category})`
+      : `${agg.benchmarkCode}`;
     provisional.push({
       studentId: agg.studentId,
       studentName: null,
@@ -999,11 +1014,13 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
       benchmarkCode: agg.benchmarkCode,
       benchmarkCategory: agg.category,
       suggestedStrategyCategory: strategy,
-      suggestedTitle: `Tier 2 — ${strategy}`,
+      suggestedTitle: `Tier 2 — ${strategy} (${agg.benchmarkCode})`,
       suggestedGoal:
-        `Improve mastery on FAST benchmark ${agg.benchmarkCode}` +
-        `${categorySnippet} from ${latestSnippet} to ${thresholdPct}% or ` +
-        `higher by the next FAST window using ${strategy} strategies.`,
+        `Student is ${latestSnippet} on FAST benchmark ${benchmarkPhrase}, ` +
+        `below the ${thresholdPct}% mastery bar in ${belowCount} of the ` +
+        `last 3 windows. Goal: reach ${thresholdPct}% or higher on this ` +
+        `benchmark by the next FAST window through targeted ${strategy} ` +
+        `instruction and weekly progress monitoring.`,
       windows,
       belowCount,
     });
