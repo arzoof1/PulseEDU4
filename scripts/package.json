@@ -8,6 +8,7 @@
     "demo-guide": "tsx ./src/generateDemoGuide.ts",
     "overview": "tsx ./src/generateOverviewOnePager.ts",
     "user-guide": "tsx ./src/generateUserGuide.ts",
+    "workflow-guide": "tsx ./src/generateWorkflowGuide.ts",
     "seed-pickup-badges": "tsx ./src/seedPickupBadges.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

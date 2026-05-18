@@ -1534,7 +1534,1115 @@ const SECTIONS: Section[] = [
   },
   // =====================================================================
   {
-    title: "14. Cross-cutting Concerns",
+    title: "15. Parent Pick-Up Module",
+    blurb:
+      "End-of-day dismissal coordination. An append-only event log (pickup_queue_events) is the source of truth for queue state; every UI surface is a projection of it. The whole module is gated by canManagePickup (admin + Core Team + counselor + front-office + confidential secretary; teachers excluded).",
+    screens: [
+      {
+        id: "pickup-curb",
+        title: "Curb Keypad",
+        navPath: "/pickup/curb (standalone kiosk page)",
+        audience: "Front-office, dismissal monitors, admins",
+        purpose:
+          "Phone-first numeric keypad. Office staff type the 4-digit pickup number from the car hanger; the page returns the primary student plus every sibling that shares the same authorized parent. Tapping 'Add to line' writes an `added` event for each student and they appear on the classroom signage tile so the teacher releases them.",
+        functions: [
+          {
+            name: "Type pickup number",
+            what: "4-digit input (range 1001–9999; schema is TEXT to allow a future 5-digit expansion). Matches student_pickup_authorizations within the active school.",
+            roleBehavior: [
+              { role: ["Admin", "Front Office", "Core Team", "Counselor"], can: "Look up and enqueue." },
+              { role: "Teacher", can: "Page is hidden — canManagePickup excludes teachers." },
+            ],
+          },
+          {
+            name: "Sibling roll-up",
+            what: "After a match, every student linked to the same parentId on the typed tag is shown. Bulk 'Add' enqueues all siblings in one event burst.",
+            roleBehavior: [{ role: "All authorized pickup staff", can: "See and add the whole sibling group at once." }],
+            notes: [
+              "If an authorization has a null parentId (guardian-only tag with no portal account) sibling roll-up is skipped — only the primary student is returned.",
+            ],
+          },
+          {
+            name: "Restricted-tag override",
+            what: "If an authorization is flagged restrictedFrom (court order / no-contact), the lookup returns a red banner and refuses the add. Admins can override with a ≥5-char justification; this writes a restricted_override event tagged with the actor + reason.",
+            roleBehavior: [
+              { role: "Admin", can: "Override with justification." },
+              { role: ["Front Office", "Core Team", "Counselor"], can: "See the banner; the Override button is hidden." },
+            ],
+            notes: [
+              "A non-override touch is still recorded as a restricted_attempt event for the audit trail.",
+            ],
+          },
+          {
+            name: "'In car' terminal step (new)",
+            what:
+              "When schoolSettings.pickupInCarStepEnabled = true, each enqueued student gets an explicit 'In car' button on the curb page; tapping it writes an in_car event and clears the row from every queue display. When the toggle is off, released_to_walk is treated as terminal and the row auto-fades after schoolSettings.pickupWalkedOutDisplaySeconds (60–1800; default 300).",
+            roleBehavior: [
+              { role: ["Admin", "Front Office", "Core Team", "Counselor"], can: "Tap 'In car' to terminate." },
+            ],
+            notes: [
+              "Toggle + display seconds live on the Pickup Settings page (Section 15 → Pickup Settings).",
+              "The /api/pickup/queue response always includes inCarStepEnabled + walkedOutDisplaySeconds so every consumer renders the same UX.",
+            ],
+          },
+          {
+            name: "Live queue strip",
+            what:
+              "Bottom of the page shows students currently 'in line' or 'walking out' with elapsed time. Student avatars (StudentPhoto) appear at 72px for face-match.",
+            roleBehavior: [{ role: "All authorized pickup staff", can: "View." }],
+          },
+        ],
+        notes: [
+          "Auth: standalone /pickup/* pages require a staff session. Without one, the page redirects to the main login.",
+          "Every action writes to pickup_queue_events (append-only); the queue endpoint reduces today's events into the visible state. There is no UPDATE/DELETE path.",
+        ],
+      },
+      {
+        id: "pickup-walkers",
+        title: "Walker Gate",
+        navPath: "/pickup/walkers",
+        audience: "Walker-gate staff, admins",
+        purpose:
+          "Releases students flagged dismissalMode = 'walker'. Same keypad and sibling logic as the curb page, but the release button is gated by a bell-window banner — the page refuses the release if the configured 'Walker Release' bell period is not active.",
+        functions: [
+          {
+            name: "Bell-window gate",
+            what: "Reads the active bell schedule + period. Banner shows the window; release button is disabled outside it.",
+            roleBehavior: [{ role: ["Admin", "Front Office", "Core Team", "Counselor"], can: "Release inside the window." }],
+            notes: ["Admins can manually override the window (writes the override into the audit trail)."],
+          },
+          {
+            name: "Release walker",
+            what: "Writes walker_released — terminal event; the student does not need an 'in car' tap.",
+            roleBehavior: [{ role: ["Admin", "Front Office", "Core Team", "Counselor"], can: "Release any walker on the active sibling group." }],
+          },
+        ],
+      },
+      {
+        id: "pickup-teacher-tile",
+        title: "Classroom Signage Tile",
+        navPath: "/pickup/teacher (or Display playlist tile)",
+        audience: "Teachers (read), admins",
+        purpose:
+          "TV signage tile inside the classroom that lights up when a curb operator enqueues a student in the teacher's roster. Filtered by playlist-owner roster, so each classroom only sees its own kids.",
+        functions: [
+          {
+            name: "Send to line",
+            what: "Teacher (or signage operator) taps to confirm release; writes released_to_walk and starts the 'walking out' clock.",
+            roleBehavior: [{ role: "Teacher", can: "Send any student on their roster." }],
+            notes: ["10-second undo window writes release_undone."],
+          },
+          {
+            name: "Teacher view scope",
+            what:
+              "schoolSettings.pickupTeacherViewScope = 'own_roster' restricts visibility to roster students; 'all_students' shows the school-wide queue (small-school mode).",
+            roleBehavior: [{ role: "Admin", can: "Pick the scope in Pickup Settings." }],
+          },
+        ],
+      },
+      {
+        id: "pickup-tags",
+        title: "Pickup Tags Admin",
+        navPath: "Sidebar → Settings → Pickup Tags (or /pickup/admin)",
+        audience: "Admin + canManagePickup",
+        purpose:
+          "Issue, reprint, and restrict the 4-digit car-tag numbers; manage extra-guardian splits; print physical PDF tags with QR codes.",
+        functions: [
+          {
+            name: "Bulk start-of-year assign",
+            what: "Walks the active roster and assigns the next free number per family (siblings share a number by default). Skips students who already hold an active tag.",
+            roleBehavior: [{ role: "Admin", can: "Run." }],
+          },
+          {
+            name: "Lost-tag reissue",
+            what: "Voids an existing number and assigns the next free one. The old number is held in a cooldown so it doesn't get re-handed-out immediately.",
+            roleBehavior: [{ role: "Admin", can: "Reissue with reason." }],
+          },
+          {
+            name: "Extra-guardian split",
+            what: "Issues a second authorization on a different number for a non-cohabiting guardian; both tags carry the same studentId.",
+            roleBehavior: [{ role: "Admin", can: "Issue." }],
+          },
+          {
+            name: "Print PDF — single + batch",
+            what: "Server renders 2×2 grid (4 tags/page) with student name, family label, QR code, and a prominent red RESTRICTED badge for restricted tags. Renderer lives in artifacts/api-server/src/lib/pickupTagsPdf.ts.",
+            roleBehavior: [{ role: "Admin", can: "Print individual tags or a full school batch." }],
+          },
+          {
+            name: "80%-of-range capacity warning",
+            what: "NUMBER_RANGE_MAX = 9999. When used numbers cross 80% of the 8,999-slot range, the panel shows an amber warning to schedule the 5-digit expansion (future work in replit.md).",
+            roleBehavior: [{ role: "Admin", can: "See warning." }],
+          },
+          {
+            name: "Toggle restrictedFrom",
+            what: "Flips an authorization's restricted state. Curb-page lookups refuse non-admin pickup when this is true.",
+            roleBehavior: [{ role: "Admin", can: "Toggle." }],
+          },
+        ],
+      },
+      {
+        id: "pickup-still-on-campus",
+        title: "Still-on-Campus Reconciliation Tile",
+        navPath: "Admin Hub → Still on Campus",
+        audience: "Admin, front-office",
+        purpose:
+          "Post-cutoff reconciliation. After schoolSettings.pickupCutoffTime (default 15:30), the tile lists every student who has no terminal event today (in_car, walker_released, or auto_cleared), grouped by dismissalMode. Used to drive 'who do we call?' parent contacts.",
+        functions: [
+          {
+            name: "View grouped list",
+            what: "Groups by dismissalMode (car_rider, walker, bus, aftercare).",
+            roleBehavior: [{ role: ["Admin", "Front Office"], can: "View." }],
+          },
+          {
+            name: "Mark auto-cleared",
+            what: "Admin can mark a remaining student as auto_cleared with a note (e.g., 'parent confirmed off-campus pickup'). Writes an auto_cleared event.",
+            roleBehavior: [{ role: "Admin", can: "Clear with note." }],
+          },
+        ],
+        notes: [
+          "Tile hidden before the cutoff time so it doesn't pollute the morning Admin Hub.",
+          "Terminal logic respects pickupInCarStepEnabled — when off, released_to_walk also counts as terminal so the tile doesn't false-positive.",
+        ],
+      },
+      {
+        id: "pickup-settings",
+        title: "Pickup Settings",
+        navPath: "Settings → Pickup",
+        audience: "Admin",
+        purpose: "Per-school configuration tile for the dismissal module.",
+        functions: [
+          {
+            name: "Cutoff time",
+            what: "HH:MM — controls when the Still-on-Campus tile appears.",
+            roleBehavior: [{ role: "Admin", can: "Edit." }],
+          },
+          {
+            name: "Teacher view scope",
+            what: "'own_roster' vs 'all_students'.",
+            roleBehavior: [{ role: "Admin", can: "Edit." }],
+          },
+          {
+            name: "'In car' terminal step toggle (new)",
+            what:
+              "Boolean. When true, every released student must be tapped 'in car' before the row clears. When false, released_to_walk is terminal and rows auto-fade after the configured display seconds.",
+            roleBehavior: [{ role: "Admin", can: "Toggle." }],
+          },
+          {
+            name: "Walked-out display seconds (new)",
+            what: "Integer 60–1800, default 300. Only takes effect when the in-car toggle is off. PUT validates the range; out-of-range payloads 422.",
+            roleBehavior: [{ role: "Admin", can: "Edit." }],
+          },
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "16. Student Photos & ID Badges",
+    blurb:
+      "students.photo_object_key + students.photo_consent live on the canonical student row. Photos are stored via the school-scoped object-storage ACL (bindObjectToSchool) and rendered through the StudentPhoto component everywhere a student avatar appears. The badge generator embeds them into printable IDs.",
+    screens: [
+      {
+        id: "student-photo-upload",
+        title: "Student Photo upload",
+        navPath: "Student profile → Photo tile (per-student); bulk via Data Importer 'yearbook zip'",
+        audience: "Admin, Core Team (canManageStudentPhoto)",
+        purpose:
+          "Single-entry ingestion path today: per-student in-browser capture using getUserMedia (cropped to a square) or file picker. Result is uploaded through /api/storage/* and the returned object key is bound to the school's ACL. Bulk yearbook-ZIP ingest is documented as future work in the route header.",
+        functions: [
+          {
+            name: "Upload (per-student)",
+            what:
+              "POST /api/students/:studentId/photo (replace) and DELETE /api/students/:studentId/photo (clear). Accepts an object key from /api/storage/upload, calls bindObjectToSchool, writes students.photo_object_key. Photo-consent toggle lives at PATCH /api/students/:studentId/photo-consent (admin-only).",
+            roleBehavior: [
+              { role: "Admin, Core Team", can: "Upload, replace, remove." },
+              { role: "Teacher", can: "Hidden." },
+            ],
+            notes: [
+              "Bind step enforces the school-scoped ACL; without it the asset is unreachable to the badge renderer and StudentPhoto.",
+            ],
+          },
+          {
+            name: "Camera capture",
+            what: "getUserMedia → square crop → blob upload → bind. Falls back to file picker on browsers without camera access.",
+            roleBehavior: [{ role: "Admin, Core Team", can: "Capture in browser." }],
+          },
+          {
+            name: "Consent toggle",
+            what:
+              "students.photo_consent (BOOL DEFAULT true). When false, every StudentPhoto surface renders initials regardless of whether a file exists. The file is not deleted — flipping the toggle back restores the photo.",
+            roleBehavior: [{ role: "Admin", can: "Toggle on student profile." }],
+          },
+        ],
+        notes: [
+          "Photo-key column is nullable. The fallback is the existing initials bubble (consistent color per name).",
+          "Parent portal never sees the photo — the staff-only ACL blocks it even if a parent guessed the URL.",
+        ],
+      },
+      {
+        id: "student-photo-surfaces",
+        title: "Where the photo renders",
+        navPath: "Cross-cutting",
+        audience: "All staff",
+        purpose:
+          "StudentPhoto is the single component; every surface uses it. Replacing the avatar in one place automatically updates everywhere.",
+        functions: [
+          {
+            name: "Surfaces",
+            what:
+              "Teacher roster avatars, PBIS Hub cards, Spotlight reveal, pickup curb confirmation (72px), walker gate, Watchlist, safety-plan picker, ID badges.",
+            roleBehavior: [{ role: "All staff", can: "See where the surface is otherwise visible." }],
+          },
+        ],
+      },
+      {
+        id: "student-id-badges",
+        title: "Student ID Badges (PDF)",
+        navPath: "Settings → Student ID Badges",
+        audience: "Admin",
+        purpose:
+          "Renders printable badges (lanyard portrait or CR80 credit-card landscape) with student photo (when consent), name + ID, house ribbon, and a Code128 + QR encoding the student_id for kiosk scans.",
+        functions: [
+          {
+            name: "Render PDF (single or batch)",
+            what:
+              "GET /api/students/id-badges.pdf and POST /api/students/id-badges.pdf both call the same handler. Accepts a student-id list (or a scope: grade / homeroom / school) and a size (lanyard portrait or CR80 landscape). Bounded concurrency (6) and 4MB per-photo cap keep the renderer from OOMing on 'print all'.",
+            roleBehavior: [{ role: "Admin", can: "Print." }],
+          },
+          {
+            name: "Audit ledger",
+            what:
+              "Every print writes a badge_print_events row: actor, students printed, batch size, reason (lost / damaged / first-issue / reprint). Read via GET /api/students/badge-print-events. Best-effort — a failed audit insert does not block the PDF.",
+            roleBehavior: [{ role: "Admin", can: "View audit table." }],
+          },
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "17. AST — Alternate Schedule Time (Staff Time Bank)",
+    blurb:
+      "Earn-then-use time bank for the HCTA staff contract. Stored in quarter-hour INTEGER units (no float drift). staff_ast_requests holds the state machine; staff_ast_ledger is the append-only source-of-truth for balances. The bank is keyed to staff_id (not (school_id, staff_id)) so a balance follows a staff member across schools within the same district.",
+    screens: [
+      {
+        id: "ast-staff",
+        title: "Staff AST Page",
+        navPath: "Sidebar → AST (AstSidebarBadge shows unread admin decisions)",
+        audience: "All staff",
+        purpose:
+          "Personal ledger + request submission. Shows district-wide banked total, YTD earned/used, and full ledger history.",
+        functions: [
+          {
+            name: "Submit Earn request",
+            what:
+              "Pre-approval workflow: staff submits intent (hours + category + description). Admin pre-approves, work happens, staff hits 'Submit completion' with actual hours, admin confirms — only the confirm step writes the ledger credit (earn_confirm).",
+            roleBehavior: [{ role: "All staff", can: "Submit." }],
+          },
+          {
+            name: "Submit Use request",
+            what: "Single-step: staff requests time off; admin approval writes the ledger debit (use_approval).",
+            roleBehavior: [{ role: "All staff", can: "Submit." }],
+          },
+          {
+            name: "Cancel pending",
+            what:
+              "Staff can cancel an earn request before completion confirm and a use request before approval. After approval the debit is posted and only admin intervention can reverse it.",
+            roleBehavior: [{ role: "All staff", can: "Cancel within window." }],
+          },
+          {
+            name: "Acknowledge bell",
+            what: "On mount /api/ast/acknowledge clears the AstSidebarBadge.",
+            roleBehavior: [{ role: "All staff", can: "Auto." }],
+          },
+        ],
+        notes: [
+          "Categories (Family-Facing / Athletics / Curriculum / etc.) are admin-set and stripped from staff-facing responses to avoid 'why was my work classified as X' disputes.",
+        ],
+      },
+      {
+        id: "ast-admin-queue",
+        title: "Admin AST Approval Queue",
+        navPath: "Admin Hub → AST Approval Queue (AstNotificationBell pulses when non-empty)",
+        audience: "Admin / District Admin / SuperUser / staff with canApproveAst (confidential secretary)",
+        purpose: "Two-stage approval queue for Earn (pre-approve + confirm) and one-step approval for Use.",
+        functions: [
+          {
+            name: "Earn pre-approval",
+            what:
+              "Approve / deny before work happens. Must pick a category on approve. Denial requires a note (so the staff member can re-submit).",
+            roleBehavior: [{ role: "Approver", can: "Pre-approve + categorize, or deny with note." }],
+          },
+          {
+            name: "Completion confirm",
+            what:
+              "After staff submits actual hours, admin confirms or amends; confirm writes the earn_confirm ledger credit (the only credit path).",
+            roleBehavior: [{ role: "Approver", can: "Confirm; amends require a justification note." }],
+          },
+          {
+            name: "Use approval",
+            what: "One-tap approve or deny-with-note. Approve writes the use_approval debit.",
+            roleBehavior: [{ role: "Approver", can: "Approve/deny." }],
+          },
+        ],
+      },
+      {
+        id: "ast-insights",
+        title: "AST Insights",
+        navPath: "Admin Hub → AST Insights",
+        audience: "Approver-tier",
+        purpose: "School-wide liability and usage analytics so admins can size the bank.",
+        functions: [
+          {
+            name: "Headline tiles",
+            what: "Live banked total, earned YTD, used YTD.",
+            roleBehavior: [{ role: "Approver", can: "View." }],
+          },
+          {
+            name: "Top 5 leaderboards",
+            what: "Top balances and top earners.",
+            roleBehavior: [{ role: "Approver", can: "View." }],
+          },
+          {
+            name: "By category + by role",
+            what: "Earned/used breakdown by AST category and by role-group (Admin / Core Team / Teacher / etc.).",
+            roleBehavior: [{ role: "Approver", can: "View." }],
+          },
+          {
+            name: "Monthly trend",
+            what: "Earned vs used bar chart (12-month rolling).",
+            roleBehavior: [{ role: "Approver", can: "View." }],
+          },
+        ],
+      },
+      {
+        id: "ast-lapse-cron",
+        title: "Lapse Cron (July 1)",
+        navPath: "artifacts/api-server/src/cron/astLapse.ts",
+        audience: "Engineering",
+        purpose:
+          "Zeros every positive balance on July 1 @ 00:05 local. Writes a 'lapse' ledger row per staff with a negative delta equal to their prior balance. Guarded by a year-specific pg_advisory_xact_lock so duplicate triggers cannot double-lapse.",
+        functions: [
+          {
+            name: "Run",
+            what: "Annual; idempotent.",
+            roleBehavior: [{ role: "System", can: "Run." }],
+          },
+        ],
+        notes: [
+          "Open follow-ups (replit.md): voluntary mid-year transfer hook (transfer_lapse kind reserved; not yet wired), optional weekly Friday digest gated on per-school ast_email_digest_enabled, per-staff ledger drilldown GET /api/ast/staff/:id/ledger.",
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "18. Feature Licensing & Plans",
+    blurb:
+      "Two-tier flag model: a SuperUser-controlled 'super feature' (from plan + per-school overrides) AND a school-level admin toggle. loadEffectiveFeatures(schoolId) is the single read path and is cached per-request. The 'AND fix' means turning a school's admin toggle ON cannot enable a feature the plan does not license.",
+    screens: [
+      {
+        id: "licensing-plans",
+        title: "Plans (global catalog)",
+        navPath: "/admin/feature-licensing → Plans",
+        audience: "SuperUser (cross-district required for create/edit/delete)",
+        purpose:
+          "Global catalog of bundles (Bronze/Silver/Gold/Enterprise — labels are tenant-defined). Each plan toggles a set of super_feature_* booleans and carries an optional quotas JSONB.",
+        functions: [
+          {
+            name: "Create / edit / delete plan",
+            what: "JSONB blob: { features: {...bools}, quotas: { maxPlaylists: N, maxParentAccounts: N, ... } }",
+            roleBehavior: [
+              { role: "Cross-district SuperUser (ALLOW_CROSS_DISTRICT_SUPERUSER=1)", can: "Full CRUD." },
+              { role: "District SuperUser", can: "Read-only." },
+            ],
+          },
+          {
+            name: "Assign plan to school",
+            what:
+              "Writes the plan id to schools.feature_plan_id and recomputes the school's super_feature_* boolean snapshot inside a locked transaction (lockSchoolForLicensing → SELECT FOR UPDATE on schools).",
+            roleBehavior: [{ role: "SuperUser", can: "Assign." }],
+          },
+        ],
+      },
+      {
+        id: "licensing-overrides",
+        title: "Per-School Overrides",
+        navPath: "/admin/feature-licensing → Schools → Overrides drawer",
+        audience: "SuperUser",
+        purpose:
+          "Per-school exceptions to the plan, with optional expiration (e.g., 30-day trial of an upsell module). Each upsert/delete writes a feature_licensing_audit_log row.",
+        functions: [
+          {
+            name: "Add / edit / remove override",
+            what: "Force a super_feature on or off and optionally set expires_at.",
+            roleBehavior: [{ role: "SuperUser", can: "Edit." }],
+          },
+          {
+            name: "Expiration sweep cron",
+            what:
+              "featureLicensingOverrideSweep.ts revokes expired overrides and writes an override_expired_sweep audit row. Sweep is idempotent via the audit log dedup.",
+            roleBehavior: [{ role: "System", can: "Run." }],
+          },
+          {
+            name: "Bulk overrides (Phase 5)",
+            what:
+              "BulkOverridesPanel applies a single override to every school in a district or platform-wide. Cross-district guard requires ALLOW_CROSS_DISTRICT_SUPERUSER.",
+            roleBehavior: [{ role: "Cross-district SuperUser", can: "Bulk apply." }],
+          },
+        ],
+      },
+      {
+        id: "licensing-quotas",
+        title: "Quota Telemetry & Enforcement",
+        navPath: "/admin/feature-licensing → Quota Telemetry",
+        audience: "SuperUser",
+        purpose:
+          "KNOWN_SEAT_QUOTAS (currently maxPlaylists, maxParentAccounts) are enforced at the consumer-route level via checkQuota(schoolId, feature, quotaName); a 403 with { error: 'quota_exceeded' } is returned when a school would exceed its plan.",
+        functions: [
+          {
+            name: "Telemetry table",
+            what: "Lists schools at ≥ 80% of any quota (adjustable threshold). Sourced from getQuotaUsage.",
+            roleBehavior: [{ role: "SuperUser", can: "View." }],
+          },
+        ],
+        notes: [
+          "Open follow-up: wire a third quota consumer to keep KNOWN_SEAT_QUOTAS honest (good candidates per replit.md: mtss.maxActivePlans or displays.maxConcurrentSchedules).",
+        ],
+      },
+      {
+        id: "licensing-audit",
+        title: "Licensing Audit Log",
+        navPath: "/admin/feature-licensing → Audit Log",
+        audience: "SuperUser",
+        purpose:
+          "Read-only history of every licensing event: plan_assigned, override_upserted, override_deleted, override_expired_sweep. Used for idempotency of the sweep and to answer 'why does school X have feature Y?' questions.",
+        functions: [{ name: "Browse", what: "Most-recent-first list with filters by school + event kind.", roleBehavior: [{ role: "SuperUser", can: "View." }] }],
+      },
+      {
+        id: "licensing-school-side",
+        title: "School Feature Configuration (admin-side)",
+        navPath: "Settings → School Features",
+        audience: "Admin",
+        purpose:
+          "School-level toggles. The visible toggle for a feature is greyed out when super_feature is OFF (the plan does not license it) and the legend explains 'Contact your district to enable'.",
+        functions: [
+          {
+            name: "Toggle a feature",
+            what:
+              "Writes school_settings.feature_*. Effective state is the AND of super_feature_* (plan + override) and feature_*. Sidebar items, Quick Access promotions, and dashboard tiles all consult loadEffectiveFeatures.",
+            roleBehavior: [
+              { role: "Admin", can: "Toggle features the plan licenses." },
+              { role: "SuperUser", can: "Toggle anything (admin tier is implicit)." },
+            ],
+          },
+          {
+            name: "Bulk feature picker",
+            what:
+              "One-click enable-all / disable-all (within the plan's licensed set). Useful for end-of-summer reset.",
+            roleBehavior: [{ role: "Admin", can: "Apply." }],
+          },
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "19. SuperUser & District Admin Tenancy",
+    blurb:
+      "Cross-school operating surface. District-scoped SuperUsers (default) can see every school in their home district; cross-district SuperUsers (ALLOW_CROSS_DISTRICT_SUPERUSER=1) get the platform tier (global plans, bulk overrides). District Admins can read across the district but do not mutate licensing or tenancy.",
+    screens: [
+      {
+        id: "tenancy-superuser-home",
+        title: "SuperUser Home (Rollups)",
+        navPath: "/admin/superuser",
+        audience: "SuperUser",
+        purpose:
+          "Aggregate counts (districts, schools, students, staff) + per-district summary. Landing page after multi-school login.",
+        functions: [
+          {
+            name: "Switch into a school",
+            what: "Sets req.schoolId for subsequent requests; every read re-binds.",
+            roleBehavior: [{ role: "SuperUser", can: "Switch to any school the role can see." }],
+          },
+          {
+            name: "Open Audit & Health panel",
+            what:
+              "7-day activity timeline across licensing changes, ISS log edits, case events. Surfaces 'is anything on fire?' at-a-glance.",
+            roleBehavior: [{ role: "SuperUser", can: "View." }],
+          },
+        ],
+      },
+      {
+        id: "tenancy-district-overview",
+        title: "District Overview",
+        navPath: "/admin/district-overview",
+        audience: "SuperUser + District Admin",
+        purpose:
+          "Per-school detail for the selected district with side-by-side 7-day stats (PBIS events, hall passes, ISS days, active cases, parent invites). Used for cross-school comparison without a context switch.",
+        functions: [
+          {
+            name: "Per-school rollup row",
+            what: "Click-through opens the school's Admin Hub in a context switch.",
+            roleBehavior: [
+              { role: "SuperUser", can: "Switch to any row." },
+              { role: "District Admin", can: "View only — switch is 403 from the API." },
+            ],
+          },
+        ],
+      },
+      {
+        id: "tenancy-onboard-district",
+        title: "Onboard-a-District Wizard",
+        navPath: "Tenancy Panel → Onboard a district",
+        audience: "Cross-district SuperUser",
+        purpose:
+          "Atomic creation of a district + primary school + initial admin staff + default settings + plan assignment, all inside a single DB transaction so a partial failure rolls back the entire tenant.",
+        functions: [
+          {
+            name: "Run wizard",
+            what:
+              "Multi-step modal: district details → primary school → admin email → plan pick → confirm. Generates a CSPRNG temp password via generateAndHashTempPassword and surfaces it once to the SuperUser for hand-off.",
+            roleBehavior: [{ role: "Cross-district SuperUser", can: "Run." }],
+          },
+        ],
+      },
+      {
+        id: "tenancy-onboard-school",
+        title: "Onboard-a-School (existing district)",
+        navPath: "Tenancy Panel → Onboard a school",
+        audience: "SuperUser",
+        purpose: "Adds a school under an existing district. Reuses the temp-password flow.",
+        functions: [
+          {
+            name: "Add school",
+            what: "Creates schools row, default school_settings row, initial admin staff, plan assignment.",
+            roleBehavior: [{ role: "SuperUser", can: "Add." }],
+          },
+        ],
+      },
+      {
+        id: "tenancy-edit-soft-delete",
+        title: "Edit + Soft-Delete Districts / Schools",
+        navPath: "Tenancy Panel rows",
+        audience: "SuperUser",
+        purpose: "Rename, change district binding, or deactivate. Soft-delete = active = false; data stays for audit.",
+        functions: [
+          {
+            name: "Edit name / metadata",
+            what: "Inline.",
+            roleBehavior: [{ role: "SuperUser", can: "Edit." }],
+          },
+          {
+            name: "Soft-delete",
+            what:
+              "Sets active = false. Every read path joins on (school.active AND district.active) so a retired tenant cannot serve orphaned sessions.",
+            roleBehavior: [{ role: "SuperUser", can: "Soft-delete." }],
+          },
+        ],
+        notes: [
+          "Cross-silo guard: assertSchoolInCallerDistrict prevents a district-scoped SuperUser from acting on schools they shouldn't see, even by guessing IDs.",
+        ],
+      },
+      {
+        id: "tenancy-data-integrity",
+        title: "Data-Integrity Check (Tenancy Panel)",
+        navPath: "Settings → Tenancy",
+        audience: "SuperUser",
+        purpose:
+          "Reports orphans (rows where school_id IS NULL) and a per-school row-count grid across 15 major tables (students, staff, hall_passes, pbis_entries, …). Sanity check after a botched import.",
+        functions: [
+          { name: "Run check", what: "Read-only snapshot.", roleBehavior: [{ role: "SuperUser", can: "Run." }] },
+          { name: "Add school (inline)", what: "Quick form alternative to the wizard.", roleBehavior: [{ role: "SuperUser", can: "Add." }] },
+        ],
+      },
+      {
+        id: "tenancy-reset-temp-pw",
+        title: "Reset to Temp Password",
+        navPath: "Staff & Roles → row → 'Reset to temp password'",
+        audience: "Admin (own school), SuperUser (any school)",
+        purpose:
+          "Generates a fresh CSPRNG temp password for a staff member, hashes it, writes the hash + must_change_at_next_login flag, and returns the plaintext ONCE to the actor for hand-off.",
+        functions: [
+          {
+            name: "Reset",
+            what:
+              "Confirmation modal explains the temp password will be shown only once. After dismiss it cannot be retrieved.",
+            roleBehavior: [
+              { role: "Admin", can: "Reset any staff in their school." },
+              { role: "SuperUser", can: "Reset anywhere." },
+            ],
+          },
+        ],
+        notes: [
+          "Helper: artifacts/api-server/src/lib/tempPassword.ts → generateAndHashTempPassword. Same helper is used by both onboarding wizards.",
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "20. Additional Admin Catalogs & Tiles",
+    blurb:
+      "Single-purpose Settings tiles. Most are CRUD on a per-school catalog; many are referenced by daily-ops screens.",
+    screens: [
+      {
+        id: "settings-school-branding",
+        title: "School Branding",
+        navPath: "Settings → School Branding",
+        audience: "Admin",
+        purpose:
+          "Per-school header gradient, logo, and color overrides applied to printouts, the HeartBEAT parent snapshot, and the Kiosk masthead.",
+        functions: [
+          { name: "Edit colors", what: "Hex inputs validated against /^#[0-9a-fA-F]{6}$/.", roleBehavior: [{ role: "Admin", can: "Edit." }] },
+          {
+            name: "Upload logo",
+            what:
+              "POST /api/school-branding/logo/bind — binds the uploaded object key to the school ACL.",
+            roleBehavior: [{ role: "Admin", can: "Upload." }],
+          },
+        ],
+        notes: ["gradient_colors persists as a JSON string for portability across drizzle-kit versions."],
+      },
+      {
+        id: "settings-logo-generator",
+        title: "Logo Generator",
+        navPath: "Settings → Logo Generator",
+        audience: "Admin / SuperUser",
+        purpose:
+          "Pure client-side tool that produces Pulse-branded SVG / PNG assets for sister apps (PulseTV, Kinetics, Athletics). No server round-trip.",
+        functions: [
+          { name: "Pick preset", what: "Bundled color packs.", roleBehavior: [{ role: "Admin", can: "Generate." }] },
+          { name: "Export SVG / PNG", what: "Canvas rasterization at 4× for retina.", roleBehavior: [{ role: "Admin", can: "Download." }] },
+        ],
+        notes: ["SVG animation does not survive PNG export — a static fallback path is used in the raster."],
+      },
+      {
+        id: "settings-heartbeat-sections",
+        title: "Heartbeat Sections Admin",
+        navPath: "Settings → Heartbeat Sections",
+        audience: "Admin",
+        purpose:
+          "Picks which 'Today's Heartbeat' signage tiles render and in what order (PBIS events, hall passes today, kiosk pulse, weather, etc.).",
+        functions: [
+          { name: "Toggle / reorder", what: "Drag-and-drop with per-section visibility.", roleBehavior: [{ role: "Admin", can: "Edit." }] },
+        ],
+      },
+      {
+        id: "settings-closed-days",
+        title: "School Closed Days",
+        navPath: "Settings → School Closed Days",
+        audience: "Admin / Core Team",
+        purpose:
+          "Non-instructional day calendar. ISS day-rollover and Add-Discipline-Log calendars skip these dates so 'no school' days don't show up as missed attendance.",
+        functions: [
+          { name: "Add / remove", what: "Date + label.", roleBehavior: [{ role: ["Admin", "Core Team"], can: "Edit." }] },
+        ],
+        notes: ["Read is open to any signed-in staff."],
+      },
+      {
+        id: "settings-pullout-templates",
+        title: "Pullout Note Templates",
+        navPath: "Settings → Pullout Note Templates",
+        audience: "Core Team",
+        purpose:
+          "Canned parent-message templates with placeholders the Verify modal substitutes client-side: {firstName} {lastName} {teacherName} {reason} {period} {schoolName}.",
+        functions: [
+          { name: "CRUD", what: "Mirrors pulloutReasons.ts pattern.", roleBehavior: [{ role: ["Admin", "Behavior Specialist", "MTSS Coordinator", "Dean"], can: "Edit." }] },
+        ],
+      },
+      {
+        id: "settings-trusted-adults",
+        title: "Trusted Adult Links",
+        navPath: "Settings → Trusted Adults",
+        audience: "Core Team",
+        purpose:
+          "Manual link between staff and student that grants the staff Watchlist + Insights visibility regardless of the section roster. Used for advisor / mentor relationships.",
+        functions: [
+          { name: "Add / remove", what: "Inline.", roleBehavior: [{ role: ["Admin", "Core Team", "PBIS Coordinator"], can: "Edit." }] },
+        ],
+      },
+      {
+        id: "settings-trusted-adult-interventions",
+        title: "Trusted-Adult Interventions",
+        navPath: "Settings → Trusted-Adult Interventions",
+        audience: "Core Team",
+        purpose: "Catalog of intervention types that trusted-adult mentors can log (separate from teacher tier 2/3).",
+        functions: [{ name: "CRUD", what: "—", roleBehavior: [{ role: ["Admin", "Core Team"], can: "Edit." }] }],
+      },
+      {
+        id: "settings-separation-tags",
+        title: "Separation Tags Admin",
+        navPath: "Settings → Separation Tags",
+        audience: "Admin",
+        purpose: "Tag catalog used by SuggestSeparationModal and the Separation Suggestions aggregate.",
+        functions: [{ name: "CRUD", what: "—", roleBehavior: [{ role: "Admin", can: "Edit." }] }],
+      },
+      {
+        id: "settings-polarity-pairs",
+        title: "Polarity Pairs",
+        navPath: "Sidebar → Interventions → Polarity Pairs",
+        audience: "Core Team",
+        purpose:
+          "Two students who must NOT both be out on a hall pass at the same time. findPolarityConflict is called by hallPasses + kiosk pass creation — the rule is enforced at issuance, not just by convention.",
+        functions: [
+          { name: "CRUD pair", what: "Pick both students + reason.", roleBehavior: [{ role: ["Admin", "Behavior Specialist", "Dean", "MTSS Coordinator"], can: "Edit." }] },
+        ],
+        notes: ["The conflict short-circuits new-pass creation with a 409 + the other student's name."],
+      },
+      {
+        id: "settings-discipline-reasons",
+        title: "Discipline Reasons Catalog",
+        navPath: "Settings → Discipline Reasons",
+        audience: "Admin",
+        purpose: "Dropdown source for ISS / OSS logging.",
+        functions: [
+          { name: "CRUD + active toggle", what: "Inactivating preserves historical labels.", roleBehavior: [{ role: "Admin", can: "Edit." }] },
+        ],
+      },
+      {
+        id: "settings-custom-roles",
+        title: "Custom Roles",
+        navPath: "Settings → Custom Roles",
+        audience: "SuperUser",
+        purpose: "District-defined named role profiles built from capability flags (cap_*). Lets a district mint, e.g., 'Attendance Clerk' without code changes.",
+        functions: [
+          { name: "Create role profile", what: "Name + capability set.", roleBehavior: [{ role: "SuperUser", can: "Create." }] },
+          { name: "Assign to staff", what: "From Staff & Roles.", roleBehavior: [{ role: "Admin", can: "Assign existing profiles." }] },
+        ],
+      },
+      {
+        id: "settings-fast-coverage",
+        title: "FAST Coverage",
+        navPath: "Settings → FAST Coverage",
+        audience: "Admin",
+        purpose:
+          "Pre-flight check before staff use the Roster: per-grade / per-subject count of students with PM1/PM2/PM3 scores vs total roster.",
+        functions: [
+          { name: "View coverage", what: "Status badges flag 'Missing PM3' / 'Partial PM3' in red/amber.", roleBehavior: [{ role: "Admin", can: "View." }] },
+        ],
+        notes: ["A 'No chart' flag means the subject is imported but FL DOE cut-scores aren't wired yet — common for Geometry until the next import cycle."],
+      },
+      {
+        id: "settings-kiosk",
+        title: "Kiosk Setup & Activation",
+        navPath: "Settings → Kiosk Setup",
+        audience: "Admin / Core Team",
+        purpose:
+          "QR/PIN activation cards for classroom tablets. Each card is a kiosk_enroll_token; exchange writes a kiosk_activation + a kiosk_viewer_token (long-lived but rotatable).",
+        functions: [
+          {
+            name: "Bulk generate teacher cards",
+            what: "One-click PDF for every active teacher.",
+            roleBehavior: [{ role: "Admin", can: "Generate." }],
+          },
+          {
+            name: "Activate proxy (sub coverage)",
+            what: "Core Team can pre-activate a kiosk for a substitute for today or 14 days.",
+            roleBehavior: [{ role: "Core Team", can: "Activate." }],
+          },
+          {
+            name: "Token rotation on print",
+            what:
+              "Printing a card invalidates the previous token immediately — security feature; hand out new cards right after printing.",
+            roleBehavior: [{ role: "Admin", can: "Print." }],
+          },
+        ],
+      },
+      {
+        id: "settings-camera-registry",
+        title: "Camera Registry + Scanner",
+        navPath: "Settings → Camera Registry",
+        audience: "Admin / Dean",
+        purpose:
+          "Catalog of school security cameras (id, label, location, retention days, viewer URL). Used by the Investigations Case Detail to issue footage requests.",
+        functions: [
+          { name: "CRUD camera", what: "—", roleBehavior: [{ role: ["Admin", "Dean"], can: "Edit." }] },
+          { name: "Scan QR (CameraScanner)", what: "Mobile QR-scan helper to onboard a camera by sticker.", roleBehavior: [{ role: ["Admin", "Dean"], can: "Use." }] },
+        ],
+      },
+      {
+        id: "settings-email-digest",
+        title: "Email Digest & Preview",
+        navPath: "Settings → Notifications → Email Digest",
+        audience: "Admin",
+        purpose:
+          "Preview today's digest email (rendered HTML) and force-fire the dispatcher for the school. Backed by /api/email-preview and /api/digest.",
+        functions: [
+          { name: "Preview", what: "Renders the current digest with live data.", roleBehavior: [{ role: "Admin", can: "Preview." }] },
+          { name: "Send now", what: "Manual trigger — not rate-limited; use sparingly.", roleBehavior: [{ role: "Admin", can: "Send." }] },
+        ],
+        notes: ["Cron is gated on EMAIL_REMINDERS_ENABLED + RESEND_FROM_ADDRESS (see replit.md Gotchas)."],
+      },
+      {
+        id: "school-store-admin",
+        title: "School Store Editor",
+        navPath: "Sidebar → School Store",
+        audience: "Admin / PBIS Coordinator (edit); all staff (read)",
+        purpose:
+          "School-wide reward catalog (separate from the per-teacher Classroom Store). Items support image, cost (PBIS points), inventory, and active toggle. Teachers see the same catalog read-only.",
+        functions: [
+          {
+            name: "CRUD item",
+            what:
+              "Image uploads use /api/storage/* with school-scoped ACL bind (bindObjectToSchool). pendingUploads ledger orphans cleanup.",
+            roleBehavior: [
+              { role: ["Admin", "PBIS Coordinator"], can: "CRUD." },
+              { role: "Teacher", can: "Read-only." },
+            ],
+          },
+          {
+            name: "Toggle active",
+            what: "Inactive items disappear from the redemption picker but historical redemptions keep their label.",
+            roleBehavior: [{ role: ["Admin", "PBIS Coordinator"], can: "Toggle." }],
+          },
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "21. Insights — Additional Dashboards & Drilldowns",
+    blurb:
+      "Surfaces that complete the Insights suite already documented in Section 7. All Insights endpoints are core-team gated and accept grades + window filters; CSV export is described in Section 22.",
+    screens: [
+      {
+        id: "insights-sebsel",
+        title: "SEB/SEL Dashboard",
+        navPath: "Sidebar → Insights → SEB/SEL",
+        audience: "Core Team",
+        purpose:
+          "Whole-school social-emotional / behavioral lens. Pulls active student_mtss_plans (bucketed into 5 plan-area categories), ESE / 504 / ELL flags, last-30-day negative PBIS, FAST priorYearBq, and active accommodations.",
+        functions: [
+          { name: "Filter grades", what: "Defensive parser; bad input becomes 'no filter'.", roleBehavior: [{ role: "Core Team", can: "Filter." }] },
+          { name: "Export CSV", what: "See Section 22.", roleBehavior: [{ role: "Core Team", can: "Export." }] },
+        ],
+        notes: ["Time window is fixed at 30 days for the negative-PBIS signal; every other signal is stateful."],
+      },
+      {
+        id: "insights-attendance",
+        title: "Attendance Dashboard",
+        navPath: "Sidebar → Insights → Attendance",
+        audience: "Core Team",
+        purpose: "Absences + tardies per student over the chosen window with rate calculation and top-N lists.",
+        functions: [
+          { name: "Window picker", what: "windowKey (week / month / quarter / custom).", roleBehavior: [{ role: "Core Team", can: "Pick." }] },
+          { name: "Export CSV", what: "See Section 22.", roleBehavior: [{ role: "Core Team", can: "Export." }] },
+        ],
+      },
+      {
+        id: "insights-academics-trajectory",
+        title: "Academics Trajectory (longitudinal drill-in)",
+        navPath: "Insights → Academics → Trajectory",
+        audience: "Core Team",
+        purpose:
+          "PM1 → PM2 → PM3 trajectory per student per subject. Classifies students into archetypes (steady-high, declining, recovering, stuck-low) and sub-archetypes. Powers the BandStudentsDrawer drill-in.",
+        functions: [
+          { name: "Pick subjects", what: "Multi-select with band coloring.", roleBehavior: [{ role: "Core Team", can: "Pick." }] },
+          { name: "Open band drawer (BandStudentsDrawer)", what: "Click a chart band to see the constituent students.", roleBehavior: [{ role: "Core Team", can: "Drill in." }] },
+          { name: "Export full CSV", what: "Server-streamed; see Section 22.", roleBehavior: [{ role: "Core Team", can: "Export." }] },
+          { name: "Export drawer CSV", what: "Client-rendered limited to drilldown.", roleBehavior: [{ role: "Core Team", can: "Export." }] },
+        ],
+      },
+      {
+        id: "insights-watchlist",
+        title: "Insights Watchlist",
+        navPath: "Insights → Watchlist",
+        audience: "Core Team",
+        purpose:
+          "Personal pinned-students view: each Core Team member can pin students they want to track; the dashboard aggregates each pinned student's PBIS, passes, ISS, MTSS, accommodations into one row.",
+        functions: [
+          { name: "Pin / unpin", what: "Toggles in MyWatchList.", roleBehavior: [{ role: "Core Team", can: "Pin." }] },
+        ],
+      },
+      {
+        id: "insights-separation-suggestions",
+        title: "Separation Suggestions",
+        navPath: "Insights → Behavior → Separation Suggestions",
+        audience: "Scheduling team (admins, counselors, Core Team — read); Teachers (write only)",
+        purpose:
+          "Aggregates SuggestSeparationModal flags filed by teachers. Pairs with high teacher-consensus counts surface to the master-schedule builder for next year.",
+        functions: [
+          { name: "Filter grade / consensus threshold", what: "Min #teachers + grade.", roleBehavior: [{ role: ["Admin", "Counselor", "Core Team"], can: "View." }] },
+          { name: "Drill into student", what: "Full timeline of separation flags + notes.", roleBehavior: [{ role: ["Admin", "Counselor", "Core Team"], can: "Drill." }] },
+        ],
+        notes: ["Intended for next-year scheduling, not active behavioral intervention."],
+      },
+      {
+        id: "pbis-goals-milestones",
+        title: "PBIS Goals + Milestones + Needs-Attention",
+        navPath: "Sidebar → PBIS Hub",
+        audience: "PBIS Coordinator / Admin",
+        purpose:
+          "pbis_goals = per-student period goals (week/month/quarter/all). pbis_milestones = thresholds that trigger automated parent emails when crossed. PbisNeedsAttention surfaces 'quiet teachers' (no points awarded in X days), 'invisible students' (zero points in X days), and reason imbalance (>80% one reason).",
+        functions: [
+          { name: "Create / archive goal", what: "Creator or PBIS Coord/Admin can archive.", roleBehavior: [{ role: ["Teacher", "PBIS Coordinator", "Admin"], can: "Create on their own students; PBIS Coord/Admin archive anyone's." }] },
+          { name: "CRUD milestone", what: "Email template + threshold.", roleBehavior: [{ role: ["Admin", "PBIS Coordinator"], can: "Edit." }] },
+          { name: "Tune thresholds", what: "Quiet-teacher days, invisible-student days, reason-imbalance ratio — Settings → PBIS Thresholds.", roleBehavior: [{ role: ["Admin", "PBIS Coordinator"], can: "Edit." }] },
+        ],
+      },
+      {
+        id: "pbis-houses",
+        title: "Houses Panel + Change-House Modal + Sort Jobs",
+        navPath: "Sidebar → PBIS Hub → Houses",
+        audience: "PBIS Coordinator / Admin",
+        purpose:
+          "Manages the 4-house system. ChangeHouseModal records the move into student_house_changes (audit). Sort jobs (student_house_sort_jobs) batch-balance new students into houses.",
+        functions: [
+          { name: "View standings", what: "Live points + ranking (consumed by Spotlight governor v2 — see Section 3 / Spotlight).", roleBehavior: [{ role: "Any staff", can: "View." }] },
+          { name: "Change house", what: "Writes audit row with actor + reason.", roleBehavior: [{ role: ["Admin", "PBIS Coordinator"], can: "Change." }] },
+          { name: "Run sort job", what: "Bulk-assign new students.", roleBehavior: [{ role: ["Admin", "PBIS Coordinator"], can: "Run." }] },
+        ],
+      },
+      {
+        id: "mtss-reports",
+        title: "MTSS Reports",
+        navPath: "Sidebar → Interventions → Reports",
+        audience: "MTSS Coordinator / Admin",
+        purpose: "Quantitative health of the MTSS program: completion stats, weekly trend lines, Mon-Fri heatmap.",
+        functions: [
+          { name: "Per-teacher completion", what: "Logged vs expected entries, by subject.", roleBehavior: [{ role: ["MTSS Coordinator", "Admin"], can: "View." }] },
+          { name: "Trend line", what: "Weekly T2 completion %, T3 average score.", roleBehavior: [{ role: ["MTSS Coordinator", "Admin"], can: "View." }] },
+          { name: "Heatmap", what: "Day-of-week completion.", roleBehavior: [{ role: ["MTSS Coordinator", "Admin"], can: "View." }] },
+        ],
+        notes: ["Tier 3 completion is binary per week; Tier 2 is ratio-based."],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "22. CSV Exports — Cross-cutting Reference",
+    blurb:
+      "Every CSV download in PulseEDU. Two implementation styles: server-streamed (Content-Disposition: attachment, UTF-8 BOM for Excel) and client-rendered (downloadCsv helper in InsightsPicker.tsx). Server route + filename pattern + columns are listed per surface so QA can verify any export end-to-end.",
+    screens: [
+      {
+        id: "csv-trajectory-full",
+        title: "Academics Trajectory — full export",
+        navPath: "Insights → Academics → Trajectory → 'CSV' button",
+        audience: "Core Team",
+        purpose:
+          "Server-streamed full-cohort export. GET /api/insights/academics/trajectory/export.csv. Filename trajectory_<subjects>_<grade>_<YYYY-MM-DD>.csv. Columns: student_id, student_name, grade, subject, pm1, pm2, pm3, pm1_band, pm3_band, archetype, sub_archetype.",
+        functions: [
+          { name: "Apply filters then export", what: "Honors subjects, grades, ell, ese, is504.", roleBehavior: [{ role: "Core Team", can: "Export." }] },
+        ],
+      },
+      {
+        id: "csv-trajectory-drawer",
+        title: "Trajectory Band Drawer export",
+        navPath: "Trajectory → click chart band → '⬇ CSV'",
+        audience: "Core Team",
+        purpose: "Client-rendered (downloadCsv) limited to the drilled archetype + subKey. Capped at CAP=200 students.",
+        functions: [{ name: "Export", what: "trajectory_<subjects>_<arch>_<date>.csv", roleBehavior: [{ role: "Core Team", can: "Export." }] }],
+      },
+      {
+        id: "csv-data-export-panel",
+        title: "Data Export Panel",
+        navPath: "Settings → Data Management → Export",
+        audience: "Importer roles (Admin)",
+        purpose:
+          "Generic exporter mirror of the importer. GET /api/data-imports/export?kind=<kind>&… Filename pulseedu-<kind>-<date>.csv (BOM prefixed). Kinds: rosters, behavior, fast_scores, fast_prior_year, assessments. Required columns are always re-injected even if the user deselects them.",
+        functions: [
+          {
+            name: "Pick kind + filters + columns",
+            what:
+              "Filters per kind: grade, date, subject, noteType, assessmentName. Scope: school (default) or district (assessments only).",
+            roleBehavior: [{ role: "Admin", can: "Export." }],
+          },
+        ],
+        notes: ["Server uses Papa.unparse with quoting; prepends \\uFEFF so Excel reads UTF-8 names correctly."],
+      },
+      {
+        id: "csv-skipped-houses",
+        title: "Skipped roster rows (per import job)",
+        navPath: "Data Imports → Job → 'Download skipped rows'",
+        audience: "Admin",
+        purpose:
+          "GET /api/data-imports/jobs/:id/skipped-houses.csv — re-emits the rejected rows with their original columns. Filename skipped-houses_<orig_filename>_job<id>.csv.",
+        functions: [{ name: "Download", what: "Job-scoped; no extra filters.", roleBehavior: [{ role: "Admin", can: "Download." }] }],
+      },
+      {
+        id: "csv-dashboards",
+        title: "Insights dashboards — CSV button",
+        navPath: "Each dashboard's filter bar",
+        audience: "Core Team",
+        purpose:
+          "Client-rendered (downloadCsv) using topListsToCsv concatenated-list format (one file, multiple sub-tables separated by blank line, with a 'list' discriminator column). Filenames <dashboard>_<grades>_<YYYY-MM-DD>.csv.",
+        functions: [
+          {
+            name: "Per-dashboard export",
+            what:
+              "Attendance, Behavior, Engagement, Equity, SEB/SEL, Academics, Early Warning each have their own button. Honors the current grades + window filters.",
+            roleBehavior: [{ role: "Core Team", can: "Export." }],
+          },
+        ],
+        notes: [
+          "Client triggers use authFetch (Bearer) rather than a bare <a href> so the iframe sandbox does not strip the auth cookie.",
+          "RFC 4180 escape: any cell containing comma, quote, or newline is wrapped in quotes; literal quotes doubled.",
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "23. Witness Statements & AI Consistency Check",
+    blurb:
+      "Two recently shipped layers on top of the Investigations suite (Section 6). Data layer is live; UI surfacing has open follow-ups noted in replit.md.",
+    screens: [
+      {
+        id: "witness-statement-numbering",
+        title: "Witness Statement Numbering",
+        navPath: "Investigations → Case Detail → Statements list",
+        audience: "Investigators (Admin / Dean / BS)",
+        purpose:
+          "Deterministic per-case statement IDs in the form CASE-YY-NNNN-WS-XX. Assignment is transaction-locked so concurrent statement creation cannot collide on a number.",
+        functions: [
+          {
+            name: "Assign number on attach",
+            what:
+              "When a statement is attached to a Case (a row moves from interaction_witness_statements with case_id IS NULL to NOT NULL) the helper assigns the next XX inside a SELECT…FOR UPDATE on the case row. Order is created_at ASC.",
+            roleBehavior: [{ role: "System", can: "Assign." }],
+          },
+        ],
+        notes: [
+          "Backfill task at deploy: walk existing attached statements per case ordered by created_at ASC. Open follow-ups: surface the formatted ID in PlayerDrawer header, Case Detail statements list, witness statement PDF/print, audit-log payload (copy-on-click).",
+        ],
+      },
+      {
+        id: "ai-consistency-check",
+        title: "AI Consistency Check",
+        navPath: "Investigations → Case Detail → Consistency panel (investigator-gated)",
+        audience: "Case investigators (Admin / SuperUser / District Admin / Dean / Behavior Specialist / MTSS Coordinator) via adminGate → isCaseInvestigator",
+        purpose:
+          "Background AI evaluation that compares statements + video evidence + interaction descriptions on a case and flags contradictions. Runs are scheduled when a statement is completed or video evidence is added; findings + dismissals + audit are stored in case_consistency_runs, case_consistency_findings, case_consistency_state.",
+        functions: [
+          { name: "Run manually", what: "'Run check' button. Gated by adminGate (admin tier + Dean + BS + MTSS).", roleBehavior: [{ role: ["Admin", "Dean", "Behavior Specialist", "MTSS Coordinator"], can: "Trigger." }] },
+          { name: "Dismiss finding with reason", what: "Required justification ≥5 chars; writes to case_consistency_state.", roleBehavior: [{ role: ["Admin", "Dean", "Behavior Specialist", "MTSS Coordinator"], can: "Dismiss." }] },
+        ],
+        notes: [
+          "Open follow-ups (replit.md): (1) onboarding step 'Review Consistency Check guardrails' in Behavior & PBIS phase with an 'I understand' marker, Core Team audience; (2) Settings tile 'Consistency Check — this month' backed by GET /api/watchlist/consistency-telemetry (admin-gated; cheap COUNT/SUM grouped by current month).",
+        ],
+      },
+      {
+        id: "iss-admin-log-audit",
+        title: "ISS Admin Log Detail Drawer (edit / delete + audit)",
+        navPath: "Admin Hub → ISS log → row → Detail Drawer",
+        audience: "Admin",
+        purpose:
+          "Edit / trim / delete a posted ISS admin log row with a required reason; the prior payload is written to iss_admin_log_audit so the change history is reconstructable.",
+        functions: [
+          { name: "Edit row", what: "Required reason ≥5 chars.", roleBehavior: [{ role: "Admin", can: "Edit." }] },
+          { name: "Delete row", what: "Soft-delete; visible in audit.", roleBehavior: [{ role: "Admin", can: "Delete." }] },
+          { name: "View audit history", what: "Chronological before/after JSON.", roleBehavior: [{ role: "Admin", can: "View." }] },
+        ],
+        notes: [
+          "Synthesized rows from admin-hub-logged days (iss_attendance_day) have negative IDs and are NOT editable from the ISS dashboard; they must be edited from Admin Hub.",
+        ],
+      },
+    ],
+  },
+  // =====================================================================
+  {
+    title: "24. Cross-cutting Concerns",
     blurb:
       "Behaviors that are not a screen on their own but are visible across many screens. Worth a separate read so QA covers them on every relevant page.",
     screens: [
@@ -1834,7 +2942,7 @@ p(
   "When you ship a new screen or function, append a row to this document — do not let it drift. The 'How to use' panels inside the app (HowToUseHelp / RoleSection) should mirror the per-role behavior recorded here.",
 );
 p(
-  "Future expansions tracked in replit.md → Future work include: Witness Statement chronological numbering, Admin Hub ISS log edit/delete with audit, AI Consistency Check onboarding step + telemetry tile, school-local timezone for case-number derivation, Core Team 'How this works' refresh after the 4-phase case enhancement suite. Each of these will add new rows to the relevant screen above.",
+  "Open follow-ups tracked in replit.md → Future work: AI Consistency Check onboarding step + 'Consistency Check — this month' Settings tile; per-school IANA timezone column (replace DEFAULT_SCHOOL_TZ with a per-school column threaded through schoolYearLabelFor, seed case backfill, AST insights, lapse cron); refresh Core Team 'How this works' copy after the Phase 4 case enhancements (tagging, video evidence panel, AI consistency check, Case Insights dashboard) ship as a single pass; Pickup module 5-digit expansion (bump NUMBER_RANGE_MAX once a tenant exceeds ~7200 active tags + narrow the PDF font + accept 4-or-5-digit input on the curb keypad); curb-line audible chime (design open — leaning visual-only since high-volume schools would overlap); Student Photos rollout (the StudentPhoto component, photo_object_key + photo_consent columns, and per-student upload route are shipped, but bulk yearbook-ZIP ingestion and several delivery surfaces remain open per replit.md); Witness statement formatted-ID surfacing in PlayerDrawer header + Case Detail list + PDF + audit log payload, plus one-time backfill at deploy; AST voluntary-transfer zero-out hook (transfer_lapse kind reserved) + optional Friday digest gated on ast_email_digest_enabled + per-staff ledger drilldown GET /api/ast/staff/:id/ledger; Feature Licensing Phase 4 (wire a third quota consumer to keep KNOWN_SEAT_QUOTAS honest — mtss.maxActivePlans or displays.maxConcurrentSchedules — and per-feature usage sparklines in the SuperUser admin page).",
   { soft: true },
 );
 
