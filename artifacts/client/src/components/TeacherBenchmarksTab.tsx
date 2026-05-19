@@ -170,6 +170,10 @@ export default function TeacherBenchmarksTab({
   // between two selected windows on the same roster. Second window
   // key uses the same "sy|win" packing as windowKey.
   const [mode, setMode] = useState<"absolute" | "growth">("absolute");
+  // Bottom-3 tile is opt-in — full benchmark heatmap shows by default
+  // and the bottom-3 callout only appears when the teacher checks this
+  // toggle (absolute mode only; growth mode uses movers tiles).
+  const [showBottom3, setShowBottom3] = useState(false);
   const [windowKeyB, setWindowKeyB] = useState<string>("");
   const [growth, setGrowth] = useState<GrowthResponse | null>(null);
   const [growthLoading, setGrowthLoading] = useState(false);
@@ -478,6 +482,20 @@ export default function TeacherBenchmarksTab({
           />
           Growth
         </label>
+        {/* Bottom-3 toggle — absolute mode only; growth mode hides this. */}
+        {mode === "absolute" && (
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            title="Show the 3 weakest benchmarks on this roster for the selected window"
+          >
+            <input
+              type="checkbox"
+              checked={showBottom3}
+              onChange={(e) => setShowBottom3(e.target.checked)}
+            />
+            Bottom 3
+          </label>
+        )}
         {data && (
           <span style={{ color: "#6b7280" }}>
             Mastery threshold: <strong>{data.thresholdPct}%</strong>
@@ -655,7 +673,7 @@ export default function TeacherBenchmarksTab({
 
       {/* Bottom-3 tile (absolute mode only — growth mode uses movers
           tiles instead). */}
-      {!loading && mode === "absolute" && data && data.bottom3.length > 0 && (
+      {!loading && mode === "absolute" && showBottom3 && data && data.bottom3.length > 0 && (
         <div
           style={{
             border: "1px solid #fecaca",
