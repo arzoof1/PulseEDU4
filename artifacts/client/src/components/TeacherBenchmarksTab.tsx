@@ -929,9 +929,14 @@ export default function TeacherBenchmarksTab({
                           padding: "6px 8px",
                           fontSize: 11,
                           textAlign: "center",
-                          borderLeft: "3px solid #6b7280",
-                          borderBottom: expanded
-                            ? "2px solid #1d4ed8"
+                          borderLeft: expanded
+                            ? "3px solid #1d4ed8"
+                            : "3px solid #6b7280",
+                          borderRight: expanded
+                            ? "3px solid #1d4ed8"
+                            : undefined,
+                          borderTop: expanded
+                            ? "3px solid #1d4ed8"
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
@@ -990,8 +995,12 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "3px solid #6b7280"
-                              : "1px solid #e5e7eb",
+                              ? "3px solid #1d4ed8"
+                              : "1px solid #93c5fd",
+                          borderRight:
+                            i === g.codes.length - 1
+                              ? "3px solid #1d4ed8"
+                              : undefined,
                           whiteSpace: "nowrap",
                           color: "#374151",
                         }}
@@ -1041,7 +1050,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "3px solid #6b7280",
+                                borderLeft: "3px solid #1d4ed8",
                               }}
                               title={`${g.category}: missing a window`}
                             >
@@ -1067,7 +1076,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "3px solid #6b7280",
+                              borderLeft: "3px solid #1d4ed8",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1103,8 +1112,12 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "3px solid #6b7280"
-                                    : "1px solid #e5e7eb",
+                                    ? "3px solid #1d4ed8"
+                                    : "1px solid #93c5fd",
+                                borderRight:
+                                  i === g.codes.length - 1
+                                    ? "3px solid #1d4ed8"
+                                    : undefined,
                               }}
                               title={`${b.code}: missing a window`}
                             >
@@ -1125,8 +1138,12 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "3px solid #6b7280"
-                                  : "1px solid #e5e7eb",
+                                  ? "3px solid #1d4ed8"
+                                  : "1px solid #93c5fd",
+                              borderRight:
+                                i === g.codes.length - 1
+                                  ? "3px solid #1d4ed8"
+                                  : undefined,
                               cursor: "help",
                             }}
                             title={`${b.code}: ${cell.pctA}% → ${cell.pctB}% (${sign}${cell.delta})`}
@@ -1195,9 +1212,14 @@ export default function TeacherBenchmarksTab({
                           padding: "6px 8px",
                           fontSize: 11,
                           textAlign: "center",
-                          borderLeft: "3px solid #6b7280",
-                          borderBottom: expanded
-                            ? "2px solid #1d4ed8"
+                          borderLeft: expanded
+                            ? "3px solid #1d4ed8"
+                            : "3px solid #6b7280",
+                          borderRight: expanded
+                            ? "3px solid #1d4ed8"
+                            : undefined,
+                          borderTop: expanded
+                            ? "3px solid #1d4ed8"
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
@@ -1256,8 +1278,12 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "3px solid #6b7280"
-                              : "1px solid #e5e7eb",
+                              ? "3px solid #1d4ed8"
+                              : "1px solid #93c5fd",
+                          borderRight:
+                            i === g.codes.length - 1
+                              ? "3px solid #1d4ed8"
+                              : undefined,
                           whiteSpace: "nowrap",
                           color: "#374151",
                         }}
@@ -1321,7 +1347,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "3px solid #6b7280",
+                                borderLeft: "3px solid #1d4ed8",
                               }}
                               title={`${g.category}: no data`}
                             >
@@ -1345,7 +1371,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "3px solid #6b7280",
+                              borderLeft: "3px solid #1d4ed8",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1383,8 +1409,12 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "3px solid #6b7280"
-                                    : "1px solid #e5e7eb",
+                                    ? "3px solid #1d4ed8"
+                                    : "1px solid #93c5fd",
+                                borderRight:
+                                  i === g.codes.length - 1
+                                    ? "3px solid #1d4ed8"
+                                    : undefined,
                               }}
                               title={`${b.code}: no data`}
                             >
@@ -1404,8 +1434,12 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "3px solid #6b7280"
-                                  : "1px solid #e5e7eb",
+                                  ? "3px solid #1d4ed8"
+                                  : "1px solid #93c5fd",
+                              borderRight:
+                                i === g.codes.length - 1
+                                  ? "3px solid #1d4ed8"
+                                  : undefined,
                               cursor: "help",
                             }}
                             title={`${s.lastName}, ${s.firstName} · ${b.code}: ${cell.earned}/${cell.possible} (${cell.pct}%)`}
