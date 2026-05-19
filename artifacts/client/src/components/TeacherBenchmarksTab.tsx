@@ -1941,7 +1941,85 @@ function ProgressReportModal(props: {
           )}
           {!loading &&
             report &&
-            visibleStudents.map((s) => (
+            visibleStudents.map((s) => {
+              const winTotals = WINDOWS.map((w) => {
+                let earned = 0;
+                let possible = 0;
+                for (const code of Object.keys(s.windows[w])) {
+                  const c = s.windows[w][code];
+                  if (c) {
+                    earned += c.earned;
+                    possible += c.possible;
+                  }
+                }
+                return {
+                  w,
+                  earned,
+                  possible,
+                  pct:
+                    possible > 0
+                      ? Math.round((earned / possible) * 100)
+                      : null,
+                };
+              });
+              const pcts = winTotals
+                .map((t) => t.pct)
+                .filter((p): p is number => p != null);
+              const overallDelta =
+                pcts.length >= 2 ? pcts[pcts.length - 1]! - pcts[0]! : null;
+              const trend: {
+                label: string;
+                bg: string;
+                fg: string;
+              } =
+                overallDelta == null
+                  ? { label: "Just getting started", bg: "#e0e7ff", fg: "#3730a3" }
+                  : overallDelta >= 10
+                  ? { label: "Trending up ▲", bg: "#bbf7d0", fg: "#14532d" }
+                  : overallDelta >= 0
+                  ? { label: "Holding steady", bg: "#fef3c7", fg: "#78350f" }
+                  : { label: "Needs focus", bg: "#fecaca", fg: "#7f1d1d" };
+              type Jump = {
+                code: string;
+                from: number;
+                to: number;
+                delta: number;
+                fromW: "pm1" | "pm2" | "pm3";
+                toW: "pm1" | "pm2" | "pm3";
+              };
+              const jumps: Jump[] = [];
+              for (const b of report.benchmarks) {
+                const cells = WINDOWS.map((w) => ({
+                  w,
+                  c: s.windows[w][b.code],
+                }));
+                for (let i = 0; i < cells.length; i++) {
+                  for (let j = i + 1; j < cells.length; j++) {
+                    const a = cells[i].c;
+                    const z = cells[j].c;
+                    if (a && z && z.pct - a.pct > 0) {
+                      jumps.push({
+                        code: b.code,
+                        from: a.pct,
+                        to: z.pct,
+                        delta: z.pct - a.pct,
+                        fromW: cells[i].w,
+                        toW: cells[j].w,
+                      });
+                    }
+                  }
+                }
+              }
+              const seen = new Set<string>();
+              const topJumps = jumps
+                .sort((a, b) => b.delta - a.delta)
+                .filter((j) => {
+                  if (seen.has(j.code)) return false;
+                  seen.add(j.code);
+                  return true;
+                })
+                .slice(0, 3);
+              return (
               <div key={s.studentId} className="progress-report-page">
                 <div
                   style={{
@@ -1973,6 +2051,191 @@ function ProgressReportModal(props: {
                     <div style={{ color: "#6b7280" }}>
                       Mastery ≥ {report.thresholdPct}%
                     </div>
+                  </div>
+                </div>
+
+                <div
+                  style={{
+                    display: "grid",
+                    gridTemplateColumns: "1fr auto",
+                    gap: 12,
+                    alignItems: "center",
+                    background:
+                      "linear-gradient(135deg, #eff6ff 0%, #ede9fe 100%)",
+                    border: "1px solid #c7d2fe",
+                    borderRadius: 8,
+                    padding: "10px 14px",
+                    marginBottom: 10,
+                  }}
+                >
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8,
+                    }}
+                  >
+                    {winTotals.map((t, i) => {
+                      const pct = t.pct;
+                      let gaugeBg = "#e5e7eb";
+                      let gaugeFg = "#6b7280";
+                      let ring = "#cbd5e1";
+                      if (pct != null) {
+                        if (pct >= report.thresholdPct) {
+                          gaugeBg = "#bbf7d0";
+                          gaugeFg = "#14532d";
+                          ring = "#16a34a";
+                        } else if (pct >= 50) {
+                          gaugeBg = "#fef3c7";
+                          gaugeFg = "#78350f";
+                          ring = "#d97706";
+                        } else {
+                          gaugeBg = "#fecaca";
+                          gaugeFg = "#7f1d1d";
+                          ring = "#dc2626";
+                        }
+                      }
+                      const prevPct = i > 0 ? winTotals[i - 1].pct : null;
+                      const delta =
+                        pct != null && prevPct != null ? pct - prevPct : null;
+                      return (
+                        <React.Fragment key={t.w}>
+                          {i > 0 && (
+                            <div
+                              style={{
+                                display: "flex",
+                                flexDirection: "column",
+                                alignItems: "center",
+                                fontSize: 10,
+                                color: "#374151",
+                                minWidth: 36,
+                              }}
+                            >
+                              <div style={{ fontSize: 18, lineHeight: 1 }}>→</div>
+                              {delta != null && (
+                                <div
+                                  style={{
+                                    fontWeight: 700,
+                                    color:
+                                      delta > 0
+                                        ? "#14532d"
+                                        : delta < 0
+                                        ? "#7f1d1d"
+                                        : "#374151",
+                                    marginTop: 2,
+                                  }}
+                                >
+                                  {delta > 0 ? "+" : ""}
+                                  {delta}%
+                                </div>
+                              )}
+                            </div>
+                          )}
+                          <div
+                            style={{
+                              display: "flex",
+                              flexDirection: "column",
+                              alignItems: "center",
+                            }}
+                          >
+                            <div
+                              style={{
+                                width: 64,
+                                height: 64,
+                                borderRadius: "50%",
+                                background: gaugeBg,
+                                border: `3px solid ${ring}`,
+                                display: "flex",
+                                alignItems: "center",
+                                justifyContent: "center",
+                                fontWeight: 800,
+                                fontSize: 16,
+                                color: gaugeFg,
+                              }}
+                            >
+                              {pct == null ? "—" : `${pct}%`}
+                            </div>
+                            <div
+                              style={{
+                                fontSize: 10,
+                                fontWeight: 700,
+                                color: "#374151",
+                                marginTop: 3,
+                              }}
+                            >
+                              {winLabel[t.w]}
+                            </div>
+                            {pct != null && (
+                              <div
+                                style={{
+                                  fontSize: 9,
+                                  color: "#6b7280",
+                                }}
+                              >
+                                {t.earned}/{t.possible}
+                              </div>
+                            )}
+                          </div>
+                        </React.Fragment>
+                      );
+                    })}
+                  </div>
+                  <div
+                    style={{
+                      textAlign: "right",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "flex-end",
+                      gap: 4,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        color: "#3730a3",
+                      }}
+                    >
+                      Growth at a Glance
+                    </div>
+                    <div
+                      style={{
+                        background: trend.bg,
+                        color: trend.fg,
+                        padding: "4px 10px",
+                        borderRadius: 999,
+                        fontWeight: 700,
+                        fontSize: 11,
+                      }}
+                    >
+                      {trend.label}
+                    </div>
+                    {overallDelta != null && (
+                      <div
+                        style={{
+                          fontSize: 10,
+                          color: "#374151",
+                        }}
+                      >
+                        Overall change:{" "}
+                        <span
+                          style={{
+                            fontWeight: 700,
+                            color:
+                              overallDelta > 0
+                                ? "#14532d"
+                                : overallDelta < 0
+                                ? "#7f1d1d"
+                                : "#374151",
+                          }}
+                        >
+                          {overallDelta > 0 ? "+" : ""}
+                          {overallDelta}%
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -2141,6 +2404,83 @@ function ProgressReportModal(props: {
                   </table>
                 )}
 
+                {topJumps.length > 0 && (
+                  <div
+                    style={{
+                      marginTop: 10,
+                      background:
+                        "linear-gradient(135deg, #f0fdf4 0%, #ecfeff 100%)",
+                      border: "1px solid #bbf7d0",
+                      borderRadius: 8,
+                      padding: "8px 12px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 10,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        color: "#14532d",
+                        marginBottom: 6,
+                      }}
+                    >
+                      🎉 Growth Highlights — biggest jumps this year
+                    </div>
+                    <div
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: `repeat(${topJumps.length}, 1fr)`,
+                        gap: 8,
+                      }}
+                    >
+                      {topJumps.map((j) => (
+                        <div
+                          key={j.code}
+                          style={{
+                            background: "white",
+                            border: "1px solid #86efac",
+                            borderRadius: 6,
+                            padding: "6px 8px",
+                            display: "flex",
+                            flexDirection: "column",
+                            gap: 3,
+                          }}
+                        >
+                          <div
+                            style={{
+                              fontFamily: "monospace",
+                              fontSize: 10,
+                              fontWeight: 700,
+                              color: "#1e3a8a",
+                            }}
+                          >
+                            {j.code}
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 14,
+                              fontWeight: 800,
+                              color: "#14532d",
+                            }}
+                          >
+                            +{j.delta}%
+                          </div>
+                          <div
+                            style={{
+                              fontSize: 9,
+                              color: "#374151",
+                            }}
+                          >
+                            {winLabel[j.fromW]} {j.from}% → {winLabel[j.toW]}{" "}
+                            {j.to}%
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 <div
                   style={{
                     marginTop: 10,
@@ -2154,7 +2494,8 @@ function ProgressReportModal(props: {
                   see growth.
                 </div>
               </div>
-            ))}
+              );
+            })}
         </div>
       </div>
     </>
