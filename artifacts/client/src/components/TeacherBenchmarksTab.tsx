@@ -938,7 +938,12 @@ export default function TeacherBenchmarksTab({
                           fontWeight: expanded ? 700 : undefined,
                           cursor: "pointer",
                           userSelect: "none",
-                          minWidth: expanded ? undefined : 110,
+                          minWidth: expanded ? undefined : 130,
+                          maxWidth: expanded ? undefined : 160,
+                          whiteSpace: expanded ? "nowrap" : "normal",
+                          wordBreak: "normal",
+                          overflowWrap: "break-word",
+                          lineHeight: 1.2,
                         }}
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
@@ -1199,7 +1204,12 @@ export default function TeacherBenchmarksTab({
                           fontWeight: expanded ? 700 : undefined,
                           cursor: "pointer",
                           userSelect: "none",
-                          minWidth: expanded ? undefined : 110,
+                          minWidth: expanded ? undefined : 130,
+                          maxWidth: expanded ? undefined : 160,
+                          whiteSpace: expanded ? "nowrap" : "normal",
+                          wordBreak: "normal",
+                          overflowWrap: "break-word",
+                          lineHeight: 1.2,
                         }}
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
