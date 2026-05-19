@@ -728,11 +728,33 @@ const FAST_SUBJECTS = ["ela", "math", "algebra1", "geometry"] as const;
 // plan title. Best-effort — falls back to the raw category label when
 // no rule fires. Casing-insensitive prefix match keeps it resilient to
 // minor formatting drift between subjects.
-function strategyCategoryForBenchmark(
+export function strategyCategoryForBenchmark(
   category: string | null,
   benchmarkCode: string,
 ): string {
   const c = (category ?? "").toLowerCase();
+  // Math: derive from the benchmark code's strand prefix BEFORE
+  // falling back to the category label. Florida's grade 6+ Math
+  // category "Geometric Reasoning, Data Analysis, and Probability"
+  // bundles GR.* and DP.* benchmarks under a single label, so the
+  // category text alone cannot tell geometry from data — only the
+  // code can. Strands used by Florida B.E.S.T. math standards:
+  //   NSO = Number Sense & Operations
+  //   FR  = Fractions (K-5)
+  //   AR  = Algebraic Reasoning
+  //   M   = Measurement (K-5)
+  //   GR  = Geometric Reasoning
+  //   DP  = Data Analysis & Probability
+  const mathStrand = /^MA\.[^.]+\.([A-Z]+)\./i.exec(benchmarkCode);
+  if (mathStrand) {
+    const strand = mathStrand[1].toUpperCase();
+    if (strand === "NSO") return "Math — Numbers & Operations";
+    if (strand === "FR") return "Math — Fractions";
+    if (strand === "AR") return "Math — Algebraic Reasoning";
+    if (strand === "M") return "Math — Measurement";
+    if (strand === "GR") return "Math — Geometry & Measurement";
+    if (strand === "DP") return "Math — Data & Statistics";
+  }
   if (c.includes("reading prose")) return "Reading Comprehension";
   if (c.includes("reading informational")) return "Reading Comprehension";
   if (c.includes("across genres")) return "Reading Comprehension";
