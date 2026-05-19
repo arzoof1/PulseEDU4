@@ -996,7 +996,7 @@ export default function TeacherBenchmarksTab({
                           borderLeft:
                             i === 0
                               ? "3px solid #1d4ed8"
-                              : "1px solid #93c5fd",
+                              : "2px solid #2563eb",
                           borderRight:
                             i === g.codes.length - 1
                               ? "3px solid #1d4ed8"
@@ -1113,7 +1113,7 @@ export default function TeacherBenchmarksTab({
                                 borderLeft:
                                   i === 0
                                     ? "3px solid #1d4ed8"
-                                    : "1px solid #93c5fd",
+                                    : "2px solid #2563eb",
                                 borderRight:
                                   i === g.codes.length - 1
                                     ? "3px solid #1d4ed8"
@@ -1139,7 +1139,7 @@ export default function TeacherBenchmarksTab({
                               borderLeft:
                                 i === 0
                                   ? "3px solid #1d4ed8"
-                                  : "1px solid #93c5fd",
+                                  : "2px solid #2563eb",
                               borderRight:
                                 i === g.codes.length - 1
                                   ? "3px solid #1d4ed8"
@@ -1279,7 +1279,7 @@ export default function TeacherBenchmarksTab({
                           borderLeft:
                             i === 0
                               ? "3px solid #1d4ed8"
-                              : "1px solid #93c5fd",
+                              : "2px solid #2563eb",
                           borderRight:
                             i === g.codes.length - 1
                               ? "3px solid #1d4ed8"
@@ -1410,7 +1410,7 @@ export default function TeacherBenchmarksTab({
                                 borderLeft:
                                   i === 0
                                     ? "3px solid #1d4ed8"
-                                    : "1px solid #93c5fd",
+                                    : "2px solid #2563eb",
                                 borderRight:
                                   i === g.codes.length - 1
                                     ? "3px solid #1d4ed8"
@@ -1435,7 +1435,7 @@ export default function TeacherBenchmarksTab({
                               borderLeft:
                                 i === 0
                                   ? "3px solid #1d4ed8"
-                                  : "1px solid #93c5fd",
+                                  : "2px solid #2563eb",
                               borderRight:
                                 i === g.codes.length - 1
                                   ? "3px solid #1d4ed8"
