@@ -558,6 +558,10 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     const isInvisible = !recognizedIds.has(stu.studentId);
     return {
       studentId: stu.studentId,
+      // District-level Local SIS ID (6-digit). Co-exists with FLEID in
+      // student_id; FLEID stays canonical for FAST. UI prefers this for
+      // visible identifier labels everywhere outside FAST screens.
+      localSisId: stu.localSisId ?? null,
       firstName: stu.firstName,
       lastName: stu.lastName,
       grade: stu.grade,

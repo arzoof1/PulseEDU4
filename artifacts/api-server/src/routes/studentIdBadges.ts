@@ -225,6 +225,11 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
 
   const badges: StudentBadgeInput[] = students.map((s) => ({
     studentId: s.studentId,
+    // District-level Local SIS ID (6-digit). When present, the visible
+    // "ID xxxx" line on the badge shows this instead of FLEID. The
+    // barcode + QR continue to encode student_id (FLEID) so existing
+    // sign-in scanners keep working.
+    localSisId: s.localSisId ?? null,
     firstName: s.firstName,
     lastName: s.lastName,
     grade: s.grade,

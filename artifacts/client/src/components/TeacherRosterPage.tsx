@@ -74,6 +74,10 @@ interface SafetyPlanSummary {
 
 interface RosterRow {
   studentId: string;
+  // District-level Local SIS ID (6-digit). Co-exists with FLEID; FLEID
+  // remains canonical for FAST. Render this as the visible identifier
+  // everywhere outside FAST screens.
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | string;
@@ -1820,8 +1824,13 @@ export default function TeacherRosterPage({
                         photoConsent={row.photoConsent}
                         size={28}
                       />
-                      <span>
-                        {row.lastName}, {row.firstName}
+                      <span style={{ display: "inline-flex", flexDirection: "column", lineHeight: 1.15 }}>
+                        <span>{row.lastName}, {row.firstName}</span>
+                        {row.localSisId && (
+                          <span style={{ fontSize: 11, color: "#6b7280", fontFamily: "ui-monospace, monospace" }}>
+                            ID {row.localSisId}
+                          </span>
+                        )}
                       </span>
                       {row.safetyPlan && (
                         <SafetyPlanPill

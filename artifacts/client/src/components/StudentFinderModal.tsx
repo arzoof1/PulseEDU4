@@ -10,6 +10,7 @@ import { authFetch } from "../lib/authToken";
 
 interface SearchHit {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -563,7 +564,7 @@ export function StudentFinderModal({
                               fontSize: 12,
                             }}
                           >
-                            {h.studentId}
+                            {h.localSisId ?? h.studentId}
                           </span>
                         </div>
                         {hasLocation && (

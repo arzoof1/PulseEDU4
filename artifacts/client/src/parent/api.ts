@@ -103,6 +103,7 @@ export interface ParentMe {
   students: Array<{
     id: number;
     studentId: string;
+    localSisId?: string | null;
     firstName: string;
     lastName: string;
     grade: number;

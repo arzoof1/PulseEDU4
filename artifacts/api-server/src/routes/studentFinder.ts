@@ -75,6 +75,7 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
   const rows = await db
     .select({
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,

@@ -229,6 +229,7 @@ router.get("/parent-auth/me", async (req, res) => {
       studentTableId: parentStudentsTable.studentId,
       studentRowId: studentsTable.id,
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -243,6 +244,7 @@ router.get("/parent-auth/me", async (req, res) => {
     students: links.map((s) => ({
       id: s.studentRowId,
       studentId: s.studentId,
+      localSisId: s.localSisId ?? null,
       firstName: s.firstName,
       lastName: s.lastName,
       grade: s.grade,

@@ -25,6 +25,10 @@ const PAGE_MARGIN = 10;
 
 export interface StudentBadgeInput {
   studentId: string;
+  // District-level Local SIS ID (6-digit). Displayed on the badge front
+  // and back when present; FLEID-style studentId remains the barcode/QR
+  // payload so existing sign-in scanners keep working.
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | null;
@@ -219,7 +223,7 @@ async function renderLanyardBadge(
   doc
     .fillColor("#111827")
     .fontSize(9)
-    .text(`ID ${badge.studentId}`, PAGE_MARGIN, H - 16, {
+    .text(`ID ${badge.localSisId ?? badge.studentId}`, PAGE_MARGIN, H - 16, {
       width: W - PAGE_MARGIN * 2,
       align: "center",
       lineBreak: false,
@@ -327,7 +331,7 @@ async function renderCr80Badge(
   doc
     .fillColor("rgba(255,255,255,0.85)")
     .fontSize(7)
-    .text(`ID ${badge.studentId}`, 8, H - 14, {
+    .text(`ID ${badge.localSisId ?? badge.studentId}`, 8, H - 14, {
       width: leftColW - 12,
       lineBreak: false,
     });
