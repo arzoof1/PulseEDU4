@@ -2011,8 +2011,72 @@ function ProgressReportModal(props: {
                           </tr>
                           {g.codes.map((b) => (
                             <tr key={b.code}>
-                              <td style={{ fontFamily: "monospace", fontSize: 10 }}>
-                                {b.code}
+                              <td style={{ fontSize: 10, verticalAlign: "top" }}>
+                                <div
+                                  style={{
+                                    fontFamily: "monospace",
+                                    fontWeight: 600,
+                                    marginBottom: 4,
+                                  }}
+                                >
+                                  {b.code}
+                                </div>
+                                <div
+                                  style={{
+                                    display: "grid",
+                                    gridTemplateColumns: "1fr 1fr 1fr",
+                                    border: "1px solid #cbd5e1",
+                                    borderRadius: 3,
+                                    overflow: "hidden",
+                                    fontSize: 9,
+                                  }}
+                                >
+                                  {WINDOWS.map((w, wi) => {
+                                    const cc = s.windows[w][b.code];
+                                    const pct = cc ? cc.pct : null;
+                                    let bg = "#f3f4f6";
+                                    let fg = "#6b7280";
+                                    if (pct != null) {
+                                      if (pct >= report.thresholdPct) {
+                                        bg = "#bbf7d0";
+                                        fg = "#14532d";
+                                      } else if (pct >= 50) {
+                                        bg = "#fef3c7";
+                                        fg = "#78350f";
+                                      } else {
+                                        bg = "#fecaca";
+                                        fg = "#7f1d1d";
+                                      }
+                                    }
+                                    return (
+                                      <div
+                                        key={w}
+                                        style={{
+                                          background: bg,
+                                          color: fg,
+                                          padding: "2px 3px",
+                                          textAlign: "center",
+                                          borderLeft:
+                                            wi === 0
+                                              ? undefined
+                                              : "1px solid #cbd5e1",
+                                          fontWeight: 600,
+                                        }}
+                                      >
+                                        <div
+                                          style={{
+                                            fontSize: 8,
+                                            opacity: 0.75,
+                                            fontWeight: 500,
+                                          }}
+                                        >
+                                          {winLabel[w]}
+                                        </div>
+                                        <div>{pct == null ? "—" : `${pct}%`}</div>
+                                      </div>
+                                    );
+                                  })}
+                                </div>
                               </td>
                               {WINDOWS.map((w) => {
                                 const cell = s.windows[w][b.code];
