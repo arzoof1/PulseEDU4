@@ -13,6 +13,13 @@
 //          ?teacherId=&subject=&window=&schoolYear=
 //        → printable heatmap (one PDF per teacher × window).
 //
+//   GET /api/teacher-roster/benchmarks/progress-report
+//          ?teacherId=&subject=&schoolYear=
+//        → per-student × per-benchmark × per-window item responses
+//          for the printable Benchmark Progress Report. One fetch
+//          covers PM1+PM2+PM3 so the client can render every student
+//          page without round-trips.
+//
 // Auth model: same gate as /api/teacher-roster — own roster always
 // allowed; another teacher's roster only for core team (admin /
 // superuser / ESE / behavior / MTSS coordinator).
@@ -599,6 +606,222 @@ router.get(
       benchmark: { code: benchmarkCode, category },
       thresholdPct: ctx.thresholdPct,
       students: out,
+    });
+  },
+);
+
+// Benchmark Progress Report — per-student item-analysis sheet across
+// PM1/PM2/PM3 for one teacher × subject × school year. One round-trip
+// returns every student page so the client can print all at once.
+router.get(
+  "/teacher-roster/benchmarks/progress-report",
+  async (req: Request, res: Response) => {
+    const ctx = await resolveContext(req, res);
+    if (!ctx) return;
+
+    const rawSY = req.query.schoolYear;
+    const schoolYear =
+      typeof rawSY === "string" && rawSY.length > 0
+        ? rawSY
+        : schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+
+    if (ctx.studentIds.length === 0) {
+      res.json({
+        teacher: {
+          id: ctx.targetTeacher.id,
+          displayName: ctx.targetTeacher.displayName,
+        },
+        subject: ctx.subject,
+        schoolYear,
+        thresholdPct: ctx.thresholdPct,
+        benchmarks: [],
+        students: [],
+      });
+      return;
+    }
+
+    const [students, items, periodRows] = await Promise.all([
+      db
+        .select({
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+          grade: studentsTable.grade,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, ctx.schoolId),
+            inArray(studentsTable.studentId, ctx.studentIds),
+          ),
+        ),
+      db
+        .select({
+          studentId: studentFastItemResponsesTable.studentId,
+          window: studentFastItemResponsesTable.window,
+          category: studentFastItemResponsesTable.category,
+          benchmarkCode: studentFastItemResponsesTable.benchmarkCode,
+          itemSeq: studentFastItemResponsesTable.itemSeq,
+          pointsEarned: studentFastItemResponsesTable.pointsEarned,
+          pointsPossible: studentFastItemResponsesTable.pointsPossible,
+        })
+        .from(studentFastItemResponsesTable)
+        .where(
+          and(
+            eq(studentFastItemResponsesTable.schoolId, ctx.schoolId),
+            eq(studentFastItemResponsesTable.subject, ctx.subject),
+            eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+            inArray(
+              studentFastItemResponsesTable.studentId,
+              ctx.studentIds,
+            ),
+          ),
+        ),
+      // Period per student for THIS teacher only (a student may be in
+      // multiple periods with the same teacher — show all, sorted).
+      db
+        .select({
+          studentId: sectionRosterTable.studentId,
+          period: classSectionsTable.period,
+        })
+        .from(sectionRosterTable)
+        .innerJoin(
+          classSectionsTable,
+          eq(classSectionsTable.id, sectionRosterTable.sectionId),
+        )
+        .where(
+          and(
+            eq(sectionRosterTable.schoolId, ctx.schoolId),
+            eq(classSectionsTable.schoolId, ctx.schoolId),
+            eq(classSectionsTable.teacherStaffId, ctx.targetTeacher.id),
+            inArray(sectionRosterTable.studentId, ctx.studentIds),
+          ),
+        ),
+    ]);
+
+    // periods[studentId] = sorted unique list
+    const periodsByStudent = new Map<string, Set<number>>();
+    for (const r of periodRows) {
+      const set = periodsByStudent.get(r.studentId) ?? new Set<number>();
+      set.add(r.period);
+      periodsByStudent.set(r.studentId, set);
+    }
+
+    // Build global benchmark order: (category, natural code) across
+    // every benchmark that has at least one item row in any window.
+    const benchmarkMeta = new Map<string, { category: string | null }>();
+    for (const r of items) {
+      if (!benchmarkMeta.has(r.benchmarkCode)) {
+        benchmarkMeta.set(r.benchmarkCode, { category: r.category });
+      }
+    }
+    const benchmarks = Array.from(benchmarkMeta.entries())
+      .map(([code, meta]) => ({ code, category: meta.category }))
+      .sort((a, b) => {
+        const ca = a.category ?? "";
+        const cb = b.category ?? "";
+        if (ca !== cb) return ca.localeCompare(cb);
+        return compareBenchmarkCodes(a.code, b.code);
+      });
+
+    // Group items: studentId → window → code → items[]
+    interface ItemDetail {
+      itemSeq: number;
+      pointsEarned: number | null;
+      pointsPossible: number | null;
+    }
+    const grouped = new Map<
+      string,
+      Map<string, Map<string, ItemDetail[]>>
+    >();
+    for (const r of items) {
+      let byWin = grouped.get(r.studentId);
+      if (!byWin) {
+        byWin = new Map();
+        grouped.set(r.studentId, byWin);
+      }
+      let byCode = byWin.get(r.window);
+      if (!byCode) {
+        byCode = new Map();
+        byWin.set(r.window, byCode);
+      }
+      const arr = byCode.get(r.benchmarkCode) ?? [];
+      arr.push({
+        itemSeq: r.itemSeq,
+        pointsEarned: r.pointsEarned,
+        pointsPossible: r.pointsPossible,
+      });
+      byCode.set(r.benchmarkCode, arr);
+    }
+
+    const WINDOWS = ["pm1", "pm2", "pm3"] as const;
+    interface OutCell {
+      items: ItemDetail[];
+      earned: number;
+      possible: number;
+      pct: number;
+    }
+
+    const studentOut = students
+      .map((s) => {
+        const periods = Array.from(
+          periodsByStudent.get(s.studentId) ?? new Set<number>(),
+        ).sort((a, b) => a - b);
+        const byWin = grouped.get(s.studentId);
+        const windows: Record<string, Record<string, OutCell | null>> = {};
+        for (const w of WINDOWS) {
+          const byCode = byWin?.get(w);
+          const row: Record<string, OutCell | null> = {};
+          for (const b of benchmarks) {
+            const arr = byCode?.get(b.code);
+            if (!arr || arr.length === 0) {
+              row[b.code] = null;
+              continue;
+            }
+            let earned = 0;
+            let possible = 0;
+            for (const it of arr) {
+              if (it.pointsPossible == null) continue;
+              earned += it.pointsEarned ?? 0;
+              possible += it.pointsPossible;
+            }
+            row[b.code] = {
+              items: arr.slice().sort((x, y) => x.itemSeq - y.itemSeq),
+              earned,
+              possible,
+              pct:
+                possible === 0
+                  ? 0
+                  : Math.round((earned / possible) * 100),
+            };
+          }
+          windows[w] = row;
+        }
+        return {
+          studentId: s.studentId,
+          firstName: s.firstName,
+          lastName: s.lastName,
+          grade: s.grade,
+          periods,
+          windows,
+        };
+      })
+      .sort((a, b) => {
+        const ln = (a.lastName ?? "").localeCompare(b.lastName ?? "");
+        if (ln !== 0) return ln;
+        return (a.firstName ?? "").localeCompare(b.firstName ?? "");
+      });
+
+    res.json({
+      teacher: {
+        id: ctx.targetTeacher.id,
+        displayName: ctx.targetTeacher.displayName,
+      },
+      subject: ctx.subject,
+      schoolYear,
+      thresholdPct: ctx.thresholdPct,
+      benchmarks,
+      students: studentOut,
     });
   },
 );

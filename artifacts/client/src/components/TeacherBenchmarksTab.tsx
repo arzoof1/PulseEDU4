@@ -8,7 +8,7 @@
 // Empty-state handling is explicit: a school that hasn't imported any
 // Florida per-student xlsx yet sees a friendly "no item-level data"
 // banner pointing them to Data Importer, not an empty grid.
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
 
 interface Cell {
@@ -42,6 +42,41 @@ interface WindowOpt {
   schoolYear: string;
   window: string;
   label: string;
+}
+
+interface ReportItem {
+  itemSeq: number;
+  pointsEarned: number | null;
+  pointsPossible: number | null;
+}
+
+interface ReportCell {
+  items: ReportItem[];
+  earned: number;
+  possible: number;
+  pct: number;
+}
+
+interface ReportStudent {
+  studentId: string;
+  firstName: string;
+  lastName: string;
+  grade: number | string;
+  periods: number[];
+  windows: {
+    pm1: Record<string, ReportCell | null>;
+    pm2: Record<string, ReportCell | null>;
+    pm3: Record<string, ReportCell | null>;
+  };
+}
+
+interface ProgressReportResponse {
+  teacher: { id: number; displayName: string | null };
+  subject: string;
+  schoolYear: string;
+  thresholdPct: number;
+  benchmarks: Benchmark[];
+  students: ReportStudent[];
 }
 
 interface MatrixResponse {
@@ -181,6 +216,36 @@ export default function TeacherBenchmarksTab({
   const [drillCode, setDrillCode] = useState<string | null>(null);
   const [drill, setDrill] = useState<DrillResponse | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+
+  // Benchmark Progress Report modal — printable per-student item
+  // analysis across PM1/PM2/PM3. Either one student or all (alpha).
+  const [reportOpen, setReportOpen] = useState(false);
+  const [reportData, setReportData] = useState<ProgressReportResponse | null>(
+    null,
+  );
+  const [reportLoading, setReportLoading] = useState(false);
+  const [reportFilter, setReportFilter] = useState<string>("all");
+
+  const openReport = () => {
+    if (teacherId == null || !data) return;
+    setReportOpen(true);
+    setReportFilter("all");
+    setReportLoading(true);
+    setReportData(null);
+    const url =
+      `/api/teacher-roster/benchmarks/progress-report` +
+      `?teacherId=${teacherId}` +
+      `&subject=${subject}` +
+      `&schoolYear=${encodeURIComponent(data.schoolYear)}`;
+    authFetch(url)
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`Report ${r.status}`);
+        return (await r.json()) as ProgressReportResponse;
+      })
+      .then((j) => setReportData(j))
+      .catch(() => setError("Could not load Benchmark Progress Report."))
+      .finally(() => setReportLoading(false));
+  };
 
   // Category collapse — default ALL collapsed so the heatmap is
   // scannable. Click a category header to expand the per-benchmark
@@ -590,6 +655,14 @@ export default function TeacherBenchmarksTab({
         >
           Print PDF
         </button>
+        <button
+          onClick={openReport}
+          disabled={!data}
+          style={{ padding: "4px 10px" }}
+          title="Per-student item-analysis sheet across PM1 / PM2 / PM3 — printable so students can see growth"
+        >
+          Benchmark Progress Report
+        </button>
       </div>
 
       {/* Color legend — only relevant in absolute mode. */}
@@ -931,13 +1004,13 @@ export default function TeacherBenchmarksTab({
                           fontSize: 11,
                           textAlign: "center",
                           borderLeft: expanded
-                            ? "6px solid #dc2626"
+                            ? "4px solid #1e3a8a"
                             : "3px solid #6b7280",
                           borderRight: expanded
-                            ? "6px solid #dc2626"
+                            ? "4px solid #1e3a8a"
                             : undefined,
                           borderTop: expanded
-                            ? "6px solid #dc2626"
+                            ? "4px solid #1e3a8a"
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
@@ -996,11 +1069,11 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "6px solid #dc2626"
-                              : "3px solid #dc2626",
+                              ? "4px solid #1e3a8a"
+                              : "2px solid #2563eb",
                           borderRight:
                             i === g.codes.length - 1
-                              ? "6px solid #dc2626"
+                              ? "4px solid #1e3a8a"
                               : undefined,
                           whiteSpace: "nowrap",
                           color: "#374151",
@@ -1051,7 +1124,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "6px solid #dc2626",
+                                borderLeft: "4px solid #1e3a8a",
                               }}
                               title={`${g.category}: missing a window`}
                             >
@@ -1077,7 +1150,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "6px solid #dc2626",
+                              borderLeft: "4px solid #1e3a8a",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1113,11 +1186,11 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "6px solid #dc2626"
-                                    : "3px solid #dc2626",
+                                    ? "4px solid #1e3a8a"
+                                    : "2px solid #2563eb",
                                 borderRight:
                                   i === g.codes.length - 1
-                                    ? "6px solid #dc2626"
+                                    ? "4px solid #1e3a8a"
                                     : undefined,
                               }}
                               title={`${b.code}: missing a window`}
@@ -1139,11 +1212,11 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "6px solid #dc2626"
-                                  : "3px solid #dc2626",
+                                  ? "4px solid #1e3a8a"
+                                  : "2px solid #2563eb",
                               borderRight:
                                 i === g.codes.length - 1
-                                  ? "6px solid #dc2626"
+                                  ? "4px solid #1e3a8a"
                                   : undefined,
                               cursor: "help",
                             }}
@@ -1215,13 +1288,13 @@ export default function TeacherBenchmarksTab({
                           fontSize: 11,
                           textAlign: "center",
                           borderLeft: expanded
-                            ? "6px solid #dc2626"
+                            ? "4px solid #1e3a8a"
                             : "3px solid #6b7280",
                           borderRight: expanded
-                            ? "6px solid #dc2626"
+                            ? "4px solid #1e3a8a"
                             : undefined,
                           borderTop: expanded
-                            ? "6px solid #dc2626"
+                            ? "4px solid #1e3a8a"
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
@@ -1280,11 +1353,11 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "6px solid #dc2626"
-                              : "3px solid #dc2626",
+                              ? "4px solid #1e3a8a"
+                              : "2px solid #2563eb",
                           borderRight:
                             i === g.codes.length - 1
-                              ? "6px solid #dc2626"
+                              ? "4px solid #1e3a8a"
                               : undefined,
                           whiteSpace: "nowrap",
                           color: "#374151",
@@ -1349,7 +1422,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "6px solid #dc2626",
+                                borderLeft: "4px solid #1e3a8a",
                               }}
                               title={`${g.category}: no data`}
                             >
@@ -1373,7 +1446,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "6px solid #dc2626",
+                              borderLeft: "4px solid #1e3a8a",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1411,11 +1484,11 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "6px solid #dc2626"
-                                    : "3px solid #dc2626",
+                                    ? "4px solid #1e3a8a"
+                                    : "2px solid #2563eb",
                                 borderRight:
                                   i === g.codes.length - 1
-                                    ? "6px solid #dc2626"
+                                    ? "4px solid #1e3a8a"
                                     : undefined,
                               }}
                               title={`${b.code}: no data`}
@@ -1436,11 +1509,11 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "6px solid #dc2626"
-                                  : "3px solid #dc2626",
+                                  ? "4px solid #1e3a8a"
+                                  : "2px solid #2563eb",
                               borderRight:
                                 i === g.codes.length - 1
-                                  ? "6px solid #dc2626"
+                                  ? "4px solid #1e3a8a"
                                   : undefined,
                               cursor: "help",
                             }}
@@ -1623,6 +1696,403 @@ export default function TeacherBenchmarksTab({
           </div>
         </div>
       )}
+
+      {reportOpen && (
+        <ProgressReportModal
+          loading={reportLoading}
+          report={reportData}
+          filter={reportFilter}
+          onFilterChange={setReportFilter}
+          onClose={() => setReportOpen(false)}
+        />
+      )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Benchmark Progress Report — printable per-student item-analysis sheet.
+// One page per student (landscape). Rows = benchmarks (grouped by category),
+// columns = PM1 · PM2 · PM3, cells = per-item chips (red ✗ / green ✓) plus a
+// summary like "2/4 · 50%". Empty PM columns show an encouragement line so
+// students can see they're working toward filling those positives in.
+// ---------------------------------------------------------------------------
+function ProgressReportModal(props: {
+  loading: boolean;
+  report: ProgressReportResponse | null;
+  filter: string; // "all" or studentId
+  onFilterChange: (v: string) => void;
+  onClose: () => void;
+}) {
+  const { loading, report, filter, onFilterChange, onClose } = props;
+
+  const subjectLabel = (s: string | undefined) => {
+    if (!s) return "";
+    if (s === "ela") return "ELA";
+    if (s === "math") return "Math";
+    if (s === "algebra1") return "Algebra 1";
+    if (s === "geometry") return "Geometry";
+    if (s === "writing") return "Writing";
+    return s.toUpperCase();
+  };
+
+  // Group benchmarks by category for the leftmost label column.
+  const grouped = useMemo(() => {
+    if (!report) return [] as Array<{ category: string; codes: Benchmark[] }>;
+    const out: Array<{ category: string; codes: Benchmark[] }> = [];
+    for (const b of report.benchmarks) {
+      const cat = b.category ?? "Other";
+      const last = out[out.length - 1];
+      if (last && last.category === cat) {
+        last.codes.push(b);
+      } else {
+        out.push({ category: cat, codes: [b] });
+      }
+    }
+    return out;
+  }, [report]);
+
+  const visibleStudents = useMemo(() => {
+    if (!report) return [] as ReportStudent[];
+    if (filter === "all") return report.students;
+    return report.students.filter((s) => s.studentId === filter);
+  }, [report, filter]);
+
+  const WINDOWS: Array<"pm1" | "pm2" | "pm3"> = ["pm1", "pm2", "pm3"];
+  const winLabel: Record<string, string> = {
+    pm1: "PM1",
+    pm2: "PM2",
+    pm3: "PM3",
+  };
+
+  return (
+    <>
+      <style>{`
+        @media print {
+          @page { size: landscape; margin: 0.35in; }
+          body * { visibility: hidden !important; }
+          .progress-report-print, .progress-report-print * {
+            visibility: visible !important;
+          }
+          .progress-report-print {
+            position: absolute !important;
+            left: 0; top: 0; width: 100%;
+            background: white !important;
+            padding: 0 !important;
+            margin: 0 !important;
+            box-shadow: none !important;
+            overflow: visible !important;
+          }
+          .progress-report-toolbar { display: none !important; }
+          .progress-report-backdrop {
+            position: static !important;
+            background: white !important;
+            inset: auto !important;
+            overflow: visible !important;
+          }
+          .progress-report-page {
+            page-break-after: always;
+            break-after: page;
+            box-shadow: none !important;
+            border: none !important;
+            margin: 0 !important;
+            width: auto !important;
+            max-width: 100% !important;
+            padding: 0 !important;
+            min-height: 0 !important;
+          }
+          .progress-report-page:last-child {
+            page-break-after: auto;
+            break-after: auto;
+          }
+        }
+        .progress-report-page {
+          background: white;
+          width: 10.5in;
+          min-height: 7.5in;
+          margin: 0 auto 16px auto;
+          padding: 0.3in;
+          box-shadow: 0 1px 4px rgba(0,0,0,0.15);
+          box-sizing: border-box;
+        }
+        .progress-report-page table { border-collapse: collapse; width: 100%; }
+        .progress-report-page th, .progress-report-page td {
+          border: 1px solid #d1d5db;
+          padding: 4px 6px;
+          font-size: 10px;
+          vertical-align: top;
+        }
+        .progress-report-page th {
+          background: #f3f4f6;
+          font-weight: 700;
+          text-align: left;
+        }
+        .item-chip {
+          display: inline-block;
+          padding: 1px 5px;
+          margin: 1px 2px 1px 0;
+          border-radius: 3px;
+          font-size: 9px;
+          font-family: monospace;
+          font-weight: 600;
+        }
+        .item-chip.correct { background: #bbf7d0; color: #14532d; }
+        .item-chip.wrong { background: #fecaca; color: #7f1d1d; }
+        .item-chip.partial { background: #fef3c7; color: #78350f; }
+      `}</style>
+
+      <div
+        className="progress-report-backdrop"
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(15,23,42,0.55)",
+          zIndex: 1000,
+          overflow: "auto",
+          padding: "20px 0",
+        }}
+      >
+        <div
+          className="progress-report-toolbar"
+          style={{
+            position: "sticky",
+            top: 0,
+            zIndex: 1,
+            display: "flex",
+            gap: 12,
+            alignItems: "center",
+            background: "white",
+            padding: "10px 16px",
+            margin: "0 auto 14px auto",
+            width: "10.5in",
+            maxWidth: "calc(100% - 32px)",
+            boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+            borderRadius: 6,
+            boxSizing: "border-box",
+          }}
+        >
+          <strong style={{ fontSize: 14 }}>
+            Benchmark Progress Report
+            {report && (
+              <span style={{ color: "#6b7280", fontWeight: 400, marginLeft: 8 }}>
+                · {subjectLabel(report.subject)} · {report.schoolYear}
+              </span>
+            )}
+          </strong>
+          <span style={{ flex: 1 }} />
+          <label style={{ fontSize: 12, color: "#374151" }}>
+            Show:&nbsp;
+            <select
+              value={filter}
+              onChange={(e) => onFilterChange(e.target.value)}
+              style={{ fontSize: 12 }}
+              disabled={!report}
+            >
+              <option value="all">All students (alpha)</option>
+              {report?.students.map((s) => (
+                <option key={s.studentId} value={s.studentId}>
+                  {s.lastName}, {s.firstName}
+                </option>
+              ))}
+            </select>
+          </label>
+          <button
+            onClick={() => window.print()}
+            disabled={!report || report.students.length === 0}
+            style={{ padding: "4px 12px" }}
+          >
+            Print
+          </button>
+          <button onClick={onClose} style={{ padding: "4px 12px" }}>
+            Close
+          </button>
+        </div>
+
+        <div className="progress-report-print">
+          {loading && (
+            <div
+              style={{
+                background: "white",
+                padding: 20,
+                margin: "0 auto",
+                width: "10.5in",
+                maxWidth: "calc(100% - 32px)",
+                borderRadius: 6,
+                boxSizing: "border-box",
+              }}
+            >
+              Loading report…
+            </div>
+          )}
+          {!loading && report && visibleStudents.length === 0 && (
+            <div
+              style={{
+                background: "white",
+                padding: 20,
+                margin: "0 auto",
+                width: "10.5in",
+                maxWidth: "calc(100% - 32px)",
+                borderRadius: 6,
+                boxSizing: "border-box",
+              }}
+            >
+              No students to show.
+            </div>
+          )}
+          {!loading &&
+            report &&
+            visibleStudents.map((s) => (
+              <div key={s.studentId} className="progress-report-page">
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "flex-end",
+                    borderBottom: "2px solid #1e3a8a",
+                    paddingBottom: 6,
+                    marginBottom: 10,
+                  }}
+                >
+                  <div>
+                    <div style={{ fontSize: 18, fontWeight: 700 }}>
+                      {s.lastName}, {s.firstName}
+                    </div>
+                    <div style={{ fontSize: 11, color: "#374151", marginTop: 2 }}>
+                      Grade {s.grade}
+                      {" · Teacher: "}
+                      {report.teacher.displayName ?? "—"}
+                      {" · Period: "}
+                      {s.periods.length > 0 ? s.periods.join(", ") : "—"}
+                    </div>
+                  </div>
+                  <div style={{ textAlign: "right", fontSize: 11, color: "#374151" }}>
+                    <div style={{ fontWeight: 700, fontSize: 13 }}>
+                      {subjectLabel(report.subject)} · {report.schoolYear}
+                    </div>
+                    <div>FAST Benchmark Progress</div>
+                    <div style={{ color: "#6b7280" }}>
+                      Mastery ≥ {report.thresholdPct}%
+                    </div>
+                  </div>
+                </div>
+
+                {report.benchmarks.length === 0 ? (
+                  <div style={{ fontSize: 12, color: "#6b7280" }}>
+                    No FAST item-level data for {report.schoolYear} yet — the
+                    first administration will populate this report.
+                  </div>
+                ) : (
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ width: "28%" }}>Benchmark</th>
+                        {WINDOWS.map((w) => (
+                          <th key={w} style={{ width: "24%" }}>
+                            {winLabel[w]}
+                          </th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {grouped.map((g) => (
+                        <React.Fragment key={g.category}>
+                          <tr>
+                            <td
+                              colSpan={4}
+                              style={{
+                                background: "#dbeafe",
+                                fontWeight: 700,
+                                fontSize: 10,
+                                color: "#1e3a8a",
+                              }}
+                            >
+                              {g.category}
+                            </td>
+                          </tr>
+                          {g.codes.map((b) => (
+                            <tr key={b.code}>
+                              <td style={{ fontFamily: "monospace", fontSize: 10 }}>
+                                {b.code}
+                              </td>
+                              {WINDOWS.map((w) => {
+                                const cell = s.windows[w][b.code];
+                                if (!cell) {
+                                  return (
+                                    <td
+                                      key={w}
+                                      style={{
+                                        color: "#9ca3af",
+                                        fontStyle: "italic",
+                                        fontSize: 9,
+                                      }}
+                                    >
+                                      {winLabel[w]} — coming up. Keep working!
+                                    </td>
+                                  );
+                                }
+                                return (
+                                  <td key={w}>
+                                    <div>
+                                      {cell.items.map((it, idx) => {
+                                        const earned = it.pointsEarned ?? 0;
+                                        const possible = it.pointsPossible ?? 0;
+                                        let cls = "wrong";
+                                        if (possible > 0 && earned === possible) {
+                                          cls = "correct";
+                                        } else if (possible > 0 && earned > 0) {
+                                          cls = "partial";
+                                        }
+                                        return (
+                                          <span
+                                            key={it.itemSeq}
+                                            className={`item-chip ${cls}`}
+                                          >
+                                            #{it.itemSeq + 1}: {earned}/
+                                            {possible}
+                                          </span>
+                                        );
+                                      })}
+                                    </div>
+                                    <div
+                                      style={{
+                                        marginTop: 3,
+                                        fontSize: 10,
+                                        fontWeight: 700,
+                                        color:
+                                          cell.pct >= report.thresholdPct
+                                            ? "#14532d"
+                                            : "#7f1d1d",
+                                      }}
+                                    >
+                                      {cell.earned}/{cell.possible} · {cell.pct}%
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </React.Fragment>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+
+                <div
+                  style={{
+                    marginTop: 10,
+                    fontSize: 9,
+                    color: "#6b7280",
+                    fontStyle: "italic",
+                  }}
+                >
+                  Each PM column shows individual items: green = full credit,
+                  yellow = partial, pink = missed. Compare PM1 → PM2 → PM3 to
+                  see growth.
+                </div>
+              </div>
+            ))}
+        </div>
+      </div>
+    </>
   );
 }
