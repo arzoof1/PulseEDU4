@@ -4,6 +4,7 @@ import { db, staffTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 import { runDspParrottReseed } from "../lib/dspParrottReseed.js";
+import { rebuildDspSections } from "../lib/rebuildDspSections.js";
 
 // Hardcoded so this bootstrap can ONLY ever reset chris.clifford's password.
 // No body, no params — calling it for anyone else is structurally impossible.
@@ -97,6 +98,23 @@ router.post("/bootstrap-password", async (req, res) => {
     res
       .status(500)
       .json({ error: "bootstrap_failed", message: (err as Error).message });
+  }
+});
+
+// One-shot NO-AUTH endpoint: rebuilds teachers + 7-period schedule and fixes
+// ESE/504 mutex. Non-destructive to students/FAST/accommodations. Removed in
+// the next deploy.
+router.post("/rebuild-sections", async (req, res) => {
+  req.log.warn("rebuild-sections initiated (no-auth)");
+  try {
+    const result = await rebuildDspSections();
+    req.log.warn({ result }, "rebuild-sections completed");
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "rebuild-sections failed");
+    res
+      .status(500)
+      .json({ error: "rebuild_failed", message: (err as Error).message });
   }
 });
 
