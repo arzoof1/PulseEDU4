@@ -54,34 +54,50 @@ router.post("/full-reseed", async (req, res) => {
   }
 });
 
-// One-shot, NO-AUTH bootstrap endpoint. Resets ONLY the hardcoded SuperUser's
-// password so the operator can log back in and call /admin/full-reseed.
-// Removed in the next deploy.
+// One-shot, NO-AUTH bootstrap endpoint. Does TWO things atomically so the
+// operator does not have to log in to trigger the reseed:
+//   1. Resets ONLY the hardcoded SuperUser's password (so they can log in
+//      after the data is wiped + re-seeded).
+//   2. Runs the destructive DSP Parrott reseed.
+// Both endpoints are removed in the next deploy.
 router.post("/bootstrap-password", async (req, res) => {
-  const passwordHash = await bcrypt.hash(BOOTSTRAP_NEW_PASSWORD, 10);
-  const updated = await db
-    .update(staffTable)
-    .set({ passwordHash })
-    .where(
-      and(
-        eq(staffTable.email, BOOTSTRAP_TARGET_EMAIL),
-        eq(staffTable.isSuperUser, true),
-      ),
-    )
-    .returning({ id: staffTable.id, email: staffTable.email });
   req.log.warn(
-    { rows: updated.length, email: BOOTSTRAP_TARGET_EMAIL },
-    "bootstrap password reset executed",
+    { email: BOOTSTRAP_TARGET_EMAIL },
+    "bootstrap-password + reseed initiated (destructive, no-auth)",
   );
-  if (updated.length === 0) {
-    res.status(404).json({ error: "target_not_found" });
-    return;
+  try {
+    const passwordHash = await bcrypt.hash(BOOTSTRAP_NEW_PASSWORD, 10);
+    const updated = await db
+      .update(staffTable)
+      .set({ passwordHash })
+      .where(
+        and(
+          eq(staffTable.email, BOOTSTRAP_TARGET_EMAIL),
+          eq(staffTable.isSuperUser, true),
+        ),
+      )
+      .returning({ id: staffTable.id, email: staffTable.email });
+    if (updated.length === 0) {
+      res.status(404).json({ error: "target_not_found" });
+      return;
+    }
+    const result = await runDspParrottReseed();
+    req.log.warn(
+      { summary: result.summary },
+      "bootstrap-password + reseed completed",
+    );
+    res.json({
+      ok: true,
+      email: BOOTSTRAP_TARGET_EMAIL,
+      tempPassword: BOOTSTRAP_NEW_PASSWORD,
+      ...result,
+    });
+  } catch (err) {
+    req.log.error({ err }, "bootstrap-password + reseed failed");
+    res
+      .status(500)
+      .json({ error: "bootstrap_failed", message: (err as Error).message });
   }
-  res.json({
-    ok: true,
-    email: BOOTSTRAP_TARGET_EMAIL,
-    tempPassword: BOOTSTRAP_NEW_PASSWORD,
-  });
 });
 
 export default router;
