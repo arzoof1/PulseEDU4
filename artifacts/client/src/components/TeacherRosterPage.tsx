@@ -13,7 +13,7 @@
 // Bucket is intentionally suppressed for grade 3 and for any subject
 // without a chart (Algebra 1 / Geometry — not in v1).
 
-import { Fragment, useEffect, useMemo, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
 import StudentPhoto from "./StudentPhoto";
@@ -723,6 +723,32 @@ function ProgramPill({
 }) {
   const meta = PROGRAM_META[kind];
   const [open, setOpen] = useState(false);
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  // Popover uses position:fixed so it escapes the roster table's horizontal
+  // overflow container (which was clipping it on right-edge chips and
+  // bottom rows). Measure on open and again on scroll/resize so it tracks
+  // the anchor.
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const measure = () => {
+      const r = anchorRef.current?.getBoundingClientRect();
+      if (!r) return;
+      const W = 280;
+      // Prefer left-align under the chip; clamp 8px from viewport edges.
+      let left = r.left;
+      if (left + W > window.innerWidth - 8) left = window.innerWidth - W - 8;
+      if (left < 8) left = 8;
+      setCoords({ top: r.bottom + 4, left });
+    };
+    measure();
+    window.addEventListener("scroll", measure, true);
+    window.addEventListener("resize", measure);
+    return () => {
+      window.removeEventListener("scroll", measure, true);
+      window.removeEventListener("resize", measure);
+    };
+  }, [open]);
   const sorted = [...row.accommodations].sort((a, b) =>
     a.name.localeCompare(b.name),
   );
@@ -735,6 +761,7 @@ function ProgramPill({
       onBlur={() => setOpen(false)}
     >
       <span
+        ref={anchorRef}
         tabIndex={0}
         title={meta.title}
         aria-label={meta.title}
@@ -753,15 +780,14 @@ function ProgramPill({
       >
         {meta.label}
       </span>
-      {open && (
+      {open && coords && (
         <div
           role="tooltip"
           style={{
-            position: "absolute",
-            top: "100%",
-            left: 0,
-            marginTop: 4,
-            zIndex: 10,
+            position: "fixed",
+            top: coords.top,
+            left: coords.left,
+            zIndex: 10000,
             background: "white",
             border: "1px solid #e5e7eb",
             borderTop: `3px solid ${meta.fg}`,
