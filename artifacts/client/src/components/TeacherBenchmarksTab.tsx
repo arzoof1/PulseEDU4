@@ -829,7 +829,8 @@ export default function TeacherBenchmarksTab({
                       position: "sticky",
                       left: 0,
                       background: "#f3f4f6",
-                      minWidth: 160,
+                      minWidth: 220,
+                      width: 220,
                       borderRight: "1px solid #d4d4d4",
                       zIndex: 2,
                     }}
@@ -956,7 +957,8 @@ export default function TeacherBenchmarksTab({
                       position: "sticky",
                       left: 0,
                       background: "#f3f4f6",
-                      minWidth: 160,
+                      minWidth: 220,
+                      width: 220,
                       borderRight: "1px solid #d4d4d4",
                       zIndex: 2,
                     }}
