@@ -40,6 +40,7 @@ import {
   staffTable,
   studentsTable,
   studentFastItemResponsesTable,
+  studentFastScoresTable,
   schoolSettingsTable,
   schoolsTable,
   studentTrustedAdultsTable,
@@ -48,6 +49,11 @@ import {
 import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
 import { requireSchool } from "../lib/scope.js";
+import {
+  placeOnChart,
+  bucketTarget,
+  type Subject as FastSubject,
+} from "../lib/fastCutScores.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
@@ -640,7 +646,7 @@ router.get(
       return;
     }
 
-    const [students, items, periodRows] = await Promise.all([
+    const [students, items, periodRows, scaleRows] = await Promise.all([
       db
         .select({
           studentId: studentsTable.studentId,
@@ -697,7 +703,35 @@ router.get(
             inArray(sectionRosterTable.studentId, ctx.studentIds),
           ),
         ),
+      db
+        .select({
+          studentId: studentFastScoresTable.studentId,
+          pm1: studentFastScoresTable.pm1,
+          pm2: studentFastScoresTable.pm2,
+          pm3: studentFastScoresTable.pm3,
+        })
+        .from(studentFastScoresTable)
+        .where(
+          and(
+            eq(studentFastScoresTable.schoolId, ctx.schoolId),
+            eq(studentFastScoresTable.subject, ctx.subject),
+            eq(studentFastScoresTable.schoolYear, schoolYear),
+            inArray(studentFastScoresTable.studentId, ctx.studentIds),
+          ),
+        ),
     ]);
+
+    const scoresByStudent = new Map<
+      string,
+      { pm1: number | null; pm2: number | null; pm3: number | null }
+    >();
+    for (const r of scaleRows) {
+      scoresByStudent.set(r.studentId, {
+        pm1: r.pm1,
+        pm2: r.pm2,
+        pm3: r.pm3,
+      });
+    }
 
     // periods[studentId] = sorted unique list
     const periodsByStudent = new Map<string, Set<number>>();
@@ -761,6 +795,32 @@ router.get(
       possible: number;
       pct: number;
     }
+    interface ScaleCell {
+      score: number;
+      level: 1 | 2 | 3 | 4 | 5;
+      subLevel: string;
+      nextStopScore: number | null;
+      nextStopLabel: string | null;
+      gap: number | null;
+    }
+    const fastSubject = ctx.subject as FastSubject;
+    function computeScale(
+      score: number | null,
+      grade: number,
+    ): ScaleCell | null {
+      if (score == null || !Number.isFinite(grade)) return null;
+      const placement = placeOnChart(score, fastSubject, grade);
+      if (!placement) return null;
+      const target = bucketTarget(fastSubject, grade, placement.subLevel);
+      return {
+        score,
+        level: placement.level,
+        subLevel: placement.subLevel,
+        nextStopScore: target ? target.score : null,
+        nextStopLabel: target ? target.nextStop : null,
+        gap: target ? target.score - score : null,
+      };
+    }
 
     const studentOut = students
       .map((s) => {
@@ -797,6 +857,13 @@ router.get(
           }
           windows[w] = row;
         }
+        const gradeNum = Number(s.grade);
+        const sc = scoresByStudent.get(s.studentId);
+        const scales = {
+          pm1: computeScale(sc?.pm1 ?? null, gradeNum),
+          pm2: computeScale(sc?.pm2 ?? null, gradeNum),
+          pm3: computeScale(sc?.pm3 ?? null, gradeNum),
+        };
         return {
           studentId: s.studentId,
           firstName: s.firstName,
@@ -804,6 +871,7 @@ router.get(
           grade: s.grade,
           periods,
           windows,
+          scales,
         };
       })
       .sort((a, b) => {

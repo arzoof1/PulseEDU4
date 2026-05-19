@@ -57,6 +57,15 @@ interface ReportCell {
   pct: number;
 }
 
+interface ReportScale {
+  score: number;
+  level: 1 | 2 | 3 | 4 | 5;
+  subLevel: string;
+  nextStopScore: number | null;
+  nextStopLabel: string | null;
+  gap: number | null;
+}
+
 interface ReportStudent {
   studentId: string;
   firstName: string;
@@ -67,6 +76,11 @@ interface ReportStudent {
     pm1: Record<string, ReportCell | null>;
     pm2: Record<string, ReportCell | null>;
     pm3: Record<string, ReportCell | null>;
+  };
+  scales: {
+    pm1: ReportScale | null;
+    pm2: ReportScale | null;
+    pm3: ReportScale | null;
   };
 }
 
@@ -2077,10 +2091,29 @@ function ProgressReportModal(props: {
                   >
                     {winTotals.map((t, i) => {
                       const pct = t.pct;
+                      const scale = s.scales[t.w];
+                      // Level color comes from FAST level when available
+                      // (the canonical mastery signal), otherwise falls
+                      // back to the item % bucketing.
+                      const LEVEL_PALETTE: Record<
+                        1 | 2 | 3 | 4 | 5,
+                        { bg: string; fg: string; ring: string }
+                      > = {
+                        1: { bg: "#fecaca", fg: "#7f1d1d", ring: "#dc2626" },
+                        2: { bg: "#fed7aa", fg: "#7c2d12", ring: "#ea580c" },
+                        3: { bg: "#bbf7d0", fg: "#14532d", ring: "#16a34a" },
+                        4: { bg: "#bfdbfe", fg: "#1e3a8a", ring: "#2563eb" },
+                        5: { bg: "#e9d5ff", fg: "#581c87", ring: "#9333ea" },
+                      };
                       let gaugeBg = "#e5e7eb";
                       let gaugeFg = "#6b7280";
                       let ring = "#cbd5e1";
-                      if (pct != null) {
+                      if (scale) {
+                        const p = LEVEL_PALETTE[scale.level];
+                        gaugeBg = p.bg;
+                        gaugeFg = p.fg;
+                        ring = p.ring;
+                      } else if (pct != null) {
                         if (pct >= report.thresholdPct) {
                           gaugeBg = "#bbf7d0";
                           gaugeFg = "#14532d";
@@ -2098,6 +2131,10 @@ function ProgressReportModal(props: {
                       const prevPct = i > 0 ? winTotals[i - 1].pct : null;
                       const delta =
                         pct != null && prevPct != null ? pct - prevPct : null;
+                      const prevScale =
+                        i > 0 ? s.scales[winTotals[i - 1].w] : null;
+                      const levelDelta =
+                        scale && prevScale ? scale.level - prevScale.level : 0;
                       return (
                         <React.Fragment key={t.w}>
                           {i > 0 && (
@@ -2108,10 +2145,12 @@ function ProgressReportModal(props: {
                                 alignItems: "center",
                                 fontSize: 10,
                                 color: "#374151",
-                                minWidth: 36,
+                                minWidth: 44,
                               }}
                             >
-                              <div style={{ fontSize: 18, lineHeight: 1 }}>→</div>
+                              <div style={{ fontSize: 18, lineHeight: 1 }}>
+                                →
+                              </div>
                               {delta != null && (
                                 <div
                                   style={{
@@ -2129,6 +2168,28 @@ function ProgressReportModal(props: {
                                   {delta}%
                                 </div>
                               )}
+                              {scale && prevScale && (
+                                <div
+                                  style={{
+                                    fontWeight: 700,
+                                    fontSize: 9,
+                                    marginTop: 1,
+                                    color:
+                                      levelDelta > 0
+                                        ? "#14532d"
+                                        : levelDelta < 0
+                                        ? "#7f1d1d"
+                                        : "#374151",
+                                  }}
+                                >
+                                  L{prevScale.level}→L{scale.level}
+                                  {levelDelta > 0
+                                    ? " ▲"
+                                    : levelDelta < 0
+                                    ? " ▼"
+                                    : ""}
+                                </div>
+                              )}
                             </div>
                           )}
                           <div
@@ -2140,20 +2201,53 @@ function ProgressReportModal(props: {
                           >
                             <div
                               style={{
+                                position: "relative",
                                 width: 64,
                                 height: 64,
-                                borderRadius: "50%",
-                                background: gaugeBg,
-                                border: `3px solid ${ring}`,
-                                display: "flex",
-                                alignItems: "center",
-                                justifyContent: "center",
-                                fontWeight: 800,
-                                fontSize: 16,
-                                color: gaugeFg,
                               }}
                             >
-                              {pct == null ? "—" : `${pct}%`}
+                              <div
+                                style={{
+                                  width: 64,
+                                  height: 64,
+                                  borderRadius: "50%",
+                                  background: gaugeBg,
+                                  border: `3px solid ${ring}`,
+                                  display: "flex",
+                                  alignItems: "center",
+                                  justifyContent: "center",
+                                  fontWeight: 800,
+                                  fontSize: 16,
+                                  color: gaugeFg,
+                                }}
+                              >
+                                {pct == null ? "—" : `${pct}%`}
+                              </div>
+                              {scale && (
+                                <div
+                                  style={{
+                                    position: "absolute",
+                                    top: -4,
+                                    right: -4,
+                                    background: ring,
+                                    color: "white",
+                                    borderRadius: 999,
+                                    minWidth: 22,
+                                    height: 22,
+                                    padding: "0 5px",
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "center",
+                                    fontWeight: 800,
+                                    fontSize: 11,
+                                    border: "2px solid white",
+                                    boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
+                                  }}
+                                  title={`Sub-level ${scale.subLevel}`}
+                                >
+                                  L{scale.level}
+                                </div>
+                              )}
                             </div>
                             <div
                               style={{
@@ -2165,16 +2259,40 @@ function ProgressReportModal(props: {
                             >
                               {winLabel[t.w]}
                             </div>
-                            {pct != null && (
+                            {scale ? (
                               <div
                                 style={{
                                   fontSize: 9,
-                                  color: "#6b7280",
+                                  color: "#374151",
+                                  fontWeight: 600,
                                 }}
                               >
+                                {scale.score} · L{scale.level}
+                              </div>
+                            ) : pct != null ? (
+                              <div style={{ fontSize: 9, color: "#6b7280" }}>
                                 {t.earned}/{t.possible}
                               </div>
-                            )}
+                            ) : null}
+                            {scale &&
+                              scale.gap != null &&
+                              scale.nextStopLabel != null && (
+                                <div
+                                  style={{
+                                    fontSize: 8,
+                                    color:
+                                      scale.gap <= 0 ? "#14532d" : "#3730a3",
+                                    fontWeight: 600,
+                                    marginTop: 1,
+                                    textAlign: "center",
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  {scale.gap <= 0
+                                    ? `At ${scale.nextStopLabel}`
+                                    : `+${scale.gap} → ${scale.nextStopLabel}`}
+                                </div>
+                              )}
                           </div>
                         </React.Fragment>
                       );
