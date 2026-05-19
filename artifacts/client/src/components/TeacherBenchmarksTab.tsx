@@ -533,6 +533,54 @@ export default function TeacherBenchmarksTab({
             Mastery threshold: <strong>{data.thresholdPct}%</strong>
           </span>
         )}
+        {/* Expand/Collapse all categories — escape valve so users
+            don't have to click every category header individually. */}
+        {((mode === "absolute" && grouped.length > 0) ||
+          (mode === "growth" && growthGrouped.length > 0)) && (
+          <span
+            style={{
+              display: "inline-flex",
+              gap: 4,
+              alignItems: "center",
+              marginLeft: 4,
+            }}
+          >
+            <span style={{ color: "#6b7280", fontSize: 11 }}>Categories:</span>
+            <button
+              type="button"
+              onClick={() => {
+                const cats = (mode === "growth" ? growthGrouped : grouped).map(
+                  (g) => g.category,
+                );
+                setExpandedCats(new Set(cats));
+              }}
+              style={{
+                padding: "2px 8px",
+                fontSize: 11,
+                background: "white",
+                border: "1px solid #d1d5db",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              Expand all
+            </button>
+            <button
+              type="button"
+              onClick={() => setExpandedCats(new Set())}
+              style={{
+                padding: "2px 8px",
+                fontSize: 11,
+                background: "white",
+                border: "1px solid #d1d5db",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              Collapse all
+            </button>
+          </span>
+        )}
         <span style={{ flex: 1 }} />
         <button
           onClick={openPdf}
@@ -881,8 +929,13 @@ export default function TeacherBenchmarksTab({
                           padding: "6px 8px",
                           fontSize: 11,
                           textAlign: "center",
-                          borderLeft: "1px solid #9ca3af",
-                          background: "#e5e7eb",
+                          borderLeft: "3px solid #6b7280",
+                          borderBottom: expanded
+                            ? "2px solid #1d4ed8"
+                            : undefined,
+                          background: expanded ? "#dbeafe" : "#e5e7eb",
+                          color: expanded ? "#1e3a8a" : undefined,
+                          fontWeight: expanded ? 700 : undefined,
                           cursor: "pointer",
                           userSelect: "none",
                           minWidth: expanded ? undefined : 110,
@@ -890,7 +943,13 @@ export default function TeacherBenchmarksTab({
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
                       >
-                        <span style={{ marginRight: 4, color: "#6b7280" }}>
+                        <span
+                          style={{
+                            marginRight: 4,
+                            color: expanded ? "#1d4ed8" : "#6b7280",
+                            fontWeight: 700,
+                          }}
+                        >
                           {expanded ? "▾" : "▸"}
                         </span>
                         {g.category}
@@ -926,7 +985,7 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "1px solid #9ca3af"
+                              ? "3px solid #6b7280"
                               : "1px solid #e5e7eb",
                           whiteSpace: "nowrap",
                           color: "#374151",
@@ -977,7 +1036,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "1px solid #9ca3af",
+                                borderLeft: "3px solid #6b7280",
                               }}
                               title={`${g.category}: missing a window`}
                             >
@@ -1003,7 +1062,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "1px solid #9ca3af",
+                              borderLeft: "3px solid #6b7280",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1039,7 +1098,7 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "1px solid #9ca3af"
+                                    ? "3px solid #6b7280"
                                     : "1px solid #e5e7eb",
                               }}
                               title={`${b.code}: missing a window`}
@@ -1061,7 +1120,7 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "1px solid #9ca3af"
+                                  ? "3px solid #6b7280"
                                   : "1px solid #e5e7eb",
                               cursor: "help",
                             }}
@@ -1131,8 +1190,13 @@ export default function TeacherBenchmarksTab({
                           padding: "6px 8px",
                           fontSize: 11,
                           textAlign: "center",
-                          borderLeft: "1px solid #9ca3af",
-                          background: "#e5e7eb",
+                          borderLeft: "3px solid #6b7280",
+                          borderBottom: expanded
+                            ? "2px solid #1d4ed8"
+                            : undefined,
+                          background: expanded ? "#dbeafe" : "#e5e7eb",
+                          color: expanded ? "#1e3a8a" : undefined,
+                          fontWeight: expanded ? 700 : undefined,
                           cursor: "pointer",
                           userSelect: "none",
                           minWidth: expanded ? undefined : 110,
@@ -1140,7 +1204,13 @@ export default function TeacherBenchmarksTab({
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
                       >
-                        <span style={{ marginRight: 4, color: "#6b7280" }}>
+                        <span
+                          style={{
+                            marginRight: 4,
+                            color: expanded ? "#1d4ed8" : "#6b7280",
+                            fontWeight: 700,
+                          }}
+                        >
                           {expanded ? "▾" : "▸"}
                         </span>
                         {g.category}
@@ -1176,7 +1246,7 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "1px solid #9ca3af"
+                              ? "3px solid #6b7280"
                               : "1px solid #e5e7eb",
                           whiteSpace: "nowrap",
                           color: "#374151",
@@ -1241,7 +1311,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "1px solid #9ca3af",
+                                borderLeft: "3px solid #6b7280",
                               }}
                               title={`${g.category}: no data`}
                             >
@@ -1265,7 +1335,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "1px solid #9ca3af",
+                              borderLeft: "3px solid #6b7280",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1303,7 +1373,7 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "1px solid #9ca3af"
+                                    ? "3px solid #6b7280"
                                     : "1px solid #e5e7eb",
                               }}
                               title={`${b.code}: no data`}
@@ -1324,7 +1394,7 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "1px solid #9ca3af"
+                                  ? "3px solid #6b7280"
                                   : "1px solid #e5e7eb",
                               cursor: "help",
                             }}
