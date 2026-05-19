@@ -182,6 +182,21 @@ export default function TeacherBenchmarksTab({
   const [drill, setDrill] = useState<DrillResponse | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
 
+  // Category collapse — default ALL collapsed so the heatmap is
+  // scannable. Click a category header to expand the per-benchmark
+  // columns underneath it (in place, no modal). Shared between
+  // absolute + growth modes since the category set is the same.
+  const [expandedCats, setExpandedCats] = useState<Set<string>>(new Set());
+  const toggleCat = (cat: string) => {
+    setExpandedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  };
+  const isExpanded = (cat: string) => expandedCats.has(cat);
+
   useEffect(() => {
     if (teacherId == null) {
       setData(null);
@@ -351,6 +366,23 @@ export default function TeacherBenchmarksTab({
     }
     return out;
   }, [data]);
+
+  // Same shape for growth mode — needed so we can render the
+  // category-collapse UX in both modes from the same shape.
+  const growthGrouped = useMemo(() => {
+    if (!growth) return [] as Array<{ category: string; codes: Benchmark[] }>;
+    const out: Array<{ category: string; codes: Benchmark[] }> = [];
+    for (const b of growth.benchmarks) {
+      const cat = b.category ?? "(Uncategorized)";
+      const last = out[out.length - 1];
+      if (last && last.category === cat) {
+        last.codes.push(b);
+      } else {
+        out.push({ category: cat, codes: [b] });
+      }
+    }
+    return out;
+  }, [growth]);
 
   if (teacherId == null) {
     return (
@@ -823,6 +855,7 @@ export default function TeacherBenchmarksTab({
               <thead>
                 <tr style={{ background: "#f3f4f6" }}>
                   <th
+                    rowSpan={2}
                     style={{
                       padding: "6px 8px",
                       textAlign: "left",
@@ -837,26 +870,73 @@ export default function TeacherBenchmarksTab({
                   >
                     Student
                   </th>
-                  {growth.benchmarks.map((b) => (
-                    <th
-                      key={b.code}
-                      style={{
-                        padding: "4px 2px",
-                        fontSize: 9,
-                        fontFamily: "monospace",
-                        fontWeight: 600,
-                        width: 44,
-                        minWidth: 44,
-                        textAlign: "center",
-                        borderLeft: "1px solid #e5e7eb",
-                        whiteSpace: "nowrap",
-                        color: "#374151",
-                      }}
-                      title={`${b.code}${b.category ? ` · ${b.category}` : ""}`}
-                    >
-                      {b.code.split(".").slice(-2).join(".")}
-                    </th>
-                  ))}
+                  {growthGrouped.map((g) => {
+                    const expanded = isExpanded(g.category);
+                    return (
+                      <th
+                        key={g.category}
+                        colSpan={expanded ? g.codes.length : 1}
+                        rowSpan={expanded ? 1 : 2}
+                        style={{
+                          padding: "6px 8px",
+                          fontSize: 11,
+                          textAlign: "center",
+                          borderLeft: "1px solid #9ca3af",
+                          background: "#e5e7eb",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          minWidth: expanded ? undefined : 110,
+                        }}
+                        title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
+                        onClick={() => toggleCat(g.category)}
+                      >
+                        <span style={{ marginRight: 4, color: "#6b7280" }}>
+                          {expanded ? "▾" : "▸"}
+                        </span>
+                        {g.category}
+                        {!expanded && (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 10,
+                              color: "#6b7280",
+                              fontWeight: 400,
+                            }}
+                          >
+                            ({g.codes.length})
+                          </span>
+                        )}
+                      </th>
+                    );
+                  })}
+                </tr>
+                <tr style={{ background: "#f3f4f6" }}>
+                  {growthGrouped.flatMap((g) => {
+                    if (!isExpanded(g.category)) return [];
+                    return g.codes.map((b, i) => (
+                      <th
+                        key={b.code}
+                        style={{
+                          padding: "4px 2px",
+                          fontSize: 9,
+                          fontFamily: "monospace",
+                          fontWeight: 600,
+                          width: 44,
+                          minWidth: 44,
+                          textAlign: "center",
+                          borderLeft:
+                            i === 0
+                              ? "1px solid #9ca3af"
+                              : "1px solid #e5e7eb",
+                          whiteSpace: "nowrap",
+                          color: "#374151",
+                        }}
+                        title={`${b.code}${b.category ? ` · ${b.category}` : ""}`}
+                      >
+                        {b.code.split(".").slice(-2).join(".")}
+                      </th>
+                    ));
+                  })}
                 </tr>
               </thead>
               <tbody>
@@ -878,45 +958,120 @@ export default function TeacherBenchmarksTab({
                     >
                       {s.lastName}, {s.firstName}
                     </td>
-                    {growth.benchmarks.map((b) => {
-                      const cell = s.cells[b.code];
-                      if (!cell || cell.delta == null) {
+                    {growthGrouped.flatMap((g) => {
+                      if (!isExpanded(g.category)) {
+                        // Collapsed → avg delta + up/down subscript.
+                        // Exclude benchmarks missing a window from the
+                        // mean; matches the absolute-mode rule.
+                        const deltas: number[] = [];
+                        for (const b of g.codes) {
+                          const c = s.cells[b.code];
+                          if (c && c.delta != null) deltas.push(c.delta);
+                        }
+                        if (deltas.length === 0) {
+                          return [
+                            <td
+                              key={g.category}
+                              style={{
+                                padding: 0,
+                                textAlign: "center",
+                                background: "#f3f4f6",
+                                color: "#9ca3af",
+                                borderLeft: "1px solid #9ca3af",
+                              }}
+                              title={`${g.category}: missing a window`}
+                            >
+                              —
+                            </td>,
+                          ];
+                        }
+                        const avg = Math.round(
+                          deltas.reduce((a, d) => a + d, 0) / deltas.length,
+                        );
+                        // |delta| ≥ 3 matches the deltaColor "moved"
+                        // threshold; below that we treat as flat.
+                        const up = deltas.filter((d) => d >= 3).length;
+                        const down = deltas.filter((d) => d <= -3).length;
+                        const c = deltaColor(avg);
+                        const sign = avg > 0 ? "+" : "";
+                        return [
+                          <td
+                            key={g.category}
+                            style={{
+                              padding: "4px 6px",
+                              textAlign: "center",
+                              background: c.bg,
+                              color: c.fg,
+                              fontWeight: 600,
+                              borderLeft: "1px solid #9ca3af",
+                              cursor: "pointer",
+                              lineHeight: 1.1,
+                            }}
+                            title={`${s.lastName}, ${s.firstName} · ${g.category}: avg ${sign}${avg} across ${deltas.length}/${g.codes.length} benchmarks — click to expand`}
+                            onClick={() => toggleCat(g.category)}
+                          >
+                            {sign}
+                            {avg}
+                            <div
+                              style={{
+                                fontSize: 9,
+                                fontWeight: 500,
+                                opacity: 0.8,
+                                marginTop: 1,
+                              }}
+                            >
+                              {up}↑ / {down}↓
+                            </div>
+                          </td>,
+                        ];
+                      }
+                      // Expanded → per-benchmark cells (unchanged).
+                      return g.codes.map((b, i) => {
+                        const cell = s.cells[b.code];
+                        if (!cell || cell.delta == null) {
+                          return (
+                            <td
+                              key={b.code}
+                              style={{
+                                padding: 0,
+                                textAlign: "center",
+                                background: "#f3f4f6",
+                                color: "#9ca3af",
+                                borderLeft:
+                                  i === 0
+                                    ? "1px solid #9ca3af"
+                                    : "1px solid #e5e7eb",
+                              }}
+                              title={`${b.code}: missing a window`}
+                            >
+                              —
+                            </td>
+                          );
+                        }
+                        const c = deltaColor(cell.delta);
+                        const sign = cell.delta > 0 ? "+" : "";
                         return (
                           <td
                             key={b.code}
                             style={{
-                              padding: 0,
+                              padding: "4px 2px",
                               textAlign: "center",
-                              background: "#f3f4f6",
-                              color: "#9ca3af",
-                              borderLeft: "1px solid #e5e7eb",
+                              background: c.bg,
+                              color: c.fg,
+                              fontWeight: 600,
+                              borderLeft:
+                                i === 0
+                                  ? "1px solid #9ca3af"
+                                  : "1px solid #e5e7eb",
+                              cursor: "help",
                             }}
-                            title={`${b.code}: missing a window`}
+                            title={`${b.code}: ${cell.pctA}% → ${cell.pctB}% (${sign}${cell.delta})`}
                           >
-                            —
+                            {sign}
+                            {cell.delta}
                           </td>
                         );
-                      }
-                      const c = deltaColor(cell.delta);
-                      const sign = cell.delta > 0 ? "+" : "";
-                      return (
-                        <td
-                          key={b.code}
-                          style={{
-                            padding: "4px 2px",
-                            textAlign: "center",
-                            background: c.bg,
-                            color: c.fg,
-                            fontWeight: 600,
-                            borderLeft: "1px solid #e5e7eb",
-                            cursor: "help",
-                          }}
-                          title={`${b.code}: ${cell.pctA}% → ${cell.pctB}% (${sign}${cell.delta})`}
-                        >
-                          {sign}
-                          {cell.delta}
-                        </td>
-                      );
+                      });
                     })}
                   </tr>
                 ))}
@@ -965,32 +1120,50 @@ export default function TeacherBenchmarksTab({
                   >
                     Student
                   </th>
-                  {grouped.map((g) => (
-                    <th
-                      key={g.category}
-                      colSpan={g.codes.length}
-                      style={{
-                        padding: "4px 6px",
-                        fontSize: 11,
-                        textAlign: "center",
-                        borderLeft: "1px solid #d4d4d4",
-                        background: "#e5e7eb",
-                      }}
-                      title={g.category}
-                    >
-                      {g.category}
-                    </th>
-                  ))}
+                  {grouped.map((g) => {
+                    const expanded = isExpanded(g.category);
+                    return (
+                      <th
+                        key={g.category}
+                        colSpan={expanded ? g.codes.length : 1}
+                        rowSpan={expanded ? 1 : 2}
+                        style={{
+                          padding: "6px 8px",
+                          fontSize: 11,
+                          textAlign: "center",
+                          borderLeft: "1px solid #9ca3af",
+                          background: "#e5e7eb",
+                          cursor: "pointer",
+                          userSelect: "none",
+                          minWidth: expanded ? undefined : 110,
+                        }}
+                        title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
+                        onClick={() => toggleCat(g.category)}
+                      >
+                        <span style={{ marginRight: 4, color: "#6b7280" }}>
+                          {expanded ? "▾" : "▸"}
+                        </span>
+                        {g.category}
+                        {!expanded && (
+                          <span
+                            style={{
+                              marginLeft: 6,
+                              fontSize: 10,
+                              color: "#6b7280",
+                              fontWeight: 400,
+                            }}
+                          >
+                            ({g.codes.length})
+                          </span>
+                        )}
+                      </th>
+                    );
+                  })}
                 </tr>
                 <tr style={{ background: "#f3f4f6" }}>
-                  {data.benchmarks.map((b, i) => {
-                    // Find if this is the first code in its category for
-                    // the divider styling.
-                    const isFirstInCat =
-                      i === 0 ||
-                      (data.benchmarks[i - 1].category ?? "(Uncategorized)") !==
-                        (b.category ?? "(Uncategorized)");
-                    return (
+                  {grouped.flatMap((g) => {
+                    if (!isExpanded(g.category)) return [];
+                    return g.codes.map((b, i) => (
                       <th
                         key={b.code}
                         style={{
@@ -1001,9 +1174,10 @@ export default function TeacherBenchmarksTab({
                           width: 44,
                           minWidth: 44,
                           textAlign: "center",
-                          borderLeft: isFirstInCat
-                            ? "1px solid #9ca3af"
-                            : "1px solid #e5e7eb",
+                          borderLeft:
+                            i === 0
+                              ? "1px solid #9ca3af"
+                              : "1px solid #e5e7eb",
                           whiteSpace: "nowrap",
                           color: "#374151",
                         }}
@@ -1025,12 +1199,10 @@ export default function TeacherBenchmarksTab({
                           }}
                           title="Click to see students below threshold"
                         >
-                          {/* Show just the last 2 segments to fit the
-                              column; full code in the title. */}
                           {b.code.split(".").slice(-2).join(".")}
                         </button>
                       </th>
-                    );
+                    ));
                   })}
                 </tr>
               </thead>
@@ -1051,51 +1223,117 @@ export default function TeacherBenchmarksTab({
                     >
                       {s.lastName}, {s.firstName}
                     </td>
-                    {data.benchmarks.map((b, i) => {
-                      const cell = s.cells[b.code];
-                      const isFirstInCat =
-                        i === 0 ||
-                        (data.benchmarks[i - 1].category ?? "(Uncategorized)") !==
-                          (b.category ?? "(Uncategorized)");
-                      if (cell == null) {
+                    {grouped.flatMap((g) => {
+                      if (!isExpanded(g.category)) {
+                        // Collapsed → one summary cell per category.
+                        // Average is over benchmarks WITH data only
+                        // (missing benchmarks are excluded from the
+                        // mean rather than counted as 0).
+                        const scored = g.codes
+                          .map((b) => s.cells[b.code])
+                          .filter((c): c is Cell => c != null);
+                        if (scored.length === 0) {
+                          return [
+                            <td
+                              key={g.category}
+                              style={{
+                                padding: 0,
+                                textAlign: "center",
+                                background: "#f3f4f6",
+                                color: "#9ca3af",
+                                borderLeft: "1px solid #9ca3af",
+                              }}
+                              title={`${g.category}: no data`}
+                            >
+                              —
+                            </td>,
+                          ];
+                        }
+                        const avg = Math.round(
+                          scored.reduce((a, c) => a + c.pct, 0) / scored.length,
+                        );
+                        const mastered = scored.filter(
+                          (c) => c.pct >= data.thresholdPct,
+                        ).length;
+                        const c = cellColor(avg, data.thresholdPct);
+                        return [
+                          <td
+                            key={g.category}
+                            style={{
+                              padding: "4px 6px",
+                              textAlign: "center",
+                              background: c.bg,
+                              color: c.fg,
+                              fontWeight: 600,
+                              borderLeft: "1px solid #9ca3af",
+                              cursor: "pointer",
+                              lineHeight: 1.1,
+                            }}
+                            title={`${s.lastName}, ${s.firstName} · ${g.category}: avg ${avg}% across ${scored.length}/${g.codes.length} scored benchmarks — click to expand`}
+                            onClick={() => toggleCat(g.category)}
+                          >
+                            {avg}
+                            <div
+                              style={{
+                                fontSize: 9,
+                                fontWeight: 500,
+                                opacity: 0.75,
+                                marginTop: 1,
+                              }}
+                            >
+                              {mastered}/{scored.length}
+                              {scored.length < g.codes.length
+                                ? ` · ${g.codes.length - scored.length}—`
+                                : ""}
+                            </div>
+                          </td>,
+                        ];
+                      }
+                      // Expanded → per-benchmark cells (unchanged).
+                      return g.codes.map((b, i) => {
+                        const cell = s.cells[b.code];
+                        if (cell == null) {
+                          return (
+                            <td
+                              key={b.code}
+                              style={{
+                                padding: 0,
+                                textAlign: "center",
+                                background: "#f3f4f6",
+                                color: "#9ca3af",
+                                borderLeft:
+                                  i === 0
+                                    ? "1px solid #9ca3af"
+                                    : "1px solid #e5e7eb",
+                              }}
+                              title={`${b.code}: no data`}
+                            >
+                              —
+                            </td>
+                          );
+                        }
+                        const c = cellColor(cell.pct, data.thresholdPct);
                         return (
                           <td
                             key={b.code}
                             style={{
-                              padding: 0,
+                              padding: "4px 2px",
                               textAlign: "center",
-                              background: "#f3f4f6",
-                              color: "#9ca3af",
-                              borderLeft: isFirstInCat
-                                ? "1px solid #9ca3af"
-                                : "1px solid #e5e7eb",
+                              background: c.bg,
+                              color: c.fg,
+                              fontWeight: 600,
+                              borderLeft:
+                                i === 0
+                                  ? "1px solid #9ca3af"
+                                  : "1px solid #e5e7eb",
+                              cursor: "help",
                             }}
-                            title={`${b.code}: no data`}
+                            title={`${s.lastName}, ${s.firstName} · ${b.code}: ${cell.earned}/${cell.possible} (${cell.pct}%)`}
                           >
-                            —
+                            {cell.pct}
                           </td>
                         );
-                      }
-                      const c = cellColor(cell.pct, data.thresholdPct);
-                      return (
-                        <td
-                          key={b.code}
-                          style={{
-                            padding: "4px 2px",
-                            textAlign: "center",
-                            background: c.bg,
-                            color: c.fg,
-                            fontWeight: 600,
-                            borderLeft: isFirstInCat
-                              ? "1px solid #9ca3af"
-                              : "1px solid #e5e7eb",
-                            cursor: "help",
-                          }}
-                          title={`${s.lastName}, ${s.firstName} · ${b.code}: ${cell.earned}/${cell.possible} (${cell.pct}%)`}
-                        >
-                          {cell.pct}
-                        </td>
-                      );
+                      });
                     })}
                   </tr>
                 ))}
