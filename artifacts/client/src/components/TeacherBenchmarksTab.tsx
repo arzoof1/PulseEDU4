@@ -931,13 +931,13 @@ export default function TeacherBenchmarksTab({
                           fontSize: 11,
                           textAlign: "center",
                           borderLeft: expanded
-                            ? "4px solid #1e3a8a"
+                            ? "6px solid #dc2626"
                             : "3px solid #6b7280",
                           borderRight: expanded
-                            ? "4px solid #1e3a8a"
+                            ? "6px solid #dc2626"
                             : undefined,
                           borderTop: expanded
-                            ? "4px solid #1e3a8a"
+                            ? "6px solid #dc2626"
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
@@ -996,11 +996,11 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "4px solid #1e3a8a"
-                              : "2px solid #2563eb",
+                              ? "6px solid #dc2626"
+                              : "3px solid #dc2626",
                           borderRight:
                             i === g.codes.length - 1
-                              ? "4px solid #1e3a8a"
+                              ? "6px solid #dc2626"
                               : undefined,
                           whiteSpace: "nowrap",
                           color: "#374151",
@@ -1051,7 +1051,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "4px solid #1e3a8a",
+                                borderLeft: "6px solid #dc2626",
                               }}
                               title={`${g.category}: missing a window`}
                             >
@@ -1077,7 +1077,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "4px solid #1e3a8a",
+                              borderLeft: "6px solid #dc2626",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1113,11 +1113,11 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "4px solid #1e3a8a"
-                                    : "2px solid #2563eb",
+                                    ? "6px solid #dc2626"
+                                    : "3px solid #dc2626",
                                 borderRight:
                                   i === g.codes.length - 1
-                                    ? "4px solid #1e3a8a"
+                                    ? "6px solid #dc2626"
                                     : undefined,
                               }}
                               title={`${b.code}: missing a window`}
@@ -1139,11 +1139,11 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "4px solid #1e3a8a"
-                                  : "2px solid #2563eb",
+                                  ? "6px solid #dc2626"
+                                  : "3px solid #dc2626",
                               borderRight:
                                 i === g.codes.length - 1
-                                  ? "4px solid #1e3a8a"
+                                  ? "6px solid #dc2626"
                                   : undefined,
                               cursor: "help",
                             }}
@@ -1215,13 +1215,13 @@ export default function TeacherBenchmarksTab({
                           fontSize: 11,
                           textAlign: "center",
                           borderLeft: expanded
-                            ? "4px solid #1e3a8a"
+                            ? "6px solid #dc2626"
                             : "3px solid #6b7280",
                           borderRight: expanded
-                            ? "4px solid #1e3a8a"
+                            ? "6px solid #dc2626"
                             : undefined,
                           borderTop: expanded
-                            ? "4px solid #1e3a8a"
+                            ? "6px solid #dc2626"
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
@@ -1280,11 +1280,11 @@ export default function TeacherBenchmarksTab({
                           textAlign: "center",
                           borderLeft:
                             i === 0
-                              ? "4px solid #1e3a8a"
-                              : "2px solid #2563eb",
+                              ? "6px solid #dc2626"
+                              : "3px solid #dc2626",
                           borderRight:
                             i === g.codes.length - 1
-                              ? "4px solid #1e3a8a"
+                              ? "6px solid #dc2626"
                               : undefined,
                           whiteSpace: "nowrap",
                           color: "#374151",
@@ -1349,7 +1349,7 @@ export default function TeacherBenchmarksTab({
                                 textAlign: "center",
                                 background: "#f3f4f6",
                                 color: "#9ca3af",
-                                borderLeft: "4px solid #1e3a8a",
+                                borderLeft: "6px solid #dc2626",
                               }}
                               title={`${g.category}: no data`}
                             >
@@ -1373,7 +1373,7 @@ export default function TeacherBenchmarksTab({
                               background: c.bg,
                               color: c.fg,
                               fontWeight: 600,
-                              borderLeft: "4px solid #1e3a8a",
+                              borderLeft: "6px solid #dc2626",
                               cursor: "pointer",
                               lineHeight: 1.1,
                             }}
@@ -1411,11 +1411,11 @@ export default function TeacherBenchmarksTab({
                                 color: "#9ca3af",
                                 borderLeft:
                                   i === 0
-                                    ? "4px solid #1e3a8a"
-                                    : "2px solid #2563eb",
+                                    ? "6px solid #dc2626"
+                                    : "3px solid #dc2626",
                                 borderRight:
                                   i === g.codes.length - 1
-                                    ? "4px solid #1e3a8a"
+                                    ? "6px solid #dc2626"
                                     : undefined,
                               }}
                               title={`${b.code}: no data`}
@@ -1436,11 +1436,11 @@ export default function TeacherBenchmarksTab({
                               fontWeight: 600,
                               borderLeft:
                                 i === 0
-                                  ? "4px solid #1e3a8a"
-                                  : "2px solid #2563eb",
+                                  ? "6px solid #dc2626"
+                                  : "3px solid #dc2626",
                               borderRight:
                                 i === g.codes.length - 1
-                                  ? "4px solid #1e3a8a"
+                                  ? "6px solid #dc2626"
                                   : undefined,
                               cursor: "help",
                             }}
