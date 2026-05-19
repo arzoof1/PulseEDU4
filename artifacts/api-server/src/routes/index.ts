@@ -30,6 +30,7 @@ import pbisMilestonesRouter from "./pbisMilestones";
 import pulloutsRouter from "./pullouts";
 import digestRouter from "./digest";
 import adminStaffRouter from "./adminStaff";
+import adminReseedRouter from "./adminReseed";
 import parentEmailRouter from "./parentEmail";
 import pulloutReasonsRouter from "./pulloutReasons";
 import pulloutNoteTemplatesRouter from "./pulloutNoteTemplates";
@@ -131,6 +132,7 @@ router.use(pbisMilestonesRouter);
 router.use(pulloutsRouter);
 router.use(digestRouter);
 router.use(adminStaffRouter);
+router.use("/admin", adminReseedRouter);
 
 // -----------------------------------------------------------------------------
 // Feature licensing gates — MUST be registered BEFORE the gated routers.
