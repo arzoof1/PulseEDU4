@@ -1,8 +1,14 @@
 import { Router, type IRouter, type Request } from "express";
+import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 import { runDspParrottReseed } from "../lib/dspParrottReseed.js";
+
+// Hardcoded so this bootstrap can ONLY ever reset chris.clifford's password.
+// No body, no params — calling it for anyone else is structurally impossible.
+const BOOTSTRAP_TARGET_EMAIL = "chris.clifford@hcsb.k12.fl.us";
+const BOOTSTRAP_NEW_PASSWORD = "PulseDemo!";
 
 const router: IRouter = Router();
 
@@ -46,6 +52,36 @@ router.post("/full-reseed", async (req, res) => {
       .status(500)
       .json({ error: "reseed_failed", message: (err as Error).message });
   }
+});
+
+// One-shot, NO-AUTH bootstrap endpoint. Resets ONLY the hardcoded SuperUser's
+// password so the operator can log back in and call /admin/full-reseed.
+// Removed in the next deploy.
+router.post("/bootstrap-password", async (req, res) => {
+  const passwordHash = await bcrypt.hash(BOOTSTRAP_NEW_PASSWORD, 10);
+  const updated = await db
+    .update(staffTable)
+    .set({ passwordHash })
+    .where(
+      and(
+        eq(staffTable.email, BOOTSTRAP_TARGET_EMAIL),
+        eq(staffTable.isSuperUser, true),
+      ),
+    )
+    .returning({ id: staffTable.id, email: staffTable.email });
+  req.log.warn(
+    { rows: updated.length, email: BOOTSTRAP_TARGET_EMAIL },
+    "bootstrap password reset executed",
+  );
+  if (updated.length === 0) {
+    res.status(404).json({ error: "target_not_found" });
+    return;
+  }
+  res.json({
+    ok: true,
+    email: BOOTSTRAP_TARGET_EMAIL,
+    tempPassword: BOOTSTRAP_NEW_PASSWORD,
+  });
 });
 
 export default router;
