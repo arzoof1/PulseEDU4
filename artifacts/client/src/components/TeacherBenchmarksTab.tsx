@@ -61,6 +61,7 @@ interface ReportScale {
   score: number;
   level: 1 | 2 | 3 | 4 | 5;
   subLevel: string;
+  subLevelLabel: string;
   nextStopScore: number | null;
   nextStopLabel: string | null;
   gap: number | null;
@@ -2175,17 +2176,19 @@ function ProgressReportModal(props: {
                                     fontSize: 9,
                                     marginTop: 1,
                                     color:
-                                      levelDelta > 0
-                                        ? "#14532d"
-                                        : levelDelta < 0
-                                        ? "#7f1d1d"
+                                      scale.subLevel !== prevScale.subLevel
+                                        ? levelDelta > 0 ||
+                                          (levelDelta === 0 &&
+                                            scale.subLevel > prevScale.subLevel)
+                                          ? "#14532d"
+                                          : "#7f1d1d"
                                         : "#374151",
                                   }}
                                 >
-                                  L{prevScale.level}→L{scale.level}
-                                  {levelDelta > 0
+                                  L{prevScale.subLevel}→L{scale.subLevel}
+                                  {scale.subLevel > prevScale.subLevel
                                     ? " ▲"
-                                    : levelDelta < 0
+                                    : scale.subLevel < prevScale.subLevel
                                     ? " ▼"
                                     : ""}
                                 </div>
@@ -2243,9 +2246,9 @@ function ProgressReportModal(props: {
                                     border: "2px solid white",
                                     boxShadow: "0 1px 2px rgba(0,0,0,0.2)",
                                   }}
-                                  title={`Sub-level ${scale.subLevel}`}
+                                  title={`Sub-level ${scale.subLevel} (${scale.subLevelLabel})`}
                                 >
-                                  L{scale.level}
+                                  L{scale.subLevel}
                                 </div>
                               )}
                             </div>
@@ -2267,7 +2270,7 @@ function ProgressReportModal(props: {
                                   fontWeight: 600,
                                 }}
                               >
-                                {scale.score} · L{scale.level}
+                                {scale.score} · {scale.subLevelLabel}
                               </div>
                             ) : pct != null ? (
                               <div style={{ fontSize: 9, color: "#6b7280" }}>

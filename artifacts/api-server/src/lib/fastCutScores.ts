@@ -368,7 +368,7 @@ const NEXT_STOP: Record<SubLevel, SubLevel | null> = {
   "5": null,
 };
 
-const SUB_LEVEL_LABEL: Record<SubLevel, string> = {
+export const SUB_LEVEL_LABEL: Record<SubLevel, string> = {
   "1.1": "Low 1",
   "1.2": "Mid 1",
   "1.3": "High 1",

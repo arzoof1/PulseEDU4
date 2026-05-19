@@ -52,6 +52,7 @@ import { requireSchool } from "../lib/scope.js";
 import {
   placeOnChart,
   bucketTarget,
+  SUB_LEVEL_LABEL,
   type Subject as FastSubject,
 } from "../lib/fastCutScores.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
@@ -799,6 +800,7 @@ router.get(
       score: number;
       level: 1 | 2 | 3 | 4 | 5;
       subLevel: string;
+      subLevelLabel: string;
       nextStopScore: number | null;
       nextStopLabel: string | null;
       gap: number | null;
@@ -816,8 +818,9 @@ router.get(
         score,
         level: placement.level,
         subLevel: placement.subLevel,
+        subLevelLabel: SUB_LEVEL_LABEL[placement.subLevel],
         nextStopScore: target ? target.score : null,
-        nextStopLabel: target ? target.nextStop : null,
+        nextStopLabel: target ? SUB_LEVEL_LABEL[target.nextStop] : null,
         gap: target ? target.score - score : null,
       };
     }
