@@ -1126,6 +1126,8 @@ export default function TeacherBenchmarksTab({
                                 top: 4,
                                 left: 4,
                                 lineHeight: 0,
+                                opacity: expanded ? 0.25 : 1,
+                                transition: "opacity 120ms ease",
                               }}
                               onClick={(e) => e.stopPropagation()}
                               title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
@@ -1482,6 +1484,8 @@ export default function TeacherBenchmarksTab({
                                 top: 4,
                                 left: 4,
                                 lineHeight: 0,
+                                opacity: expanded ? 0.25 : 1,
+                                transition: "opacity 120ms ease",
                               }}
                               onClick={(e) => e.stopPropagation()}
                               title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
