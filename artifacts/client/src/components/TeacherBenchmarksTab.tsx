@@ -1097,43 +1097,45 @@ export default function TeacherBenchmarksTab({
                             ({g.codes.length})
                           </span>
                         )}
-                        {expanded &&
-                          (() => {
-                            // Aggregate the per-benchmark stars into one
-                            // category-level star: sum of deliveries, latest
-                            // taught-on across any benchmark in the group.
-                            let total = 0;
-                            let latest: string | null = null;
-                            for (const b of g.codes) {
-                              const dc = deliveryCounts[b.code];
-                              if (!dc) continue;
-                              total += dc.count;
-                              if (
-                                dc.lastTaughtOn &&
-                                (!latest || dc.lastTaughtOn > latest)
-                              ) {
-                                latest = dc.lastTaughtOn;
-                              }
+                        {(() => {
+                          // Aggregate the per-benchmark stars into one
+                          // category-level star: sum of deliveries, latest
+                          // taught-on across any benchmark in the group.
+                          // Shown in both collapsed and expanded states so
+                          // teachers see at-a-glance coverage without
+                          // having to expand every category.
+                          let total = 0;
+                          let latest: string | null = null;
+                          for (const b of g.codes) {
+                            const dc = deliveryCounts[b.code];
+                            if (!dc) continue;
+                            total += dc.count;
+                            if (
+                              dc.lastTaughtOn &&
+                              (!latest || dc.lastTaughtOn > latest)
+                            ) {
+                              latest = dc.lastTaughtOn;
                             }
-                            if (total === 0) return null;
-                            return (
-                              <span
-                                style={{
-                                  marginLeft: 8,
-                                  verticalAlign: "middle",
-                                  display: "inline-block",
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
-                              >
-                                <BenchmarkStar
-                                  count={total}
-                                  lastTaughtOn={latest}
-                                  size={22}
-                                />
-                              </span>
-                            );
-                          })()}
+                          }
+                          if (total === 0) return null;
+                          return (
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                verticalAlign: "middle",
+                                display: "inline-block",
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
+                            >
+                              <BenchmarkStar
+                                count={total}
+                                lastTaughtOn={latest}
+                                size={26}
+                              />
+                            </span>
+                          );
+                        })()}
                       </th>
                     );
                   })}
@@ -1178,7 +1180,7 @@ export default function TeacherBenchmarksTab({
                             lastTaughtOn={
                               deliveryCounts[b.code]?.lastTaughtOn ?? null
                             }
-                            size={18}
+                            size={36}
                           />
                           <span>{b.code.split(".").slice(-2).join(".")}</span>
                         </div>
@@ -1434,43 +1436,45 @@ export default function TeacherBenchmarksTab({
                             ({g.codes.length})
                           </span>
                         )}
-                        {expanded &&
-                          (() => {
-                            // Aggregate the per-benchmark stars into one
-                            // category-level star: sum of deliveries, latest
-                            // taught-on across any benchmark in the group.
-                            let total = 0;
-                            let latest: string | null = null;
-                            for (const b of g.codes) {
-                              const dc = deliveryCounts[b.code];
-                              if (!dc) continue;
-                              total += dc.count;
-                              if (
-                                dc.lastTaughtOn &&
-                                (!latest || dc.lastTaughtOn > latest)
-                              ) {
-                                latest = dc.lastTaughtOn;
-                              }
+                        {(() => {
+                          // Aggregate the per-benchmark stars into one
+                          // category-level star: sum of deliveries, latest
+                          // taught-on across any benchmark in the group.
+                          // Shown in both collapsed and expanded states so
+                          // teachers see at-a-glance coverage without
+                          // having to expand every category.
+                          let total = 0;
+                          let latest: string | null = null;
+                          for (const b of g.codes) {
+                            const dc = deliveryCounts[b.code];
+                            if (!dc) continue;
+                            total += dc.count;
+                            if (
+                              dc.lastTaughtOn &&
+                              (!latest || dc.lastTaughtOn > latest)
+                            ) {
+                              latest = dc.lastTaughtOn;
                             }
-                            if (total === 0) return null;
-                            return (
-                              <span
-                                style={{
-                                  marginLeft: 8,
-                                  verticalAlign: "middle",
-                                  display: "inline-block",
-                                }}
-                                onClick={(e) => e.stopPropagation()}
-                                title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
-                              >
-                                <BenchmarkStar
-                                  count={total}
-                                  lastTaughtOn={latest}
-                                  size={22}
-                                />
-                              </span>
-                            );
-                          })()}
+                          }
+                          if (total === 0) return null;
+                          return (
+                            <span
+                              style={{
+                                marginLeft: 8,
+                                verticalAlign: "middle",
+                                display: "inline-block",
+                              }}
+                              onClick={(e) => e.stopPropagation()}
+                              title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
+                            >
+                              <BenchmarkStar
+                                count={total}
+                                lastTaughtOn={latest}
+                                size={26}
+                              />
+                            </span>
+                          );
+                        })()}
                       </th>
                     );
                   })}
@@ -1486,8 +1490,8 @@ export default function TeacherBenchmarksTab({
                           fontSize: 9,
                           fontFamily: "monospace",
                           fontWeight: 600,
-                          width: 44,
-                          minWidth: 44,
+                          width: 56,
+                          minWidth: 56,
                           textAlign: "center",
                           borderLeft:
                             i === 0
@@ -1502,24 +1506,40 @@ export default function TeacherBenchmarksTab({
                         }}
                         title={b.code}
                       >
-                        <button
-                          onClick={() => setDrillCode(b.code)}
+                        <div
                           style={{
-                            background: "none",
-                            border: "none",
-                            padding: 0,
-                            cursor: "pointer",
-                            color: "inherit",
-                            fontFamily: "inherit",
-                            fontSize: "inherit",
-                            fontWeight: "inherit",
-                            textDecoration: "underline",
-                            textDecorationStyle: "dotted",
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            gap: 2,
                           }}
-                          title="Click to see students below threshold"
                         >
-                          {b.code.split(".").slice(-2).join(".")}
-                        </button>
+                          <BenchmarkStar
+                            count={deliveryCounts[b.code]?.count ?? 0}
+                            lastTaughtOn={
+                              deliveryCounts[b.code]?.lastTaughtOn ?? null
+                            }
+                            size={36}
+                          />
+                          <button
+                            onClick={() => setDrillCode(b.code)}
+                            style={{
+                              background: "none",
+                              border: "none",
+                              padding: 0,
+                              cursor: "pointer",
+                              color: "inherit",
+                              fontFamily: "inherit",
+                              fontSize: "inherit",
+                              fontWeight: "inherit",
+                              textDecoration: "underline",
+                              textDecorationStyle: "dotted",
+                            }}
+                            title="Click to see students below threshold"
+                          >
+                            {b.code.split(".").slice(-2).join(".")}
+                          </button>
+                        </div>
                       </th>
                     ));
                   })}
