@@ -460,7 +460,9 @@ function ActivationEntry({
     room?: string,
   ) => Promise<{ ok: boolean; error?: string }>;
 }) {
-  const [tab, setTab] = useState<"scan" | "pin" | "password">("scan");
+  const [tab, setTab] = useState<"camera" | "scan" | "pin" | "password">(
+    "camera",
+  );
   return (
     <div
       style={{
@@ -500,7 +502,7 @@ function ActivationEntry({
           borderRadius: 8,
         }}
       >
-        {(["scan", "pin", "password"] as const).map((t) => (
+        {(["camera", "scan", "pin", "password"] as const).map((t) => (
           <button
             key={t}
             role="tab"
@@ -513,21 +515,127 @@ function ActivationEntry({
                 tab === t ? "rgba(255,255,255,0.12)" : "transparent",
               border: "none",
               color: "white",
-              padding: "0.5rem 0.75rem",
+              padding: "0.5rem 0.5rem",
               borderRadius: 6,
-              fontSize: "0.9rem",
+              fontSize: "0.85rem",
               fontWeight: tab === t ? 700 : 500,
               cursor: "pointer",
             }}
           >
-            {t === "scan" ? "Scan card" : t === "pin" ? "6-digit code" : "Password"}
+            {t === "camera"
+              ? "Use this camera"
+              : t === "scan"
+              ? "Phone scan"
+              : t === "pin"
+              ? "6-digit code"
+              : "Password"}
           </button>
         ))}
       </div>
 
+      {tab === "camera" && <CameraScan onBeginEnroll={onBeginEnroll} />}
       {tab === "scan" && <ScanInstructions />}
       {tab === "pin" && <PinEntry onBeginEnroll={onBeginEnroll} />}
       {tab === "password" && <ActivationScreen onActivated={onActivated} />}
+    </div>
+  );
+}
+
+// Front-facing camera scan for laptop/desktop kiosks. The activation
+// card QR encodes a URL like `/kiosk?enroll=<token>`. We extract the
+// token and feed it into the same activate-by-enrollment flow used
+// when a teacher scans on their phone.
+function CameraScan({
+  onBeginEnroll,
+}: {
+  onBeginEnroll: (
+    credential: string,
+    method: "enroll" | "pin",
+    room?: string,
+  ) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  function extractToken(raw: string): string | null {
+    // Accept either a full URL with ?enroll=<token> or a bare token.
+    try {
+      const u = new URL(raw, window.location.origin);
+      const t = u.searchParams.get("enroll");
+      if (t && t.length >= 16) return t;
+    } catch {
+      // not a URL — fall through
+    }
+    const trimmed = raw.trim();
+    if (/^[A-Za-z0-9_-]{16,}$/.test(trimmed)) return trimmed;
+    return null;
+  }
+
+  async function handleScan(text: string) {
+    setOpen(false);
+    const token = extractToken(text);
+    if (!token) {
+      setError(
+        "That QR code isn't an activation card. Point at the QR on the card itself.",
+      );
+      return;
+    }
+    setBusy(true);
+    setError("");
+    const result = await onBeginEnroll(token, "enroll");
+    if (!result.ok) {
+      setError(result.error ?? "Activation failed");
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.85rem",
+        padding: "0.5rem 0.25rem",
+        fontSize: "0.95rem",
+        lineHeight: 1.5,
+      }}
+    >
+      <div style={{ opacity: 0.9 }}>
+        Hold your activation card up to this device's webcam. We'll
+        read the QR code and activate the kiosk automatically.
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          setError("");
+          setOpen(true);
+        }}
+        disabled={busy}
+        style={primaryBtn(busy)}
+      >
+        {busy ? "Activating…" : "Open camera"}
+      </button>
+      {error && <ErrorBox>{error}</ErrorBox>}
+      <div
+        style={{
+          fontSize: "0.8rem",
+          opacity: 0.65,
+          borderTop: "1px solid rgba(255,255,255,0.08)",
+          paddingTop: "0.6rem",
+        }}
+      >
+        No camera permission? Use <b>6-digit code</b> or <b>Password</b>
+        {" "}instead. The browser will remember the choice next time.
+      </div>
+      {open && (
+        <CameraScanner
+          facingMode="user"
+          label="Hold the activation card's QR up to the camera"
+          onScan={handleScan}
+          onCancel={() => setOpen(false)}
+        />
+      )}
     </div>
   );
 }

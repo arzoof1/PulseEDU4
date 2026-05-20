@@ -18,6 +18,12 @@ type Phase = "starting" | "scanning" | "error";
 interface Props {
   onScan: (text: string) => void;
   onCancel: () => void;
+  // "environment" (default) targets the rear camera on phones for
+  // student badge scanning. "user" targets the front-facing camera,
+  // which is what a laptop / desktop kiosk needs when a teacher
+  // holds their activation card up to the screen.
+  facingMode?: "environment" | "user";
+  label?: string;
 }
 
 // Minimal subset of the BarcodeDetector API we actually use.
@@ -33,7 +39,12 @@ declare global {
   }
 }
 
-export function CameraScanner({ onScan, onCancel }: Props) {
+export function CameraScanner({
+  onScan,
+  onCancel,
+  facingMode = "environment",
+  label,
+}: Props) {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   // Tracks whether we've already fired onScan so a slow zxing controls
@@ -67,7 +78,7 @@ export function CameraScanner({ onScan, onCancel }: Props) {
     async function start() {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: "environment" },
+          video: { facingMode },
           audio: false,
         });
         if (cancelled) {
@@ -135,6 +146,7 @@ export function CameraScanner({ onScan, onCancel }: Props) {
 
     return () => {
       cancelled = true;
+      void facingMode;
       if (rafId !== null) cancelAnimationFrame(rafId);
       try {
         zxingControls?.stop();
@@ -175,7 +187,7 @@ export function CameraScanner({ onScan, onCancel }: Props) {
         }}
       >
         {phase === "starting" && "Starting camera…"}
-        {phase === "scanning" && "Point the camera at the badge"}
+        {phase === "scanning" && (label ?? "Point the camera at the badge")}
         {phase === "error" && `Camera error: ${errorMsg}`}
       </div>
       <div
