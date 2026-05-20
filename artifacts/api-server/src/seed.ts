@@ -6364,8 +6364,7 @@ export async function ensureSchoolBenchmarksCatalogBackfill(): Promise<void> {
     SELECT school_id, subject, benchmark_code, MAX(category), 'fast'
       FROM student_fast_item_responses
      GROUP BY school_id, subject, benchmark_code
-    ON CONFLICT ON CONSTRAINT school_benchmarks_school_subject_code_unique
-    DO NOTHING
+    ON CONFLICT (school_id, subject, code) DO NOTHING
   `);
 }
 

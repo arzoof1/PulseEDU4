@@ -206,16 +206,28 @@ async function runSeed(): Promise<void> {
   // ELL flag is set but who has zero active student_accommodations rows
   // — otherwise the Teacher Roster "Programs" hover opens to an empty
   // list. Idempotent.
-  await ensureStudentAccommodationsBackfill();
+  // Instructional Log + Instructional Coverage tables + catalog auto-seed
+  // from FAST item responses. Both idempotent. Run BEFORE any seed step
+  // that has historically been fragile (e.g. the accommodations
+  // backfill, which depends on a constraint that's missing on some
+  // legacy tenants) so a downstream failure cannot keep this new
+  // schema from being created. Also wrapped in try/catch defensively.
+  try {
+    await ensureBenchmarkDeliveriesSchema();
+    await ensureSchoolBenchmarksCatalogBackfill();
+  } catch (err) {
+    logger.error({ err }, "[boot] benchmark catalog ensure failed");
+  }
+  try {
+    await ensureStudentAccommodationsBackfill();
+  } catch (err) {
+    logger.error({ err }, "[boot] student accommodations backfill failed");
+  }
   // Backfill location_allowed_destinations for schools that have locations
   // but zero origin×destination pairs — otherwise the kiosk destination
   // picker is blank for legacy tenants. Idempotent: schools with any
   // existing pair are skipped.
   await ensureLocationAllowedDestinationsBackfill();
-  // Instructional Log + Instructional Coverage tables + catalog auto-seed
-  // from FAST item responses. Both idempotent.
-  await ensureBenchmarkDeliveriesSchema();
-  await ensureSchoolBenchmarksCatalogBackfill();
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a
