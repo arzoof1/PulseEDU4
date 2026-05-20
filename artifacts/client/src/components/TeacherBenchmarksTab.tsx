@@ -1784,7 +1784,7 @@ function ProgressReportModal(props: {
     <>
       <style>{`
         @media print {
-          @page { size: landscape; margin: 0.35in; }
+          @page { size: letter portrait; margin: 0.35in; }
           body * { visibility: hidden !important; }
           .progress-report-print, .progress-report-print * {
             visibility: visible !important;
@@ -1808,6 +1808,8 @@ function ProgressReportModal(props: {
           .progress-report-page {
             page-break-after: always;
             break-after: page;
+            page-break-inside: avoid;
+            break-inside: avoid;
             box-shadow: none !important;
             border: none !important;
             margin: 0 !important;
@@ -1820,11 +1822,17 @@ function ProgressReportModal(props: {
             page-break-after: auto;
             break-after: auto;
           }
+          .progress-report-page table { font-size: 8.5px !important; }
+          .progress-report-page th,
+          .progress-report-page td {
+            padding: 2px 4px !important;
+          }
+          .item-chip { font-size: 7.5px !important; padding: 0 3px !important; }
         }
         .progress-report-page {
           background: white;
-          width: 10.5in;
-          min-height: 7.5in;
+          width: 7.7in;
+          min-height: 10in;
           margin: 0 auto 16px auto;
           padding: 0.3in;
           box-shadow: 0 1px 4px rgba(0,0,0,0.15);
@@ -1833,8 +1841,8 @@ function ProgressReportModal(props: {
         .progress-report-page table { border-collapse: collapse; width: 100%; }
         .progress-report-page th, .progress-report-page td {
           border: 1px solid #d1d5db;
-          padding: 4px 6px;
-          font-size: 10px;
+          padding: 3px 5px;
+          font-size: 9px;
           vertical-align: top;
         }
         .progress-report-page th {
@@ -1844,10 +1852,10 @@ function ProgressReportModal(props: {
         }
         .item-chip {
           display: inline-block;
-          padding: 1px 5px;
+          padding: 1px 4px;
           margin: 1px 2px 1px 0;
           border-radius: 3px;
-          font-size: 9px;
+          font-size: 8px;
           font-family: monospace;
           font-weight: 600;
         }
