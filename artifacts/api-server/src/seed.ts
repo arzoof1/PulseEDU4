@@ -51,7 +51,7 @@ import {
   studentRetentionsTable,
 } from "@workspace/db";
 import bcrypt from "bcryptjs";
-import { eq, sql, and, inArray, isNull } from "drizzle-orm";
+import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";

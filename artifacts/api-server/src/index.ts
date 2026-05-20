@@ -34,6 +34,7 @@ import {
   ensureSchoolsTimezoneColumn,
   ensureStudentPhotoColumns,
   ensureStudentLocalSisIdBackfill,
+  ensureStudentAccommodationsBackfill,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -198,6 +199,11 @@ async function runSeed(): Promise<void> {
   // (legacy rows). Local SIS ID is the student-facing credential
   // everywhere in the app; FLEID stays internal for FAST joins.
   await ensureStudentLocalSisIdBackfill();
+  // Backfill per-student accommodations for any student whose ESE / 504 /
+  // ELL flag is set but who has zero active student_accommodations rows
+  // — otherwise the Teacher Roster "Programs" hover opens to an empty
+  // list. Idempotent.
+  await ensureStudentAccommodationsBackfill();
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a
