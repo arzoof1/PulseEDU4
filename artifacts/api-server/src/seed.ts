@@ -6107,6 +6107,131 @@ export async function ensureStudentLocalSisIdBackfill(): Promise<void> {
   `);
 }
 
+// -----------------------------------------------------------------------------
+// Per-student accommodations backfill.
+//
+// Why: the bulk multi-school seeder (seedMultiSchoolIfEmpty) was the only
+// path that ever wrote rows into student_accommodations. Once any school
+// has a school_accommodations catalog row, the bulk seeder short-circuits
+// — so production tenants that onboarded after the initial seed (or any
+// student inserted later via a roster import) end up with the ESE / 504 /
+// ELL pill rendering but no per-student accommodations behind it. The
+// Teacher Roster "Programs" hover therefore opens to an empty list.
+//
+// This backfill walks every school and, for each student whose
+// demographic flag is set but who has zero ACTIVE (removedAt IS NULL)
+// student_accommodations rows, assigns 2–4 category-matched
+// accommodations drawn from MASTER_ACCS. Catalog rows are upserted into
+// school_accommodations first via ON CONFLICT DO NOTHING on the
+// (school_id, name) unique index so this is safe to run on schools that
+// already have a partial or fully populated catalog.
+//
+// Idempotent: students that already have any active assignment are
+// skipped. Re-running on a fully-backfilled tenant performs one cheap
+// COUNT + the catalog upserts (also no-ops).
+// -----------------------------------------------------------------------------
+export async function ensureStudentAccommodationsBackfill(): Promise<void> {
+  // 1. Per school, ensure the catalog rows exist.
+  const schools = await db
+    .select({ id: schoolsTable.id })
+    .from(schoolsTable);
+  for (const school of schools) {
+    for (const a of MASTER_ACCS) {
+      await db.execute(sql`
+        INSERT INTO school_accommodations (school_id, name, category, active)
+        VALUES (${school.id}, ${a.name}, ${a.category}, true)
+        ON CONFLICT ON CONSTRAINT school_accommodations_school_id_name_unique
+        DO NOTHING
+      `);
+    }
+
+    // 2. Find students with at least one program flag set but no active
+    // accommodations. We do this in one query per school.
+    const orphanRows = (await db.execute(sql`
+      SELECT s.student_id, s.ese, s.is_504, s.ell
+        FROM students s
+       WHERE s.school_id = ${school.id}
+         AND (s.ese = true OR s.is_504 = true OR s.ell = true)
+         AND NOT EXISTS (
+               SELECT 1
+                 FROM student_accommodations sa
+                WHERE sa.school_id = s.school_id
+                  AND sa.student_id = s.student_id
+                  AND sa.removed_at IS NULL
+             )
+    `)).rows as Array<{
+      student_id: string;
+      ese: boolean;
+      is_504: boolean;
+      ell: boolean;
+    }>;
+    if (orphanRows.length === 0) continue;
+
+    // 3. Load the school's catalog and bucket by category.
+    const catalog = await db
+      .select()
+      .from(schoolAccommodationsTable)
+      .where(eq(schoolAccommodationsTable.schoolId, school.id));
+    const iepIds = catalog.filter((c) => c.category === "IEP").map((c) => c.id);
+    const sec504Ids = catalog.filter((c) => c.category === "504").map((c) => c.id);
+    const ellIds = catalog.filter((c) => c.category === "ELL").map((c) => c.id);
+
+    // Pick an admin/SuperUser/teacher (in that order) to attribute the
+    // backfill assignments to so the audit trail isn't NULL.
+    const [attributable] = await db
+      .select({ id: staffTable.id })
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, school.id),
+          eq(staffTable.active, true),
+        ),
+      )
+      .orderBy(
+        desc(staffTable.isSuperUser),
+        desc(staffTable.isAdmin),
+        asc(staffTable.id),
+      )
+      .limit(1);
+    const assignedById = attributable?.id ?? null;
+
+    // 4. Deterministic per-school RNG so a reseed produces the same set.
+    const rng = makeRng(0xacc0 + school.id * 7919);
+    type AssignInsert = typeof studentAccommodationsTable.$inferInsert;
+    const rows: AssignInsert[] = [];
+    for (const s of orphanRows) {
+      // Pool from the student's actual flags. ESE → IEP catalog, etc.
+      // Students with multiple flags draw from a merged pool.
+      const pool: number[] = [];
+      if (s.ese) pool.push(...iepIds);
+      if (s.is_504) pool.push(...sec504Ids);
+      if (s.ell) pool.push(...ellIds);
+      if (pool.length === 0) continue;
+      const count = Math.min(2 + Math.floor(rng() * 3), pool.length); // 2..4
+      const chosen = shuffle(rng, pool).slice(0, count);
+      for (const accId of chosen) {
+        rows.push({
+          schoolId: school.id,
+          studentId: s.student_id,
+          accommodationId: accId,
+          assignedByStaffId: assignedById,
+        });
+      }
+    }
+    if (rows.length > 0) {
+      await chunkedInsert(studentAccommodationsTable, rows, 1000);
+      logger.info(
+        {
+          schoolId: school.id,
+          students: orphanRows.length,
+          assignments: rows.length,
+        },
+        "[seed] accommodations backfill",
+      );
+    }
+  }
+}
+
 export async function ensureBadgePrintEventsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS badge_print_events (
