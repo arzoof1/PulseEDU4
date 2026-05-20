@@ -62,6 +62,7 @@ function gradeTokenFromCode(code: string): string | null {
 export default function InstructionalCoverageDashboard({ onBack }: Props) {
   const [subject, setSubject] = useState<string>("ela");
   const [grade, setGrade] = useState<string>("all");
+  const [benchmarkCode, setBenchmarkCode] = useState<string>("all");
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
@@ -116,17 +117,42 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
     return Array.from(set).sort((a, b) => order(a) - order(b) || a.localeCompare(b));
   }, [data]);
 
-  // Reset the grade picker when the subject (and therefore the
+  // Reset the grade + benchmark pickers when the subject (and therefore the
   // available grades) changes — keeps the user from being stuck on a
   // grade the new subject doesn't have.
   useEffect(() => {
     setGrade("all");
+    setBenchmarkCode("all");
   }, [subject]);
+
+  // Reset the benchmark picker when the grade changes, since the picker's
+  // options are scoped to the current grade.
+  useEffect(() => {
+    setBenchmarkCode("all");
+  }, [grade]);
 
   const filteredBenchmarks = useMemo(() => {
     if (!data) return [] as Row[];
-    if (grade === "all") return data.benchmarks;
-    return data.benchmarks.filter((r) => gradeTokenFromCode(r.code) === grade);
+    let rows = data.benchmarks;
+    if (grade !== "all") {
+      rows = rows.filter((r) => gradeTokenFromCode(r.code) === grade);
+    }
+    if (benchmarkCode !== "all") {
+      rows = rows.filter((r) => r.code === benchmarkCode);
+    }
+    return rows;
+  }, [data, grade, benchmarkCode]);
+
+  // Benchmark dropdown options — scoped by the current grade filter so a
+  // coach drilling into Grade 7 Math only sees 7th-grade codes. Each
+  // option is "CODE — Category" so admins can scan by domain.
+  const benchmarkOptions = useMemo(() => {
+    if (!data) return [] as Row[];
+    const rows =
+      grade === "all"
+        ? data.benchmarks
+        : data.benchmarks.filter((r) => gradeTokenFromCode(r.code) === grade);
+    return [...rows].sort((a, b) => a.code.localeCompare(b.code));
   }, [data, grade]);
 
   // Effectiveness band — combines delivery count with mastery to indicate
@@ -265,6 +291,23 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
             {availableGrades.map((g) => (
               <option key={g} value={g}>
                 {g === "K" ? "Kindergarten" : `Grade ${g}`}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ fontSize: 13 }}>
+          Benchmark:&nbsp;
+          <select
+            value={benchmarkCode}
+            onChange={(e) => setBenchmarkCode(e.target.value)}
+            disabled={benchmarkOptions.length === 0}
+            style={{ maxWidth: 320 }}
+          >
+            <option value="all">All benchmarks</option>
+            {benchmarkOptions.map((b) => (
+              <option key={b.code} value={b.code}>
+                {b.code}
+                {b.category ? ` — ${b.category}` : ""}
               </option>
             ))}
           </select>
