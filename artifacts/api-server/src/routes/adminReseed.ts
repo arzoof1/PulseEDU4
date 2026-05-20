@@ -183,152 +183,218 @@ router.post("/fix-object-names", async (req, res) => {
 // Idempotent: existing locations are skipped (by name); existing
 // staff rooms/extensions are NOT overwritten if already set.
 router.post("/seed-rooms-staff", async (req, res) => {
-  req.log.warn("seed-rooms-staff initiated (no-auth)");
+  req.log.warn("seed-rooms-staff initiated (no-auth, all schools)");
   try {
-    const { db, staffTable, locationsTable, staffDefaultsTable } =
-      await import("@workspace/db");
+    const {
+      db,
+      staffTable,
+      locationsTable,
+      staffDefaultsTable,
+      schoolsTable,
+    } = await import("@workspace/db");
     const { and, eq } = await import("drizzle-orm");
-    const SCHOOL_ID = 1;
 
-    // ---- 1. Classrooms ------------------------------------------------
-    // Pattern matches existing rows like "Parrott Room 101".
-    const desiredRooms: string[] = [];
-    for (const floor of [1, 2, 3]) {
-      for (let n = 1; n <= 12; n++) {
-        desiredRooms.push(`Parrott Room ${floor}${n.toString().padStart(2, "0")}`);
-      }
+    // Derive a short, room-friendly prefix from a school. Prefer the
+    // explicit `short_name` column; otherwise take the first
+    // meaningful word of `name` (skipping common district-style
+    // prefixes like "DSP", "The"); fallback to "School{id}".
+    function prefixFor(s: {
+      id: number;
+      name: string;
+      shortName: string | null;
+    }): string {
+      const SKIP = new Set(["dsp", "the", "a", "of"]);
+      if (s.shortName && s.shortName.trim()) return s.shortName.trim();
+      const tokens = (s.name || "")
+        .split(/\s+/)
+        .filter((t) => t && !SKIP.has(t.toLowerCase()));
+      if (tokens.length > 0) return tokens[0]!;
+      return `School${s.id}`;
     }
-    // Plus a couple of specialist spaces.
-    const specialistRooms = [
-      "Parrott Library",
-      "Parrott Counseling Office",
-      "Parrott Front Office",
-      "Parrott Music Room",
-      "Parrott Art Room",
-      "Parrott Science Lab",
-    ];
 
-    const existingRows = await db
-      .select({ name: locationsTable.name })
-      .from(locationsTable)
-      .where(eq(locationsTable.schoolId, SCHOOL_ID));
-    const existingNames = new Set(existingRows.map((r) => r.name));
+    const schools = await db
+      .select({
+        id: schoolsTable.id,
+        name: schoolsTable.name,
+        shortName: schoolsTable.shortName,
+      })
+      .from(schoolsTable)
+      .orderBy(schoolsTable.id);
 
-    let roomsInserted = 0;
-    for (const name of [...desiredRooms, ...specialistRooms]) {
-      if (existingNames.has(name)) continue;
+    type PerSchoolResult = {
+      schoolId: number;
+      schoolName: string;
+      prefix: string;
+      roomsInserted: number;
+      teachers: number;
+      staffUpdated: number;
+      defaultsUpserted: number;
+    };
+    const perSchool: PerSchoolResult[] = [];
+    let totals = {
+      roomsInserted: 0,
+      teachers: 0,
+      staffUpdated: 0,
+      defaultsUpserted: 0,
+    };
+
+    for (const school of schools) {
+      const SCHOOL_ID = school.id;
+      const prefix = prefixFor(school);
+
+      // ---- 1. Classrooms --------------------------------------------
+      // 3 floors × 12 rooms = 36 classrooms, e.g. "Parrott Room 101".
+      const desiredRooms: string[] = [];
+      for (const floor of [1, 2, 3]) {
+        for (let n = 1; n <= 12; n++) {
+          desiredRooms.push(
+            `${prefix} Room ${floor}${n.toString().padStart(2, "0")}`,
+          );
+        }
+      }
+      const specialistRooms = [
+        `${prefix} Library`,
+        `${prefix} Counseling Office`,
+        `${prefix} Front Office`,
+        `${prefix} Music Room`,
+        `${prefix} Art Room`,
+        `${prefix} Science Lab`,
+      ];
+
       // eslint-disable-next-line no-await-in-loop
-      await db.insert(locationsTable).values({
-        schoolId: SCHOOL_ID,
-        name,
-        kind: "classroom",
-        isOrigin: true,
-        isDestination: false,
-        studentVisible: false,
-        active: true,
-      });
-      roomsInserted++;
-    }
+      const existingRows = await db
+        .select({ name: locationsTable.name })
+        .from(locationsTable)
+        .where(eq(locationsTable.schoolId, SCHOOL_ID));
+      const existingNames = new Set(existingRows.map((r) => r.name));
 
-    // ---- 2. Assign rooms + extensions to active teachers --------------
-    const teachers = await db
-      .select()
-      .from(staffTable)
-      .where(
-        and(eq(staffTable.schoolId, SCHOOL_ID), eq(staffTable.active, true)),
-      )
-      .orderBy(staffTable.id);
-
-    // Build the room pool we'll round-robin through. Classrooms first,
-    // then specialist spaces.
-    const roomPool = [...desiredRooms];
-
-    // Heuristic: counselors / admins get office rooms; everyone else
-    // gets a classroom.
-    function extensionForRoom(roomName: string): string {
-      const m = roomName.match(/Room\s+(\d+)/);
-      if (m) return `1${m[1]}`;
-      // Specialist rooms get 19xx extensions.
-      const idx = specialistRooms.indexOf(roomName);
-      return `19${(idx + 1).toString().padStart(2, "0")}`;
-    }
-
-    let staffUpdated = 0;
-    let defaultsUpserted = 0;
-    let classroomCursor = 0;
-    for (const t of teachers) {
-      const name = (t.displayName || "").toLowerCase();
-      let assignedRoom: string;
-      if (name.includes("counsel") || name.includes("guidance")) {
-        assignedRoom = "Parrott Counseling Office";
-      } else if (
-        name.includes("principal") ||
-        name.includes("admin") ||
-        name.includes("front office") ||
-        name.includes("secretary")
-      ) {
-        assignedRoom = "Parrott Front Office";
-      } else if (name.includes("librarian") || name.includes("media")) {
-        assignedRoom = "Parrott Library";
-      } else if (name.includes("music") || name.includes("band")) {
-        assignedRoom = "Parrott Music Room";
-      } else if (name.includes("art")) {
-        assignedRoom = "Parrott Art Room";
-      } else if (name.includes("science") && classroomCursor % 7 === 0) {
-        assignedRoom = "Parrott Science Lab";
-      } else {
-        assignedRoom = roomPool[classroomCursor % roomPool.length]!;
-        classroomCursor++;
-      }
-      const ext = extensionForRoom(assignedRoom);
-
-      const updates: Record<string, string> = {};
-      if (!t.defaultRoom) updates.defaultRoom = assignedRoom;
-      if (!t.workExtension) updates.workExtension = ext;
-      if (Object.keys(updates).length > 0) {
+      let roomsInserted = 0;
+      for (const name of [...desiredRooms, ...specialistRooms]) {
+        if (existingNames.has(name)) continue;
         // eslint-disable-next-line no-await-in-loop
-        await db
-          .update(staffTable)
-          .set(updates)
-          .where(eq(staffTable.id, t.id));
-        staffUpdated++;
+        await db.insert(locationsTable).values({
+          schoolId: SCHOOL_ID,
+          name,
+          kind: "classroom",
+          isOrigin: true,
+          isDestination: false,
+          studentVisible: false,
+          active: true,
+        });
+        roomsInserted++;
       }
 
-      // Upsert staff_defaults (the source of truth for kiosk
-      // previewRoom). staff_name is unique — use it as the upsert key.
+      // ---- 2. Assign rooms + extensions to active staff ------------
       // eslint-disable-next-line no-await-in-loop
-      const [existing] = await db
+      const teachers = await db
         .select()
-        .from(staffDefaultsTable)
-        .where(eq(staffDefaultsTable.staffId, t.id));
-      const targetRoom = t.defaultRoom ?? assignedRoom;
-      if (existing) {
-        if (!existing.defaultLocationName) {
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, SCHOOL_ID),
+            eq(staffTable.active, true),
+          ),
+        )
+        .orderBy(staffTable.id);
+
+      const roomPool = [...desiredRooms];
+
+      function extensionForRoom(roomName: string): string {
+        const m = roomName.match(/Room\s+(\d+)/);
+        if (m) return `1${m[1]}`;
+        const idx = specialistRooms.indexOf(roomName);
+        return `19${(idx + 1).toString().padStart(2, "0")}`;
+      }
+
+      let staffUpdated = 0;
+      let defaultsUpserted = 0;
+      let classroomCursor = 0;
+      for (const t of teachers) {
+        const name = (t.displayName || "").toLowerCase();
+        let assignedRoom: string;
+        if (name.includes("counsel") || name.includes("guidance")) {
+          assignedRoom = `${prefix} Counseling Office`;
+        } else if (
+          name.includes("principal") ||
+          name.includes("admin") ||
+          name.includes("front office") ||
+          name.includes("secretary")
+        ) {
+          assignedRoom = `${prefix} Front Office`;
+        } else if (name.includes("librarian") || name.includes("media")) {
+          assignedRoom = `${prefix} Library`;
+        } else if (name.includes("music") || name.includes("band")) {
+          assignedRoom = `${prefix} Music Room`;
+        } else if (name.includes("art")) {
+          assignedRoom = `${prefix} Art Room`;
+        } else if (name.includes("science") && classroomCursor % 7 === 0) {
+          assignedRoom = `${prefix} Science Lab`;
+        } else {
+          assignedRoom = roomPool[classroomCursor % roomPool.length]!;
+          classroomCursor++;
+        }
+        const ext = extensionForRoom(assignedRoom);
+
+        const updates: Record<string, string> = {};
+        if (!t.defaultRoom) updates.defaultRoom = assignedRoom;
+        if (!t.workExtension) updates.workExtension = ext;
+        if (Object.keys(updates).length > 0) {
           // eslint-disable-next-line no-await-in-loop
           await db
-            .update(staffDefaultsTable)
-            .set({ defaultLocationName: targetRoom })
-            .where(eq(staffDefaultsTable.id, existing.id));
+            .update(staffTable)
+            .set(updates)
+            .where(eq(staffTable.id, t.id));
+          staffUpdated++;
+        }
+
+        // Upsert staff_defaults (source of truth for kiosk previewRoom).
+        // eslint-disable-next-line no-await-in-loop
+        const [existing] = await db
+          .select()
+          .from(staffDefaultsTable)
+          .where(eq(staffDefaultsTable.staffId, t.id));
+        const targetRoom = t.defaultRoom ?? assignedRoom;
+        if (existing) {
+          if (!existing.defaultLocationName) {
+            // eslint-disable-next-line no-await-in-loop
+            await db
+              .update(staffDefaultsTable)
+              .set({ defaultLocationName: targetRoom })
+              .where(eq(staffDefaultsTable.id, existing.id));
+            defaultsUpserted++;
+          }
+        } else {
+          // eslint-disable-next-line no-await-in-loop
+          await db.insert(staffDefaultsTable).values({
+            schoolId: SCHOOL_ID,
+            staffId: t.id,
+            staffName: t.displayName,
+            defaultLocationName: targetRoom,
+          });
           defaultsUpserted++;
         }
-      } else {
-        // eslint-disable-next-line no-await-in-loop
-        await db.insert(staffDefaultsTable).values({
-          schoolId: SCHOOL_ID,
-          staffId: t.id,
-          staffName: t.displayName,
-          defaultLocationName: targetRoom,
-        });
-        defaultsUpserted++;
       }
+
+      perSchool.push({
+        schoolId: SCHOOL_ID,
+        schoolName: school.name,
+        prefix,
+        roomsInserted,
+        teachers: teachers.length,
+        staffUpdated,
+        defaultsUpserted,
+      });
+      totals.roomsInserted += roomsInserted;
+      totals.teachers += teachers.length;
+      totals.staffUpdated += staffUpdated;
+      totals.defaultsUpserted += defaultsUpserted;
     }
 
     const result = {
       ok: true,
-      roomsInserted,
-      teachers: teachers.length,
-      staffUpdated,
-      defaultsUpserted,
+      schools: schools.length,
+      totals,
+      perSchool,
     };
     req.log.warn(result, "seed-rooms-staff completed");
     res.json(result);
