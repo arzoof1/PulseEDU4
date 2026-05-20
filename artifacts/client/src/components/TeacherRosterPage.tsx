@@ -18,12 +18,13 @@ import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
 import StudentPhoto from "./StudentPhoto";
 import TeacherBenchmarksTab from "./TeacherBenchmarksTab";
+import TeacherInstructionLogTab from "./TeacherInstructionLogTab";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
 // Top-level tab in this page. "roster" is the original FAST PM
 // pills + flags table; "benchmarks" is the FAST Phase 2 per-item
 // mastery heatmap + bottom-3 tile.
-type RosterTab = "roster" | "benchmarks";
+type RosterTab = "roster" | "benchmarks" | "instruction";
 
 interface TeacherOpt {
   id: number;
@@ -1421,6 +1422,7 @@ export default function TeacherRosterPage({
           [
             { value: "roster", label: "Roster" },
             { value: "benchmarks", label: "Benchmarks" },
+            { value: "instruction", label: "Instruction Log" },
           ] as Array<{ value: RosterTab; label: string }>
         ).map((t) => {
           const active = tab === t.value;
@@ -1450,6 +1452,13 @@ export default function TeacherRosterPage({
 
       {tab === "benchmarks" && (
         <TeacherBenchmarksTab
+          teacherId={teacherId}
+          isOwnRoster={isOwnRoster}
+        />
+      )}
+
+      {tab === "instruction" && (
+        <TeacherInstructionLogTab
           teacherId={teacherId}
           isOwnRoster={isOwnRoster}
         />

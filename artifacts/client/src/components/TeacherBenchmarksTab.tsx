@@ -10,6 +10,12 @@
 // banner pointing them to Data Importer, not an empty grid.
 import React, { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import BenchmarkStar from "./BenchmarkStar";
+
+// Per-teacher instruction delivery counts (keyed by benchmark code) for
+// the current school year. Drives the gradient star badge on heatmap
+// column headers + every row of the Benchmark Progress Report.
+type DeliveryCounts = Record<string, { count: number; lastTaughtOn: string }>;
 
 interface Cell {
   pct: number;
@@ -209,6 +215,7 @@ export default function TeacherBenchmarksTab({
   void isOwnRoster;
 
   const [subject, setSubject] = useState<string>("ela");
+  const [deliveryCounts, setDeliveryCounts] = useState<DeliveryCounts>({});
   // Window selection is "{schoolYear}|{window}" so a single <select>
   // can drive both fields without juggling two pieces of state.
   const [windowKey, setWindowKey] = useState<string>("");
@@ -322,6 +329,32 @@ export default function TeacherBenchmarksTab({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [teacherId, subject, windowKey]);
+
+  // Per-teacher instruction delivery counts for the current school year.
+  // Drives the BenchmarkStar badge on column headers + Progress Report
+  // rows. Refetches on (teacher, subject) change; the heatmap window
+  // picker doesn't affect it (counts are always SY-to-date).
+  useEffect(() => {
+    if (teacherId == null) {
+      setDeliveryCounts({});
+      return;
+    }
+    let cancelled = false;
+    authFetch(
+      `/api/teacher-roster/benchmark-deliveries/counts?subject=${subject}&teacherId=${teacherId}`,
+    )
+      .then(async (r) => (r.ok ? r.json() : { counts: {} }))
+      .then((j) => {
+        if (!cancelled)
+          setDeliveryCounts((j as { counts?: DeliveryCounts }).counts ?? {});
+      })
+      .catch(() => {
+        if (!cancelled) setDeliveryCounts({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [teacherId, subject]);
 
   // Phase 4 — Growth fetch. Only fires when the toggle is on AND both
   // windows are picked. When the user toggles ON for the first time
@@ -1095,7 +1128,23 @@ export default function TeacherBenchmarksTab({
                         }}
                         title={`${b.code}${b.category ? ` · ${b.category}` : ""}`}
                       >
-                        {b.code.split(".").slice(-2).join(".")}
+                        <div
+                          style={{
+                            display: "flex",
+                            flexDirection: "column",
+                            alignItems: "center",
+                            gap: 2,
+                          }}
+                        >
+                          <BenchmarkStar
+                            count={deliveryCounts[b.code]?.count ?? 0}
+                            lastTaughtOn={
+                              deliveryCounts[b.code]?.lastTaughtOn ?? null
+                            }
+                            size={18}
+                          />
+                          <span>{b.code.split(".").slice(-2).join(".")}</span>
+                        </div>
                       </th>
                     ));
                   })}
@@ -1719,6 +1768,7 @@ export default function TeacherBenchmarksTab({
           filter={reportFilter}
           onFilterChange={setReportFilter}
           onClose={() => setReportOpen(false)}
+          deliveryCounts={deliveryCounts}
         />
       )}
     </div>
@@ -1738,8 +1788,10 @@ function ProgressReportModal(props: {
   filter: string; // "all" or studentId
   onFilterChange: (v: string) => void;
   onClose: () => void;
+  deliveryCounts: DeliveryCounts;
 }) {
-  const { loading, report, filter, onFilterChange, onClose } = props;
+  const { loading, report, filter, onFilterChange, onClose, deliveryCounts } =
+    props;
 
   const subjectLabel = (s: string | undefined) => {
     if (!s) return "";
@@ -2406,12 +2458,30 @@ function ProgressReportModal(props: {
                               <td style={{ fontSize: 10, verticalAlign: "top" }}>
                                 <div
                                   style={{
-                                    fontFamily: "monospace",
-                                    fontWeight: 600,
+                                    display: "flex",
+                                    alignItems: "center",
+                                    gap: 6,
                                     marginBottom: 4,
                                   }}
                                 >
-                                  {b.code}
+                                  <BenchmarkStar
+                                    count={
+                                      deliveryCounts[b.code]?.count ?? 0
+                                    }
+                                    lastTaughtOn={
+                                      deliveryCounts[b.code]?.lastTaughtOn ??
+                                      null
+                                    }
+                                    size={26}
+                                  />
+                                  <span
+                                    style={{
+                                      fontFamily: "monospace",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {b.code}
+                                  </span>
                                 </div>
                                 <div
                                   style={{

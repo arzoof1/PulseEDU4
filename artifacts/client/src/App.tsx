@@ -69,6 +69,7 @@ import TeacherRosterPage from "./components/TeacherRosterPage";
 import PrivacyGate from "./components/PrivacyGate";
 import SeparationSuggestionsPage from "./components/SeparationSuggestionsPage";
 import FastBenchmarksDashboard from "./components/FastBenchmarksDashboard";
+import InstructionalCoverageDashboard from "./components/InstructionalCoverageDashboard";
 import SeparationTagsAdmin from "./components/SeparationTagsAdmin";
 import SafetyPlanEditor from "./components/SafetyPlanEditor";
 import SignageLauncherView from "./components/SignageLauncherView";
@@ -4000,6 +4001,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     targetSection: "fastBenchmarks",
   },
   {
+    id: "instructionalCoverage",
+    icon: "⭐",
+    title: "Instructional Coverage",
+    subtitle:
+      "What's actually being taught vs what's being assessed. Per-benchmark totals, teacher coverage, last-taught date, and a 'weak + untaught' flag (mastery < 60% AND no delivery in 14 days) so PLCs know where to focus.",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "instructionalCoverage",
+  },
+  {
     id: "earlyWarning",
     icon: "🚨",
     title: "Early Warning",
@@ -4507,6 +4518,7 @@ function App() {
     | "watchlistStudentGraph"
     | "separationSuggestions"
     | "fastBenchmarks"
+    | "instructionalCoverage"
     | "spotlight"
     | "houseRankings"
     | "issReporting"
@@ -20243,6 +20255,13 @@ function App() {
           onBack={() => setActiveSection("insights")}
         />
       )}
+
+      {activeSection === "instructionalCoverage" &&
+        canAccessFastBenchmarksInsights && (
+          <InstructionalCoverageDashboard
+            onBack={() => setActiveSection("insights")}
+          />
+        )}
 
       {activeSection === "parentAccess" && canManageSettings && (
         <FeatureGate feature="parentPortal" label="Parent Portal">

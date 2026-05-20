@@ -28,7 +28,8 @@ export type InsightsTileId =
   | "interventions"
   | "earlyWarning"
   | "separations"
-  | "fastBenchmarks";
+  | "fastBenchmarks"
+  | "instructionalCoverage";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 
