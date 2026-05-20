@@ -33,6 +33,7 @@ import {
   ensureFastItemResponsesSchema,
   ensureSchoolsTimezoneColumn,
   ensureStudentPhotoColumns,
+  ensureStudentLocalSisIdBackfill,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -193,6 +194,10 @@ async function runSeed(): Promise<void> {
   // Packet B — Student photo + consent columns on students (pre-2026
   // tenants may be missing them). Idempotent.
   await ensureStudentPhotoColumns();
+  // Backfill local_sis_id from the FLEID for any students missing it
+  // (legacy rows). Local SIS ID is the student-facing credential
+  // everywhere in the app; FLEID stays internal for FAST joins.
+  await ensureStudentLocalSisIdBackfill();
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a

@@ -1,6 +1,11 @@
 import { Router, type IRouter } from "express";
-import { db, hallPassesTable, recordEditsTable } from "@workspace/db";
-import { eq, and } from "drizzle-orm";
+import {
+  db,
+  hallPassesTable,
+  recordEditsTable,
+  studentsTable,
+} from "@workspace/db";
+import { eq, and, inArray } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
 import {
@@ -11,6 +16,7 @@ import {
   findDailyLimitConflict,
   dailyLimitConflictMessage,
 } from "./studentHallPassLimits";
+import { resolveStudentIdInput } from "../lib/studentIdResolver.js";
 
 const router: IRouter = Router();
 
@@ -21,7 +27,28 @@ router.get("/hall-passes", async (req, res) => {
     .select()
     .from(hallPassesTable)
     .where(eq(hallPassesTable.schoolId, schoolId));
-  res.json(rows);
+  // Enrich with each student's local SIS ID — that's the credential
+  // the UI shows. FLEID remains on studentId for internal use.
+  const sids = Array.from(new Set(rows.map((r) => r.studentId)));
+  const localBySid = new Map<string, string | null>();
+  if (sids.length > 0) {
+    const stu = await db
+      .select({
+        studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, sids),
+        ),
+      );
+    for (const s of stu) localBySid.set(s.studentId, s.localSisId);
+  }
+  res.json(
+    rows.map((r) => ({ ...r, localSisId: localBySid.get(r.studentId) ?? null })),
+  );
 });
 
 router.post("/hall-passes", async (req, res) => {
@@ -53,6 +80,14 @@ router.post("/hall-passes", async (req, res) => {
     return;
   }
 
+  // Accept either FLEID or local SIS ID and translate to the canonical
+  // FLEID for storage. Every downstream query keys off the FLEID.
+  const resolvedStudentId = await resolveStudentIdInput(schoolId, studentId);
+  if (!resolvedStudentId) {
+    res.status(404).json({ error: `No student with ID "${studentId}"` });
+    return;
+  }
+
   const destTeacher =
     typeof destinationTeacher === "string" && destinationTeacher.trim()
       ? destinationTeacher.trim()
@@ -76,7 +111,7 @@ router.post("/hall-passes", async (req, res) => {
     .where(
       and(
         eq(hallPassesTable.schoolId, schoolId),
-        eq(hallPassesTable.studentId, studentId),
+        eq(hallPassesTable.studentId, resolvedStudentId),
         eq(hallPassesTable.status, "active"),
       ),
     );
@@ -108,7 +143,7 @@ router.post("/hall-passes", async (req, res) => {
   // teacher has explicitly acknowledged the override
   // (overridePolarityAck=true). Acknowledgement is collected in the UI as
   // a forced checkbox ("I have contacted admin about this override").
-  const conflict = await findPolarityConflict(studentId, schoolId);
+  const conflict = await findPolarityConflict(resolvedStudentId, schoolId);
   if (conflict) {
     if (overridePolarityAck !== true) {
       res.status(409).json({
@@ -135,7 +170,7 @@ router.post("/hall-passes", async (req, res) => {
   }
 
   // Daily-limit enforcement (per-student override falls back to per-school global).
-  const limitConflict = await findDailyLimitConflict(studentId, schoolId);
+  const limitConflict = await findDailyLimitConflict(resolvedStudentId, schoolId);
   if (limitConflict) {
     res.status(409).json({ error: dailyLimitConflictMessage(limitConflict) });
     return;
@@ -145,7 +180,7 @@ router.post("/hall-passes", async (req, res) => {
     .insert(hallPassesTable)
     .values({
       schoolId,
-      studentId,
+      studentId: resolvedStudentId,
       destination,
       originRoom,
       teacherName,

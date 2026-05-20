@@ -167,6 +167,8 @@ interface Student {
 interface HallPass {
   id: number;
   studentId: string;
+  /** District-local SIS number — student-facing credential. Null on legacy rows; falls back to studentId display-side. */
+  localSisId?: string | null;
   destination: string;
   originRoom: string;
   teacherName: string;
@@ -10149,7 +10151,7 @@ function App() {
                         <div
                           style={{ fontSize: 11, color: "var(--text-subtle)" }}
                         >
-                          {p.studentId}
+                          {p.localSisId ?? p.studentId}
                         </div>
                       </td>
                       <td>{p.teacherName}</td>

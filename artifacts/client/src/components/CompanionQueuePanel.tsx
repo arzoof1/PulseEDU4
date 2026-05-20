@@ -23,6 +23,7 @@ interface QueueEntry {
   id: number;
   room: string;
   studentId: string;
+  localSisId?: string | null;
   firstName: string | null;
   lastName: string | null;
   destination: string;
@@ -37,6 +38,7 @@ interface ActivePass {
   kioskActivationId: number | null;
   room: string;
   studentId: string;
+  localSisId?: string | null;
   firstName: string | null;
   lastName: string | null;
   destination: string;
@@ -392,7 +394,7 @@ function RoomBlock({
               >
                 <span aria-hidden>🚶</span>
                 <span style={{ flex: 1, minWidth: 0, fontWeight: 600 }}>
-                  {studentName(p.firstName, p.lastName, p.studentId)}
+                  {studentName(p.firstName, p.lastName, p.localSisId ?? p.studentId)}
                 </span>
                 <span style={{ opacity: 0.65, fontSize: "0.78rem" }}>
                   → {p.destination} ·{" "}
@@ -464,7 +466,7 @@ function RoomBlock({
               </span>
               <span style={{ flex: 1, minWidth: 0 }}>
                 <span style={{ fontWeight: 600 }}>
-                  {studentName(e.firstName, e.lastName, e.studentId)}
+                  {studentName(e.firstName, e.lastName, e.localSisId ?? e.studentId)}
                 </span>{" "}
                 <span style={{ opacity: 0.6, fontSize: "0.8rem" }}>
                   · {e.destination} · {formatWait(e.addedAt)}

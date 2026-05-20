@@ -6085,6 +6085,28 @@ export async function ensureStudentPhotoColumns(): Promise<void> {
   );
 }
 
+// Backfill local_sis_id for every student that is currently NULL.
+// Derivation: strip the leading "FL" prefix and any subsequent leading
+// zeros from the FLEID — "FL000008101387" → "8101387". This is the
+// numeric portion FL districts use as the local SIS identifier on
+// printed badges and parent-facing materials. Idempotent: only fills
+// NULLs, so re-runs are a cheap UPDATE...WHERE NULL no-op once filled.
+// FLEID remains the canonical internal identifier; this is purely the
+// student-facing credential surface.
+export async function ensureStudentLocalSisIdBackfill(): Promise<void> {
+  await db.execute(sql`
+    UPDATE students
+       SET local_sis_id = REGEXP_REPLACE(
+             REGEXP_REPLACE(student_id, '^FL', ''),
+             '^0+',
+             ''
+           )
+     WHERE local_sis_id IS NULL
+       AND student_id IS NOT NULL
+       AND student_id <> ''
+  `);
+}
+
 export async function ensureBadgePrintEventsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS badge_print_events (
