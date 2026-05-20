@@ -2551,7 +2551,7 @@ router.get("/insights/academics", async (req, res) => {
           ? sql`SELECT COUNT(*)::int AS c FROM assessments
                 WHERE school_id = ${schoolId}
                   AND source = ${source}
-                  AND student_id = ANY(${studentIds})`
+                  AND student_id IN (${sql.join(studentIds.map((x) => sql`${x}`), sql`, `)})`
           : sql`SELECT COUNT(*)::int AS c FROM assessments
                 WHERE school_id = ${schoolId} AND source = ${source}`,
       )

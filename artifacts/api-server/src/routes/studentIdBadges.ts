@@ -183,7 +183,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
       .where(
         and(
           eq(housesTable.schoolId, schoolId),
-          sql`${housesTable.id} = ANY(${houseIds})`,
+          inArray(housesTable.id, houseIds),
         ),
       );
     for (const r of rows) {

@@ -1,4 +1,4 @@
-import { and, eq, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import {
   db,
   witnessStatementsTable,
@@ -153,7 +153,7 @@ export async function formattedIdsForStatements(args: {
     .where(
       and(
         eq(interactionsTable.schoolId, args.schoolId),
-        sql`${interactionsTable.id} = ANY(${ids})`,
+        inArray(interactionsTable.id, ids),
       ),
     );
   const caseByInteraction = new Map<
