@@ -2117,7 +2117,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
         defaultLocationName: staffDefaultsTable.defaultLocationName,
       })
       .from(staffDefaultsTable)
-      .where(sql`${staffDefaultsTable.staffId} = ANY(${teacherIds})`);
+      .where(inArray(staffDefaultsTable.staffId, teacherIds));
     for (const d of defaults) {
       if (d.staffId == null) continue;
       roomByStaffId.set(d.staffId, d.defaultLocationName ?? null);
@@ -2150,7 +2150,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
       .where(
         and(
           eq(housesTable.schoolId, schoolId),
-          sql`${housesTable.id} = ANY(${houseIds})`,
+          inArray(housesTable.id, houseIds),
         ),
       );
     for (const r of rows) {
