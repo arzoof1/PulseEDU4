@@ -1,10 +1,20 @@
 import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
-import { db, staffTable } from "@workspace/db";
-import { and, eq } from "drizzle-orm";
+import {
+  db,
+  staffTable,
+  studentsTable,
+  interactionsTable,
+  interactionParticipantsTable,
+  interactionCasesTable,
+  interactionCasePlayerImpactTable,
+  interactionCaseNotesTable,
+} from "@workspace/db";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 import { runDspParrottReseed } from "../lib/dspParrottReseed.js";
 import { rebuildDspSections } from "../lib/rebuildDspSections.js";
+import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
 // Hardcoded so this bootstrap can ONLY ever reset chris.clifford's password.
 // No body, no params — calling it for anyone else is structurally impossible.
@@ -423,6 +433,462 @@ router.post("/seed-rooms-staff", async (req, res) => {
     res
       .status(500)
       .json({ error: "seed_failed", message: (err as Error).message });
+  }
+});
+
+// ------------------------------------------------------------------
+// One-shot, NO-AUTH demo seeder: 3 investigation cases at Parrott
+// (school_id=1) with realistic scenarios, roles, linked statements,
+// and per-(case,student) impact ratings. Idempotent on title — if a
+// case with one of the three titles already exists at Parrott, that
+// case (and its players) is left alone.
+// ------------------------------------------------------------------
+router.post("/seed-demo-cases", async (req, res) => {
+  const SCHOOL_ID = 1;
+  const LEAD_EMAIL = "chris.clifford@hcsb.k12.fl.us";
+
+  type PlayerSpec = {
+    role:
+      | "direct"
+      | "target"
+      | "instigator"
+      | "rumor"
+      | "witness"
+      | "peripheral"
+      | "deescalator";
+    impact: 1 | 2 | 3 | 4; // 1=Minor,2=Contributing,3=Significant,4=Driver
+    gradeHint?: number; // for picking from the roster
+  };
+
+  type StatementSpec = {
+    daysAgo: number;
+    kind:
+      | "fight"
+      | "verbal"
+      | "rumor"
+      | "property"
+      | "class_disruption"
+      | "peripheral_note"
+      | "threat"
+      | "other";
+    severity: 1 | 2 | 3 | 4 | 5;
+    location: string;
+    summary: string;
+    detail: string;
+    // Indexes into the case's player list — first is the statement's
+    // "anchor" (also recorded as witness_student on the interaction
+    // row, so the case-detail timeline has an author).
+    playerIdxs: number[];
+  };
+
+  type CaseSpec = {
+    title: string;
+    status: "open" | "monitoring" | "escalated";
+    summary: string;
+    notes: string[];
+    players: PlayerSpec[];
+    statements: StatementSpec[];
+  };
+
+  // 3 demo scenarios. Player count: 4 / 5 / 6.
+  const CASES: CaseSpec[] = [
+    {
+      title: "Cafeteria insult cycle (Grade 7)",
+      status: "open",
+      summary:
+        "Repeated lunch-table verbal jabs between two Grade 7 students with a small audience. Escalated from teasing to a thrown milk carton on day 3.",
+      notes: [
+        "Spoke with both moms on phone — agreed to a mediated lunch on Friday.",
+        "Custodian flagged the milk-throw; cafeteria monitor reassigned tables.",
+      ],
+      players: [
+        { role: "instigator", impact: 4, gradeHint: 7 },
+        { role: "target", impact: 4, gradeHint: 7 },
+        { role: "witness", impact: 2, gradeHint: 7 },
+        { role: "witness", impact: 1, gradeHint: 7 },
+      ],
+      statements: [
+        {
+          daysAgo: 8,
+          kind: "verbal",
+          severity: 2,
+          location: "Cafeteria",
+          summary: "Name-calling across tables during 2nd lunch.",
+          detail:
+            "Witnesses report repeated 'loser' and shoe-comments aimed at target. Target tried to ignore but eventually walked away.",
+          playerIdxs: [2, 0, 1],
+        },
+        {
+          daysAgo: 4,
+          kind: "verbal",
+          severity: 3,
+          location: "Cafeteria",
+          summary: "Instigator stood up and yelled across the room.",
+          detail:
+            "Loud enough that monitor intervened. Target was visibly upset; left lunch early to counselor's office.",
+          playerIdxs: [3, 0, 1, 2],
+        },
+        {
+          daysAgo: 1,
+          kind: "property",
+          severity: 4,
+          location: "Cafeteria",
+          summary: "Milk carton thrown at target's tray.",
+          detail:
+            "Instigator threw a partially full milk carton; landed on the target's tray, splashed shirt. Cafeteria monitor witnessed.",
+          playerIdxs: [1, 0, 2, 3],
+        },
+      ],
+    },
+    {
+      title: "Bus stop rumor spread (Grade 8)",
+      status: "monitoring",
+      summary:
+        "False rumor about target circulated by group chat after weekend bus-stop incident. Two students actively spreading; one stepped in to de-escalate.",
+      notes: [
+        "Reviewed chat screenshots provided by target's parent.",
+        "Met with both rumor-spreaders separately; both denied authorship but admitted forwarding.",
+      ],
+      players: [
+        { role: "instigator", impact: 4, gradeHint: 8 },
+        { role: "rumor", impact: 3, gradeHint: 8 },
+        { role: "rumor", impact: 3, gradeHint: 8 },
+        { role: "target", impact: 4, gradeHint: 8 },
+        { role: "deescalator", impact: 1, gradeHint: 8 },
+      ],
+      statements: [
+        {
+          daysAgo: 12,
+          kind: "rumor",
+          severity: 2,
+          location: "Bus stop",
+          summary: "Group chat screenshots surface to counselor.",
+          detail:
+            "Target's mother forwarded chat showing originating message from instigator, then forwards from two classmates.",
+          playerIdxs: [3, 0, 1, 2],
+        },
+        {
+          daysAgo: 9,
+          kind: "verbal",
+          severity: 3,
+          location: "Hallway A wing",
+          summary: "Target confronted in hallway about rumor.",
+          detail:
+            "Rumor-spreader asked target loudly about the rumor in front of class change. De-escalator pulled target aside to walk to class.",
+          playerIdxs: [4, 1, 3],
+        },
+        {
+          daysAgo: 5,
+          kind: "rumor",
+          severity: 2,
+          location: "Library",
+          summary: "Rumor resurfaces during media-center group work.",
+          detail:
+            "Second rumor-spreader brought it up during quiet study. Librarian moved seats.",
+          playerIdxs: [2, 3, 1],
+        },
+      ],
+    },
+    {
+      title: "Locker room shoving (Grade 6)",
+      status: "escalated",
+      summary:
+        "Pre-PE locker room shoving match between two Grade 6 students with peripheral hangers-on. Pushed against locker bank; one minor scrape reported to clinic.",
+      notes: [
+        "Coach restructured locker-room supervision (2 staff during change-out).",
+        "Parents of both directs notified; restorative meeting scheduled for next week.",
+      ],
+      players: [
+        { role: "direct", impact: 4, gradeHint: 6 },
+        { role: "direct", impact: 4, gradeHint: 6 },
+        { role: "target", impact: 3, gradeHint: 6 },
+        { role: "witness", impact: 2, gradeHint: 6 },
+        { role: "witness", impact: 2, gradeHint: 6 },
+        { role: "peripheral", impact: 1, gradeHint: 6 },
+      ],
+      statements: [
+        {
+          daysAgo: 10,
+          kind: "peripheral_note",
+          severity: 1,
+          location: "PE locker room",
+          summary: "Coach noted growing tension between two players.",
+          detail:
+            "Both directs were chest-bumping near locker 412 — no physical contact yet, but voices were raised.",
+          playerIdxs: [3, 0, 1, 5],
+        },
+        {
+          daysAgo: 6,
+          kind: "fight",
+          severity: 4,
+          location: "PE locker room",
+          summary: "Shove against locker bank during change-out.",
+          detail:
+            "Witness reports direct #1 shoved direct #2 into the locker; direct #2 shoved back. Target was between them and got knocked into locker — minor scrape on elbow, sent to clinic.",
+          playerIdxs: [4, 0, 1, 2, 3],
+        },
+        {
+          daysAgo: 2,
+          kind: "verbal",
+          severity: 3,
+          location: "Hallway B wing",
+          summary: "Re-engagement after class.",
+          detail:
+            "Trash-talk in the hall after 5th period. Peripheral student egging on direct #1.",
+          playerIdxs: [3, 0, 1, 5],
+        },
+      ],
+    },
+  ];
+
+  try {
+    // ---- Lead staff ----
+    const [lead] = await db
+      .select()
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, SCHOOL_ID),
+          eq(staffTable.email, LEAD_EMAIL),
+        ),
+      );
+    if (!lead) {
+      res.status(404).json({
+        error: "lead_not_found",
+        message: `Could not find lead staff ${LEAD_EMAIL} at school ${SCHOOL_ID}`,
+      });
+      return;
+    }
+
+    // ---- Roster: pull all Parrott students once, bucket by grade ----
+    const allStudents = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, SCHOOL_ID));
+
+    function byGrade(g: number) {
+      return allStudents.filter((s) => String(s.grade) === String(g));
+    }
+
+    // ---- Skip if all 3 cases already exist by title ----
+    const existing = await db
+      .select({
+        id: interactionCasesTable.id,
+        title: interactionCasesTable.title,
+      })
+      .from(interactionCasesTable)
+      .where(
+        and(
+          eq(interactionCasesTable.schoolId, SCHOOL_ID),
+          inArray(
+            interactionCasesTable.title,
+            CASES.map((c) => c.title),
+          ),
+        ),
+      );
+    const existingTitles = new Set(existing.map((r) => r.title));
+
+    const yearLabel = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+
+    // ---- Pick the next case_number once, then bump per insert ----
+    const [{ nextStart }] = (
+      await db.execute(sql`
+        SELECT COALESCE(MAX(case_number), 0) + 1 AS "nextStart"
+          FROM interaction_cases
+         WHERE school_id = ${SCHOOL_ID}
+           AND school_year_label = ${yearLabel}
+      `)
+    ).rows as { nextStart: number }[];
+    let nextNumber = nextStart;
+
+    const usedStudentIds = new Set<string>();
+    // Pre-reserve students already in the existing-titled cases so we
+    // don't double-assign them — collect from interaction_participants
+    // for those caseIds.
+    if (existing.length > 0) {
+      const usedRows = await db
+        .select({ studentId: interactionParticipantsTable.studentId })
+        .from(interactionParticipantsTable)
+        .innerJoin(
+          interactionsTable,
+          eq(interactionsTable.id, interactionParticipantsTable.interactionId),
+        )
+        .where(
+          and(
+            eq(interactionParticipantsTable.schoolId, SCHOOL_ID),
+            inArray(
+              interactionsTable.caseId,
+              existing.map((c) => c.id),
+            ),
+          ),
+        );
+      for (const r of usedRows) usedStudentIds.add(r.studentId);
+    }
+
+    const perCase: Array<{
+      title: string;
+      status: "created" | "skipped";
+      caseId?: number;
+      caseNumber?: number;
+      playerCount?: number;
+      statementCount?: number;
+    }> = [];
+
+    for (const spec of CASES) {
+      if (existingTitles.has(spec.title)) {
+        perCase.push({ title: spec.title, status: "skipped" });
+        continue;
+      }
+
+      // Pick fresh students for each player slot, preferring the
+      // grade hint but falling back to any unused student.
+      const chosen: Array<{
+        studentId: string;
+        firstName: string;
+        lastName: string;
+        role: PlayerSpec["role"];
+        impact: PlayerSpec["impact"];
+      }> = [];
+      for (const p of spec.players) {
+        const pool = (p.gradeHint ? byGrade(p.gradeHint) : allStudents).filter(
+          (s) => !usedStudentIds.has(s.studentId),
+        );
+        const fallback = allStudents.filter(
+          (s) => !usedStudentIds.has(s.studentId),
+        );
+        const pick = (pool.length ? pool : fallback)[0];
+        if (!pick) {
+          res.status(409).json({
+            error: "roster_exhausted",
+            message: `Not enough Parrott students to fill case "${spec.title}"`,
+          });
+          return;
+        }
+        usedStudentIds.add(pick.studentId);
+        chosen.push({
+          studentId: pick.studentId,
+          firstName: pick.firstName,
+          lastName: pick.lastName,
+          role: p.role,
+          impact: p.impact,
+        });
+      }
+
+      // ---- Insert case ----
+      const [caseRow] = await db
+        .insert(interactionCasesTable)
+        .values({
+          schoolId: SCHOOL_ID,
+          caseNumber: nextNumber,
+          schoolYearLabel: yearLabel,
+          title: spec.title,
+          status: spec.status,
+          leadStaffId: lead.id,
+          leadStaffName: lead.displayName,
+          summary: spec.summary,
+          createdByStaffId: lead.id,
+          createdByName: lead.displayName,
+        })
+        .returning();
+      nextNumber += 1;
+
+      // ---- Interactions + participants per statement ----
+      let stmtCount = 0;
+      for (const st of spec.statements) {
+        const occurredDate = (() => {
+          const d = new Date();
+          d.setDate(d.getDate() - st.daysAgo);
+          return d.toISOString().slice(0, 10);
+        })();
+        const anchor = chosen[st.playerIdxs[0]];
+        const [intRow] = await db
+          .insert(interactionsTable)
+          .values({
+            schoolId: SCHOOL_ID,
+            occurredDate,
+            kind: st.kind,
+            severity: st.severity,
+            location: st.location,
+            summary: st.summary,
+            detail: st.detail,
+            caseId: caseRow.id,
+            loggedByStaffId: lead.id,
+            loggedByName: lead.displayName,
+            witnessStudentId: anchor.studentId,
+            witnessStudentName: `${anchor.firstName} ${anchor.lastName}`,
+            status: "open",
+          })
+          .returning();
+
+        for (const idx of st.playerIdxs) {
+          const p = chosen[idx];
+          await db.insert(interactionParticipantsTable).values({
+            schoolId: SCHOOL_ID,
+            interactionId: intRow.id,
+            studentId: p.studentId,
+            role: p.role,
+            notes: "",
+          });
+        }
+        stmtCount += 1;
+      }
+
+      // ---- Per-(case,student) impact ratings ----
+      for (const p of chosen) {
+        await db
+          .insert(interactionCasePlayerImpactTable)
+          .values({
+            schoolId: SCHOOL_ID,
+            caseId: caseRow.id,
+            studentId: p.studentId,
+            impact: p.impact,
+            updatedByStaffId: lead.id,
+            updatedByName: lead.displayName,
+          })
+          .onConflictDoNothing();
+      }
+
+      // ---- Case notes (narrative) ----
+      for (const body of spec.notes) {
+        await db.insert(interactionCaseNotesTable).values({
+          schoolId: SCHOOL_ID,
+          caseId: caseRow.id,
+          body,
+          authorStaffId: lead.id,
+          authorName: lead.displayName,
+        });
+      }
+
+      perCase.push({
+        title: spec.title,
+        status: "created",
+        caseId: caseRow.id,
+        caseNumber: caseRow.caseNumber,
+        playerCount: chosen.length,
+        statementCount: stmtCount,
+      });
+    }
+
+    const result = {
+      ok: true,
+      schoolId: SCHOOL_ID,
+      leadStaff: { id: lead.id, name: lead.displayName },
+      schoolYearLabel: yearLabel,
+      cases: perCase,
+    };
+    req.log.warn(result, "seed-demo-cases completed");
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "seed-demo-cases failed");
+    res.status(500).json({
+      error: "seed_demo_cases_failed",
+      message: (err as Error).message,
+    });
   }
 });
 
