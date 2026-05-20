@@ -1049,7 +1049,7 @@ export default function TeacherBenchmarksTab({
                         rowSpan={expanded ? 1 : 2}
                         style={{
                           padding: "6px 8px",
-                          fontSize: 11,
+                          fontSize: 13,
                           textAlign: "center",
                           borderLeft: expanded
                             ? "4px solid #1e3a8a"
@@ -1062,11 +1062,11 @@ export default function TeacherBenchmarksTab({
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
-                          fontWeight: expanded ? 700 : undefined,
+                          fontWeight: 700,
                           cursor: "pointer",
                           userSelect: "none",
-                          minWidth: expanded ? undefined : 130,
-                          maxWidth: expanded ? undefined : 160,
+                          minWidth: expanded ? undefined : 140,
+                          maxWidth: expanded ? undefined : 170,
                           whiteSpace: expanded ? "nowrap" : "normal",
                           wordBreak: "normal",
                           overflowWrap: "break-word",
@@ -1357,7 +1357,8 @@ export default function TeacherBenchmarksTab({
               style={{
                 borderCollapse: "separate",
                 borderSpacing: 0,
-                fontSize: 11,
+                fontSize: 14,
+                fontWeight: 600,
                 tableLayout: "fixed",
               }}
             >
@@ -1366,15 +1367,17 @@ export default function TeacherBenchmarksTab({
                   <th
                     rowSpan={2}
                     style={{
-                      padding: "6px 8px",
+                      padding: "8px 10px",
                       textAlign: "left",
                       position: "sticky",
                       left: 0,
                       background: "#f3f4f6",
-                      minWidth: 180,
-                      width: 180,
+                      minWidth: 200,
+                      width: 200,
                       borderRight: "1px solid #d4d4d4",
                       zIndex: 2,
+                      fontSize: 13,
+                      fontWeight: 700,
                     }}
                   >
                     Student
@@ -1388,7 +1391,7 @@ export default function TeacherBenchmarksTab({
                         rowSpan={expanded ? 1 : 2}
                         style={{
                           padding: "6px 8px",
-                          fontSize: 11,
+                          fontSize: 13,
                           textAlign: "center",
                           borderLeft: expanded
                             ? "4px solid #1e3a8a"
@@ -1401,11 +1404,11 @@ export default function TeacherBenchmarksTab({
                             : undefined,
                           background: expanded ? "#dbeafe" : "#e5e7eb",
                           color: expanded ? "#1e3a8a" : undefined,
-                          fontWeight: expanded ? 700 : undefined,
+                          fontWeight: 700,
                           cursor: "pointer",
                           userSelect: "none",
-                          minWidth: expanded ? undefined : 130,
-                          maxWidth: expanded ? undefined : 160,
+                          minWidth: expanded ? undefined : 140,
+                          maxWidth: expanded ? undefined : 170,
                           whiteSpace: expanded ? "nowrap" : "normal",
                           wordBreak: "normal",
                           overflowWrap: "break-word",
@@ -1550,13 +1553,15 @@ export default function TeacherBenchmarksTab({
                   <tr key={s.studentId} style={{ borderTop: "1px solid #f3f4f6" }}>
                     <td
                       style={{
-                        padding: "4px 8px",
+                        padding: "6px 10px",
                         position: "sticky",
                         left: 0,
                         background: "white",
                         borderRight: "1px solid #d4d4d4",
                         whiteSpace: "nowrap",
                         zIndex: 1,
+                        fontWeight: 700,
+                        fontSize: 14,
                       }}
                       title={`${s.firstName} ${s.lastName} (G${s.grade})`}
                     >
@@ -1599,11 +1604,12 @@ export default function TeacherBenchmarksTab({
                           <td
                             key={g.category}
                             style={{
-                              padding: "4px 6px",
+                              padding: "6px 8px",
                               textAlign: "center",
                               background: c.bg,
                               color: c.fg,
-                              fontWeight: 600,
+                              fontWeight: 700,
+                              fontSize: 15,
                               borderLeft: "4px solid #1e3a8a",
                               cursor: "pointer",
                               lineHeight: 1.1,
@@ -1614,10 +1620,10 @@ export default function TeacherBenchmarksTab({
                             {avg}
                             <div
                               style={{
-                                fontSize: 9,
-                                fontWeight: 500,
-                                opacity: 0.75,
-                                marginTop: 1,
+                                fontSize: 11,
+                                fontWeight: 600,
+                                opacity: 0.8,
+                                marginTop: 2,
                               }}
                             >
                               {mastered}/{scored.length}
@@ -1660,11 +1666,12 @@ export default function TeacherBenchmarksTab({
                           <td
                             key={b.code}
                             style={{
-                              padding: "4px 2px",
+                              padding: "6px 2px",
                               textAlign: "center",
                               background: c.bg,
                               color: c.fg,
-                              fontWeight: 600,
+                              fontWeight: 700,
+                              fontSize: 14,
                               borderLeft:
                                 i === 0
                                   ? "4px solid #1e3a8a"
