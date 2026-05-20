@@ -129,6 +129,61 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
     return data.benchmarks.filter((r) => gradeTokenFromCode(r.code) === grade);
   }, [data, grade]);
 
+  // Effectiveness band — combines delivery count with mastery to indicate
+  // whether the methods being used are landing. Used for both the row Flag
+  // pill and the default sort order.
+  type Band = "critical" | "reteach" | "building" | "effective";
+  const bandOf = (r: Row): Band => {
+    const m = r.masteryPct;
+    const d = r.totalDeliveries;
+    if (d === 0) return "critical";
+    if (m === null) {
+      // Taught but no mastery signal yet — treat as building.
+      return d >= 2 ? "building" : "critical";
+    }
+    if (d === 1 && m < 50) return "critical";
+    if (d >= 2 && m < 50) return "reteach";
+    if (m >= 70 && d >= 3) return "effective";
+    return "building";
+  };
+  const BAND_META: Record<
+    Band,
+    { label: string; bg: string; fg: string; row: string; rank: number; help: string }
+  > = {
+    critical: {
+      label: "Critical gap",
+      bg: "#fecaca",
+      fg: "#7f1d1d",
+      row: "#fef2f2",
+      rank: 0,
+      help: "Untaught or barely touched + low mastery",
+    },
+    reteach: {
+      label: "Re-teach",
+      bg: "#fed7aa",
+      fg: "#7c2d12",
+      row: "#fff7ed",
+      rank: 1,
+      help: "Taught but mastery <50% — methods aren't landing",
+    },
+    building: {
+      label: "Building",
+      bg: "#fef08a",
+      fg: "#713f12",
+      row: "#fefce8",
+      rank: 2,
+      help: "Mid mastery or limited coverage — trending",
+    },
+    effective: {
+      label: "Effective",
+      bg: "#bbf7d0",
+      fg: "#14532d",
+      row: "#f0fdf4",
+      rank: 3,
+      help: "Mastery ≥70% with ≥3 deliveries — methods working",
+    },
+  };
+
   const sorted = useMemo(() => {
     if (!data) return [] as Row[];
     const rows = [...filteredBenchmarks];
@@ -143,18 +198,22 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
           a.totalDeliveries - b.totalDeliveries,
       );
     } else {
-      // "weak + untaught" = low mastery AND no recent instruction.
-      // Score = (100 - mastery) + bonus when no delivery in 14 days.
-      const score = (r: Row) => {
-        const m = r.masteryPct ?? 50;
-        const ago = daysAgo(r.lastTaughtOn);
-        const stale = ago === null || ago > 14;
-        return (100 - m) + (stale ? 30 : 0);
-      };
-      rows.sort((a, b) => score(b) - score(a));
+      // "weak" → sort by effectiveness band, worst first; tiebreak by mastery.
+      rows.sort((a, b) => {
+        const ra = BAND_META[bandOf(a)].rank;
+        const rb = BAND_META[bandOf(b)].rank;
+        if (ra !== rb) return ra - rb;
+        return (a.masteryPct ?? 101) - (b.masteryPct ?? 101);
+      });
     }
     return rows;
   }, [data, filteredBenchmarks, sort]);
+
+  const bandCounts = useMemo(() => {
+    const c = { critical: 0, reteach: 0, building: 0, effective: 0 };
+    for (const r of filteredBenchmarks) c[bandOf(r)]++;
+    return c;
+  }, [filteredBenchmarks]);
 
   const totals = useMemo(() => {
     if (!data) return { rows: 0, deliveries: 0, taught: 0, untaught: 0 };
@@ -239,14 +298,57 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
             label="Taught at least once"
             value={`${totals.taught} / ${totals.rows}`}
           />
-          <SummaryTile
-            label="Untaught this year"
-            value={totals.untaught}
-            warn={totals.untaught > 0}
-          />
           <div style={{ fontSize: 12, color: "#6b7280", alignSelf: "center" }}>
             School year: {data.schoolYear}
           </div>
+        </div>
+      )}
+
+      {data && filteredBenchmarks.length > 0 && (
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            marginBottom: 12,
+            flexWrap: "wrap",
+            alignItems: "center",
+          }}
+        >
+          <span style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>
+            Method effectiveness:
+          </span>
+          {(["critical", "reteach", "building", "effective"] as const).map((b) => {
+            const meta = BAND_META[b];
+            return (
+              <span
+                key={b}
+                title={meta.help}
+                style={{
+                  display: "inline-flex",
+                  alignItems: "center",
+                  gap: 6,
+                  background: meta.bg,
+                  color: meta.fg,
+                  padding: "3px 10px",
+                  borderRadius: 999,
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}
+              >
+                {meta.label}
+                <span
+                  style={{
+                    background: "rgba(255,255,255,0.6)",
+                    borderRadius: 999,
+                    padding: "0 6px",
+                    fontSize: 11,
+                  }}
+                >
+                  {bandCounts[b]}
+                </span>
+              </span>
+            );
+          })}
         </div>
       )}
 
@@ -296,16 +398,14 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
           </thead>
           <tbody>
             {sorted.map((r) => {
-              const ago = daysAgo(r.lastTaughtOn);
-              const stale = ago === null || ago > 14;
-              const weak = r.masteryPct !== null && r.masteryPct < 60;
-              const weakUntaught = weak && stale;
+              const band = bandOf(r);
+              const meta = BAND_META[band];
               return (
                 <tr
                   key={r.code}
                   style={{
                     borderTop: "1px solid #e5e7eb",
-                    background: weakUntaught ? "#fef2f2" : undefined,
+                    background: meta.row,
                   }}
                 >
                   <td style={{ padding: "6px 8px" }}>
@@ -361,33 +461,20 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
                     {r.masteryPct === null ? "—" : `${r.masteryPct}%`}
                   </td>
                   <td style={{ padding: "6px 8px" }}>
-                    {weakUntaught && (
-                      <span
-                        style={{
-                          background: "#fecaca",
-                          color: "#7f1d1d",
-                          padding: "1px 6px",
-                          borderRadius: 3,
-                          fontSize: 10,
-                          fontWeight: 700,
-                        }}
-                      >
-                        Weak + untaught
-                      </span>
-                    )}
-                    {!weakUntaught && r.totalDeliveries === 0 && (
-                      <span
-                        style={{
-                          background: "#e5e7eb",
-                          color: "#374151",
-                          padding: "1px 6px",
-                          borderRadius: 3,
-                          fontSize: 10,
-                        }}
-                      >
-                        Untaught
-                      </span>
-                    )}
+                    <span
+                      title={meta.help}
+                      style={{
+                        background: meta.bg,
+                        color: meta.fg,
+                        padding: "2px 8px",
+                        borderRadius: 999,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {meta.label}
+                    </span>
                   </td>
                 </tr>
               );
