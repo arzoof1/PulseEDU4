@@ -1131,7 +1131,7 @@ export default function TeacherBenchmarksTab({
                               <BenchmarkStar
                                 count={total}
                                 lastTaughtOn={latest}
-                                size={26}
+                                size={52}
                               />
                             </span>
                           );
@@ -1180,7 +1180,7 @@ export default function TeacherBenchmarksTab({
                             lastTaughtOn={
                               deliveryCounts[b.code]?.lastTaughtOn ?? null
                             }
-                            size={36}
+                            size={72}
                           />
                           <span>{b.code.split(".").slice(-2).join(".")}</span>
                         </div>
@@ -1470,7 +1470,7 @@ export default function TeacherBenchmarksTab({
                               <BenchmarkStar
                                 count={total}
                                 lastTaughtOn={latest}
-                                size={26}
+                                size={52}
                               />
                             </span>
                           );
@@ -1490,8 +1490,8 @@ export default function TeacherBenchmarksTab({
                           fontSize: 9,
                           fontFamily: "monospace",
                           fontWeight: 600,
-                          width: 56,
-                          minWidth: 56,
+                          width: 84,
+                          minWidth: 84,
                           textAlign: "center",
                           borderLeft:
                             i === 0
@@ -1519,7 +1519,7 @@ export default function TeacherBenchmarksTab({
                             lastTaughtOn={
                               deliveryCounts[b.code]?.lastTaughtOn ?? null
                             }
-                            size={36}
+                            size={72}
                           />
                           <button
                             onClick={() => setDrillCode(b.code)}

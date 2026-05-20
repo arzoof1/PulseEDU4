@@ -46,14 +46,13 @@ export default function BenchmarkStar({
   const stale = ago !== null && ago > 21;
   const isZero = count <= 0;
 
-  // Gradient — purple to green when active, neutral when zero, washed
-  // out gray when stale.
-  const gradId = `bmstar-${isZero ? "z" : stale ? "s" : "a"}-${size}`;
-  const stops = isZero
-    ? ["#e5e7eb", "#d1d5db"]
+  // Solid dark purple when active so the bold white count reads
+  // clearly; faded grey outline when zero; lighter purple when stale.
+  const fillColor = isZero
+    ? "#e5e7eb"
     : stale
-      ? ["#c4b5fd", "#a7f3d0"]
-      : ["#7c3aed", "#10b981"];
+      ? "#7e57c2"
+      : "#4c1d95";
 
   const autoTitle = isZero
     ? "Not yet logged this year"
@@ -84,16 +83,10 @@ export default function BenchmarkStar({
         viewBox="0 0 24 24"
         style={{ opacity: isZero ? 0.55 : 1 }}
       >
-        <defs>
-          <linearGradient id={gradId} x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0%" stopColor={stops[0]} />
-            <stop offset="100%" stopColor={stops[1]} />
-          </linearGradient>
-        </defs>
         <path
           d="M12 2.5l2.95 5.97 6.59.96-4.77 4.65 1.13 6.57L12 17.55l-5.9 3.1 1.13-6.57L2.46 9.43l6.59-.96L12 2.5z"
-          fill={isZero ? "none" : `url(#${gradId})`}
-          stroke={isZero ? "#9ca3af" : "rgba(0,0,0,0.15)"}
+          fill={isZero ? "none" : fillColor}
+          stroke={isZero ? "#9ca3af" : "rgba(0,0,0,0.25)"}
           strokeWidth={isZero ? 1.2 : 0.6}
         />
       </svg>
