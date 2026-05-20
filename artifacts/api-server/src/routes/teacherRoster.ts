@@ -42,13 +42,45 @@ import { requireSchool } from "../lib/scope.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   bucketFor,
+  bucketTarget,
   hasChart,
   placeOnChart,
   placePm3,
+  SUB_LEVEL_LABEL,
   type Subject,
   type Placement,
   type BucketInfo,
 } from "../lib/fastCutScores.js";
+
+// Per-PM placement enriched with the gap-to-next-sublevel caption used
+// by the roster pills. Gap is computed on the CURRENT-grade chart (same
+// approach the FAST Benchmarks tab uses) so the number is "points to
+// clear our chart's next stop" — what teachers expect to see.
+interface PlacementWithGap extends Placement {
+  gap: number | null;
+  nextStopLabel: string | null;
+}
+
+function withGap(
+  placement: Placement | null,
+  pmScore: number | null,
+  subject: Subject,
+  grade: number,
+): PlacementWithGap | null {
+  if (!placement) return null;
+  if (pmScore == null) {
+    return { ...placement, gap: null, nextStopLabel: null };
+  }
+  const target = bucketTarget(subject, grade, placement.subLevel);
+  if (!target) {
+    return { ...placement, gap: null, nextStopLabel: null };
+  }
+  return {
+    ...placement,
+    gap: target.score - pmScore,
+    nextStopLabel: SUB_LEVEL_LABEL[target.nextStop],
+  };
+}
 
 const router: IRouter = Router();
 
@@ -95,9 +127,9 @@ interface SubjectBlock {
   // Placement of EACH PM score on its own chart. PM1/PM2 use current
   // grade; PM3 uses prior grade (so it represents end-of-prior-year
   // mastery before fall regression).
-  pm1Placement: Placement | null;
-  pm2Placement: Placement | null;
-  pm3Placement: Placement | null;
+  pm1Placement: PlacementWithGap | null;
+  pm2Placement: PlacementWithGap | null;
+  pm3Placement: PlacementWithGap | null;
   bucket: BucketInfo;
   priorYearScore: number | null;
   priorYearBq: boolean;
@@ -133,12 +165,24 @@ function buildSubjectBlock(
       noChart,
     };
   }
-  const pm1Placement =
-    row.pm1 != null ? placeOnChart(row.pm1, subject, grade) : null;
-  const pm2Placement =
-    row.pm2 != null ? placeOnChart(row.pm2, subject, grade) : null;
-  const pm3Placement =
-    row.pm3 != null ? placePm3(row.pm3, subject, grade) : null;
+  const pm1Placement = withGap(
+    row.pm1 != null ? placeOnChart(row.pm1, subject, grade) : null,
+    row.pm1,
+    subject,
+    grade,
+  );
+  const pm2Placement = withGap(
+    row.pm2 != null ? placeOnChart(row.pm2, subject, grade) : null,
+    row.pm2,
+    subject,
+    grade,
+  );
+  const pm3Placement = withGap(
+    row.pm3 != null ? placePm3(row.pm3, subject, grade) : null,
+    row.pm3,
+    subject,
+    grade,
+  );
   const bucket =
     row.pm3 != null
       ? bucketFor(row.pm3, subject, grade)

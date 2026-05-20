@@ -33,6 +33,13 @@ interface TeacherOpt {
 interface Placement {
   level: 1 | 2 | 3 | 4 | 5;
   subLevel: string;
+  // Points to the NEXT sub-level on the current-grade chart, and the
+  // label of that next sub-level. Both null when the student is at L5
+  // (no next stop) or when no current-grade chart exists. Rendered as a
+  // small "+12 → L3 lo" caption under each PM pill so teachers see at a
+  // glance what each student needs to climb the chart.
+  gap?: number | null;
+  nextStopLabel?: string | null;
 }
 
 type BucketColor = "red" | "orange" | "green" | "blue" | "purple";
@@ -346,10 +353,71 @@ function ScorePill({
   // Pills sized to roughly match the 44px bucket icon for a consistent
   // visual rhythm across the row. Raw scale scores can be 3 digits, so
   // minWidth needs to accommodate that without wrapping.
+  // All pill cells render with the same vertical envelope (pill +
+  // reserved caption slot) so rows stay aligned even when some cells
+  // have a "+12 → L3 lo" caption and adjacent cells don't.
+  const CAPTION_SLOT_HEIGHT = 12;
   if (score == null || placement == null) {
     return (
       <span
-        title={`${pmLabel}: no score`}
+        style={{
+          display: "inline-flex",
+          flexDirection: "column",
+          alignItems: "center",
+          gap: 2,
+        }}
+      >
+        <span
+          title={`${pmLabel}: no score`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            justifyContent: "center",
+            minWidth: 44,
+            height: 36,
+            padding: "0 10px",
+            borderRadius: 8,
+            background: "#e5e7eb",
+            color: "#6b7280",
+            fontSize: 14,
+            textAlign: "center",
+          }}
+        >
+          —
+        </span>
+        <span aria-hidden style={{ height: CAPTION_SLOT_HEIGHT }} />
+      </span>
+    );
+  }
+  const tooltip = `${pmLabel} • Level ${placement.subLevel} • Scale score ${score} (click to flip)`;
+  // Caption mirrors the FAST Benchmarks tab: "+12 → L3 lo" when there's
+  // still climb available, "At {next}" once the student has met the next
+  // sub-level, nothing when they're at L5 / no chart. Renders just below
+  // the pill; adds ~12px of vertical space per row.
+  const gap = placement.gap;
+  const nextStop = placement.nextStopLabel;
+  let caption: { text: string; color: string } | null = null;
+  if (gap != null && nextStop) {
+    caption =
+      gap <= 0
+        ? { text: `At ${nextStop}`, color: "#14532d" }
+        : { text: `+${gap} → ${nextStop}`, color: "#3730a3" };
+  }
+  return (
+    <span
+      style={{
+        display: "inline-flex",
+        flexDirection: "column",
+        alignItems: "center",
+        gap: 2,
+      }}
+    >
+      <button
+        type="button"
+        title={tooltip}
+        aria-label={tooltip}
+        aria-pressed={flipped}
+        onClick={() => setFlipped((f) => !f)}
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -358,45 +426,33 @@ function ScorePill({
           height: 36,
           padding: "0 10px",
           borderRadius: 8,
-          background: "#e5e7eb",
-          color: "#6b7280",
-          fontSize: 14,
+          border: "none",
+          background: LEVEL_BG[placement.level],
+          color: LEVEL_FG[placement.level],
+          fontSize: 16,
+          fontWeight: 700,
           textAlign: "center",
+          cursor: "pointer",
+          fontFamily: "inherit",
+          lineHeight: 1,
         }}
       >
-        —
+        {flipped ? score : placement.subLevel}
+      </button>
+      <span
+        aria-hidden={caption ? undefined : true}
+        style={{
+          minHeight: CAPTION_SLOT_HEIGHT,
+          fontSize: 9,
+          fontWeight: 600,
+          color: caption?.color ?? "transparent",
+          lineHeight: 1.1,
+          whiteSpace: "nowrap",
+        }}
+      >
+        {caption?.text ?? "\u00A0"}
       </span>
-    );
-  }
-  const tooltip = `${pmLabel} • Level ${placement.subLevel} • Scale score ${score} (click to flip)`;
-  return (
-    <button
-      type="button"
-      title={tooltip}
-      aria-label={tooltip}
-      aria-pressed={flipped}
-      onClick={() => setFlipped((f) => !f)}
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        justifyContent: "center",
-        minWidth: 44,
-        height: 36,
-        padding: "0 10px",
-        borderRadius: 8,
-        border: "none",
-        background: LEVEL_BG[placement.level],
-        color: LEVEL_FG[placement.level],
-        fontSize: 16,
-        fontWeight: 700,
-        textAlign: "center",
-        cursor: "pointer",
-        fontFamily: "inherit",
-        lineHeight: 1,
-      }}
-    >
-      {flipped ? score : placement.subLevel}
-    </button>
+    </span>
   );
 }
 
