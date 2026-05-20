@@ -476,6 +476,21 @@ export function KioskCardsPanel({
       {reveal && (
         <RevealModal
           {...reveal}
+          busy={busy}
+          onPrint={() => {
+            void downloadCardsPdf(
+              {
+                presupplied: [
+                  {
+                    staffId: reveal.staffId,
+                    enrollToken: reveal.enrollToken,
+                    pin: reveal.pin,
+                  },
+                ],
+              },
+              `kiosk-card-${reveal.staffName.replace(/\s+/g, "-")}.pdf`,
+            );
+          }}
           onClose={() => setReveal(null)}
         />
       )}
@@ -497,11 +512,15 @@ function RevealModal({
   staffName,
   enrollToken,
   pin,
+  busy,
+  onPrint,
   onClose,
 }: {
   staffName: string;
   enrollToken: string;
   pin: string;
+  busy: boolean;
+  onPrint: () => void;
   onClose: () => void;
 }) {
   return (
@@ -573,6 +592,9 @@ function RevealModal({
           </code>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
+          <button type="button" onClick={onPrint} disabled={busy}>
+            {busy ? "Preparing PDF…" : "Print this card"}
+          </button>
           <button type="button" onClick={onClose}>
             I&apos;ve recorded this — close
           </button>
