@@ -6232,6 +6232,63 @@ export async function ensureStudentAccommodationsBackfill(): Promise<void> {
   }
 }
 
+// -----------------------------------------------------------------------------
+// ensureLocationAllowedDestinationsBackfill
+//
+// The bulk seed populates `location_allowed_destinations` only for freshly
+// created schools (full origin×destination cross product). Schools onboarded
+// before that block existed — including school 1 (Parrott) — have an empty
+// LAD table, which leaves the kiosk's destination picker blank because
+// `destinationOptions` intersects the school's destinations with the
+// allowed-pair set for the kiosk's origin room.
+//
+// This idempotent backfill: for every school that has locations but zero
+// rows in LAD, inserts the full origin×destination cross product. A school
+// with even one existing pair is left alone (admins may have intentionally
+// pruned the matrix).
+// -----------------------------------------------------------------------------
+export async function ensureLocationAllowedDestinationsBackfill(): Promise<void> {
+  const schools = await db.select({ id: schoolsTable.id }).from(schoolsTable);
+  for (const school of schools) {
+    const [{ c: existing }] = (await db.execute(sql`
+      SELECT COUNT(*)::int AS c
+        FROM location_allowed_destinations
+       WHERE school_id = ${school.id}
+    `)).rows as Array<{ c: number }>;
+    if (existing > 0) continue;
+
+    const locs = await db
+      .select()
+      .from(locationsTable)
+      .where(eq(locationsTable.schoolId, school.id));
+    const origins = locs.filter((l) => l.isOrigin && l.active);
+    const dests = locs.filter((l) => l.isDestination && l.active);
+    if (origins.length === 0 || dests.length === 0) continue;
+
+    const rows: {
+      schoolId: number;
+      originLocationId: number;
+      destinationLocationId: number;
+    }[] = [];
+    for (const o of origins) {
+      for (const d of dests) {
+        rows.push({
+          schoolId: school.id,
+          originLocationId: o.id,
+          destinationLocationId: d.id,
+        });
+      }
+    }
+    if (rows.length > 0) {
+      await db.insert(locationAllowedDestinationsTable).values(rows);
+      logger.info(
+        { schoolId: school.id, pairs: rows.length },
+        "[seed] LAD backfill",
+      );
+    }
+  }
+}
+
 export async function ensureBadgePrintEventsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS badge_print_events (

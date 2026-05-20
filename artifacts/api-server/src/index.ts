@@ -35,6 +35,7 @@ import {
   ensureStudentPhotoColumns,
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
+  ensureLocationAllowedDestinationsBackfill,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -204,6 +205,11 @@ async function runSeed(): Promise<void> {
   // — otherwise the Teacher Roster "Programs" hover opens to an empty
   // list. Idempotent.
   await ensureStudentAccommodationsBackfill();
+  // Backfill location_allowed_destinations for schools that have locations
+  // but zero origin×destination pairs — otherwise the kiosk destination
+  // picker is blank for legacy tenants. Idempotent: schools with any
+  // existing pair are skipped.
+  await ensureLocationAllowedDestinationsBackfill();
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a

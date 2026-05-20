@@ -51,6 +51,12 @@ export function CameraScanner({
   // teardown doesn't deliver a second result after the parent has
   // already closed us.
   const firedRef = useRef(false);
+  // Latest onScan in a ref so the mount effect doesn't depend on it.
+  // The parent (KioskBody) re-renders every 1s from a clock tick, which
+  // would otherwise tear down + restart getUserMedia every second and
+  // leave the <video> permanently black.
+  const onScanRef = useRef(onScan);
+  onScanRef.current = onScan;
   const [phase, setPhase] = useState<Phase>("starting");
   const [errorMsg, setErrorMsg] = useState<string>("");
 
@@ -72,7 +78,7 @@ export function CameraScanner({
       } catch {
         // ignore — vibration is best-effort
       }
-      onScan(cleaned);
+      onScanRef.current(cleaned);
     }
 
     async function start() {
@@ -146,7 +152,6 @@ export function CameraScanner({
 
     return () => {
       cancelled = true;
-      void facingMode;
       if (rafId !== null) cancelAnimationFrame(rafId);
       try {
         zxingControls?.stop();
@@ -159,7 +164,11 @@ export function CameraScanner({
         streamRef.current = null;
       }
     };
-  }, [onScan]);
+    // Intentionally mount-once. facingMode and onScan are captured via
+    // initial closure / ref; changing them mid-session would require a
+    // remount anyway (new camera device, different consumer).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return (
     <div
