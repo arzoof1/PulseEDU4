@@ -104,3 +104,5 @@ export * from "./featurePlans";
 export * from "./featureLicensingAuditLog";
 export * from "./studentHouseChanges";
 export * from "./studentHouseSortJobs";
+export * from "./schoolBenchmarks";
+export * from "./benchmarkDeliveries";

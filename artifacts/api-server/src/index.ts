@@ -36,6 +36,8 @@ import {
   ensureStudentLocalSisIdBackfill,
   ensureStudentAccommodationsBackfill,
   ensureLocationAllowedDestinationsBackfill,
+  ensureBenchmarkDeliveriesSchema,
+  ensureSchoolBenchmarksCatalogBackfill,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -210,6 +212,10 @@ async function runSeed(): Promise<void> {
   // picker is blank for legacy tenants. Idempotent: schools with any
   // existing pair are skipped.
   await ensureLocationAllowedDestinationsBackfill();
+  // Instructional Log + Instructional Coverage tables + catalog auto-seed
+  // from FAST item responses. Both idempotent.
+  await ensureBenchmarkDeliveriesSchema();
+  await ensureSchoolBenchmarksCatalogBackfill();
   // Packet A — One-shot backfill of ws_seq for legacy witness
   // statements that were attached to cases before the per-case
   // numbering shipped. Idempotent: skips rows that already have a

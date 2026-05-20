@@ -6289,6 +6289,86 @@ export async function ensureLocationAllowedDestinationsBackfill(): Promise<void>
   }
 }
 
+// -----------------------------------------------------------------------------
+// ensureBenchmarkDeliveriesSchema
+//
+// Creates school_benchmarks (per-school standards catalog) and
+// benchmark_deliveries (teacher-owned instructional log) idempotently.
+// See lib/db/src/schema/{schoolBenchmarks,benchmarkDeliveries}.ts.
+// -----------------------------------------------------------------------------
+export async function ensureBenchmarkDeliveriesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_benchmarks (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      subject TEXT NOT NULL,
+      code TEXT NOT NULL,
+      category TEXT,
+      label TEXT,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      source TEXT NOT NULL DEFAULT 'local',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS school_benchmarks_school_subject_idx
+      ON school_benchmarks(school_id, subject)
+  `);
+  await db.execute(sql`
+    CREATE UNIQUE INDEX IF NOT EXISTS school_benchmarks_school_subject_code_unique
+      ON school_benchmarks(school_id, subject, code)
+  `);
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS benchmark_deliveries (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      subject TEXT NOT NULL,
+      benchmark_code TEXT NOT NULL,
+      delivered_on DATE NOT NULL,
+      notes TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS benchmark_deliveries_teacher_idx
+      ON benchmark_deliveries(school_id, teacher_staff_id, subject)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS benchmark_deliveries_benchmark_idx
+      ON benchmark_deliveries(school_id, subject, benchmark_code)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS benchmark_deliveries_school_date_idx
+      ON benchmark_deliveries(school_id, delivered_on)
+  `);
+}
+
+// -----------------------------------------------------------------------------
+// ensureSchoolBenchmarksCatalogBackfill
+//
+// For every school, derive distinct (subject, benchmark_code, category)
+// triples from student_fast_item_responses and upsert into
+// school_benchmarks (source='fast'). This is what makes the
+// Instruction Log dropdown and the Instructional Coverage dashboard
+// usable for ELA + Math out of the box without admins typing anything.
+//
+// Idempotent — uses ON CONFLICT DO NOTHING on the (school, subject,
+// code) unique constraint so re-runs are no-ops. Locally-added or
+// CSV-imported rows (source != 'fast') are never touched.
+// -----------------------------------------------------------------------------
+export async function ensureSchoolBenchmarksCatalogBackfill(): Promise<void> {
+  await db.execute(sql`
+    INSERT INTO school_benchmarks (school_id, subject, code, category, source)
+    SELECT school_id, subject, benchmark_code, MAX(category), 'fast'
+      FROM student_fast_item_responses
+     GROUP BY school_id, subject, benchmark_code
+    ON CONFLICT ON CONSTRAINT school_benchmarks_school_subject_code_unique
+    DO NOTHING
+  `);
+}
+
 export async function ensureBadgePrintEventsSchema(): Promise<void> {
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS badge_print_events (
