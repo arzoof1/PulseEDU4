@@ -89,10 +89,18 @@ router.get(
     const actor = await gateImpersonator(req, res);
     if (!actor) return;
 
+    // Respect the currently-active school context (the school-switcher pill
+    // in the header) instead of always expanding to the whole district.
+    // SuperUser viewing "Parrott" should only see Parrott teachers; if they
+    // switch to "Bell Creek" they should only see Bell Creek teachers. Falls
+    // back to district scope only when no active school is set.
+    const activeSchoolId = req.schoolId ?? null;
     const scopeIds =
-      actor.isSuperUser || actor.isDistrictAdmin
-        ? await loadDistrictSchoolIds(actor.schoolId)
-        : [actor.schoolId];
+      activeSchoolId !== null
+        ? [activeSchoolId]
+        : actor.isSuperUser || actor.isDistrictAdmin
+          ? await loadDistrictSchoolIds(actor.schoolId)
+          : [actor.schoolId];
 
     const rows = await db
       .select({
