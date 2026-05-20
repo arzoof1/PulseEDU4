@@ -21,7 +21,7 @@ import {
   bellSchedulePeriodsTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
-import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
+import { and, eq, inArray, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
@@ -2091,7 +2091,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
       and(
         eq(staffTable.schoolId, schoolId),
         eq(staffTable.active, true),
-        ...(all ? [] : [sql`${staffTable.id} = ANY(${staffIds})`]),
+        ...(all ? [] : [inArray(staffTable.id, staffIds)]),
       ),
     )
     .orderBy(asc(staffTable.displayName));
