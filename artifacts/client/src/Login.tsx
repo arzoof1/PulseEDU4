@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { setAuthToken } from "./lib/authToken";
+import { setCsrfToken } from "./lib/csrf";
 
 export interface AuthUser {
   id: number;
@@ -37,8 +38,10 @@ export default function Login({
         setError(body.error ?? `Sign-in failed (${res.status})`);
         return;
       }
-      const user: AuthUser & { authToken?: string } = await res.json();
+      const user: AuthUser & { authToken?: string; csrfToken?: string } =
+        await res.json();
       if (user.authToken) setAuthToken(user.authToken);
+      if (user.csrfToken) setCsrfToken(user.csrfToken);
       onLogin(user);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Network error");

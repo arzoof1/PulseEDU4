@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Heart, CheckCircle2 } from "lucide-react";
 import { setParentToken, navigate, type ParentMe } from "./api";
+import { setCsrfToken } from "../lib/csrf";
 
 interface InviteInfo {
   studentFirstName: string;
@@ -84,6 +85,7 @@ export default function AcceptInvite({
       }
       const body = await res.json();
       if (body.authToken) setParentToken(body.authToken);
+      if (body.csrfToken) setCsrfToken(body.csrfToken);
       // Pull /me so the parent app can render with student list.
       const meRes = await fetch("/api/parent-auth/me", {
         credentials: "include",
@@ -93,6 +95,7 @@ export default function AcceptInvite({
       });
       const me = (await meRes.json()) as ParentMe;
       if (me.authToken) setParentToken(me.authToken);
+      if (me.csrfToken) setCsrfToken(me.csrfToken);
       onAccepted(me);
       navigate("/parent");
     } catch (err) {

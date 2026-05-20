@@ -1,11 +1,15 @@
 import express, { type Express } from "express";
-import cors from "cors";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
+import { corsMiddleware } from "./lib/corsConfig.js";
+import { csrfProtectionMiddleware } from "./lib/csrf.js";
 import { logger } from "./lib/logger";
-import { verifyAuthToken } from "./lib/authToken";
+import {
+  isStaffBearerAuthEnabled,
+  staffIdFromBearerToken,
+} from "./lib/staffBearerAuth";
 import { db, staffTable, schoolsTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
 
@@ -41,6 +45,7 @@ declare global {
 declare module "express-session" {
   interface SessionData {
     activeSchoolId?: number;
+    csrfToken?: string;
   }
 }
 
@@ -80,7 +85,7 @@ app.use(
     },
   }),
 );
-app.use(cors());
+app.use(corsMiddleware);
 // JSON body limit: bumped from the 100KB default so the Data Imports
 // route can accept CSV text in the request body. The frontend caps file
 // uploads at 10MB; 15MB gives headroom for JSON-quoting overhead.
@@ -92,6 +97,9 @@ app.use(
     store: new PgSession({
       conObject: { connectionString: databaseUrl },
       tableName: "user_sessions",
+      // Not in Drizzle schema (connect-pg-simple owns this table). Create on first use
+      // so local / fresh DBs work without a separate migration step.
+      createTableIfMissing: true,
     }),
     secret: sessionSecret,
     resave: false,
@@ -104,27 +112,23 @@ app.use(
       // to allow third-party cookies, which is increasingly blocked by
       // default and was breaking the session inside the Replit preview iframe.
       sameSite: "lax",
-      secure: true,
+      // HttpOnly cookies work on http://localhost in dev; Secure only over HTTPS.
+      secure: process.env.NODE_ENV === "production",
       maxAge: 1000 * 60 * 60 * 24 * 14,
     },
     name: "pulseed.sid",
   }),
 );
 
-// Resolve the authenticated staff id per request from EITHER the session
-// cookie OR a server-issued Bearer token (HMAC-signed with SESSION_SECRET).
-// The bearer fallback is needed inside the Replit preview iframe where the
-// session cookie is often blocked. We DO NOT write to req.session here, so:
-//   - logout (which destroys the session) stays authoritative for cookie auth
-//   - the session store sees no extra writes/churn
-//   - bearer-derived identity never gets persisted with a different sid
-// Routes should read req.staffId instead of req.session.staffId.
+// Resolve staff identity from the HttpOnly session cookie. Bearer tokens are
+// optional (STAFF_BEARER_AUTH_ENABLED) for legacy iframe/dev only; they are
+// versioned and revoked on logout. Routes should read req.staffId.
 app.use(async (req, _res, next) => {
   let sid: number | null = req.session.staffId ?? null;
-  if (!sid) {
+  if (!sid && isStaffBearerAuthEnabled()) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      sid = verifyAuthToken(auth.slice(7).trim());
+      sid = await staffIdFromBearerToken(auth.slice(7).trim());
     }
   }
   // "Preview as another staff" swap. Backed by staff.preview_target_staff_id
@@ -262,6 +266,7 @@ app.use(async (req, _res, next) => {
   next();
 });
 
+app.use("/api", csrfProtectionMiddleware);
 app.use("/api", router);
 
 export default app;

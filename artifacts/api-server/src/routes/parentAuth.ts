@@ -13,6 +13,14 @@ import {
   verifyParentAuthToken,
 } from "../lib/authToken.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
+import { ensureCsrfToken } from "../lib/csrf.js";
+import {
+  checkLoginAllowed,
+  PARENT_LOGIN_MAX_BCRYPT_CHECKS,
+  recordLoginFailure,
+  recordLoginSuccess,
+  sendLoginRateLimited,
+} from "../lib/loginThrottle.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -67,6 +75,13 @@ router.post("/parent-auth/login", async (req: Request, res) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+
+  const blocked = await checkLoginAllowed(req, "parent", normalizedEmail);
+  if (blocked) {
+    sendLoginRateLimited(res, blocked);
+    return;
+  }
+
   // Pull every parent row matching this email — there can be one per school
   // (rare, but possible if a family moves districts). Try them in turn so the
   // user doesn't have to know which school the row was created under.
@@ -75,9 +90,16 @@ router.post("/parent-auth/login", async (req: Request, res) => {
     .from(parentsTable)
     .where(eq(parentsTable.email, normalizedEmail));
 
-  for (const parent of candidates) {
-    if (!parent.active || !parent.passwordHash) continue;
-    const ok = await bcrypt.compare(password, parent.passwordHash);
+  const eligible = candidates
+    .filter((p) => p.active && p.passwordHash)
+    .sort(
+      (a, b) =>
+        (b.lastLoginAt?.getTime() ?? 0) - (a.lastLoginAt?.getTime() ?? 0),
+    )
+    .slice(0, PARENT_LOGIN_MAX_BCRYPT_CHECKS);
+
+  for (const parent of eligible) {
+    const ok = await bcrypt.compare(password, parent.passwordHash!);
     if (!ok) continue;
 
     await db
@@ -95,6 +117,7 @@ router.post("/parent-auth/login", async (req: Request, res) => {
       // logged in twice in the same browser.
       delete req.session.staffId;
       delete req.session.activeSchoolId;
+      const csrfToken = ensureCsrfToken(req.session);
       req.session.save((saveErr) => {
         if (saveErr) {
           res.status(500).json({ error: "Could not save session" });
@@ -102,13 +125,16 @@ router.post("/parent-auth/login", async (req: Request, res) => {
         }
         res.json({
           ...publicParent(parent),
+          csrfToken,
           authToken: issueParentAuthToken(parent.id),
         });
       });
     });
+    await recordLoginSuccess(req, "parent", normalizedEmail);
     return;
   }
 
+  await recordLoginFailure(req, "parent", normalizedEmail);
   res.status(401).json({ error: GENERIC_LOGIN_ERROR });
 });
 
@@ -154,8 +180,11 @@ router.get("/parent-auth/me", async (req, res) => {
     .innerJoin(studentsTable, eq(parentStudentsTable.studentId, studentsTable.id))
     .where(eq(parentStudentsTable.parentId, pid));
 
+  const csrfToken = ensureCsrfToken(req.session);
+
   res.json({
     ...publicParent(parent),
+    csrfToken,
     authToken: issueParentAuthToken(parent.id),
     students: links.map((s) => ({
       id: s.studentRowId,
@@ -303,6 +332,13 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
   }
 
   const normalizedEmail = invite.email.toLowerCase();
+
+  const blockedInvite = await checkLoginAllowed(req, "parent", normalizedEmail);
+  if (blockedInvite) {
+    sendLoginRateLimited(res, blockedInvite);
+    return;
+  }
+
   const [existing] = await db
     .select()
     .from(parentsTable)
@@ -318,6 +354,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     // Sibling case — verify the existing password rather than overwriting.
     const ok = await bcrypt.compare(password, existing.passwordHash);
     if (!ok) {
+      await recordLoginFailure(req, "parent", normalizedEmail);
       res.status(401).json({
         error:
           "An account with this email already exists at this school. Enter your existing password to add this student.",
@@ -378,6 +415,8 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     })
     .where(eq(parentInvitesTable.id, invite.id));
 
+  await recordLoginSuccess(req, "parent", normalizedEmail);
+
   // Auto-sign-in so the parent lands on their dashboard immediately.
   const [parent] = await db
     .select()
@@ -391,6 +430,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     req.session.parentId = parentId;
     delete req.session.staffId;
     delete req.session.activeSchoolId;
+    const csrfToken = ensureCsrfToken(req.session);
     req.session.save((saveErr) => {
       if (saveErr) {
         res.status(500).json({ error: "Could not save session" });
@@ -398,6 +438,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
       }
       res.json({
         ...publicParent(parent!),
+        csrfToken,
         authToken: issueParentAuthToken(parentId),
       });
     });

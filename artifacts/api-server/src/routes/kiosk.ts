@@ -17,6 +17,12 @@ import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
+import {
+  checkLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+  sendLoginRateLimited,
+} from "../lib/loginThrottle.js";
 import { loadBrandingForSchool } from "./schoolBranding.js";
 import {
   findPolarityConflict,
@@ -375,20 +381,31 @@ router.post("/kiosk/activate", async (req, res) => {
   }
 
   const normalizedEmail = email.trim().toLowerCase();
+
+  const blocked = await checkLoginAllowed(req, "staff", normalizedEmail);
+  if (blocked) {
+    sendLoginRateLimited(res, blocked);
+    return;
+  }
+
   const [staff] = await db
     .select()
     .from(staffTable)
     .where(eq(staffTable.email, normalizedEmail));
 
   if (!staff || !staff.active) {
+    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
   const ok = await bcrypt.compare(password, staff.passwordHash);
   if (!ok) {
+    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
+
+  await recordLoginSuccess(req, "staff", normalizedEmail);
 
   const { deviceLabel, deviceFingerprint } = cleanDeviceFields(req);
   const outcome = await resolveActivation({

@@ -8,7 +8,7 @@ import {
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
 import { and, eq, asc, inArray, sql } from "drizzle-orm";
-import { verifyAuthToken } from "../lib/authToken.js";
+import { staffIdFromBearerToken } from "../lib/staffBearerAuth.js";
 import {
   getDistrictIdForSchool,
   getSchoolIdsForDistrict,
@@ -28,7 +28,7 @@ async function loadStaff(req: Request): Promise<StaffRow | null> {
   if (!id) {
     const auth = req.headers.authorization;
     if (typeof auth === "string" && auth.startsWith("Bearer ")) {
-      id = verifyAuthToken(auth.slice(7).trim());
+      id = await staffIdFromBearerToken(auth.slice(7).trim());
     }
   }
   if (!id) return null;

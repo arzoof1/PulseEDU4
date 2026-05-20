@@ -2,7 +2,17 @@ import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
 import { db, staffTable } from "@workspace/db";
 import { eq } from "drizzle-orm";
-import { issueAuthToken, verifyAuthToken } from "../lib/authToken.js";
+import {
+  bumpStaffAuthTokenVersion,
+  issueStaffAuthTokenIfEnabled,
+} from "../lib/staffBearerAuth.js";
+import { ensureCsrfToken } from "../lib/csrf.js";
+import {
+  checkLoginAllowed,
+  recordLoginFailure,
+  recordLoginSuccess,
+  sendLoginRateLimited,
+} from "../lib/loginThrottle.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -55,26 +65,32 @@ router.post("/auth/login", async (req: Request, res) => {
 
   const normalizedEmail = email.trim().toLowerCase();
 
+  const blocked = await checkLoginAllowed(req, "staff", normalizedEmail);
+  if (blocked) {
+    sendLoginRateLimited(res, blocked);
+    return;
+  }
+
   const [staff] = await db
     .select()
     .from(staffTable)
     .where(eq(staffTable.email, normalizedEmail));
 
   if (!staff || !staff.active) {
+    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
     return;
   }
 
   const ok = await bcrypt.compare(password, staff.passwordHash);
   if (!ok) {
+    await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
     return;
   }
 
-  // Safety net: clear any stale SuperUser "act as another school" override on
-  // every fresh login. Without this, an expired session/token in the middle
-  // of a switch can leave a SuperUser stranded acting-as another school with
-  // no way to call /tenancy/switch-school. A re-login always lands at home.
+  await recordLoginSuccess(req, "staff", normalizedEmail);
+
   if (staff.activeSchoolOverride !== null) {
     await db
       .update(staffTable)
@@ -82,10 +98,6 @@ router.post("/auth/login", async (req: Request, res) => {
       .where(eq(staffTable.id, staff.id));
     staff.activeSchoolOverride = null;
   }
-  // Same safety net for the "Preview as another staff" pointer. A fresh
-  // login always lands on the real account; impersonation should never
-  // silently carry over from a previous session/device, mirroring the
-  // session-scoped semantics the previous design had.
   if (staff.previewTargetStaffId !== null) {
     await db
       .update(staffTable)
@@ -100,22 +112,28 @@ router.post("/auth/login", async (req: Request, res) => {
       return;
     }
     req.session.staffId = staff.id;
-    req.session.save((saveErr) => {
+    const csrfToken = ensureCsrfToken(req.session);
+    req.session.save(async (saveErr) => {
       if (saveErr) {
         res.status(500).json({ error: "Could not save session" });
         return;
       }
+      const authToken = await issueStaffAuthTokenIfEnabled(staff.id);
       res.json({
         ...publicStaff(staff),
-        // Signed bearer token used as a fallback when the browser blocks
-        // the session cookie (e.g. inside the Replit preview iframe).
-        authToken: issueAuthToken(staff.id),
+        csrfToken,
+        ...(authToken ? { authToken } : {}),
       });
     });
   });
 });
 
-router.post("/auth/logout", (req, res) => {
+router.post("/auth/logout", async (req, res) => {
+  const staffId = req.session.staffId ?? req.staffId ?? null;
+  if (staffId) {
+    await bumpStaffAuthTokenVersion(staffId);
+  }
+
   req.session.destroy((err) => {
     if (err) {
       res.status(500).json({ error: "Could not log out" });
@@ -126,8 +144,6 @@ router.post("/auth/logout", (req, res) => {
   });
 });
 
-// Change the caller's own password. Requires current password to prove it's
-// really them (so a stolen session/bearer token can't silently reset it).
 router.post("/auth/change-password", async (req: Request, res) => {
   const staffId = req.staffId ?? null;
   if (!staffId) {
@@ -172,6 +188,8 @@ router.post("/auth/change-password", async (req: Request, res) => {
     .set({ passwordHash })
     .where(eq(staffTable.id, staffId));
 
+  await bumpStaffAuthTokenVersion(staffId);
+
   res.json({ ok: true });
 });
 
@@ -191,26 +209,16 @@ router.get("/auth/me", async (req, res) => {
     });
     return;
   }
-  // If the global middleware swapped this request to a "Preview as X"
-  // identity (see /admin/staff-preview), it stamped req.impersonatorStaffId
-  // and req.impersonatorDisplayName from the staff row's preview pointer.
-  // Surface those so the client can render a "Previewing as X — return
-  // to my account" banner.
-  // CRITICAL: when previewing, the bearer token we mint here MUST be for
-  // the impersonator (the real signed-in user), NOT for the swapped target
-  // identity in `staff`. The client's authFetch silently rotates its
-  // stored bearer from any response carrying a fresh `authToken`, so
-  // issuing `staff.id` (= target) during preview would permanently bind
-  // the client's bearer to the previewed user. Then "Exit preview" would
-  // appear to succeed (the server-side preview pointer would clear) but
-  // the very next /auth/me request, authenticated by the now-target's
-  // bearer, would resolve directly to the target with no impersonation —
-  // stranding the user inside the previewed account. Always re-anchor the
-  // token to the impersonator's row when one is present.
+
   const tokenSubject = req.impersonatorStaffId ?? staff.id;
+  const authToken = await issueStaffAuthTokenIfEnabled(tokenSubject);
+
+  const csrfToken = ensureCsrfToken(req.session);
+
   res.json({
     ...publicStaff(staff),
-    authToken: issueAuthToken(tokenSubject),
+    csrfToken,
+    ...(authToken ? { authToken } : {}),
     activeSchoolId: req.schoolId ?? staff.schoolId,
     homeSchoolId: req.homeSchoolId ?? staff.schoolId,
     isSchoolSwitched: !!req.isSchoolSwitched,

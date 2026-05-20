@@ -9,6 +9,7 @@ import {
   logicalPath,
   type ParentMe,
 } from "./api";
+import { setCsrfToken } from "../lib/csrf";
 
 type Route =
   | { kind: "loading" }
@@ -40,6 +41,7 @@ export default function ParentApp() {
       if (!res.ok) return null;
       const body = (await res.json()) as ParentMe;
       if (body.authToken) setParentToken(body.authToken);
+      if (body.csrfToken) setCsrfToken(body.csrfToken);
       return body;
     } catch {
       return null;

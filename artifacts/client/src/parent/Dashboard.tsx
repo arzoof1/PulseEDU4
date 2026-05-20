@@ -32,7 +32,12 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
+import {
+  clearParentSession,
+  parentFetch,
+  navigate,
+  type ParentMe,
+} from "./api";
 
 interface Snapshot {
   parent: { displayName: string; email: string };
@@ -241,14 +246,11 @@ export default function Dashboard({ me }: { me: ParentMe }) {
 
   async function handleSignOut() {
     try {
-      await fetch("/api/parent-auth/logout", {
-        method: "POST",
-        credentials: "include",
-      });
+      await parentFetch("/api/parent-auth/logout", { method: "POST" });
     } catch {
       /* swallow */
     }
-    setParentToken(null);
+    clearParentSession();
     navigate("/parent/login");
   }
 
