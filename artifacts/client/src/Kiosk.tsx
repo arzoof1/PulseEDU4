@@ -92,6 +92,11 @@ type Phase =
       staffName: string;
       previewRoom: string | null;
       ttlDays: number;
+      // Set when we tried to auto-confirm with the previewRoom and it
+      // failed (e.g., the default room is no longer a valid origin).
+      // Surfaced as a banner in EnrollConfirmScreen so the user knows
+      // why they landed on the manual form.
+      autoConfirmError?: string | null;
     }
   | {
       kind: "ready";
@@ -259,6 +264,57 @@ export default function Kiosk() {
       });
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.requiresConfirm) {
+        // If the server already knows this teacher's default room
+        // (staff_defaults.default_location_name is set), skip the
+        // confirm screen and auto-activate. The teacher typed her
+        // own PIN/QR — she shouldn't have to also pick the room she
+        // sits in every day. Core Team sub-coverage uses a different
+        // endpoint (/api/kiosk/activate-proxy) where the actor types
+        // the room explicitly, so they're unaffected by this branch.
+        const presetRoom =
+          typeof data.previewRoom === "string" && data.previewRoom.trim()
+            ? data.previewRoom.trim()
+            : null;
+        if (presetRoom) {
+          const confirmBody: Record<string, unknown> = {
+            deviceFingerprint: getOrCreateDeviceFingerprint(),
+            deviceLabel: getDeviceLabel(),
+            confirm: true,
+            room: presetRoom,
+          };
+          if (method === "enroll") confirmBody.enrollToken = credential;
+          else confirmBody.pin = credential;
+          const confirmRes = await fetch(path, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(confirmBody),
+          });
+          const confirmData = await confirmRes.json().catch(() => ({}));
+          if (confirmRes.ok && confirmData.token) {
+            handleActivated(
+              confirmData.token,
+              confirmData.room,
+              confirmData.staffName,
+              confirmData.expiresAt ?? null,
+            );
+            return { ok: true };
+          }
+          // Fall through to the confirm screen on failure so the user
+          // can see the error and try a different room name.
+          setPhase({
+            kind: "enrollConfirm",
+            method,
+            credential,
+            staffId: data.staffId,
+            staffName: data.staffName,
+            previewRoom: data.previewRoom ?? null,
+            ttlDays: data.ttlDays ?? 14,
+            autoConfirmError:
+              confirmData.error ??
+              `Auto-activation failed (${confirmRes.status}). Pick a room and try again.`,
+          });
+          return { ok: true };
+        }
         setPhase({
           kind: "enrollConfirm",
           method,
@@ -332,6 +388,7 @@ export default function Kiosk() {
           staffName={phase.staffName}
           previewRoom={phase.previewRoom}
           ttlDays={phase.ttlDays}
+          initialError={phase.autoConfirmError ?? null}
           onCancel={() => setPhase({ kind: "activate" })}
           onConfirm={async (room) => {
             const body: Record<string, unknown> = {
@@ -742,18 +799,20 @@ function EnrollConfirmScreen({
   staffName,
   previewRoom,
   ttlDays,
+  initialError,
   onCancel,
   onConfirm,
 }: {
   staffName: string;
   previewRoom: string | null;
   ttlDays: number;
+  initialError?: string | null;
   onCancel: () => void;
   onConfirm: (room: string) => Promise<{ ok: boolean; error?: string }>;
 }) {
   const [room, setRoom] = useState(previewRoom ?? "");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
+  const [error, setError] = useState(initialError ?? "");
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!room.trim()) {
