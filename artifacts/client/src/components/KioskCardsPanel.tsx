@@ -162,6 +162,7 @@ export function KioskCardsPanel({
     try {
       const res = await authFetch("/api/kiosk/cards.pdf", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
       if (!res.ok) {
