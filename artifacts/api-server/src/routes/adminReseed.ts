@@ -348,21 +348,41 @@ router.post("/seed-rooms-staff", async (req, res) => {
         }
 
         // Upsert staff_defaults (source of truth for kiosk previewRoom).
+        // `staff_name` is GLOBALLY unique (not per-school) — so we look
+        // up by name first to avoid unique-constraint violations when
+        // the same display name exists in multiple schools (e.g.
+        // "James Carter" at both schools). Resolution:
+        //   - row with this name AND this staff_id  -> fill if empty
+        //   - row with this name AND a different staff_id -> skip,
+        //     because we cannot create a second row with the same
+        //     name. The kiosk auto-skip will simply not fire for this
+        //     teacher; admin can disambiguate later.
+        //   - no row with this name -> insert.
+        const targetRoom = t.defaultRoom ?? assignedRoom;
         // eslint-disable-next-line no-await-in-loop
-        const [existing] = await db
+        const [existingByName] = await db
           .select()
           .from(staffDefaultsTable)
-          .where(eq(staffDefaultsTable.staffId, t.id));
-        const targetRoom = t.defaultRoom ?? assignedRoom;
-        if (existing) {
-          if (!existing.defaultLocationName) {
-            // eslint-disable-next-line no-await-in-loop
-            await db
-              .update(staffDefaultsTable)
-              .set({ defaultLocationName: targetRoom })
-              .where(eq(staffDefaultsTable.id, existing.id));
-            defaultsUpserted++;
+          .where(eq(staffDefaultsTable.staffName, t.displayName));
+        if (existingByName) {
+          if (existingByName.staffId === t.id) {
+            const patch: Record<string, unknown> = {};
+            if (!existingByName.defaultLocationName) {
+              patch.defaultLocationName = targetRoom;
+            }
+            if (existingByName.schoolId !== SCHOOL_ID) {
+              patch.schoolId = SCHOOL_ID;
+            }
+            if (Object.keys(patch).length > 0) {
+              // eslint-disable-next-line no-await-in-loop
+              await db
+                .update(staffDefaultsTable)
+                .set(patch)
+                .where(eq(staffDefaultsTable.id, existingByName.id));
+              defaultsUpserted++;
+            }
           }
+          // else: name collision with another staff member — skip.
         } else {
           // eslint-disable-next-line no-await-in-loop
           await db.insert(staffDefaultsTable).values({
