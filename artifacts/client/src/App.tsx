@@ -3950,7 +3950,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
   {
     id: "equity",
     icon: "⚖️",
-    title: "Equity",
+    title: "Risk Ratio",
     subtitle:
       "Risk ratios across ELL, IEP, 504, and gender — surfaces where outcomes diverge from peer rates.",
     phase: "Today",
