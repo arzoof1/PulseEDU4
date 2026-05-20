@@ -49,8 +49,19 @@ interface Props {
   onBack: () => void;
 }
 
+// Florida benchmark codes encode grade as the 2nd dotted segment
+// (e.g. "ELA.6.R.1.1" → "6", "MA.K.NSO.1.1" → "K"). Returns the
+// uppercased token, or null when the code doesn't follow the pattern.
+function gradeTokenFromCode(code: string): string | null {
+  const parts = code.split(".");
+  if (parts.length < 2) return null;
+  const g = parts[1]?.trim().toUpperCase();
+  return g ? g : null;
+}
+
 export default function InstructionalCoverageDashboard({ onBack }: Props) {
   const [subject, setSubject] = useState<string>("ela");
+  const [grade, setGrade] = useState<string>("all");
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
@@ -85,9 +96,42 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
     };
   }, [subject]);
 
+  // Grades present in the returned catalog (subject-aware). Drives the
+  // grade picker so we only ever offer choices that actually exist —
+  // a Math catalog limited to grades 3–5 won't surface a "Grade 8"
+  // option that returns zero rows.
+  const availableGrades = useMemo(() => {
+    if (!data) return [] as string[];
+    const set = new Set<string>();
+    for (const r of data.benchmarks) {
+      const tok = gradeTokenFromCode(r.code);
+      if (tok) set.add(tok);
+    }
+    // Sort: K, 1, 2, …, 12, then anything else alphabetically.
+    const order = (t: string): number => {
+      if (t === "K") return 0;
+      const n = Number(t);
+      return Number.isFinite(n) ? n : 1000;
+    };
+    return Array.from(set).sort((a, b) => order(a) - order(b) || a.localeCompare(b));
+  }, [data]);
+
+  // Reset the grade picker when the subject (and therefore the
+  // available grades) changes — keeps the user from being stuck on a
+  // grade the new subject doesn't have.
+  useEffect(() => {
+    setGrade("all");
+  }, [subject]);
+
+  const filteredBenchmarks = useMemo(() => {
+    if (!data) return [] as Row[];
+    if (grade === "all") return data.benchmarks;
+    return data.benchmarks.filter((r) => gradeTokenFromCode(r.code) === grade);
+  }, [data, grade]);
+
   const sorted = useMemo(() => {
     if (!data) return [] as Row[];
-    const rows = [...data.benchmarks];
+    const rows = [...filteredBenchmarks];
     if (sort === "total") {
       rows.sort((a, b) => b.totalDeliveries - a.totalDeliveries);
     } else if (sort === "teachers") {
@@ -110,22 +154,22 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
       rows.sort((a, b) => score(b) - score(a));
     }
     return rows;
-  }, [data, sort]);
+  }, [data, filteredBenchmarks, sort]);
 
   const totals = useMemo(() => {
     if (!data) return { rows: 0, deliveries: 0, taught: 0, untaught: 0 };
-    const deliveries = data.benchmarks.reduce(
+    const deliveries = filteredBenchmarks.reduce(
       (s, r) => s + r.totalDeliveries,
       0,
     );
-    const taught = data.benchmarks.filter((r) => r.totalDeliveries > 0).length;
+    const taught = filteredBenchmarks.filter((r) => r.totalDeliveries > 0).length;
     return {
-      rows: data.benchmarks.length,
+      rows: filteredBenchmarks.length,
       deliveries,
       taught,
-      untaught: data.benchmarks.length - taught,
+      untaught: filteredBenchmarks.length - taught,
     };
-  }, [data]);
+  }, [data, filteredBenchmarks]);
 
   return (
     <div style={{ padding: "1rem", maxWidth: 1200 }}>
@@ -147,6 +191,21 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
             {SUBJECTS.map((s) => (
               <option key={s.value} value={s.value}>
                 {s.label}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label style={{ fontSize: 13 }}>
+          Grade:&nbsp;
+          <select
+            value={grade}
+            onChange={(e) => setGrade(e.target.value)}
+            disabled={availableGrades.length === 0}
+          >
+            <option value="all">All grades</option>
+            {availableGrades.map((g) => (
+              <option key={g} value={g}>
+                {g === "K" ? "Kindergarten" : `Grade ${g}`}
               </option>
             ))}
           </select>
@@ -206,7 +265,16 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
         </div>
       )}
 
-      {data && data.benchmarks.length > 0 && (
+      {data &&
+        data.benchmarks.length > 0 &&
+        filteredBenchmarks.length === 0 && (
+          <div style={{ fontSize: 13, color: "#6b7280" }}>
+            No {subject.toUpperCase()} benchmarks for{" "}
+            {grade === "K" ? "Kindergarten" : `Grade ${grade}`}.
+          </div>
+        )}
+
+      {data && filteredBenchmarks.length > 0 && (
         <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12 }}>
           <thead>
             <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
