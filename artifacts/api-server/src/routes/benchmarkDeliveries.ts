@@ -41,6 +41,9 @@ import {
   schoolBenchmarksTable,
   benchmarkDeliveriesTable,
   studentFastItemResponsesTable,
+  classSectionsTable,
+  sectionRosterTable,
+  studentsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql, desc, asc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
@@ -83,16 +86,91 @@ function todayISO(): string {
   });
 }
 
+// Pull the distinct grade levels a teacher is responsible for, by
+// walking their class sections → roster → students. Used to filter
+// the benchmark catalog so a 6th-grade teacher doesn't see 7th/8th
+// standards in the Instruction Log dropdown.
+async function teacherGrades(
+  schoolId: number,
+  teacherStaffId: number,
+): Promise<number[]> {
+  const rows = await db
+    .select({ grade: studentsTable.grade })
+    .from(classSectionsTable)
+    .innerJoin(
+      sectionRosterTable,
+      and(
+        eq(sectionRosterTable.schoolId, classSectionsTable.schoolId),
+        eq(sectionRosterTable.sectionId, classSectionsTable.id),
+      ),
+    )
+    .innerJoin(
+      studentsTable,
+      and(
+        eq(studentsTable.schoolId, sectionRosterTable.schoolId),
+        eq(studentsTable.studentId, sectionRosterTable.studentId),
+      ),
+    )
+    .where(
+      and(
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.teacherStaffId, teacherStaffId),
+        eq(classSectionsTable.isPlanning, false),
+      ),
+    );
+  return Array.from(new Set(rows.map((r) => r.grade))).sort((a, b) => a - b);
+}
+
+// Florida benchmark codes encode grade as the 2nd dotted segment
+// (e.g. "ELA.6.R.1.1" → 6, "MA.6.NSO.1.1" → 6, "ELA.K.R.1.1" → "K").
+// Returns the grade as a string token for set lookups; null when the
+// code doesn't follow the convention.
+function gradeTokenFromCode(code: string): string | null {
+  const parts = code.split(".");
+  if (parts.length < 2) return null;
+  const g = parts[1]?.trim().toUpperCase();
+  return g ? g : null;
+}
+
+function gradeTokensForTeacherGrades(grades: number[]): Set<string> {
+  const out = new Set<string>();
+  for (const g of grades) {
+    if (g === 0) out.add("K");
+    out.add(String(g));
+  }
+  return out;
+}
+
 // ----------------------------- catalog -------------------------------------
 router.get(
   "/teacher-roster/benchmark-catalog",
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
     const subject = parseSubject(req.query.subject);
     if (!subject) {
       res.status(400).json({ error: "subject required" });
       return;
+    }
+    // Resolve target teacher (defaults to caller; Core Team may pass
+    // another staffId — mirrors counts/history endpoints).
+    let teacherId = staff.id;
+    if (req.query.teacherId) {
+      const t = Number(req.query.teacherId);
+      if (!Number.isInteger(t) || t <= 0) {
+        res.status(400).json({ error: "bad teacherId" });
+        return;
+      }
+      if (t !== staff.id && !isCoreTeam(staff)) {
+        res.status(403).json({ error: "Core Team required" });
+        return;
+      }
+      teacherId = t;
     }
     const rows = await db
       .select({
@@ -110,7 +188,23 @@ router.get(
         ),
       )
       .orderBy(asc(schoolBenchmarksTable.category), asc(schoolBenchmarksTable.code));
-    res.json({ subject, benchmarks: rows });
+
+    // Filter by the teacher's actual grade levels. A 6th-grade teacher
+    // should only see 6th-grade benchmarks. If we can't determine any
+    // grades (teacher has no roster yet, or none of the codes encode a
+    // recognizable grade), fall back to the unfiltered list so the
+    // dropdown isn't empty.
+    const grades = await teacherGrades(schoolId, teacherId);
+    const allowed = gradeTokensForTeacherGrades(grades);
+    let filtered = rows;
+    if (allowed.size > 0) {
+      const matches = rows.filter((r) => {
+        const tok = gradeTokenFromCode(r.code);
+        return tok != null && allowed.has(tok);
+      });
+      if (matches.length > 0) filtered = matches;
+    }
+    res.json({ subject, teacherId, grades, benchmarks: filtered });
   },
 );
 

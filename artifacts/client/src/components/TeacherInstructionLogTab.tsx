@@ -79,7 +79,9 @@ export default function TeacherInstructionLogTab({
     setErr(null);
     try {
       const [catRes, cntRes, hisRes] = await Promise.all([
-        authFetch(`/api/teacher-roster/benchmark-catalog?subject=${subject}`),
+        authFetch(
+          `/api/teacher-roster/benchmark-catalog?subject=${subject}${teacherQuery}`,
+        ),
         authFetch(
           `/api/teacher-roster/benchmark-deliveries/counts?subject=${subject}${teacherQuery}`,
         ),
