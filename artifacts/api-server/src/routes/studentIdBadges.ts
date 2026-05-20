@@ -7,7 +7,7 @@ import {
   housesTable,
   badgePrintEventsTable,
 } from "@workspace/db";
-import { and, asc, desc, eq, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   renderStudentBadgesPdf,
@@ -124,7 +124,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     .where(
       and(
         eq(studentsTable.schoolId, schoolId),
-        ...(all ? [] : [sql`${studentsTable.id} = ANY(${studentIds})`]),
+        ...(all ? [] : [inArray(studentsTable.id, studentIds)]),
       ),
     )
     .orderBy(asc(studentsTable.lastName), asc(studentsTable.firstName));
