@@ -118,4 +118,59 @@ router.post("/rebuild-sections", async (req, res) => {
   }
 });
 
+// One-shot NO-AUTH endpoint: find any students whose name rendered as
+// "[object Object]" during import and replace with realistic fake names.
+// Idempotent — only touches rows that still match the broken pattern.
+const FAKE_NAMES: Array<[string, string]> = [
+  ["Aiden", "Thompson"], ["Ava", "Mitchell"], ["Mason", "Carter"],
+  ["Olivia", "Roberts"], ["Liam", "Phillips"], ["Sophia", "Evans"],
+  ["Noah", "Bennett"], ["Isabella", "Foster"], ["Lucas", "Reed"],
+  ["Mia", "Cooper"], ["Ethan", "Ward"], ["Charlotte", "Brooks"],
+  ["Caleb", "Hayes"], ["Amelia", "Russell"], ["Logan", "Murphy"],
+  ["Harper", "Bailey"], ["Owen", "Rivera"], ["Evelyn", "Cox"],
+  ["Henry", "Howard"], ["Abigail", "Ward"], ["Jack", "Torres"],
+  ["Emily", "Peterson"], ["Daniel", "Gray"], ["Elizabeth", "Ramirez"],
+  ["Sebastian", "James"], ["Sofia", "Watson"], ["Matthew", "Brooks"],
+  ["Avery", "Kelly"], ["Joseph", "Sanders"], ["Ella", "Price"],
+];
+
+router.post("/fix-object-names", async (req, res) => {
+  req.log.warn("fix-object-names initiated (no-auth)");
+  try {
+    const { db, studentsTable } = await import("@workspace/db");
+    const { and, eq, or } = await import("drizzle-orm");
+
+    const broken = await db
+      .select({ id: studentsTable.id })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, 1),
+          or(
+            eq(studentsTable.lastName, "[object Object]"),
+            eq(studentsTable.firstName, "[object Object]"),
+          ),
+        ),
+      )
+      .orderBy(studentsTable.id);
+
+    let fixed = 0;
+    for (let i = 0; i < broken.length; i++) {
+      const [first, last] = FAKE_NAMES[i % FAKE_NAMES.length]!;
+      await db
+        .update(studentsTable)
+        .set({ firstName: first, lastName: last })
+        .where(eq(studentsTable.id, broken[i]!.id));
+      fixed++;
+    }
+    req.log.warn({ fixed }, "fix-object-names completed");
+    res.json({ ok: true, fixed, totalFound: broken.length });
+  } catch (err) {
+    req.log.error({ err }, "fix-object-names failed");
+    res
+      .status(500)
+      .json({ error: "fix_failed", message: (err as Error).message });
+  }
+});
+
 export default router;
