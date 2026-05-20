@@ -136,6 +136,14 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
     setBenchmarkCode("all");
   }, [grade]);
 
+  // Strip the subject + grade tokens (e.g. "ELA.7." or "MA.8.") so a
+  // benchmark suffix like "R.1.1" can be matched across grades. Used by
+  // both the dropdown options (grouping) and the table filter.
+  const suffixOf = (code: string): string => {
+    const parts = code.split(".");
+    return parts.length > 2 ? parts.slice(2).join(".") : code;
+  };
+
   const filteredBenchmarks = useMemo(() => {
     if (!data) return [] as Row[];
     let rows = data.benchmarks;
@@ -143,21 +151,59 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
       rows = rows.filter((r) => gradeTokenFromCode(r.code) === grade);
     }
     if (benchmarkCode !== "all") {
-      rows = rows.filter((r) => r.code === benchmarkCode);
+      // Match by suffix so picking "R.1.1" with Grade=All surfaces every
+      // grade's R.1.1 row. When a specific grade is selected, the grade
+      // filter above has already narrowed it to a single row.
+      rows = rows.filter((r) => suffixOf(r.code) === benchmarkCode);
     }
     return rows;
   }, [data, grade, benchmarkCode]);
 
-  // Benchmark dropdown options — scoped by the current grade filter so a
-  // coach drilling into Grade 7 Math only sees 7th-grade codes. Each
-  // option is "CODE — Category" so admins can scan by domain.
+  // Benchmark dropdown options — grouped by suffix so duplicates across
+  // grades collapse into one entry. With Grade = All you see one "R.1.1"
+  // option that filters the table to every grade's R.1.1. With a specific
+  // grade selected there's only one benchmark per suffix anyway, so the
+  // grouping is a no-op. The label shows which grades carry the suffix
+  // (e.g. "R.1.1 (G6, G7, G8) — Reading Prose and Poetry") so coaches
+  // know it spans the school.
   const benchmarkOptions = useMemo(() => {
-    if (!data) return [] as Row[];
+    if (!data) return [] as Array<{ suffix: string; label: string }>;
     const rows =
       grade === "all"
         ? data.benchmarks
         : data.benchmarks.filter((r) => gradeTokenFromCode(r.code) === grade);
-    return [...rows].sort((a, b) => a.code.localeCompare(b.code));
+    const groups = new Map<
+      string,
+      { grades: Set<string>; category: string | null }
+    >();
+    for (const r of rows) {
+      const suffix = suffixOf(r.code);
+      const g = gradeTokenFromCode(r.code);
+      const existing = groups.get(suffix);
+      if (existing) {
+        if (g) existing.grades.add(g);
+        if (!existing.category && r.category) existing.category = r.category;
+      } else {
+        groups.set(suffix, {
+          grades: new Set(g ? [g] : []),
+          category: r.category,
+        });
+      }
+    }
+    const gradeOrder = (g: string) => (g === "K" ? -1 : Number(g));
+    return Array.from(groups.entries())
+      .map(([suffix, info]) => {
+        const grades = Array.from(info.grades).sort(
+          (a, b) => gradeOrder(a) - gradeOrder(b),
+        );
+        const gradePart =
+          grade === "all" && grades.length > 1
+            ? ` (${grades.map((g) => (g === "K" ? "K" : `G${g}`)).join(", ")})`
+            : "";
+        const catPart = info.category ? ` — ${info.category}` : "";
+        return { suffix, label: `${suffix}${gradePart}${catPart}` };
+      })
+      .sort((a, b) => a.suffix.localeCompare(b.suffix));
   }, [data, grade]);
 
   // Effectiveness band — combines delivery count with mastery to indicate
@@ -309,21 +355,11 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
             style={{ maxWidth: 320 }}
           >
             <option value="all">All benchmarks</option>
-            {benchmarkOptions.map((b) => {
-              // Strip the subject + grade tokens (e.g. "ELA.7." or "MA.8.")
-              // so the option reads as just the standard suffix. The grade
-              // is already conveyed by the Grade filter, and when grade=All
-              // every code shares the same subject prefix — keeping it makes
-              // the dropdown impossible to scan.
-              const parts = b.code.split(".");
-              const short = parts.length > 2 ? parts.slice(2).join(".") : b.code;
-              return (
-                <option key={b.code} value={b.code}>
-                  {short}
-                  {b.category ? ` — ${b.category}` : ""}
-                </option>
-              );
-            })}
+            {benchmarkOptions.map((b) => (
+              <option key={b.suffix} value={b.suffix}>
+                {b.label}
+              </option>
+            ))}
           </select>
         </label>
         <label style={{ fontSize: 13 }}>
