@@ -98,6 +98,7 @@ export function StudentBadgesPanel() {
       };
       const res = await authFetch("/api/students/id-badges.pdf", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
       if (!res.ok) {
