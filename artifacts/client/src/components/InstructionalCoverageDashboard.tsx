@@ -66,6 +66,7 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
   const [data, setData] = useState<Resp | null>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
+  const [howToOpen, setHowToOpen] = useState<boolean>(false);
   // Sort: total | teachers | mastery | weakUntaught
   const [sort, setSort] = useState<"total" | "teachers" | "mastery" | "weak">(
     "weak",
@@ -270,6 +271,22 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
           ← Back
         </button>
         <h2 style={{ margin: 0 }}>Instructional Coverage</h2>
+        <button
+          onClick={() => setHowToOpen((v) => !v)}
+          style={{
+            padding: "4px 10px",
+            fontSize: 12,
+            background: howToOpen ? "#1e3a8a" : "#eef2ff",
+            color: howToOpen ? "white" : "#1e3a8a",
+            border: "1px solid #1e3a8a",
+            borderRadius: 4,
+            cursor: "pointer",
+            fontWeight: 600,
+          }}
+          aria-expanded={howToOpen}
+        >
+          {howToOpen ? "Hide" : "How to use"}
+        </button>
         <label style={{ fontSize: 13, marginLeft: "auto" }}>
           Subject:&nbsp;
           <select value={subject} onChange={(e) => setSubject(e.target.value)}>
@@ -347,51 +364,199 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
         </div>
       )}
 
+      {howToOpen && (
+        <div
+          style={{
+            background: "#f8fafc",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            padding: "12px 16px",
+            marginBottom: 12,
+            fontSize: 13,
+            lineHeight: 1.5,
+            color: "#1f2937",
+          }}
+        >
+          <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 6 }}>
+            How to use this report
+          </div>
+          <p style={{ margin: "0 0 8px" }}>
+            This dashboard combines <strong>what teachers logged teaching</strong>{" "}
+            (Instruction Log) with <strong>how students performed on FAST</strong>{" "}
+            (per-benchmark mastery) so coaches and admins can tell whether the
+            instructional methods being used are actually moving students.
+          </p>
+          <ol style={{ margin: "0 0 8px 18px", padding: 0 }}>
+            <li>
+              <strong>Pick a Subject</strong> (and optionally a Grade) to scope
+              the catalog.
+            </li>
+            <li>
+              <strong>Scan the effectiveness legend</strong> — the counts tell
+              you how many benchmarks fall in each band right now.
+            </li>
+            <li>
+              <strong>Sort by "Weak + untaught first"</strong> to surface the
+              critical and re-teach benchmarks at the top.
+            </li>
+            <li>
+              <strong>Use the Benchmark dropdown</strong> to drill into a single
+              standard schoolwide — useful for coaching conversations or PLC
+              planning ("everyone struggled on ELA.7.R.2.2, let's plan a
+              shared re-teach").
+            </li>
+          </ol>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: "10px 0 4px" }}>
+            What the bands mean
+          </div>
+          <ul style={{ margin: "0 0 8px 18px", padding: 0 }}>
+            <li>
+              <strong style={{ color: BAND_META.critical.fg }}>
+                Critical gap
+              </strong>{" "}
+              — 0 deliveries, OR only 1 delivery and mastery still under 50%.
+              Either nobody's taught it, or one touch wasn't enough. Action:
+              schedule instruction.
+            </li>
+            <li>
+              <strong style={{ color: BAND_META.reteach.fg }}>Re-teach</strong>{" "}
+              — Taught at least twice, but mastery is still below 50%. The
+              methods being used <em>aren't landing</em> — coach a different
+              strategy, swap materials, or pull MTSS Tier 2.
+            </li>
+            <li>
+              <strong style={{ color: BAND_META.building.fg }}>Building</strong>{" "}
+              — Mid mastery (50–69%) OR high mastery (≥70%) with limited
+              coverage. Trending the right direction; keep going.
+            </li>
+            <li>
+              <strong style={{ color: BAND_META.effective.fg }}>Effective</strong>{" "}
+              — Mastery ≥70% with ≥3 deliveries. The methods are working —
+              capture what's being done and share with the team.
+            </li>
+          </ul>
+          <div style={{ fontSize: 12.5, fontWeight: 700, margin: "10px 0 4px" }}>
+            Columns
+          </div>
+          <ul style={{ margin: "0 0 0 18px", padding: 0 }}>
+            <li>
+              <strong>Coverage circle</strong> — total schoolwide deliveries
+              for this benchmark. Faded purple = no recent activity.
+            </li>
+            <li>
+              <strong>Deliveries</strong> / <strong>Teachers</strong> — how many
+              lessons logged, and how many distinct teachers logged them.
+            </li>
+            <li>
+              <strong>Last taught</strong> — most recent date any teacher
+              logged this benchmark.
+            </li>
+            <li>
+              <strong>Mastery</strong> — % correct on FAST items aligned to
+              this benchmark in the most recent PM window. Red &lt;60%, amber
+              60–79%, green ≥80%.
+            </li>
+            <li>
+              <strong>Flag</strong> — the effectiveness band (see above).
+            </li>
+          </ul>
+        </div>
+      )}
+
       {data && filteredBenchmarks.length > 0 && (
         <div
           style={{
-            display: "flex",
-            gap: 8,
             marginBottom: 12,
-            flexWrap: "wrap",
-            alignItems: "center",
+            padding: "10px 12px",
+            background: "#fafafa",
+            border: "1px solid #e5e7eb",
+            borderRadius: 6,
           }}
         >
-          <span style={{ fontSize: 12, color: "#374151", fontWeight: 600 }}>
-            Method effectiveness:
-          </span>
-          {(["critical", "reteach", "building", "effective"] as const).map((b) => {
-            const meta = BAND_META[b];
-            return (
-              <span
-                key={b}
-                title={meta.help}
-                style={{
-                  display: "inline-flex",
-                  alignItems: "center",
-                  gap: 6,
-                  background: meta.bg,
-                  color: meta.fg,
-                  padding: "3px 10px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  fontWeight: 700,
-                }}
-              >
-                {meta.label}
-                <span
-                  style={{
-                    background: "rgba(255,255,255,0.6)",
-                    borderRadius: 999,
-                    padding: "0 6px",
-                    fontSize: 11,
-                  }}
-                >
-                  {bandCounts[b]}
-                </span>
-              </span>
-            );
-          })}
+          <div
+            style={{
+              fontSize: 12,
+              color: "#374151",
+              fontWeight: 700,
+              marginBottom: 8,
+            }}
+          >
+            Method effectiveness — how many benchmarks fall in each band
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: 10,
+            }}
+          >
+            {(["critical", "reteach", "building", "effective"] as const).map(
+              (b) => {
+                const meta = BAND_META[b];
+                const explanations: Record<typeof b, string> = {
+                  critical:
+                    "0 deliveries, or 1 delivery + mastery <50%. Not being taught.",
+                  reteach:
+                    "≥2 deliveries but mastery <50%. Methods aren't landing — try a different strategy.",
+                  building:
+                    "Mid mastery (50–69%), or ≥70% with limited coverage. Trending right.",
+                  effective:
+                    "Mastery ≥70% with ≥3 deliveries. Methods are working — keep going.",
+                };
+                return (
+                  <div
+                    key={b}
+                    style={{
+                      background: meta.row,
+                      borderLeft: `4px solid ${meta.bg}`,
+                      borderRadius: 4,
+                      padding: "6px 10px",
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: 6,
+                        marginBottom: 2,
+                      }}
+                    >
+                      <span
+                        style={{
+                          background: meta.bg,
+                          color: meta.fg,
+                          padding: "2px 8px",
+                          borderRadius: 999,
+                          fontSize: 12,
+                          fontWeight: 700,
+                        }}
+                      >
+                        {meta.label}
+                      </span>
+                      <span
+                        style={{
+                          fontSize: 14,
+                          fontWeight: 700,
+                          color: meta.fg,
+                        }}
+                      >
+                        {bandCounts[b]}
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11.5,
+                        color: "#374151",
+                        lineHeight: 1.35,
+                      }}
+                    >
+                      {explanations[b]}
+                    </div>
+                  </div>
+                );
+              },
+            )}
+          </div>
         </div>
       )}
 
