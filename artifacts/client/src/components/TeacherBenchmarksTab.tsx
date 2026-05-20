@@ -1048,9 +1048,10 @@ export default function TeacherBenchmarksTab({
                         colSpan={expanded ? g.codes.length : 1}
                         rowSpan={expanded ? 1 : 2}
                         style={{
-                          padding: "6px 8px",
+                          padding: "6px 8px 6px 36px",
                           fontSize: 13,
                           textAlign: "center",
+                          position: "relative",
                           borderLeft: expanded
                             ? "4px solid #1e3a8a"
                             : "3px solid #6b7280",
@@ -1121,9 +1122,10 @@ export default function TeacherBenchmarksTab({
                           return (
                             <span
                               style={{
-                                marginLeft: 8,
-                                verticalAlign: "middle",
-                                display: "inline-block",
+                                position: "absolute",
+                                top: 4,
+                                left: 4,
+                                lineHeight: 0,
                               }}
                               onClick={(e) => e.stopPropagation()}
                               title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
@@ -1131,7 +1133,7 @@ export default function TeacherBenchmarksTab({
                               <BenchmarkStar
                                 count={total}
                                 lastTaughtOn={latest}
-                                size={52}
+                                size={28}
                               />
                             </span>
                           );
@@ -1154,6 +1156,7 @@ export default function TeacherBenchmarksTab({
                           width: 44,
                           minWidth: 44,
                           textAlign: "center",
+                          position: "relative",
                           borderLeft:
                             i === 0
                               ? "4px solid #1e3a8a"
@@ -1173,15 +1176,26 @@ export default function TeacherBenchmarksTab({
                             flexDirection: "column",
                             alignItems: "center",
                             gap: 2,
+                            minHeight: 28,
+                            justifyContent: "flex-end",
                           }}
                         >
-                          <BenchmarkStar
-                            count={deliveryCounts[b.code]?.count ?? 0}
-                            lastTaughtOn={
-                              deliveryCounts[b.code]?.lastTaughtOn ?? null
-                            }
-                            size={72}
-                          />
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: 2,
+                              left: 2,
+                              lineHeight: 0,
+                            }}
+                          >
+                            <BenchmarkStar
+                              count={deliveryCounts[b.code]?.count ?? 0}
+                              lastTaughtOn={
+                                deliveryCounts[b.code]?.lastTaughtOn ?? null
+                              }
+                              size={22}
+                            />
+                          </span>
                           <span>{b.code.split(".").slice(-2).join(".")}</span>
                         </div>
                       </th>
@@ -1390,9 +1404,10 @@ export default function TeacherBenchmarksTab({
                         colSpan={expanded ? g.codes.length : 1}
                         rowSpan={expanded ? 1 : 2}
                         style={{
-                          padding: "6px 8px",
+                          padding: "6px 8px 6px 36px",
                           fontSize: 13,
                           textAlign: "center",
+                          position: "relative",
                           borderLeft: expanded
                             ? "4px solid #1e3a8a"
                             : "3px solid #6b7280",
@@ -1463,9 +1478,10 @@ export default function TeacherBenchmarksTab({
                           return (
                             <span
                               style={{
-                                marginLeft: 8,
-                                verticalAlign: "middle",
-                                display: "inline-block",
+                                position: "absolute",
+                                top: 4,
+                                left: 4,
+                                lineHeight: 0,
                               }}
                               onClick={(e) => e.stopPropagation()}
                               title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
@@ -1473,7 +1489,7 @@ export default function TeacherBenchmarksTab({
                               <BenchmarkStar
                                 count={total}
                                 lastTaughtOn={latest}
-                                size={52}
+                                size={28}
                               />
                             </span>
                           );
@@ -1496,6 +1512,7 @@ export default function TeacherBenchmarksTab({
                           width: 84,
                           minWidth: 84,
                           textAlign: "center",
+                          position: "relative",
                           borderLeft:
                             i === 0
                               ? "4px solid #1e3a8a"
@@ -1515,15 +1532,26 @@ export default function TeacherBenchmarksTab({
                             flexDirection: "column",
                             alignItems: "center",
                             gap: 2,
+                            minHeight: 32,
+                            justifyContent: "flex-end",
                           }}
                         >
-                          <BenchmarkStar
-                            count={deliveryCounts[b.code]?.count ?? 0}
-                            lastTaughtOn={
-                              deliveryCounts[b.code]?.lastTaughtOn ?? null
-                            }
-                            size={72}
-                          />
+                          <span
+                            style={{
+                              position: "absolute",
+                              top: 3,
+                              left: 3,
+                              lineHeight: 0,
+                            }}
+                          >
+                            <BenchmarkStar
+                              count={deliveryCounts[b.code]?.count ?? 0}
+                              lastTaughtOn={
+                                deliveryCounts[b.code]?.lastTaughtOn ?? null
+                              }
+                              size={26}
+                            />
+                          </span>
                           <button
                             onClick={() => setDrillCode(b.code)}
                             style={{

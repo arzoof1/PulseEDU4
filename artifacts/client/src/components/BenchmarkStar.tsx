@@ -1,4 +1,5 @@
-// BenchmarkStar — purple → green gradient star with a bold white count.
+// BenchmarkStar — solid dark-purple coverage badge with a bold white count.
+// (Renders as a circle; name kept for backwards-compat across imports.)
 //
 // Shown on the FAST Benchmarks heatmap column headers and on every row
 // of the Benchmark Progress Report so a teacher can see at a glance
@@ -83,8 +84,10 @@ export default function BenchmarkStar({
         viewBox="0 0 24 24"
         style={{ opacity: isZero ? 0.55 : 1 }}
       >
-        <path
-          d="M12 2.5l2.95 5.97 6.59.96-4.77 4.65 1.13 6.57L12 17.55l-5.9 3.1 1.13-6.57L2.46 9.43l6.59-.96L12 2.5z"
+        <circle
+          cx="12"
+          cy="12"
+          r="11"
           fill={isZero ? "none" : fillColor}
           stroke={isZero ? "#9ca3af" : "rgba(0,0,0,0.25)"}
           strokeWidth={isZero ? 1.2 : 0.6}
