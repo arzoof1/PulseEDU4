@@ -321,12 +321,21 @@ export default function InstructionalCoverageDashboard({ onBack }: Props) {
             style={{ maxWidth: 320 }}
           >
             <option value="all">All benchmarks</option>
-            {benchmarkOptions.map((b) => (
-              <option key={b.code} value={b.code}>
-                {b.code}
-                {b.category ? ` — ${b.category}` : ""}
-              </option>
-            ))}
+            {benchmarkOptions.map((b) => {
+              // Strip the subject + grade tokens (e.g. "ELA.7." or "MA.8.")
+              // so the option reads as just the standard suffix. The grade
+              // is already conveyed by the Grade filter, and when grade=All
+              // every code shares the same subject prefix — keeping it makes
+              // the dropdown impossible to scan.
+              const parts = b.code.split(".");
+              const short = parts.length > 2 ? parts.slice(2).join(".") : b.code;
+              return (
+                <option key={b.code} value={b.code}>
+                  {short}
+                  {b.category ? ` — ${b.category}` : ""}
+                </option>
+              );
+            })}
           </select>
         </label>
         <label style={{ fontSize: 13 }}>
