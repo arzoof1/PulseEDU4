@@ -50,6 +50,7 @@ export function KioskCardsPanel({
   // After a regenerate, we show the raw token + PIN in a "print
   // immediately" modal — it's the only time this data is visible.
   const [reveal, setReveal] = useState<{
+    staffId: number;
     staffName: string;
     enrollToken: string;
     pin: string;
@@ -138,6 +139,7 @@ export function KioskCardsPanel({
       }
       const data = await res.json();
       setReveal({
+        staffId: row.staffId,
         staffName: data.staffName,
         enrollToken: data.enrollToken,
         pin: data.pin,
@@ -150,11 +152,27 @@ export function KioskCardsPanel({
     }
   }
 
-  // Cards endpoint is POST (it rotates tokens — we don't want GET
-  // navigation/CSRF triggering silent invalidation). Fetch the PDF as
-  // a blob, then trigger a download via an anchor element.
+  // Cards endpoint is POST. Three accepted payload shapes:
+  //   - `{ all: true }`             — rotates every active teacher's token
+  //   - `{ staffIds: [...] }`       — rotates the listed teachers' tokens
+  //   - `{ presupplied: [...] }`    — uses already-live raw token/PIN
+  //                                    values; NO rotation. Used by the
+  //                                    "Reissue → Print" single-row flow
+  //                                    so the printed PDF's PIN matches
+  //                                    the one we just showed in the
+  //                                    reveal modal.
+  // Fetch the PDF as a blob, then trigger a download via an anchor.
   async function downloadCardsPdf(
-    payload: { all: true } | { staffIds: number[] },
+    payload:
+      | { all: true }
+      | { staffIds: number[] }
+      | {
+          presupplied: Array<{
+            staffId: number;
+            enrollToken: string;
+            pin: string;
+          }>;
+        },
     filename: string,
   ) {
     setBusy(true);
@@ -197,6 +215,32 @@ export function KioskCardsPanel({
   }
 
   function printOne(row: TokenRow) {
+    // If we still have the freshly-revealed raw values for this row
+    // (typically right after "Reissue"), print THOSE — no rotation, so
+    // the on-screen PIN and the PDF PIN stay in sync.
+    if (
+      reveal &&
+      reveal.staffId === row.staffId &&
+      reveal.enrollToken &&
+      reveal.pin
+    ) {
+      void downloadCardsPdf(
+        {
+          presupplied: [
+            {
+              staffId: row.staffId,
+              enrollToken: reveal.enrollToken,
+              pin: reveal.pin,
+            },
+          ],
+        },
+        `kiosk-card-${row.staffId}.pdf`,
+      );
+      return;
+    }
+    // Otherwise we have no raw values in hand and must rotate to
+    // produce a printable PIN. Warn loudly because this invalidates
+    // any card the teacher might already be carrying.
     if (
       !window.confirm(
         `Print a single card for ${row.displayName}? This rotates their token — their previous card will stop working.`,

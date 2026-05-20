@@ -2041,16 +2041,25 @@ function isPinThrottled(ip: string): boolean {
 }
 
 // ---- Admin: printable card PDF -------------------------------------
-// IMPORTANT: regenerates raw tokens + PINs on the fly. Because we only
-// store hashes, the only way to print a card is to issue a NEW token.
-// Calling this rotates every selected teacher's enrollment token —
-// their previous card stops working the moment this endpoint runs.
-// The admin UI MUST make this clear.
-// IMPORTANT: this endpoint MUTATES state (it rotates the enroll
-// token + PIN for every teacher in the response). It must be POST so
-// a browser navigation/img-tag cross-site request can't silently
-// invalidate cards. requireAdmin enforces session auth; the auth
-// cookie/CSRF stack already protects POST.
+// Two modes, controlled by request body:
+//
+//   1. `presupplied: [{staffId, enrollToken, pin}, ...]` — the caller
+//      already has live raw token/PIN values (typically because they
+//      JUST clicked "Reissue" and got them back from
+//      /enroll-tokens/regenerate). We verify each token hash against a
+//      live row for that (school, staff) and print THOSE values
+//      verbatim. NO rotation. This is the path "Reissue → Print card"
+//      should take so users never end up with a PDF whose PIN was
+//      already revoked by the print step itself.
+//
+//   2. `all=true` or `staffIds=[...]` — bulk/first-issue path. We
+//      rotate every selected teacher's enrollment token, because we
+//      only store hashes and have no other way to obtain a printable
+//      raw value. The admin UI MUST warn the user before doing this.
+//
+// IMPORTANT: mode 2 MUTATES state. Endpoint is POST so a browser
+// navigation/img-tag cross-site request can't silently invalidate
+// cards. requireAdmin enforces session auth.
 router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
@@ -2061,7 +2070,86 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
   // Accept body params (POST). Legacy query-string params still work
   // for backwards compat with hand-tested URLs but the client must
   // POST so the browser includes credentials + CSRF protections.
-  const body = (req.body ?? {}) as { all?: boolean; staffIds?: number[] };
+  const body = (req.body ?? {}) as {
+    all?: boolean;
+    staffIds?: number[];
+    presupplied?: Array<{
+      staffId?: unknown;
+      enrollToken?: unknown;
+      pin?: unknown;
+    }>;
+  };
+
+  // Mode 1: presupplied raw token/PIN values. Validate shape + verify
+  // every token hash maps to a LIVE row for the right (school, staff).
+  type Presupplied = {
+    staffId: number;
+    enrollToken: string;
+    pin: string;
+  };
+  let presupplied: Presupplied[] = [];
+  if (Array.isArray(body.presupplied) && body.presupplied.length > 0) {
+    for (const raw of body.presupplied) {
+      if (
+        typeof raw.staffId !== "number" ||
+        !Number.isInteger(raw.staffId) ||
+        raw.staffId <= 0 ||
+        typeof raw.enrollToken !== "string" ||
+        raw.enrollToken.length === 0 ||
+        typeof raw.pin !== "string" ||
+        !/^\d{6}$/.test(raw.pin)
+      ) {
+        res
+          .status(400)
+          .json({ error: "Invalid presupplied entry shape" });
+        return;
+      }
+      presupplied.push({
+        staffId: raw.staffId,
+        enrollToken: raw.enrollToken,
+        pin: raw.pin,
+      });
+    }
+    // Verify each token belongs to a LIVE enroll row for the right
+    // (school, staff) AND that the supplied PIN matches the stored
+    // pinHash. Both must hold — otherwise we'd happily print a PDF
+    // whose token works but PIN doesn't (or vice versa), producing
+    // broken cards. This is the security gate that lets us skip
+    // rotation safely.
+    for (const p of presupplied) {
+      // eslint-disable-next-line no-await-in-loop
+      const [row] = await db
+        .select({
+          id: kioskEnrollTokensTable.id,
+          pinHash: kioskEnrollTokensTable.pinHash,
+        })
+        .from(kioskEnrollTokensTable)
+        .where(
+          and(
+            eq(kioskEnrollTokensTable.schoolId, schoolId),
+            eq(kioskEnrollTokensTable.staffId, p.staffId),
+            eq(kioskEnrollTokensTable.tokenHash, hashToken(p.enrollToken)),
+            isNull(kioskEnrollTokensTable.revokedAt),
+          ),
+        );
+      if (!row || !row.pinHash) {
+        res.status(409).json({
+          error:
+            "One of the supplied cards has been revoked or rotated. Reissue and try again.",
+        });
+        return;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      const pinOk = await bcrypt.compare(p.pin, row.pinHash);
+      if (!pinOk) {
+        res.status(400).json({
+          error: "Supplied PIN does not match the live card for this teacher.",
+        });
+        return;
+      }
+    }
+  }
+
   const all =
     body.all === true ||
     req.query.all === "1" ||
@@ -2077,13 +2165,16 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
     .filter((n) => Number.isInteger(n) && n > 0);
   const staffIds = bodyIds.length ? bodyIds : queryIds;
 
-  if (!all && staffIds.length === 0) {
+  if (presupplied.length === 0 && !all && staffIds.length === 0) {
     res
       .status(400)
-      .json({ error: "Provide staffIds=1,2,3 or all=1" });
+      .json({ error: "Provide presupplied=[...], staffIds=1,2,3, or all=1" });
     return;
   }
 
+  const filterStaffIds =
+    presupplied.length > 0 ? presupplied.map((p) => p.staffId) : staffIds;
+  const useAllFilter = presupplied.length === 0 && all;
   const teachers = await db
     .select()
     .from(staffTable)
@@ -2091,7 +2182,7 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
       and(
         eq(staffTable.schoolId, schoolId),
         eq(staffTable.active, true),
-        ...(all ? [] : [inArray(staffTable.id, staffIds)]),
+        ...(useAllFilter ? [] : [inArray(staffTable.id, filterStaffIds)]),
       ),
     )
     .orderBy(asc(staffTable.displayName));
@@ -2177,15 +2268,30 @@ router.post("/kiosk/cards.pdf", requireAdmin, async (req, res) => {
   }> = [];
   const baseUrl = kioskBaseUrl(req);
   const bulkContext = `print:${randomBytes(6).toString("hex")}`;
+  const presuppliedByStaffId = new Map<number, Presupplied>();
+  for (const p of presupplied) presuppliedByStaffId.set(p.staffId, p);
   for (const t of teachers) {
-    // eslint-disable-next-line no-await-in-loop
-    const { rawToken, rawPin } = await issueEnrollToken({
-      schoolId,
-      staffId: t.id,
-      actorStaffId: actor.id,
-      reason: "card_print",
-      bulkContext,
-    });
+    const pre = presuppliedByStaffId.get(t.id);
+    let rawToken: string;
+    let rawPin: string;
+    if (pre) {
+      // Mode 1: use the already-live values the caller supplied.
+      // We verified above that they map to a live row.
+      rawToken = pre.enrollToken;
+      rawPin = pre.pin;
+    } else {
+      // Mode 2: rotate.
+      // eslint-disable-next-line no-await-in-loop
+      const issued = await issueEnrollToken({
+        schoolId,
+        staffId: t.id,
+        actorStaffId: actor.id,
+        reason: "card_print",
+        bulkContext,
+      });
+      rawToken = issued.rawToken;
+      rawPin = issued.rawPin;
+    }
     const teacherHouseId = (t as { houseId: number | null }).houseId;
     cards.push({
       teacherName: t.displayName,
