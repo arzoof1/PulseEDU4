@@ -1097,6 +1097,43 @@ export default function TeacherBenchmarksTab({
                             ({g.codes.length})
                           </span>
                         )}
+                        {expanded &&
+                          (() => {
+                            // Aggregate the per-benchmark stars into one
+                            // category-level star: sum of deliveries, latest
+                            // taught-on across any benchmark in the group.
+                            let total = 0;
+                            let latest: string | null = null;
+                            for (const b of g.codes) {
+                              const dc = deliveryCounts[b.code];
+                              if (!dc) continue;
+                              total += dc.count;
+                              if (
+                                dc.lastTaughtOn &&
+                                (!latest || dc.lastTaughtOn > latest)
+                              ) {
+                                latest = dc.lastTaughtOn;
+                              }
+                            }
+                            if (total === 0) return null;
+                            return (
+                              <span
+                                style={{
+                                  marginLeft: 8,
+                                  verticalAlign: "middle",
+                                  display: "inline-block",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
+                              >
+                                <BenchmarkStar
+                                  count={total}
+                                  lastTaughtOn={latest}
+                                  size={22}
+                                />
+                              </span>
+                            );
+                          })()}
                       </th>
                     );
                   })}
@@ -1397,6 +1434,43 @@ export default function TeacherBenchmarksTab({
                             ({g.codes.length})
                           </span>
                         )}
+                        {expanded &&
+                          (() => {
+                            // Aggregate the per-benchmark stars into one
+                            // category-level star: sum of deliveries, latest
+                            // taught-on across any benchmark in the group.
+                            let total = 0;
+                            let latest: string | null = null;
+                            for (const b of g.codes) {
+                              const dc = deliveryCounts[b.code];
+                              if (!dc) continue;
+                              total += dc.count;
+                              if (
+                                dc.lastTaughtOn &&
+                                (!latest || dc.lastTaughtOn > latest)
+                              ) {
+                                latest = dc.lastTaughtOn;
+                              }
+                            }
+                            if (total === 0) return null;
+                            return (
+                              <span
+                                style={{
+                                  marginLeft: 8,
+                                  verticalAlign: "middle",
+                                  display: "inline-block",
+                                }}
+                                onClick={(e) => e.stopPropagation()}
+                                title={`${total} instructional delivery${total === 1 ? "" : "s"} this year across ${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"}`}
+                              >
+                                <BenchmarkStar
+                                  count={total}
+                                  lastTaughtOn={latest}
+                                  size={22}
+                                />
+                              </span>
+                            );
+                          })()}
                       </th>
                     );
                   })}
