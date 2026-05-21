@@ -1,0 +1,58 @@
+name: Deploy Production
+
+on:
+  push:
+    branches: [ "main" ]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Deploy and Conditionally Restart app on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            
+            cd /var/www/Pulse-Kinetics-Design
+            
+            
+            git fetch origin main
+            CHANGED_FILES=$(git diff HEAD origin/main --name-only)
+            
+            
+            git pull origin main
+            
+            
+            pnpm install
+            
+            
+            pnpm run build
+            
+            # 6. BACKEND Restart Logic
+           
+            if echo "$CHANGED_FILES" | grep -q "artifacts/api-server/"; then
+              echo "Backend changes detected. Restarting Backend..."
+              cd artifacts/api-server
+              pm2 restart PulseEDU4-Backend || pm2 start pnpm --name "PulseEDU4-Backend" -- run start
+              cd ../../
+            else
+              echo "No changes in Backend. Skipping restart."
+            fi
+            
+            # 7. FRONTEND Restart Logic
+            # Agar 'client' folder mein koi change hai toh hi frontend restart hoga
+            if echo "$CHANGED_FILES" | grep -q "artifacts/client/"; then
+              echo "Frontend changes detected. Restarting Frontend..."
+              cd artifacts/client
+              pm2 restart PulseEDU4-Frontend || pm2 start pnpm --name "PulseEDU4-Frontend" -- run serve
+              cd ../../
+            else
+              echo "No changes in Frontend. Skipping restart."
+            fi
+            
+           
+            pm2 save
