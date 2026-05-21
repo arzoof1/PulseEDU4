@@ -24,12 +24,54 @@ export default function TeacherAllowlistAdmin({
   );
   const [bulkBusy, setBulkBusy] = useState<string | null>(null);
 
+  // Column tiering — three bands, left → right:
+  //   0 RESTROOM   (blueish tint)   restroom / bathroom / RR / WC
+  //   1 FACILITY   (reddish tint)   office, clinic, nurse, guidance,
+  //                                 counselor, library, media, cafeteria,
+  //                                 gym, front desk, admin, etc.
+  //   2 TEACHER    (no tint)        seeded as "<Name> — Room <n>" so they
+  //                                 carry the em/en/hyphen dash separator.
+  // Teacher rooms get pushed all the way to the right per user request so
+  // the high-frequency destinations (restrooms + shared facilities) are
+  // visible without horizontal scrolling.
   const RESTROOM_RE = /(restroom|bathroom|\brr\b|\bwc\b)/i;
-  const isRestroom = (name: string) => RESTROOM_RE.test(name);
+  const FACILITY_RE =
+    /(office|clinic|nurse|guidance|counsel|library|media|cafeteria|cafe|gym|front\s*desk|admin|reception|isr|iss\b|ess\b|principal|dean|attendance|wellness|conference)/i;
+  const TEACHER_RE = /\s[—–-]\s/;
+  const tierOf = (name: string): 0 | 1 | 2 => {
+    if (RESTROOM_RE.test(name)) return 0;
+    if (TEACHER_RE.test(name) && !FACILITY_RE.test(name)) return 2;
+    return 1;
+  };
   const restroomCount = useMemo(
-    () => allDestinations.filter(isRestroom).length,
+    () => allDestinations.filter((d) => tierOf(d) === 0).length,
+    // tierOf is stable (pure function of name); deps only on the list
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [allDestinations],
   );
+  const facilityCount = useMemo(
+    () => allDestinations.filter((d) => tierOf(d) === 1).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [allDestinations],
+  );
+
+  // Re-sort columns into the three tiers (restrooms, facilities,
+  // teacher rooms) regardless of the order the parent passes in.
+  // Alphabetical (numeric-aware) within each tier.
+  const sortedDestinations = useMemo(() => {
+    const collator = new Intl.Collator(undefined, {
+      numeric: true,
+      sensitivity: "base",
+    });
+    return [...allDestinations].sort((a, b) => {
+      const ta = tierOf(a);
+      const tb = tierOf(b);
+      if (ta !== tb) return ta - tb;
+      return collator.compare(a, b);
+    });
+    // tierOf is pure
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allDestinations]);
 
   const sortedStaff = useMemo(
     () =>
@@ -270,15 +312,29 @@ export default function TeacherAllowlistAdmin({
               >
                 Teacher
               </th>
-              {allDestinations.map((d, idx) => {
+              {sortedDestinations.map((d, idx) => {
                 const allChecked =
                   sortedStaff.length > 0 &&
                   sortedStaff.every((name) =>
                     (allowlistMap[name] ?? []).includes(d),
                   );
-                const rr = isRestroom(d);
+                const tier = tierOf(d);
                 const isLastRestroom =
-                  rr && restroomCount > 0 && idx === restroomCount - 1;
+                  tier === 0 &&
+                  restroomCount > 0 &&
+                  idx === restroomCount - 1;
+                const isLastFacility =
+                  tier === 1 &&
+                  facilityCount > 0 &&
+                  idx === restroomCount + facilityCount - 1;
+                const tint =
+                  tier === 0 ? "#f0f9ff" : tier === 1 ? "#fef2f2" : undefined;
+                const tintFg =
+                  tier === 0
+                    ? "#0369a1"
+                    : tier === 1
+                      ? "#b91c1c"
+                      : "var(--text-muted)";
                 return (
                   <th
                     key={d}
@@ -286,12 +342,13 @@ export default function TeacherAllowlistAdmin({
                       textAlign: "center",
                       padding: "0.4rem 0.5rem",
                       borderBottom: "1px solid #e2e8f0",
-                      borderRight: isLastRestroom
-                        ? "2px solid #cbd5e1"
-                        : undefined,
-                      background: rr ? "#f0f9ff" : undefined,
-                      fontWeight: rr ? 600 : 500,
-                      color: rr ? "#0369a1" : "var(--text-muted)",
+                      borderRight:
+                        isLastRestroom || isLastFacility
+                          ? "2px solid #cbd5e1"
+                          : undefined,
+                      background: tint,
+                      fontWeight: tier !== 2 ? 600 : 500,
+                      color: tintFg,
                       whiteSpace: "nowrap",
                       verticalAlign: "bottom",
                     }}
@@ -371,10 +428,22 @@ export default function TeacherAllowlistAdmin({
                       </div>
                     )}
                   </td>
-                  {allDestinations.map((d, idx) => {
-                    const rr = isRestroom(d);
+                  {sortedDestinations.map((d, idx) => {
+                    const tier = tierOf(d);
                     const isLastRestroom =
-                      rr && restroomCount > 0 && idx === restroomCount - 1;
+                      tier === 0 &&
+                      restroomCount > 0 &&
+                      idx === restroomCount - 1;
+                    const isLastFacility =
+                      tier === 1 &&
+                      facilityCount > 0 &&
+                      idx === restroomCount + facilityCount - 1;
+                    const tint =
+                      tier === 0
+                        ? "#f0f9ff"
+                        : tier === 1
+                          ? "#fef2f2"
+                          : undefined;
                     return (
                     <td
                       key={d}
@@ -382,10 +451,11 @@ export default function TeacherAllowlistAdmin({
                         textAlign: "center",
                         padding: "0.3rem 0.5rem",
                         borderBottom: "1px solid #f1f5f9",
-                        borderRight: isLastRestroom
-                          ? "2px solid #cbd5e1"
-                          : undefined,
-                        background: rr ? "#f0f9ff" : undefined,
+                        borderRight:
+                          isLastRestroom || isLastFacility
+                            ? "2px solid #cbd5e1"
+                            : undefined,
+                        background: tint,
                       }}
                     >
                       <input
