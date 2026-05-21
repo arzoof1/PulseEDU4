@@ -39,6 +39,7 @@ import {
   ensureBenchmarkDeliveriesSchema,
   ensureSchoolBenchmarksCatalogBackfill,
   seedBenchmarkDeliveriesOnce,
+  remapBenchmarkDeliveriesToRealTeachersOnce,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -220,6 +221,7 @@ async function runSeed(): Promise<void> {
     // One-shot backfill of the dev-entered deliveries into prod.
     // Idempotent: no-op once school_id=1 has any benchmark_deliveries row.
     await seedBenchmarkDeliveriesOnce();
+    await remapBenchmarkDeliveriesToRealTeachersOnce();
   } catch (err) {
     logger.error({ err }, "[boot] benchmark catalog ensure failed");
   }

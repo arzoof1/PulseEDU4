@@ -6533,3 +6533,57 @@ export async function seedBenchmarkDeliveriesOnce(): Promise<void> {
     "[seed] benchmark_deliveries one-shot backfill complete",
   );
 }
+
+// Remap fictional demo-teacher deliveries onto the real Parrott teacher roster,
+// matched by grade. Idempotent: no-op once the fictional staff own zero rows.
+export async function remapBenchmarkDeliveriesToRealTeachersOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+  const REMAP: Array<[string, string]> = [
+    ["Marcus Hayes ELA",     "David Wright - ELA G6"],
+    ["Sarah Chen ELA",       "Carol Young - ELA G6"],
+    ["David Rodriguez ELA",  "Kimberly King - ELA G7"],
+    ["Jennifer Park ELA",    "Mark Rivera - ELA G7"],
+    ["Brian Walsh ELA",      "Susan Adams - ELA G8"],
+    ["Aisha Johnson ELA",    "Sandra Clark - ELA G8"],
+    ["Linda Foster Math",    "Heather Martinez - Math G6"],
+    ["Priya Patel Math",     "Steven Brown - Math G6"],
+    ["James OBrien Math",    "Kevin Young - Math G7"],
+    ["Kenji Tanaka Math",    "David Walker - Math G7"],
+    ["Maria Sanchez Math",   "Jason Baker - Math G8"],
+    ["Tyrone Williams Math", "Patricia Scott - Math G8"],
+  ];
+
+  const staffRows = await db.execute<{ id: number; display_name: string }>(sql`
+    SELECT id, display_name FROM staff WHERE school_id = ${SCHOOL_ID}
+  `);
+  const idByName = new Map<string, number>();
+  for (const r of staffRows.rows) idByName.set(r.display_name, r.id);
+
+  const fictionalIds = REMAP.map(([from]) => idByName.get(from)).filter(
+    (v): v is number => typeof v === "number",
+  );
+  if (fictionalIds.length === 0) return;
+
+  const owned = await db.execute<{ n: number }>(sql`
+    SELECT COUNT(*)::int AS n FROM benchmark_deliveries
+     WHERE school_id = ${SCHOOL_ID}
+       AND teacher_staff_id IN (${sql.join(fictionalIds.map((i) => sql`${i}`), sql`, `)})
+  `);
+  if (Number(owned.rows[0]?.n ?? 0) === 0) return;
+
+  let updated = 0;
+  for (const [fromName, toName] of REMAP) {
+    const fromId = idByName.get(fromName);
+    const toId = idByName.get(toName);
+    if (fromId == null || toId == null) continue;
+    const r = await db.execute<{ id: number }>(sql`
+      UPDATE benchmark_deliveries
+         SET teacher_staff_id = ${toId}
+       WHERE school_id = ${SCHOOL_ID}
+         AND teacher_staff_id = ${fromId}
+      RETURNING id
+    `);
+    updated += r.rows.length;
+  }
+  logger.info({ updated }, "[seed] benchmark_deliveries remapped to real teachers");
+}
