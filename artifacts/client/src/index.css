@@ -384,6 +384,18 @@ strong {
   display: flex;
   flex-direction: column;
   gap: 0.125rem;
+  /* Pin the sidebar below the sticky 64px header so nav items remain
+     reachable on tall pages (Kiosk Setup, Locations, Allowlist, etc.).
+     Without this, the sidebar scrolls away with the page and users
+     have to scroll back to the top just to switch sections. The
+     internal overflow keeps it usable on short viewports where the
+     nav list itself exceeds the visible area. align-self: start is
+     required for sticky to work inside a CSS grid row. */
+  position: sticky;
+  top: 64px;
+  align-self: start;
+  max-height: calc(100vh - 64px);
+  overflow-y: auto;
 }
 
 .sidebar .section-label {
