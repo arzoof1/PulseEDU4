@@ -1,4 +1,4 @@
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
 import helmet from "helmet";
 import pinoHttp from "pino-http";
 import session from "express-session";
@@ -149,11 +149,34 @@ app.use(
   }),
 );
 app.use(corsMiddleware);
-// JSON body limit: bumped from the 100KB default so the Data Imports
-// route can accept CSV text in the request body. The frontend caps file
-// uploads at 10MB; 15MB gives headroom for JSON-quoting overhead.
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+const defaultJsonParser = express.json({ limit: "256kb" });
+const defaultUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "64kb",
+});
+const importJsonParser = express.json({ limit: "15mb" });
+const importUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "15mb",
+});
+
+function skipDataImportRequests(parser: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    const path = req.originalUrl.split("?")[0] ?? "";
+    if (path.startsWith("/api/data-imports")) {
+      next();
+      return;
+    }
+    parser(req, res, next);
+  };
+}
+
+// Data import endpoints accept CSV text in JSON bodies. Keep the larger limit
+// scoped to those routes; normal APIs use tighter defaults to reduce abuse.
+app.use("/api/data-imports", importJsonParser, importUrlencodedParser);
+app.use(skipDataImportRequests(defaultJsonParser));
+app.use(skipDataImportRequests(defaultUrlencodedParser));
 
 app.use(
   session({
