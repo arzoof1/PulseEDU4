@@ -86,6 +86,26 @@ function isCoreTeam(s: StaffRow): boolean {
 // "ELA.6.R.1.2" — split on '.', compare numeric segments numerically,
 // string segments lexically. Without this "ELA.6.R.1.10" sorts ahead
 // of "ELA.6.R.1.2" alphabetically, which is wrong.
+// True when a Florida benchmark code's grade segment matches the
+// student's roster grade. The grade lives in the 2nd dotted segment
+// for both ELA/MA codes ("ELA.6.R.1.1", "MA.7.AR.1.1"). We use this
+// to filter out cross-grade contamination (e.g. a 7th-grader who has
+// both 7th- and 8th-grade FAST responses in the same import) so the
+// teacher's heatmap only shows the columns that belong to the
+// student's current grade. Non-numeric / missing grade segments
+// (e.g. "N/A" placeholder rows) are dropped entirely.
+function codeMatchesStudentGrade(
+  code: string,
+  studentGrade: number | string | null | undefined,
+): boolean {
+  const seg = code.split(".")[1];
+  const codeGrade = Number(seg);
+  if (!Number.isFinite(codeGrade)) return false;
+  const sg = Number(studentGrade);
+  if (!Number.isFinite(sg)) return false;
+  return codeGrade === sg;
+}
+
 function compareBenchmarkCodes(a: string, b: string): number {
   const ap = a.split(".");
   const bp = b.split(".");
@@ -309,7 +329,7 @@ router.get(
     }
 
     // Pull students + item responses in parallel.
-    const [students, items] = await Promise.all([
+    const [students, itemsRaw] = await Promise.all([
       db
         .select({
           studentId: studentsTable.studentId,
@@ -346,6 +366,20 @@ router.get(
           ),
         ),
     ]);
+
+    // Filter out cross-grade rows (e.g. a 7th-grader who has 8th-grade
+    // FAST responses in the same import) and "N/A" benchmark codes —
+    // both create phantom duplicate columns in the heatmap because
+    // the display label only shows the last 2 segments of the code.
+    const studentGradeById = new Map(
+      students.map((s) => [s.studentId, s.grade]),
+    );
+    const items = itemsRaw.filter((r) =>
+      codeMatchesStudentGrade(
+        r.benchmarkCode,
+        studentGradeById.get(r.studentId),
+      ),
+    );
 
     // Aggregate (student, benchmark) → {earned, possible, category}.
     // SUM here intentionally collapses duplicated item_seq rows for the
@@ -647,7 +681,7 @@ router.get(
       return;
     }
 
-    const [students, items, periodRows, scaleRows] = await Promise.all([
+    const [students, itemsRaw, periodRows, scaleRows] = await Promise.all([
       db
         .select({
           studentId: studentsTable.studentId,
@@ -721,6 +755,17 @@ router.get(
           ),
         ),
     ]);
+
+    // Drop cross-grade rows + "N/A" codes — see helper comment.
+    const studentGradeById = new Map(
+      students.map((s) => [s.studentId, s.grade]),
+    );
+    const items = itemsRaw.filter((r) =>
+      codeMatchesStudentGrade(
+        r.benchmarkCode,
+        studentGradeById.get(r.studentId),
+      ),
+    );
 
     const scoresByStudent = new Map<
       string,
@@ -931,7 +976,7 @@ router.get(
     // factored out to keep the route file self-contained — the
     // JSON-shape changes are unlikely to need to round-trip through
     // the PDF view).
-    const [students, items] = await Promise.all([
+    const [students, itemsRaw] = await Promise.all([
       ctx.studentIds.length === 0
         ? Promise.resolve([] as Array<{
             studentId: string;
@@ -983,6 +1028,17 @@ router.get(
               ),
             ),
     ]);
+
+    // Drop cross-grade rows + "N/A" codes — see helper comment.
+    const studentGradeById = new Map(
+      students.map((s) => [s.studentId, s.grade]),
+    );
+    const items = itemsRaw.filter((r) =>
+      codeMatchesStudentGrade(
+        r.benchmarkCode,
+        studentGradeById.get(r.studentId),
+      ),
+    );
 
     const cellMap = new Map<string, { earned: number; possible: number }>();
     const benchmarkMeta = new Map<string, { category: string | null }>();
