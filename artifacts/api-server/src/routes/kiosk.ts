@@ -159,7 +159,22 @@ async function resolveActivation(args: {
     .select()
     .from(staffDefaultsTable)
     .where(eq(staffDefaultsTable.staffId, staff.id));
-  const defaultRoom = defaultRow?.defaultLocationName ?? null;
+  // Two columns end up holding a teacher's home room:
+  //   staff_defaults.default_location_name  ← set by the kiosk default-room
+  //                                            picker, scoped via the
+  //                                            settings tile
+  //   staff.default_room                    ← set by the admin staff editor
+  //                                            (where most rooms actually
+  //                                            get entered today)
+  // Either one is authoritative for "which room does this teacher's
+  // kiosk card open in?", so we prefer the kiosk-specific value and
+  // fall back to the staff-record value. Without the fallback, every
+  // teacher whose room was only set via the staff editor (the common
+  // path) gets the room-picker prompt on every kiosk-card scan, even
+  // though the system already knows their room.
+  const rawStaffDefaultRoom = staff.defaultRoom?.trim() || null;
+  const defaultRoom =
+    defaultRow?.defaultLocationName?.trim() || rawStaffDefaultRoom;
 
   // Origin rooms are scoped to the activating staff's school.
   const originLocations = (
@@ -203,8 +218,22 @@ async function resolveActivation(args: {
     }
     chosenRoom = candidate;
     if (!defaultRoom) usedFallbackPicker = true;
-  } else if (defaultRoom) {
+  } else if (defaultRoom && originLocations.includes(defaultRoom)) {
     chosenRoom = defaultRoom;
+  } else if (defaultRoom) {
+    // The teacher's stored default room is no longer a valid kiosk
+    // origin (renamed, deactivated, or never matched a real location).
+    // Don't fail the activation — surface the picker so the user can
+    // recover. Mark it as a fallback-picker case for the admin
+    // notification trail below.
+    return {
+      kind: "needs_room",
+      body: {
+        error: `Saved default room "${defaultRoom}" is no longer a valid kiosk room`,
+        needsRoom: true,
+        locations: originLocations,
+      },
+    };
   } else {
     return {
       kind: "needs_room",
