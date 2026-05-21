@@ -17,7 +17,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             
-            cd /var/www/Pulse-Kinetics-Design
+            cd /var/www/PulseEDU4
             
             
             git fetch origin main
