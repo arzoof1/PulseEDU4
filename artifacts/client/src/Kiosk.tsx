@@ -1358,6 +1358,13 @@ function KioskBody({
   const [school, setSchool] = useState<SchoolSettings | null>(null);
   const [locations, setLocations] = useState<LocationRow[]>([]);
   const [allowed, setAllowed] = useState<AllowedRow[]>([]);
+  // Token-authed destination list for this kiosk. Returned by
+  // /api/kiosk/destinations/:token which unions room-pair allowlist with
+  // the activating teacher's per-staff allowlist. Preferred over the old
+  // locations × allowed intersection so per-teacher admin edits show up.
+  const [tokenDestinations, setTokenDestinations] = useState<
+    { id: number; name: string }[] | null
+  >(null);
   const [now, setNow] = useState(new Date());
   const [studentId, setStudentId] = useState("");
   const [destination, setDestination] = useState("");
@@ -1467,7 +1474,18 @@ function KioskBody({
       .then((r) => r.json())
       .then((d: AllowedRow[]) => setAllowed(d))
       .catch(() => setAllowed([]));
-  }, []);
+    // Token-authed source of truth for "what destinations can students
+    // pick at THIS kiosk". Unions the school-wide room-pair matrix with
+    // the activating teacher's per-staff allowlist server-side so admin
+    // edits in either tile light up here.
+    fetch(`/api/kiosk/destinations/${encodeURIComponent(token)}`)
+      .then((r) => (r.ok ? r.json() : Promise.reject(r)))
+      .then(
+        (d: { destinations: { id: number; name: string }[] }) =>
+          setTokenDestinations(d.destinations ?? []),
+      )
+      .catch(() => setTokenDestinations(null));
+  }, [token]);
 
   useEffect(() => {
     const id = setInterval(() => setNow(new Date()), 1000);
@@ -1480,6 +1498,17 @@ function KioskBody({
   );
 
   const destinationOptions = useMemo(() => {
+    // Prefer the token-authed kiosk-destinations endpoint (unions the
+    // school-wide room-pair matrix with the activating teacher's
+    // allowlist). Fall back to the old client-side intersection only if
+    // the new endpoint failed (network/old server) so the kiosk still
+    // works during a partial rollout.
+    if (tokenDestinations !== null) {
+      const byId = new Map(locations.map((l) => [l.id, l]));
+      return tokenDestinations
+        .map((d) => byId.get(d.id) ?? { id: d.id, name: d.name } as LocationRow)
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
     if (!originLocation) return [];
     const allowedDestIds = new Set(
       allowed
@@ -1495,7 +1524,7 @@ function KioskBody({
           allowedDestIds.has(l.id),
       )
       .sort((a, b) => a.name.localeCompare(b.name));
-  }, [locations, allowed, originLocation]);
+  }, [locations, allowed, originLocation, tokenDestinations]);
 
   function resetForm() {
     setStudentId("");

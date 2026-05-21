@@ -19,6 +19,7 @@ import {
   classSigninsTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
+  teacherDestinationAllowlistTable,
 } from "@workspace/db";
 import { renderKioskCardsPdf } from "../lib/kioskCardsPdf.js";
 import { and, eq, inArray, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
@@ -559,6 +560,123 @@ router.get("/kiosk/branding/:token", async (req, res) => {
   res.json(await loadBrandingForSchool(act.schoolId));
 });
 
+// Destinations available from this kiosk, computed for the activating
+// teacher and their room. Returns the UNION of:
+//   • origin-room × destination pairs from `location_allowed_destinations`
+//     (the school-wide "from this room you may go to…" matrix), AND
+//   • the activating teacher's per-staff allowlist from
+//     `teacher_destination_allowlist` (configured in the Teacher Allowlist
+//     admin tile).
+// History: the client originally fetched `/api/locations` +
+// `/api/location-allowed-destinations` directly and intersected, which
+// meant the per-teacher allowlist was silently invisible at the kiosk —
+// admins who set a teacher's destinations there saw nothing change on
+// the floor. This single token-authed endpoint is the source of truth so
+// either admin path lights up the right list, with no staff session
+// required (the kiosk device usually has none).
+router.get("/kiosk/destinations/:token", async (req, res) => {
+  const token = req.params.token;
+  if (!token || token.length < 16) {
+    res.status(400).json({ error: "Invalid token" });
+    return;
+  }
+  const [act] = await db
+    .select()
+    .from(kioskActivationsTable)
+    .where(
+      and(
+        eq(kioskActivationsTable.tokenHash, hashToken(token)),
+        isNull(kioskActivationsTable.deactivatedAt),
+        gt(kioskActivationsTable.expiresAt, new Date()),
+      ),
+    );
+  if (!act) {
+    res
+      .status(401)
+      .json({ error: "Activation not found, revoked, or expired" });
+    return;
+  }
+  const [actStaff] = await db
+    .select({ displayName: staffTable.displayName })
+    .from(staffTable)
+    .where(eq(staffTable.id, act.staffId));
+
+  const [origin] = await db
+    .select({ id: locationsTable.id })
+    .from(locationsTable)
+    .where(
+      and(
+        eq(locationsTable.name, act.room),
+        eq(locationsTable.schoolId, act.schoolId),
+      ),
+    );
+
+  // Both queries are independent — run them in parallel to keep the
+  // kiosk's initial destinations fetch snappy.
+  const [roomPairRows, teacherRows] = await Promise.all([
+    origin
+      ? db
+          .select({
+            id: locationAllowedDestinationsTable.destinationLocationId,
+          })
+          .from(locationAllowedDestinationsTable)
+          .where(
+            and(
+              eq(locationAllowedDestinationsTable.schoolId, act.schoolId),
+              eq(
+                locationAllowedDestinationsTable.originLocationId,
+                origin.id,
+              ),
+            ),
+          )
+      : Promise.resolve([] as { id: number }[]),
+    actStaff?.displayName
+      ? db
+          .select({
+            id: teacherDestinationAllowlistTable.destinationLocationId,
+          })
+          .from(teacherDestinationAllowlistTable)
+          .where(
+            and(
+              eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
+              eq(
+                teacherDestinationAllowlistTable.staffName,
+                actStaff.displayName,
+              ),
+            ),
+          )
+      : Promise.resolve([] as { id: number }[]),
+  ]);
+  const roomPairDestIds = roomPairRows.map((r) => r.id);
+  const teacherDestIds = teacherRows.map((r) => r.id);
+
+  const allIds = Array.from(new Set([...roomPairDestIds, ...teacherDestIds]));
+  if (allIds.length === 0) {
+    res.json({ originRoom: act.room, destinations: [] });
+    return;
+  }
+  const rows = await db
+    .select({
+      id: locationsTable.id,
+      name: locationsTable.name,
+      active: locationsTable.active,
+      studentVisible: locationsTable.studentVisible,
+      isDestination: locationsTable.isDestination,
+    })
+    .from(locationsTable)
+    .where(
+      and(
+        eq(locationsTable.schoolId, act.schoolId),
+        inArray(locationsTable.id, allIds),
+      ),
+    );
+  const visible = rows
+    .filter((r) => r.active && r.studentVisible && r.isDestination)
+    .map((r) => ({ id: r.id, name: r.name }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+  res.json({ originRoom: act.room, destinations: visible });
+});
+
 router.post("/kiosk/deactivate", requireStaff, async (req, res) => {
   const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
     .staff;
@@ -825,8 +943,13 @@ router.post("/kiosk/hall-passes", async (req, res) => {
     return;
   }
 
-  const [allowed] = await db
-    .select()
+  // Allow the destination if EITHER allowlist matches: the school-wide
+  // room-pair matrix (location_allowed_destinations) OR the activating
+  // teacher's per-staff allowlist (teacher_destination_allowlist). Keep
+  // these in sync with /kiosk/destinations/:token above — they're the
+  // same union, just one validates a single pick and the other lists all.
+  const [roomPairAllowed] = await db
+    .select({ id: locationAllowedDestinationsTable.id })
     .from(locationAllowedDestinationsTable)
     .where(
       and(
@@ -838,7 +961,26 @@ router.post("/kiosk/hall-passes", async (req, res) => {
         ),
       ),
     );
-  if (!allowed) {
+  let teacherAllowed: { id: number } | undefined;
+  if (!roomPairAllowed && actStaff?.displayName) {
+    [teacherAllowed] = await db
+      .select({ id: teacherDestinationAllowlistTable.id })
+      .from(teacherDestinationAllowlistTable)
+      .where(
+        and(
+          eq(teacherDestinationAllowlistTable.schoolId, act.schoolId),
+          eq(
+            teacherDestinationAllowlistTable.staffName,
+            actStaff.displayName,
+          ),
+          eq(
+            teacherDestinationAllowlistTable.destinationLocationId,
+            dest.id,
+          ),
+        ),
+      );
+  }
+  if (!roomPairAllowed && !teacherAllowed) {
     res.status(403).json({
       error: `${destination} is not an allowed destination from ${originRoom}`,
     });
