@@ -51,6 +51,8 @@ function isCsrfExempt(path: string, method: string): boolean {
   if (!UNSAFE_METHODS.has(method)) return true;
 
   if (path === "/api/auth/login") return true;
+  if (path === "/api/auth/forgot-password") return true;
+  if (path === "/api/auth/reset-password") return true;
   if (path === "/api/parent-auth/login") return true;
   if (path === "/api/parent-auth/accept-invite") return true;
 

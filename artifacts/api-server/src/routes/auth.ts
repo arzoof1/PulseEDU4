@@ -1,7 +1,7 @@
 import { Router, type IRouter, type Request } from "express";
 import bcrypt from "bcryptjs";
-import { db, staffTable } from "@workspace/db";
-import { eq } from "drizzle-orm";
+import { db, pool, staffPasswordResetsTable, staffTable } from "@workspace/db";
+import { and, eq } from "drizzle-orm";
 import {
   bumpStaffAuthTokenVersion,
   issueStaffAuthTokenIfEnabled,
@@ -13,6 +13,17 @@ import {
   recordLoginSuccess,
   sendLoginRateLimited,
 } from "../lib/loginThrottle.js";
+import {
+  buildStaffPasswordResetUrl,
+  sendStaffPasswordResetEmail,
+} from "../lib/staffPasswordResetEmail.js";
+import {
+  hashStaffPasswordResetToken,
+  issueStaffPasswordResetToken,
+  staffPasswordResetExpiresAt,
+  verifyStaffPasswordResetToken,
+} from "../lib/staffPasswordResetToken.js";
+import { logger } from "../lib/logger.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -25,6 +36,11 @@ const router: IRouter = Router();
 const GENERIC_LOGIN_ERROR = "Invalid email or password";
 const PASSWORD_POLICY_ERROR =
   "newPassword must be at least 8 characters and include uppercase, lowercase, number, and special character";
+const FORGOT_PASSWORD_RESPONSE =
+  "If an active staff account exists for that email, a password reset link has been sent.";
+const RESET_LINK_EXPIRES_MINUTES = 30;
+
+let passwordResetTableReady: Promise<void> | null = null;
 
 function meetsStaffPasswordPolicy(password: string): boolean {
   return (
@@ -34,6 +50,51 @@ function meetsStaffPasswordPolicy(password: string): boolean {
     /\d/.test(password) &&
     /[^A-Za-z0-9]/.test(password)
   );
+}
+
+function clientIp(req: Request): string {
+  return req.ip?.trim() || "unknown";
+}
+
+function userAgent(req: Request): string | null {
+  const value = req.get("user-agent");
+  return value && value.length > 0 ? value.slice(0, 500) : null;
+}
+
+function ensureStaffPasswordResetTable(): Promise<void> {
+  if (!passwordResetTableReady) {
+    passwordResetTableReady = pool
+      .query(`
+        CREATE TABLE IF NOT EXISTS staff_password_resets (
+          id serial PRIMARY KEY,
+          staff_id integer,
+          email text NOT NULL,
+          token_hash text UNIQUE,
+          status text NOT NULL DEFAULT 'requested',
+          requested_at timestamptz NOT NULL DEFAULT now(),
+          expires_at timestamptz,
+          used_at timestamptz,
+          request_ip text,
+          used_ip text,
+          user_agent text,
+          email_sent_at timestamptz,
+          email_error text
+        );
+        CREATE INDEX IF NOT EXISTS staff_password_resets_staff_idx ON staff_password_resets(staff_id);
+        CREATE INDEX IF NOT EXISTS staff_password_resets_email_idx ON staff_password_resets(email);
+        CREATE INDEX IF NOT EXISTS staff_password_resets_expires_idx ON staff_password_resets(expires_at);
+      `)
+      .then(() => undefined)
+      .catch((err: unknown) => {
+        passwordResetTableReady = null;
+        throw err;
+      });
+  }
+  const ready = passwordResetTableReady;
+  if (!ready) {
+    throw new Error("staff password reset table initialization failed");
+  }
+  return ready;
 }
 
 function publicStaff(row: typeof staffTable.$inferSelect) {
@@ -61,6 +122,161 @@ function publicStaff(row: typeof staffTable.$inferSelect) {
     defaultRoom: row.defaultRoom,
   };
 }
+
+router.post("/auth/forgot-password", async (req: Request, res) => {
+  const { email } = (req.body ?? {}) as { email?: unknown };
+  if (typeof email !== "string" || !email.trim() || !email.includes("@")) {
+    res.status(400).json({ error: "email is required" });
+    return;
+  }
+
+  await ensureStaffPasswordResetTable();
+  const normalizedEmail = email.trim().toLowerCase();
+  const [staff] = await db
+    .select({
+      id: staffTable.id,
+      email: staffTable.email,
+      displayName: staffTable.displayName,
+      active: staffTable.active,
+    })
+    .from(staffTable)
+    .where(eq(staffTable.email, normalizedEmail));
+
+  if (!staff || !staff.active) {
+    await db.insert(staffPasswordResetsTable).values({
+      email: normalizedEmail,
+      status: "no_active_account",
+      requestIp: clientIp(req),
+      userAgent: userAgent(req),
+    });
+    res.json({ message: FORGOT_PASSWORD_RESPONSE });
+    return;
+  }
+
+  const expiresAt = staffPasswordResetExpiresAt();
+  const [resetRow] = await db
+    .insert(staffPasswordResetsTable)
+    .values({
+      staffId: staff.id,
+      email: normalizedEmail,
+      status: "requested",
+      expiresAt,
+      requestIp: clientIp(req),
+      userAgent: userAgent(req),
+    })
+    .returning({ id: staffPasswordResetsTable.id });
+
+  const resetId = resetRow.id;
+  const token = issueStaffPasswordResetToken({
+    resetId,
+    staffId: staff.id,
+    expiresAt,
+  });
+  const tokenHash = hashStaffPasswordResetToken(token);
+  await db
+    .update(staffPasswordResetsTable)
+    .set({ tokenHash })
+    .where(eq(staffPasswordResetsTable.id, resetId));
+
+  const resetUrl = buildStaffPasswordResetUrl(token);
+  try {
+    await sendStaffPasswordResetEmail({
+      to: staff.email,
+      displayName: staff.displayName,
+      resetUrl,
+      expiresMinutes: RESET_LINK_EXPIRES_MINUTES,
+    });
+    await db
+      .update(staffPasswordResetsTable)
+      .set({ status: "email_sent", emailSentAt: new Date() })
+      .where(eq(staffPasswordResetsTable.id, resetId));
+  } catch (err) {
+    logger.warn({ err, staffId: staff.id }, "staff password reset email failed");
+    await db
+      .update(staffPasswordResetsTable)
+      .set({
+        status: "email_failed",
+        emailError: err instanceof Error ? err.message : String(err),
+      })
+      .where(eq(staffPasswordResetsTable.id, resetId));
+  }
+
+  res.json({ message: FORGOT_PASSWORD_RESPONSE });
+});
+
+router.post("/auth/reset-password", async (req: Request, res) => {
+  const { token, newPassword } = (req.body ?? {}) as {
+    token?: unknown;
+    newPassword?: unknown;
+  };
+  if (typeof token !== "string" || !token) {
+    res.status(400).json({ error: "Reset link is invalid or expired." });
+    return;
+  }
+  if (typeof newPassword !== "string" || !meetsStaffPasswordPolicy(newPassword)) {
+    res.status(400).json({ error: PASSWORD_POLICY_ERROR });
+    return;
+  }
+
+  const parsed = verifyStaffPasswordResetToken(token);
+  if (!parsed) {
+    res.status(400).json({ error: "Reset link is invalid or expired." });
+    return;
+  }
+
+  await ensureStaffPasswordResetTable();
+  const tokenHash = hashStaffPasswordResetToken(token);
+  const [resetRow] = await db
+    .select()
+    .from(staffPasswordResetsTable)
+    .where(
+      and(
+        eq(staffPasswordResetsTable.id, parsed.resetId),
+        eq(staffPasswordResetsTable.staffId, parsed.staffId),
+        eq(staffPasswordResetsTable.tokenHash, tokenHash),
+      ),
+    );
+
+  if (!resetRow || resetRow.usedAt || !resetRow.expiresAt) {
+    res.status(400).json({ error: "Reset link is invalid or expired." });
+    return;
+  }
+  if (resetRow.expiresAt.getTime() < Date.now()) {
+    await db
+      .update(staffPasswordResetsTable)
+      .set({ status: "expired" })
+      .where(eq(staffPasswordResetsTable.id, resetRow.id));
+    res.status(400).json({ error: "Reset link is invalid or expired." });
+    return;
+  }
+
+  const [staff] = await db
+    .select({ id: staffTable.id, active: staffTable.active })
+    .from(staffTable)
+    .where(eq(staffTable.id, parsed.staffId));
+  if (!staff || !staff.active) {
+    await db
+      .update(staffPasswordResetsTable)
+      .set({ status: "inactive_account" })
+      .where(eq(staffPasswordResetsTable.id, resetRow.id));
+    res.status(400).json({ error: "Reset link is invalid or expired." });
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await db
+    .update(staffTable)
+    .set({ passwordHash })
+    .where(eq(staffTable.id, staff.id));
+
+  await bumpStaffAuthTokenVersion(staff.id);
+  await db
+    .update(staffPasswordResetsTable)
+    .set({ status: "used", usedAt: new Date(), usedIp: clientIp(req) })
+    .where(eq(staffPasswordResetsTable.id, resetRow.id));
+
+  res.json({ ok: true });
+});
 
 router.post("/auth/login", async (req: Request, res) => {
   const { email, password } = req.body ?? {};

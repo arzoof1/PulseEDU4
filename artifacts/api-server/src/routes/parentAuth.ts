@@ -33,6 +33,8 @@ const router: IRouter = Router();
 const GENERIC_LOGIN_ERROR = "Invalid email or password";
 const GENERIC_INVITE_ERROR =
   "This invite link is no longer valid. Ask your school to resend it.";
+const GENERIC_ACCEPT_INVITE_ERROR =
+  "Could not accept invite. Check the password or ask your school to resend the invite.";
 
 function publicParent(row: typeof parentsTable.$inferSelect) {
   return {
@@ -41,7 +43,6 @@ function publicParent(row: typeof parentsTable.$inferSelect) {
     displayName: row.displayName,
     schoolId: row.schoolId,
     active: row.active,
-    hasPassword: row.passwordHash !== null,
   };
 }
 
@@ -272,25 +273,11 @@ router.get("/parent-auth/invite/:token", async (req, res) => {
     return;
   }
 
-  // Tell the client whether this email already has a parent account at this
-  // school. If yes, the accept page can show "sign in to link this student"
-  // instead of "create a password".
-  const [existing] = await db
-    .select({ id: parentsTable.id, hasPassword: parentsTable.passwordHash })
-    .from(parentsTable)
-    .where(
-      and(
-        eq(parentsTable.email, invite.email.toLowerCase()),
-        eq(parentsTable.schoolId, invite.schoolId),
-      ),
-    );
-
   res.json({
     studentFirstName: student.firstName,
     studentLastName: student.lastName,
     studentGrade: student.grade,
     email: invite.email,
-    alreadyHasAccount: !!existing && existing.hasPassword !== null,
     alreadyAccepted: invite.status === "accepted",
   });
 });
@@ -356,8 +343,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     if (!ok) {
       await recordLoginFailure(req, "parent", normalizedEmail);
       res.status(401).json({
-        error:
-          "An account with this email already exists at this school. Enter your existing password to add this student.",
+        error: GENERIC_ACCEPT_INVITE_ERROR,
       });
       return;
     }

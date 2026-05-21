@@ -8,7 +8,6 @@ interface InviteInfo {
   studentLastName: string;
   studentGrade: number;
   email: string;
-  alreadyHasAccount: boolean;
   alreadyAccepted: boolean;
 }
 
@@ -61,7 +60,7 @@ export default function AcceptInvite({
       setError("Password must be at least 8 characters.");
       return;
     }
-    if (!info?.alreadyHasAccount && password !== confirm) {
+    if (password !== confirm) {
       setError("Passwords do not match.");
       return;
     }
@@ -154,8 +153,6 @@ export default function AcceptInvite({
     );
   }
 
-  const sibling = info.alreadyHasAccount;
-
   return (
     <Centered>
       <form
@@ -170,9 +167,8 @@ export default function AcceptInvite({
             Pulse<span className="text-blue-400">EDU</span>
           </div>
           <div className="text-sm text-white/70 text-center">
-            {sibling
-              ? `Add ${info.studentFirstName} to your existing account`
-              : `Create your parent account for ${info.studentFirstName} ${info.studentLastName}`}
+            Accept your invite for {info.studentFirstName}{" "}
+            {info.studentLastName}
           </div>
         </div>
 
@@ -189,53 +185,46 @@ export default function AcceptInvite({
           <div className="font-medium">{info.email}</div>
         </div>
 
-        {!sibling && (
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm text-white/80">Your name</span>
-            <input
-              type="text"
-              autoComplete="name"
-              value={displayName}
-              onChange={(e) => setDisplayName(e.target.value)}
-              disabled={busy}
-              placeholder="e.g. Sarah Rodriguez"
-              className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400"
-            />
-          </label>
-        )}
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm text-white/80">Your name (optional)</span>
+          <input
+            type="text"
+            autoComplete="name"
+            value={displayName}
+            onChange={(e) => setDisplayName(e.target.value)}
+            disabled={busy}
+            placeholder="e.g. Sarah Rodriguez"
+            className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400"
+          />
+        </label>
 
         <label className="flex flex-col gap-1.5">
-          <span className="text-sm text-white/80">
-            {sibling ? "Your existing password" : "Create a password"}
-          </span>
+          <span className="text-sm text-white/80">Password</span>
           <input
             type="password"
-            autoComplete={sibling ? "current-password" : "new-password"}
+            autoComplete="current-password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             disabled={busy}
             className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400"
           />
-          {!sibling && (
-            <span className="text-xs text-white/50">
-              Minimum 8 characters.
-            </span>
-          )}
+          <span className="text-xs text-white/50">
+            Create a password, or enter your existing parent password if you
+            already have an account. Minimum 8 characters.
+          </span>
         </label>
 
-        {!sibling && (
-          <label className="flex flex-col gap-1.5">
-            <span className="text-sm text-white/80">Confirm password</span>
-            <input
-              type="password"
-              autoComplete="new-password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              disabled={busy}
-              className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400"
-            />
-          </label>
-        )}
+        <label className="flex flex-col gap-1.5">
+          <span className="text-sm text-white/80">Confirm password</span>
+          <input
+            type="password"
+            autoComplete="new-password"
+            value={confirm}
+            onChange={(e) => setConfirm(e.target.value)}
+            disabled={busy}
+            className="bg-slate-900/60 border border-white/20 rounded-lg px-3 py-2.5 text-base outline-none focus:border-blue-400"
+          />
+        </label>
 
         {error && (
           <div className="bg-red-500/15 border border-red-500/40 text-red-200 px-3 py-2 rounded-lg text-sm">
@@ -245,14 +234,10 @@ export default function AcceptInvite({
 
         <button
           type="submit"
-          disabled={busy || password.length < 8}
+          disabled={busy || password.length < 8 || password !== confirm}
           className="bg-blue-500 hover:bg-blue-400 disabled:bg-blue-500/40 disabled:cursor-not-allowed text-white font-semibold rounded-lg py-2.5 transition-colors"
         >
-          {busy
-            ? "Working…"
-            : sibling
-              ? `Add ${info.studentFirstName}`
-              : "Create account"}
+          {busy ? "Working…" : "Continue"}
         </button>
       </form>
     </Centered>
