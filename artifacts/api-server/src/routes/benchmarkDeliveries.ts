@@ -73,6 +73,25 @@ function isCoreTeam(s: StaffRow): boolean {
   return isCoreTeamShared(s);
 }
 
+// Map a free-text course_name to one of our canonical subject keys.
+// class_sections has no structured subject column, so we rely on a
+// keyword sniff. Returns null when no clear match — those sections are
+// excluded from per-teacher attribution rather than risk a false
+// match. Order matters: "social studies" must beat the generic
+// "history" check, and "algebra"/"geometry" fall back to math today
+// (separate Algebra-1/Geometry subjects are a future phase).
+function inferSubjectFromCourseName(courseName: string): string | null {
+  const c = courseName.toLowerCase();
+  if (/\bsocial\s*studies|civics|us\s*history|world\s*history|geography\b/.test(c))
+    return "social_studies";
+  if (/\bscience|biology|chemistry|physics|earth\b/.test(c)) return "science";
+  if (/\bwriting\b/.test(c)) return "writing";
+  if (/\bela\b|reading|literature|english\s*lang/.test(c)) return "ela";
+  if (/\bmath|algebra|geometry|pre-?calc|calculus|statistics\b/.test(c))
+    return "math";
+  return null;
+}
+
 function parseSubject(raw: unknown): string | null {
   if (typeof raw !== "string") return null;
   const s = raw.toLowerCase().trim();
@@ -732,15 +751,20 @@ router.get(
     }
     const relevantGrades = new Set(codesByGrade.keys());
 
-    // Teacher roster: (teacherStaffId, studentId, gradeToken). Walks
-    // class_sections → section_roster → students. is_planning sections
-    // are excluded so an unscheduled prep section doesn't fake
-    // attribution.
+    // Teacher roster: (teacherStaffId, studentId, gradeToken, course).
+    // Walks class_sections → section_roster → students. is_planning
+    // sections are excluded so an unscheduled prep section doesn't fake
+    // attribution. We pull `courseName` so we can infer the subject of
+    // each section and only attribute mastery to teachers whose section
+    // actually teaches the drilled-into subject (a math teacher should
+    // not show up under an ELA benchmark just because their roster
+    // overlaps).
     const rosterRows = await db
       .select({
         teacherStaffId: classSectionsTable.teacherStaffId,
         studentId: studentsTable.studentId,
         grade: studentsTable.grade,
+        courseName: classSectionsTable.courseName,
       })
       .from(classSectionsTable)
       .innerJoin(
@@ -776,6 +800,7 @@ router.get(
     for (const r of rosterRows) {
       const g = r.grade === 0 ? "K" : String(r.grade);
       if (!relevantGrades.has(g)) continue;
+      if (inferSubjectFromCourseName(r.courseName) !== subject) continue;
       const existing = teacherMap.get(r.teacherStaffId) ?? {
         teacherStaffId: r.teacherStaffId,
         codes: new Set<string>(),
