@@ -28,6 +28,9 @@ jobs:
             
             
             pnpm install
+            export PORT=8080
+            export BASE_PATH=/
+            pnpm run build
             
             
             pnpm run build
@@ -44,7 +47,7 @@ jobs:
             fi
             
             # 7. FRONTEND Restart Logic
-            # Agar 'client' folder mein koi change hai toh hi frontend restart hoga
+            
             if echo "$CHANGED_FILES" | grep -q "artifacts/client/"; then
               echo "Frontend changes detected. Restarting Frontend..."
               cd artifacts/client
