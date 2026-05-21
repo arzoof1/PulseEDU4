@@ -55,6 +55,7 @@ import { eq, sql, and, inArray, isNull, asc, desc } from "drizzle-orm";
 import { logger } from "./lib/logger";
 import { fetchWeatherForLocation } from "./lib/weatherFetcher";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./lib/schoolYear.js";
+import benchmarkDeliveriesSeedJson from "./seedData/benchmarkDeliveriesSeed.json" with { type: "json" };
 
 // =============================================================================
 // MULTI-SCHOOL SEED
@@ -6435,5 +6436,100 @@ export async function ensureBadgePrintEventsSchema(): Promise<void> {
   );
   await db.execute(
     sql`CREATE INDEX IF NOT EXISTS badge_print_events_student_idx ON badge_print_events(school_id, student_id, printed_at)`,
+  );
+}
+
+// =============================================================================
+// ONE-SHOT: backfill benchmark_deliveries on the live demo school (school_id=1
+// = D. S. Parrott Middle School). These rows were entered in the dev DB by
+// accident and need to land in prod for the demo. Idempotent: if any
+// benchmark_deliveries row already exists for school_id=1, this is a no-op.
+// Safe to leave in seed.ts; can be deleted after the next prod boot.
+// =============================================================================
+
+interface BenchmarkDeliverySeedRow {
+  t: string; // "__chris__" or staff.email
+  s: string; // subject
+  c: string; // benchmark_code
+  d: string; // YYYY-MM-DD
+  n: string | null; // notes
+}
+
+const DEMO_TEACHER_SEEDS: Array<{ email: string; displayName: string }> = [
+  { email: "marcus.hayes.ela@dsparrott.test",    displayName: "Marcus Hayes ELA" },
+  { email: "sarah.chen.ela@dsparrott.test",      displayName: "Sarah Chen ELA" },
+  { email: "david.rodriguez.ela@dsparrott.test", displayName: "David Rodriguez ELA" },
+  { email: "jennifer.park.ela@dsparrott.test",   displayName: "Jennifer Park ELA" },
+  { email: "brian.walsh.ela@dsparrott.test",     displayName: "Brian Walsh ELA" },
+  { email: "aisha.johnson.ela@dsparrott.test",   displayName: "Aisha Johnson ELA" },
+  { email: "linda.foster.math@dsparrott.test",   displayName: "Linda Foster Math" },
+  { email: "priya.patel.math@dsparrott.test",    displayName: "Priya Patel Math" },
+  { email: "james.obrien.math@dsparrott.test",   displayName: "James OBrien Math" },
+  { email: "kenji.tanaka.math@dsparrott.test",   displayName: "Kenji Tanaka Math" },
+  { email: "maria.sanchez.math@dsparrott.test",  displayName: "Maria Sanchez Math" },
+  { email: "tyrone.williams.math@dsparrott.test", displayName: "Tyrone Williams Math" },
+];
+
+export async function seedBenchmarkDeliveriesOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  const existing = await db.execute<{ n: number }>(
+    sql`SELECT COUNT(*)::int AS n FROM benchmark_deliveries WHERE school_id = ${SCHOOL_ID}`,
+  );
+  const existingCount = Number(existing.rows[0]?.n ?? 0);
+  if (existingCount > 0) {
+    return; // idempotent no-op
+  }
+
+  // 1) Upsert the 12 demo teachers (no-op if any already exist by email).
+  for (const t of DEMO_TEACHER_SEEDS) {
+    await db.execute(sql`
+      INSERT INTO staff (email, password_hash, display_name, school_id, active, is_admin)
+      VALUES (${t.email}, '!disabled!', ${t.displayName}, ${SCHOOL_ID}, true, false)
+      ON CONFLICT (email) DO NOTHING
+    `);
+  }
+
+  // 2) Build email/display_name → staff.id map for this school.
+  const staffRows = await db.execute<{ id: number; email: string; display_name: string }>(sql`
+    SELECT id, email, display_name FROM staff WHERE school_id = ${SCHOOL_ID}
+  `);
+  const idByEmail = new Map<string, number>();
+  let chrisId: number | null = null;
+  for (const r of staffRows.rows) {
+    if (r.email) idByEmail.set(r.email, r.id);
+    if (r.display_name === "Chris Clifford") chrisId = r.id;
+  }
+
+  const rows = benchmarkDeliveriesSeedJson as BenchmarkDeliverySeedRow[];
+  let inserted = 0;
+  let skipped = 0;
+  const BATCH = 100;
+  for (let i = 0; i < rows.length; i += BATCH) {
+    const slice = rows.slice(i, i + BATCH);
+    const values = slice
+      .map((r) => {
+        const teacherId = r.t === "__chris__" ? chrisId : (idByEmail.get(r.t) ?? null);
+        if (teacherId == null) {
+          skipped++;
+          return null;
+        }
+        const notesSql = r.n === null
+          ? sql`NULL`
+          : sql`${r.n}`;
+        return sql`(${SCHOOL_ID}, ${teacherId}, ${r.s}, ${r.c}, ${r.d}::date, ${notesSql})`;
+      })
+      .filter((v): v is ReturnType<typeof sql> => v !== null);
+    if (values.length === 0) continue;
+    await db.execute(sql`
+      INSERT INTO benchmark_deliveries
+        (school_id, teacher_staff_id, subject, benchmark_code, delivered_on, notes)
+      VALUES ${sql.join(values, sql`, `)}
+    `);
+    inserted += values.length;
+  }
+  logger.info(
+    { inserted, skipped, total: rows.length },
+    "[seed] benchmark_deliveries one-shot backfill complete",
   );
 }
