@@ -33,6 +33,9 @@ interface CountEntry {
 interface Props {
   teacherId: number | null;
   isOwnRoster: boolean;
+  // Core Team may log on a teacher's behalf (coaches, admin coverage,
+  // substitutes). Defaults false so non-CT callers stay read-only.
+  isCoreTeam?: boolean;
 }
 
 const SUBJECTS: Array<{ value: string; label: string }> = [
@@ -65,7 +68,12 @@ function gradeLabel(g: number | string): string {
 export default function TeacherInstructionLogTab({
   teacherId,
   isOwnRoster,
+  isCoreTeam = false,
 }: Props) {
+  // Form is editable for the owning teacher OR a Core Team member viewing
+  // someone else's roster (proxy logging).
+  const canEdit = isOwnRoster || isCoreTeam;
+  const proxyLogging = !isOwnRoster && isCoreTeam;
   const [subject, setSubject] = useState<string>("ela");
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [counts, setCounts] = useState<Record<string, CountEntry>>({});
@@ -219,6 +227,9 @@ export default function TeacherInstructionLogTab({
             benchmarkCodes: selectedCodes,
             deliveredOn,
             notes: notes.trim() || undefined,
+            // Proxy logging: Core Team logging on behalf of the teacher
+            // currently displayed. Server validates the override.
+            teacherId: proxyLogging && teacherId ? teacherId : undefined,
           }),
         },
       );
@@ -349,7 +360,7 @@ export default function TeacherInstructionLogTab({
       </div>
 
       {/* Add form — owner only */}
-      {isOwnRoster && (
+      {canEdit && (
         <div
           style={{
             border: "1px solid #e5e7eb",
@@ -360,6 +371,22 @@ export default function TeacherInstructionLogTab({
         >
           <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>
             Log instruction
+            {proxyLogging && (
+              <span
+                style={{
+                  marginLeft: 8,
+                  fontSize: 11,
+                  fontWeight: 500,
+                  color: "#92400e",
+                  background: "#fef3c7",
+                  border: "1px solid #fde68a",
+                  borderRadius: 3,
+                  padding: "1px 6px",
+                }}
+              >
+                Logging on behalf of this teacher (Core Team)
+              </span>
+            )}
           </div>
           {catalog.length === 0 ? (
             <div style={{ fontSize: 12, color: "#6b7280" }}>

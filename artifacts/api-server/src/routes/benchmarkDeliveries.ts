@@ -351,11 +351,29 @@ router.post(
       benchmarkCodes?: unknown;
       deliveredOn?: unknown;
       notes?: unknown;
+      teacherId?: unknown;
     };
     const subject = parseSubject(body.subject);
     if (!subject) {
       res.status(400).json({ error: "subject required" });
       return;
+    }
+    // Owner resolution: defaults to caller. Core Team may pass another
+    // teacher's staff id to log on their behalf (coaches, admin coverage,
+    // substitutes who don't have their own login). Mirrors the read-side
+    // teacherId override used by catalog / counts / history.
+    let ownerStaffId = staff.id;
+    if (body.teacherId !== undefined && body.teacherId !== null) {
+      const t = Number(body.teacherId);
+      if (!Number.isInteger(t) || t <= 0) {
+        res.status(400).json({ error: "bad teacherId" });
+        return;
+      }
+      if (t !== staff.id && !isCoreTeam(staff)) {
+        res.status(403).json({ error: "Core Team required" });
+        return;
+      }
+      ownerStaffId = t;
     }
     if (!Array.isArray(body.benchmarkCodes) || body.benchmarkCodes.length === 0) {
       res.status(400).json({ error: "benchmarkCodes[] required" });
@@ -430,7 +448,7 @@ router.post(
     }
     const rows = codes.map((code) => ({
       schoolId,
-      teacherStaffId: staff.id,
+      teacherStaffId: ownerStaffId,
       subject,
       benchmarkCode: code,
       deliveredOn: deliveredOnRaw,

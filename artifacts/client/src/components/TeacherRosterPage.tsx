@@ -1461,6 +1461,7 @@ export default function TeacherRosterPage({
         <TeacherInstructionLogTab
           teacherId={teacherId}
           isOwnRoster={isOwnRoster}
+          isCoreTeam={isCoreTeam}
         />
       )}
 
