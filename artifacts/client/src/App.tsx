@@ -85,6 +85,7 @@ import SchoolSwitcher from "./components/SchoolSwitcher";
 import SchoolBrandingPanel from "./components/SchoolBrandingPanel";
 import { useSchoolBranding } from "./lib/branding";
 import { authFetch } from "./lib/authToken";
+import { fetchAllStudents } from "./lib/students";
 import {
   AreaChart,
   Area,
@@ -6405,9 +6406,8 @@ function App() {
   };
 
   const loadStudents = () => {
-    authFetch("/api/students")
-      .then((res) => res.json())
-      .then((data: Student[]) => setStudents(data))
+    fetchAllStudents<Student>()
+      .then((data) => setStudents(data))
       .catch((err) => console.error("Failed to load students:", err));
   };
 

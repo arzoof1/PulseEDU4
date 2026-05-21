@@ -10,6 +10,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 import { HowToUseHelp, HowToSection, RoleSection } from "./HowToUseHelp";
 
 interface Link {
@@ -75,8 +76,7 @@ export default function TrustedAdultsAdmin({ canManage }: Props) {
     reload();
     // Pre-load the student + staff pickers in parallel. Both endpoints
     // are school-scoped server-side, so we don't need to filter here.
-    authFetch("/api/students")
-      .then((r) => r.json())
+    fetchAllStudents<Student>()
       .then((rows: Student[]) => setStudents(rows))
       .catch(() => undefined);
     authFetch("/api/trusted-adult-links/staff-directory")
