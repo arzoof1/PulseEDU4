@@ -14,6 +14,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 import { runDspParrottReseed } from "../lib/dspParrottReseed.js";
 import { rebuildDspSections } from "../lib/rebuildDspSections.js";
+import { rebuildParrott } from "../lib/parrottRebuild.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
 // Hardcoded so this bootstrap can ONLY ever reset chris.clifford's password.
@@ -35,6 +36,30 @@ async function loadStaff(req: Request) {
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return s && s.active ? s : null;
 }
+
+router.post("/parrott-rebuild", async (req, res) => {
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "superuser_required" });
+    return;
+  }
+  req.log.warn({ staffId: staff.id }, "Parrott clean rebuild initiated");
+  try {
+    const result = await rebuildParrott();
+    req.log.warn({ staffId: staff.id, summary: result.summary }, "Parrott clean rebuild completed");
+    res.json(result);
+  } catch (err) {
+    req.log.error({ err }, "Parrott clean rebuild failed");
+    res.status(500).json({
+      error: "rebuild_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
 
 router.post("/full-reseed", async (req, res) => {
   const staff = await loadStaff(req);
