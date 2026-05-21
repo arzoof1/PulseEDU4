@@ -844,16 +844,20 @@ function BenchmarkDrillDrawer({
   data: DrillResp | null;
   onClose: () => void;
 }) {
-  // Per-teacher effectiveness band — same 4-band logic as the main
-  // table but applied to one teacher's own roster mastery + delivery
-  // count. Critical = nobody taught (or 1 touch and <50%); Re-teach =
-  // taught ≥2 but <50%; Building = mid mastery or limited coverage;
-  // Effective = ≥70% with ≥3 deliveries.
-  const teacherBand = (t: TeacherDrill): "critical" | "reteach" | "building" | "effective" => {
+  // Per-teacher effectiveness band. Bands are about the coaching
+  // conversation, not a score: Critical = no instruction happened at
+  // all (the most actionable gap); Re-teach = it was taught but kids
+  // aren't getting it; Effective = strong mastery backed by repeated
+  // instruction; Building = everything in between. Crucially, taking
+  // more swings at a benchmark should never make a teacher LESS
+  // urgent — so we no longer downgrade "1 lesson + low mastery" to
+  // critical above "3 lessons + low mastery".
+  const teacherBand = (
+    t: TeacherDrill,
+  ): "critical" | "reteach" | "building" | "effective" => {
     if (t.deliveries === 0) return "critical";
-    if (t.deliveries === 1 && (t.masteryPct ?? 0) < 50) return "critical";
-    if (t.deliveries >= 2 && (t.masteryPct ?? 100) < 50) return "reteach";
-    if ((t.masteryPct ?? 0) >= 70 && t.deliveries >= 3) return "effective";
+    if ((t.masteryPct ?? 100) < 50) return "reteach";
+    if ((t.masteryPct ?? 0) >= 70 && t.deliveries >= 2) return "effective";
     return "building";
   };
   const BAND: Record<
@@ -1184,9 +1188,10 @@ function BenchmarkDrillDrawer({
               >
                 Mastery = % correct on this benchmark's FAST items for kids
                 on that teacher's roster, current school year ({data.schoolYear}
-                ). Flag combines the teacher's delivery count with their
-                roster's mastery — Critical / Re-teach surface the
-                strongest coaching conversations.
+                ). Flags: <strong>Critical</strong> = never taught;{" "}
+                <strong>Re-teach</strong> = taught but mastery &lt; 50%;{" "}
+                <strong>Effective</strong> = mastery ≥ 70% with ≥ 2 deliveries;{" "}
+                <strong>Building</strong> = everything else.
               </div>
             </>
           )}
