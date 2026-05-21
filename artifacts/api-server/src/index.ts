@@ -1,26 +1,6 @@
 import app from "./app";
 import { logger } from "./lib/logger";
-import {
-  cleanupLooseSeedInteractionsOnce,
-  seedIfEmpty,
-  seedTenancy,
-  seedMtssPlansIfEmpty,
-  seedTieredInterventionsIfEmpty,
-  seedFastScoresIfEmpty,
-  seedHousesIfEmpty,
-  seedIreadyAndSciIfEmpty,
-  seedEngagementEventsIfEmpty,
-  seedPbisCatalogIfEmpty,
-  seedSeparationReasonTagsIfEmpty,
-  seedPbisEntriesIfEmpty,
-  seedStudentDemographicsIfEmpty,
-  seedStudentRaceIfEmpty,
-  seedSafetyPlanLibraryIfEmpty,
-  seedSafetyPlansIfEmpty,
-  ensureWatchlistSchema,
-  seedWatchlistIfEmpty,
-  seedWatchlistQuickEntriesIfEmpty,
-} from "./seed";
+import { runSeed } from "./seedRunner";
 import cron from "node-cron";
 import { sendDailyDigestEmail } from "./lib/dailyDigest";
 import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
@@ -40,91 +20,20 @@ if (Number.isNaN(port) || port <= 0) {
   throw new Error(`Invalid PORT value: "${rawPort}"`);
 }
 
-// IMPORTANT: sequential, not Promise.all. seedIfEmpty() reads the
-// schools table that seedTenancy() populates, so on a fresh prod
-// database the order matters — running them in parallel can race
-// and leave the seed with zero schools to attach data to.
-//
-// Each step is idempotent (skip-if-non-empty per school) so it's safe
-// to run AFTER the HTTP listener opens. We do exactly that in production
-// because the full seed (60-day demo data × 7 schools) takes well over
-// the platform's port-open timeout on a fresh DB.
-async function runSeed(): Promise<void> {
-  await seedTenancy();
-  await seedIfEmpty();
-  // One-shot sweep of loose (case_id IS NULL) demo interactions left
-  // over from prior seed runs. Demo-school-gated; safe no-op once
-  // empty. See cleanupLooseSeedInteractionsOnce in seed.ts.
-  await cleanupLooseSeedInteractionsOnce();
-  // Runs after the main seed so studentsTable is populated. Idempotent
-  // per-school: skipped for any school that already has at least one plan.
-  await seedMtssPlansIfEmpty();
-  // Tier-aware demo: ~10% of each school's students get a fully wired
-  // Tier 2 (CICO/group, daily) or Tier 3 (weekly with goals) plan, with
-  // assigned_teacher_ids drawn from the section roster so the bell
-  // surfaces "owed today" rows for the right teachers. Idempotent:
-  // skipped if any plan with `opened_by_name = 'Tiered Demo Seed'`
-  // already exists for that school.
-  await seedTieredInterventionsIfEmpty();
-  // Same pattern: ensure schema + skip-if-non-empty per school. Required
-  // before the Teacher Roster API has anything to render.
-  await seedFastScoresIfEmpty();
-  // iReady AP1/AP2/AP3 (K-8) + SCI Benchmark 1/2/3 (G6-12) demo data
-  // landed in the generic assessments table. Per-school + per-source
-  // skip-if-non-empty so re-runs are a near-noop.
-  await seedIreadyAndSciIfEmpty();
-  // Houses (PBIS teams) + round-robin assign students. Idempotent per school.
-  await seedHousesIfEmpty();
-  // Demo engagement events (hall passes, tardies, ISS, pullouts) over the
-  // last 60 days so the new Engagement dashboard renders something on first
-  // launch. Skip-if-already-populated per school + per table.
-  await seedEngagementEventsIfEmpty();
-  // PBIS catalog (reasons) per school, then 60 days of pbis_entries demo
-  // data so the new Behavior dashboard renders on first launch. Catalog
-  // seed runs first because the entries seed reads pbis_reasons live.
-  await seedPbisCatalogIfEmpty();
-  await seedSeparationReasonTagsIfEmpty();
-  await seedPbisEntriesIfEmpty();
-  // Demographic flags (ELL/ESE/504/gender) for the SEB/SEL + Equity
-  // dashboards. Runs LAST because it correlates demographics to existing
-  // FAST BQ + recent-30d negative PBIS counts so the demo dataset surfaces
-  // realistic disparity ratios. Idempotent per-school: skipped the moment
-  // any student already has a flag/gender set, so a real SIS roster import
-  // is never overwritten.
-  await seedStudentDemographicsIfEmpty();
-  // Race + ethnicity (7 buckets + Hispanic Y/N) for the Equity dashboard's
-  // race disaggregation. Same two-stage idempotency contract as the
-  // demographics seed: skipped when any student in a school already has a
-  // race set, AND skipped for schools without the demo marker. Real SIS
-  // imports remain untouched.
-  await seedStudentRaceIfEmpty();
-  // Safety Plans: school-wide library catalog first, then per-student
-  // plans (~10% of each school's roster, plus at least one per teacher
-  // so the red SP pill appears on every teacher's roster on day-1).
-  await seedSafetyPlanLibraryIfEmpty();
-  await seedSafetyPlansIfEmpty();
-  // Watchlist Hub schema (interactions, cases, witness statements, audit log,
-  // alert dismissals). Idempotent — safe on every boot; cheap on already-
-  // migrated DBs.
-  await ensureWatchlistSchema();
-  // Watchlist demo data: 20% of each school's roster gets activity, with a
-  // ~3%-of-20% high-concern slice anchoring 3–4 cases. Idempotent per school.
-  await seedWatchlistIfEmpty();
-  // Per-school default catalog of quick-entry templates (Hallway shove,
-  // Cafeteria verbal, etc.) for the Log Interaction modal. Idempotent:
-  // skipped per-school when any quick entry already exists, so Core
-  // Team customizations are preserved across reboots.
-  await seedWatchlistQuickEntriesIfEmpty();
+function envFlag(name: string): boolean {
+  return process.env[name]?.toLowerCase() === "true";
 }
 
-// In production we MUST open the port within the platform's health-check
-// window, otherwise the deploy is killed. Because the seed is idempotent
-// and the routes already handle empty data gracefully, we open the
-// listener first and run the seed in the background. In development we
-// keep the original sequential behavior so a `pnpm dev` restart blocks
-// until the seed is ready (clearer logs, no stale-data confusion while
-// iterating).
-const seedInBackground = process.env.NODE_ENV === "production";
+const isProduction = process.env.NODE_ENV === "production";
+const runBootSeed =
+  process.env.NODE_ENV !== "test" &&
+  (isProduction
+    ? envFlag("RUN_BOOT_SEED")
+    : process.env.RUN_BOOT_SEED !== "false");
+// Production boot seed is opt-in only. If explicitly enabled, keep it in the
+// background so the platform health check sees an open port quickly. Local dev
+// keeps the historical seed-first behavior unless RUN_BOOT_SEED=false.
+const seedInBackground = isProduction && runBootSeed;
 
 function safeCronErrorMsg(errorMsg?: string | null): string | undefined {
   if (!errorMsg) return undefined;
@@ -146,7 +55,7 @@ function startListening(): void {
         logger.info("Starting seed in background (post-listen)");
         runSeed()
           .then(() => logger.info("Background seed complete"))
-          .catch((err) =>
+          .catch((err: unknown) =>
             logger.error({ err }, "Background seed failed"),
           );
       }
@@ -256,14 +165,19 @@ function startListening(): void {
     });
 }
 
-// Boot. In dev we keep the original "seed first, then listen" flow so
-// the workflow logs read top-to-bottom and a `pnpm dev` restart waits
-// for data to be ready. In production we listen immediately and run
-// the (idempotent) seed in the background — see startListening().
+// Boot. Production starts the API without mutating demo data unless
+// RUN_BOOT_SEED=true is explicitly configured. Development keeps the original
+// seed-first behavior by default for fresh local databases.
 if (seedInBackground) {
+  startListening();
+} else if (!runBootSeed) {
+  logger.info(
+    { nodeEnv: process.env.NODE_ENV ?? "development" },
+    "Boot seed disabled",
+  );
   startListening();
 } else {
   runSeed()
-    .catch((err) => logger.error({ err }, "Seed failed"))
+    .catch((err: unknown) => logger.error({ err }, "Seed failed"))
     .finally(() => startListening());
 }
