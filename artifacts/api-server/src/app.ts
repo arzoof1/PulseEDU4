@@ -163,6 +163,11 @@ app.use(
       // Not in Drizzle schema (connect-pg-simple owns this table). Create on first use
       // so local / fresh DBs work without a separate migration step.
       createTableIfMissing: true,
+      // Make the default cleanup behavior explicit: prune expired sessions
+      // every 15 minutes so user_sessions does not grow without bound.
+      pruneSessionInterval: 15 * 60,
+      errorLog: (err: unknown) =>
+        logger.warn({ err }, "session store background error"),
     }),
     secret: sessionSecret,
     resave: false,
