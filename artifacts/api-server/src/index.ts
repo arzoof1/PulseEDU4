@@ -1,10 +1,10 @@
 import app from "./app";
 import { logger } from "./lib/logger";
 import { runSeed } from "./seedRunner";
-import cron from "node-cron";
-import { sendDailyDigestEmail } from "./lib/dailyDigest";
-import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
-import { startReminderScheduler } from "./lib/scheduler";
+import {
+  scheduledJobsEnabled,
+  startScheduledJobs,
+} from "./lib/scheduledJobs.js";
 
 const rawPort = process.env["PORT"];
 
@@ -34,13 +34,9 @@ const runBootSeed =
 // background so the platform health check sees an open port quickly. Local dev
 // keeps the historical seed-first behavior unless RUN_BOOT_SEED=false.
 const seedInBackground = isProduction && runBootSeed;
-
-function safeCronErrorMsg(errorMsg?: string | null): string | undefined {
-  if (!errorMsg) return undefined;
-  return errorMsg
-    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
-    .slice(0, 240);
-}
+const runScheduledJobs =
+  process.env.NODE_ENV !== "test" &&
+  scheduledJobsEnabled(!isProduction);
 
 function startListening(): void {
     app.listen(port, (err) => {
@@ -60,107 +56,13 @@ function startListening(): void {
           );
       }
 
-      // Daily pullout digest. Defaults to 16:00 (4pm) school local time.
-      // Override with DIGEST_CRON / DIGEST_TZ env vars. Skip in test.
-      if (process.env.NODE_ENV !== "test") {
-        const expr = process.env.DIGEST_CRON ?? "0 16 * * 1-5";
-        const tz = process.env.DIGEST_TZ ?? "America/New_York";
-        try {
-          cron.schedule(
-            expr,
-            async () => {
-              try {
-                const results = await sendDailyDigestEmail(new Date());
-                for (const r of results) {
-                  logger.info(
-                    {
-                      schoolId: r.schoolId,
-                      status: r.status,
-                      requested: r.totals.requested,
-                      backlog: r.totals.unreviewedClosedBacklog,
-                      errorMsg: safeCronErrorMsg(r.errorMsg),
-                    },
-                    "Daily digest fired",
-                  );
-                }
-              } catch (cronErr) {
-                logger.error({ err: cronErr }, "Daily digest send failed");
-              }
-            },
-            { timezone: tz },
-          );
-          logger.info({ expr, tz }, "Daily digest scheduled");
-        } catch (schedErr) {
-          logger.error({ err: schedErr }, "Failed to schedule daily digest");
-        }
-
-        // Weekly HeartBEAT email. Default Friday 16:00 school local time —
-        // late enough that the day's events have been logged, early enough
-        // that families can read it over the weekend. Override with
-        // WEEKLY_HEARTBEAT_CRON / WEEKLY_HEARTBEAT_TZ. Skip in test.
-        const wExpr =
-          process.env.WEEKLY_HEARTBEAT_CRON ?? "0 16 * * 5";
-        const wTz = process.env.WEEKLY_HEARTBEAT_TZ ?? "America/New_York";
-        try {
-          cron.schedule(
-            wExpr,
-            async () => {
-              try {
-                const results = await sendWeeklyHeartbeatEmails(new Date());
-                const sent = results.filter((r) => r.status === "sent").length;
-                const failed = results.filter(
-                  (r) => r.status === "failed",
-                ).length;
-                const skipped = results.filter(
-                  (r) => r.status === "skipped_school_disallowed",
-                ).length;
-                logger.info(
-                  { total: results.length, sent, failed, skipped },
-                  "Weekly HeartBEAT email fired",
-                );
-                for (const r of results) {
-                  if (r.status === "failed") {
-                    logger.warn(
-                      {
-                        parentId: r.parentId,
-                        studentId: r.studentId,
-                        errorMsg: safeCronErrorMsg(r.errorMsg),
-                      },
-                      "Weekly HeartBEAT email failed for row",
-                    );
-                  }
-                }
-              } catch (cronErr) {
-                logger.error(
-                  { err: cronErr },
-                  "Weekly HeartBEAT email send failed",
-                );
-              }
-            },
-            { timezone: wTz },
-          );
-          logger.info(
-            { expr: wExpr, tz: wTz },
-            "Weekly HeartBEAT email scheduled",
-          );
-        } catch (schedErr) {
-          logger.error(
-            { err: schedErr },
-            "Failed to schedule weekly HeartBEAT email",
-          );
-        }
-
-        // Tier 2 / Tier 3 reminder scheduler. Dormant by default —
-        // EMAIL_REMINDERS_ENABLED=true flips it live once the
-        // hcsb.k12.fl.us sender domain is verified in Resend.
-        try {
-          startReminderScheduler();
-        } catch (schedErr) {
-          logger.error(
-            { err: schedErr },
-            "Failed to schedule intervention reminders",
-          );
-        }
+      if (runScheduledJobs) {
+        startScheduledJobs("api");
+      } else {
+        logger.info(
+          { nodeEnv: process.env.NODE_ENV ?? "development" },
+          "Scheduled jobs disabled in API process",
+        );
       }
     });
 }

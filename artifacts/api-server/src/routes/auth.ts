@@ -1,5 +1,4 @@
 import { Router, type IRouter, type Request } from "express";
-import bcrypt from "bcryptjs";
 import { db, pool, staffPasswordResetsTable, staffTable } from "@workspace/db";
 import { and, eq } from "drizzle-orm";
 import {
@@ -24,6 +23,7 @@ import {
   verifyStaffPasswordResetToken,
 } from "../lib/staffPasswordResetToken.js";
 import { logger } from "../lib/logger.js";
+import { bcryptCompare, bcryptHash } from "../lib/bcrypt.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -263,7 +263,7 @@ router.post("/auth/reset-password", async (req: Request, res) => {
     return;
   }
 
-  const passwordHash = await bcrypt.hash(newPassword, 10);
+  const passwordHash = await bcryptHash(newPassword, 10);
   await db
     .update(staffTable)
     .set({ passwordHash })
@@ -310,7 +310,7 @@ router.post("/auth/login", async (req: Request, res) => {
     return;
   }
 
-  const ok = await bcrypt.compare(password, staff.passwordHash);
+  const ok = await bcryptCompare(password, staff.passwordHash);
   if (!ok) {
     await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
@@ -404,13 +404,13 @@ router.post("/auth/change-password", async (req: Request, res) => {
     return;
   }
 
-  const ok = await bcrypt.compare(currentPassword, staff.passwordHash);
+  const ok = await bcryptCompare(currentPassword, staff.passwordHash);
   if (!ok) {
     res.status(401).json({ error: "Current password is incorrect" });
     return;
   }
 
-  const passwordHash = await bcrypt.hash(newPassword, 10);
+  const passwordHash = await bcryptHash(newPassword, 10);
   await db
     .update(staffTable)
     .set({ passwordHash })

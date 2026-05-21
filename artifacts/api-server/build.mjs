@@ -19,6 +19,8 @@ async function buildAll() {
     entryPoints: [
       path.resolve(artifactDir, "src/index.ts"),
       path.resolve(artifactDir, "src/seedCli.ts"),
+      path.resolve(artifactDir, "src/scheduledJobsWorker.ts"),
+      path.resolve(artifactDir, "src/bcryptWorker.ts"),
     ],
     platform: "node",
     bundle: true,

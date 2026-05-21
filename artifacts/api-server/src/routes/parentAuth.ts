@@ -1,5 +1,4 @@
 import { Router, type IRouter, type Request } from "express";
-import bcrypt from "bcryptjs";
 import {
   db,
   parentsTable,
@@ -21,6 +20,7 @@ import {
   recordLoginSuccess,
   sendLoginRateLimited,
 } from "../lib/loginThrottle.js";
+import { bcryptCompare, bcryptHash } from "../lib/bcrypt.js";
 
 declare module "express-session" {
   interface SessionData {
@@ -100,7 +100,7 @@ router.post("/parent-auth/login", async (req: Request, res) => {
     .slice(0, PARENT_LOGIN_MAX_BCRYPT_CHECKS);
 
   for (const parent of eligible) {
-    const ok = await bcrypt.compare(password, parent.passwordHash!);
+    const ok = await bcryptCompare(password, parent.passwordHash!);
     if (!ok) continue;
 
     await db
@@ -339,7 +339,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
   let parentId: number;
   if (existing && existing.passwordHash) {
     // Sibling case — verify the existing password rather than overwriting.
-    const ok = await bcrypt.compare(password, existing.passwordHash);
+    const ok = await bcryptCompare(password, existing.passwordHash);
     if (!ok) {
       await recordLoginFailure(req, "parent", normalizedEmail);
       res.status(401).json({
@@ -349,7 +349,7 @@ router.post("/parent-auth/accept-invite", async (req, res) => {
     }
     parentId = existing.id;
   } else {
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcryptHash(password, 10);
     const fallbackName =
       typeof displayName === "string" && displayName.trim().length > 0
         ? displayName.trim()
@@ -460,12 +460,12 @@ router.post("/parent-auth/change-password", async (req, res) => {
     res.status(401).json({ error: "Sign-in required" });
     return;
   }
-  const ok = await bcrypt.compare(currentPassword, parent.passwordHash);
+  const ok = await bcryptCompare(currentPassword, parent.passwordHash);
   if (!ok) {
     res.status(401).json({ error: "Current password is incorrect" });
     return;
   }
-  const passwordHash = await bcrypt.hash(newPassword, 10);
+  const passwordHash = await bcryptHash(newPassword, 10);
   await db
     .update(parentsTable)
     .set({ passwordHash })
