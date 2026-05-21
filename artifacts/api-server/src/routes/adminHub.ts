@@ -307,6 +307,7 @@ router.get(
       ? await db
           .select({
             studentId: studentsTable.studentId,
+            localSisId: studentsTable.localSisId,
             firstName: studentsTable.firstName,
             lastName: studentsTable.lastName,
             grade: studentsTable.grade,
@@ -1350,6 +1351,7 @@ router.get(
     );
     const expected = (await db.execute(
       sql`SELECT sr.student_id AS student_id,
+                 st.local_sis_id AS local_sis_id,
                  cs.teacher_staff_id AS teacher_id,
                  cs.period AS period,
                  s.display_name AS teacher_name,
@@ -1365,6 +1367,7 @@ router.get(
              AND cs.period IS NOT NULL`,
     )).rows as {
       student_id: string;
+      local_sis_id: string | null;
       teacher_id: number;
       period: number;
       teacher_name: string;
@@ -1388,6 +1391,7 @@ router.get(
 
     type Row = {
       studentId: string;
+      localSisId: string | null;
       studentName: string;
       teacherId: number;
       teacherName: string;
@@ -1404,7 +1408,8 @@ router.get(
       );
       return {
         studentId: e.student_id,
-        studentName: (e.student_name ?? "").trim() || e.student_id,
+        localSisId: e.local_sis_id ?? null,
+        studentName: (e.student_name ?? "").trim() || (e.local_sis_id ?? ""),
         teacherId: e.teacher_id,
         teacherName: e.teacher_name,
         period: e.period,

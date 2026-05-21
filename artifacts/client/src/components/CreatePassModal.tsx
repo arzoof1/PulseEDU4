@@ -227,16 +227,13 @@ export default function CreatePassModal({
     for (const s of students) {
       const first = s.firstName.toLowerCase();
       const last = s.lastName.toLowerCase();
-      const sid = s.studentId.toLowerCase();
       const localSid = (s.localSisId ?? "").toLowerCase();
       let rank = -1;
       if (first.startsWith(q) || last.startsWith(q)) rank = 0;
       else if (localSid && localSid.startsWith(q)) rank = 1;
-      else if (sid.startsWith(q)) rank = 1;
       else if (
         first.includes(q) ||
         last.includes(q) ||
-        sid.includes(q) ||
         (localSid && localSid.includes(q))
       )
         rank = 2;
@@ -404,7 +401,7 @@ export default function CreatePassModal({
                         <strong>
                           {s.firstName} {s.lastName}
                         </strong>
-                        <span className="cp-list-sub">{s.localSisId ?? s.studentId}</span>
+                        <span className="cp-list-sub">{s.localSisId ?? "—"}</span>
                       </span>
                     </button>
                   </li>

@@ -367,6 +367,7 @@ router.get(
     const rows = await db
       .select({
         studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
@@ -376,11 +377,11 @@ router.get(
         and(
           eq(studentsTable.schoolId, schoolId),
           or(
-            // Prefix match on first/last/ID — see studentFinder.ts for
-            // the rationale. Substring-anywhere was too noisy.
+            // Prefix match on first/last/local-SIS-ID. FLEID is
+            // server-only and never used as a search key.
             ilike(studentsTable.firstName, `${q}%`),
             ilike(studentsTable.lastName, `${q}%`),
-            ilike(studentsTable.studentId, `${q}%`),
+            ilike(studentsTable.localSisId, `${q}%`),
           ),
           sql`EXISTS (
             SELECT 1
@@ -440,6 +441,7 @@ router.get("/watchlist/orbit", async (req: Request, res: Response) => {
       const nonDirectPct = r.total > 0 ? Math.round((r.nonDirect / r.total) * 100) : 0;
       return {
         studentId: r.studentId,
+        localSisId: s.localSisId ?? null,
         firstName: s.firstName,
         lastName: s.lastName,
         grade: s.grade,

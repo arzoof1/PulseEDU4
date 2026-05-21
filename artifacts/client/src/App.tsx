@@ -156,6 +156,7 @@ const destinationsByRoom: Record<string, string[]> = {
 interface Student {
   id: number;
   studentId: string;
+  localSisId?: string | null;
   parentName?: string | null;
   parentEmail?: string | null;
   parentPhone?: string | null;
@@ -584,7 +585,7 @@ function RequestPulloutSection({
             {sortedStudents.map((s) => (
               <option
                 key={s.id}
-                value={`${s.firstName} ${s.lastName} (${s.studentId})`}
+                value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
               />
             ))}
           </datalist>
@@ -764,6 +765,7 @@ function RequestPulloutSection({
 type PulloutRow = {
   id: number;
   studentId: string;
+  localSisId?: string | null;
   requestedById: number | null;
   requestedByName: string;
   requestedAt: string;
@@ -1280,7 +1282,7 @@ function VerifyPulloutsSection({
                 {sortedStudentsForCalledIn.map((s) => (
                   <option
                     key={s.id}
-                    value={`${s.firstName} ${s.lastName} (${s.studentId})`}
+                    value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
                   />
                 ))}
               </datalist>
@@ -1439,7 +1441,7 @@ function VerifyPulloutsSection({
                   <div>
                     <strong>{studentName(p.studentId)}</strong>{" "}
                     <span style={{ color: "#64748b" }}>
-                      (#{p.studentId}) · pullout #{p.id}
+                      (#{p.localSisId ?? "—"}) · pullout #{p.id}
                     </span>
                   </div>
                   <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
@@ -1685,6 +1687,7 @@ type IssRosterEntry = {
   // rows that this dashboard owns end-to-end.
   id: number;
   studentId: string;
+  localSisId?: string | null;
   source: "manual" | "pullout" | "admin";
   pulloutId: number | null;
   period: number | null;
@@ -1704,6 +1707,7 @@ type IssRosterEntry = {
 type IssAttendanceRow = {
   id: number;
   studentId: string;
+  localSisId?: string | null;
   day: string;
   source: "manual" | "pullout" | "admin";
   pulloutId: number | null;
@@ -2056,7 +2060,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
         <div>
           <strong>{studentName(p.studentId)}</strong>{" "}
           <span style={{ color: "#64748b" }}>
-            (#{p.studentId}) · pullout #{p.id}
+            (#{p.localSisId ?? "—"}) · pullout #{p.id}
           </span>
         </div>
         <div style={{ color: "#64748b", fontSize: "0.85rem" }}>
@@ -2458,7 +2462,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                   {sortedStudents.map((s) => (
                     <option
                       key={s.id}
-                      value={`${s.firstName} ${s.lastName} (${s.studentId})`}
+                      value={`${s.firstName} ${s.lastName} (${s.localSisId ?? "—"})`}
                     />
                   ))}
                 </datalist>
@@ -2536,7 +2540,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                       <div>
                         <strong>{studentName(entry.studentId)}</strong>{" "}
                         <span style={{ color: "#64748b" }}>
-                          (#{entry.studentId})
+                          (#{entry.localSisId ?? "—"})
                         </span>
                         {entry.period != null && (
                           <span
@@ -2996,7 +3000,7 @@ function IssDashboardSection({ students }: { students: Student[] }) {
                                   color: "#475569",
                                 }}
                               >
-                                {row.studentId}
+                                {row.localSisId ?? "—"}
                               </td>
                               {periods.map((p) => (
                                 <td
@@ -3254,7 +3258,7 @@ function BehaviorReviewSection({
             {rows.map((p) => (
               <tr key={p.id}>
                 <td>
-                  {p.studentId}
+                  {p.localSisId ?? "—"}
                   <br />
                   <span style={{ color: "#64748b" }}>
                     {studentName(p.studentId)}
@@ -10190,7 +10194,7 @@ function App() {
                         <div
                           style={{ fontSize: 11, color: "var(--text-subtle)" }}
                         >
-                          {p.localSisId ?? p.studentId}
+                          {p.localSisId ?? "—"}
                         </div>
                       </td>
                       <td>{p.teacherName}</td>

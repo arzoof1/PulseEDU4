@@ -15,6 +15,7 @@ interface Props {
 
 interface StudentRow {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: string | null;
@@ -359,7 +360,7 @@ export default function AddDisciplineLogModal({
                   {student.firstName} {student.lastName}
                 </div>
                 <div style={{ fontSize: 12, color: "var(--text-subtle)" }}>
-                  ID {student.studentId} · Grade {student.grade ?? "—"}
+                  ID {student.localSisId ?? "—"} · Grade {student.grade ?? "—"}
                   {student.ese && " · ESE"}
                   {student.is504 && " · 504"}
                   {student.ell && " · ELL"}
@@ -422,7 +423,7 @@ export default function AddDisciplineLogModal({
                         {s.firstName} {s.lastName}
                       </div>
                       <div style={{ fontSize: 11, color: "var(--text-subtle)" }}>
-                        {s.studentId} · Gr {s.grade ?? "—"}
+                        {s.localSisId ?? "—"} · Gr {s.grade ?? "—"}
                       </div>
                     </button>
                   ))}

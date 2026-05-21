@@ -2462,7 +2462,7 @@ function NextUpScreen({
     if (!trimmed) return;
     if (trimmed.toUpperCase() !== entry.studentId.toUpperCase()) {
       setError(
-        `That ID doesn't match ${entry.firstName ?? entry.studentId}. Try again or tap Skip.`,
+        `That ID doesn't match ${entry.firstName ?? "the student"}. Try again or tap Skip.`,
       );
       return;
     }

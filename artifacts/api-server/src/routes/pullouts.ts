@@ -9,10 +9,11 @@ import {
   db,
   pulloutsTable,
   staffTable,
+  studentsTable,
   interventionEntriesTable,
   issRosterTable,
 } from "@workspace/db";
-import { eq, and, gte, desc } from "drizzle-orm";
+import { eq, and, gte, desc, inArray } from "drizzle-orm";
 import {
   sendPulloutArrivalEmail,
   sendPulloutDispatchEmail,
@@ -196,7 +197,33 @@ router.get(
         (r) => r.status === "closed" && r.reviewedAt == null,
       );
     }
-    res.json(rows);
+
+    // Enrich with localSisId so the UI can render the 6-digit local
+    // ID staff know kids by. FLEID stays in the payload as
+    // `studentId` (internal key) but is never rendered.
+    const sids = Array.from(new Set(rows.map((r) => r.studentId)));
+    const localSisMap = new Map<string, string | null>();
+    if (sids.length > 0) {
+      const stuRows = await db
+        .select({
+          studentId: studentsTable.studentId,
+          localSisId: studentsTable.localSisId,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, req.schoolId!),
+            inArray(studentsTable.studentId, sids),
+          ),
+        );
+      for (const s of stuRows) localSisMap.set(s.studentId, s.localSisId ?? null);
+    }
+    res.json(
+      rows.map((r) => ({
+        ...r,
+        localSisId: localSisMap.get(r.studentId) ?? null,
+      })),
+    );
   },
 );
 
@@ -467,7 +494,17 @@ router.get(
         ),
       )
       .orderBy(desc(pulloutsTable.requestedAt));
-    res.json(rows);
+    const [stu] = await db
+      .select({ localSisId: studentsTable.localSisId })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.studentId, sid),
+          eq(studentsTable.schoolId, req.schoolId!),
+        ),
+      );
+    const localSisId = stu?.localSisId ?? null;
+    res.json(rows.map((r) => ({ ...r, localSisId })));
   },
 );
 

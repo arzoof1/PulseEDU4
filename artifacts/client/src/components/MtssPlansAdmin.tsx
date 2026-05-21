@@ -18,6 +18,7 @@ interface Plan {
   studentId: string;
   studentName: string | null;
   studentGrade: number | null;
+  studentLocalSisId?: string | null;
   title: string;
   goals: string;
   tier: number;
@@ -72,6 +73,7 @@ function parseCsv(csv: string | null | undefined): number[] {
 
 interface Student {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -135,6 +137,7 @@ interface FastSuggestion {
   studentId: string;
   studentName: string | null;
   studentGrade: number | null;
+  studentLocalSisId?: string | null;
   subject: string;
   benchmarkCode: string;
   benchmarkCategory: string | null;
@@ -586,7 +589,7 @@ export default function MtssPlansAdmin({
                                   fontSize: "0.72rem",
                                 }}
                               >
-                                ID {s.studentId}
+                                ID {s.studentLocalSisId ?? "—"}
                                 {s.studentGrade != null
                                   ? ` • Gr ${s.studentGrade}`
                                   : ""}
@@ -787,7 +790,7 @@ export default function MtssPlansAdmin({
                         {p.studentName ?? "(unknown)"}
                       </div>
                       <div style={{ color: "#64748b", fontSize: "0.78rem" }}>
-                        ID {p.studentId}
+                        ID {p.studentLocalSisId ?? "—"}
                         {p.studentGrade != null
                           ? ` • Gr ${p.studentGrade}`
                           : ""}
@@ -1137,7 +1140,7 @@ function PlanModal({
   }, [studentId]);
 
   const studentLabel = (s: Student) =>
-    `${s.firstName} ${s.lastName} — ID ${s.studentId} (Gr ${s.grade})`;
+    `${s.firstName} ${s.lastName} — ID ${s.localSisId ?? "—"} (Gr ${s.grade})`;
 
   // For the new-plan picker, surface a hint if the student already has
   // an active plan. We don't block — multiple plans per student are
@@ -1289,7 +1292,7 @@ function PlanModal({
         ) : (
           <div style={{ marginBottom: "0.75rem", color: "#475569" }}>
             <strong>Student:</strong>{" "}
-            {plan!.studentName ?? "(unknown)"} — ID {plan!.studentId}
+            {plan!.studentName ?? "(unknown)"} — ID {plan!.studentLocalSisId ?? "—"}
           </div>
         )}
 

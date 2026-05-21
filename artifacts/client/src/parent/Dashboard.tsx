@@ -426,7 +426,7 @@ export default function Dashboard({ me }: { me: ParentMe }) {
               </div>
               <p className="text-slate-500 font-medium flex items-center gap-2">
                 <span>
-                  {gradeLabel(activeStudent.grade)} · ID {activeStudent.localSisId ?? activeStudent.studentId}
+                  {gradeLabel(activeStudent.grade)} · ID {activeStudent.localSisId ?? "—"}
                 </span>
                 {snapshot?.student.retainedGrades &&
                   snapshot.student.retainedGrades.length > 0 && (

@@ -75,7 +75,7 @@ export function StudentBadgesPanel() {
     return students.filter((r) => {
       if (gradeFilter && String(r.grade ?? "") !== gradeFilter) return false;
       if (!q) return true;
-      const hay = `${r.firstName} ${r.lastName} ${r.localSisId ?? ""} ${r.studentId}`.toLowerCase();
+      const hay = `${r.firstName} ${r.lastName} ${r.localSisId ?? ""}`.toLowerCase();
       return hay.includes(q);
     });
   }, [students, filter, gradeFilter]);
@@ -299,7 +299,7 @@ export function StudentBadgesPanel() {
                   <span style={{ flex: 1 }}>
                     {r.lastName}, {r.firstName}{" "}
                     <span style={{ opacity: 0.6 }}>
-                      · {r.localSisId ?? r.studentId}
+                      · {r.localSisId ?? "—"}
                       {r.grade !== null && r.grade !== undefined && r.grade !== "" ? ` · Grade ${r.grade}` : ""}
                     </span>
                   </span>

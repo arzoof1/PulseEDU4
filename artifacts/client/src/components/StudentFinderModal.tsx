@@ -564,7 +564,7 @@ export function StudentFinderModal({
                               fontSize: 12,
                             }}
                           >
-                            {h.localSisId ?? h.studentId}
+                            {h.localSisId ?? "—"}
                           </span>
                         </div>
                         {hasLocation && (

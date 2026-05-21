@@ -211,6 +211,7 @@ type LookupHit = {
     authorizationId: number;
     studentDbId: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -226,6 +227,7 @@ type LookupHit = {
     authorizationId: number;
     studentDbId: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -239,6 +241,7 @@ type LookupHit = {
 type QueueEntry = {
   position: number;
   studentId: string;
+  localSisId: string | null;
   studentDbId: number;
   firstName: string;
   lastName: string;
@@ -433,7 +436,7 @@ function CurbKeypadPage({ me }: { me: Me }) {
                         {c.firstName} {c.lastName}
                       </div>
                       <div style={{ color: "#6b7280", fontSize: 13 }}>
-                        Grade {c.grade} · ID {c.studentId}
+                        Grade {c.grade} · ID {c.localSisId ?? "—"}
                       </div>
                       {c.restricted && (
                         <div
@@ -553,6 +556,7 @@ function CurbKeypadPage({ me }: { me: Me }) {
 type WalkerRow = {
   studentDbId: number;
   studentId: string;
+  localSisId: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -853,7 +857,7 @@ function WalkerGatePage({ me }: { me: Me }) {
                           {c.firstName} {c.lastName}
                         </div>
                         <div style={{ color: "#6b7280", fontSize: 13 }}>
-                          Grade {c.grade} · ID {c.studentId} · walker
+                          Grade {c.grade} · ID {c.localSisId ?? "—"} · walker
                         </div>
                       </div>
                     </div>
@@ -991,7 +995,7 @@ function WalkerGatePage({ me }: { me: Me }) {
                   {r.firstName} {r.lastName}
                 </div>
                 <div style={{ color: "#6b7280", fontSize: 13 }}>
-                  Grade {r.grade} · ID {r.studentId}
+                  Grade {r.grade} · ID {r.localSisId ?? "—"}
                 </div>
               {r.released && (
                 <div style={{ color: "#15803d", fontSize: 13, marginTop: 4 }}>

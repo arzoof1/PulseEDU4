@@ -71,7 +71,7 @@ router.get("/students", async (req, res) => {
           // prefix match too (admins typically know the leading digits).
           ilike(studentsTable.firstName, `${q}%`),
           ilike(studentsTable.lastName, `${q}%`),
-          ilike(studentsTable.studentId, `${q}%`),
+          ilike(studentsTable.localSisId, `${q}%`),
         ),
       )
     : eq(studentsTable.schoolId, schoolId);

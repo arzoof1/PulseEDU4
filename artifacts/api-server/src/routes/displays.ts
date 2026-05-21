@@ -1100,6 +1100,7 @@ router.get("/displays/public/playlists/:id", async (req, res) => {
         .select({
           id: pbisEntriesTable.id,
           studentId: pbisEntriesTable.studentId,
+          localSisId: studentsTable.localSisId,
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
           points: pbisEntriesTable.points,

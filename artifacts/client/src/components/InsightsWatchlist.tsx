@@ -28,6 +28,7 @@ import {
 
 interface StudentLookup {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | string | null;
@@ -37,6 +38,7 @@ type WindowKey = "3" | "7" | "15" | "30" | "custom";
 
 interface Row {
   studentId: string;
+  localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number;
@@ -952,7 +954,7 @@ export default function InsightsWatchlist({
                       color: "#9ca3af",
                     }}
                   >
-                    {s.studentId}
+                    {s.localSisId ?? "—"}
                     {s.grade !== null &&
                     s.grade !== undefined &&
                     s.grade !== ""
@@ -1498,7 +1500,7 @@ function WatchCard({
                 color: "#6b7280",
               }}
             >
-              Grade {row.grade} · {row.studentId}
+              Grade {row.grade} · {row.localSisId ?? "—"}
             </div>
           </div>
           {row.isNewThisWindow && (

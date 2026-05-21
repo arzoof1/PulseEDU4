@@ -91,11 +91,10 @@ router.get("/student-finder/search", async (req: Request, res: Response) => {
           // were noisy and pulled in unrelated kids.
           ilike(studentsTable.firstName, `${q}%`),
           ilike(studentsTable.lastName, `${q}%`),
-          // Match local SIS ID first — that's the credential staff
-          // know the kid by. Keep the FLEID match too so internal
-          // lookups and legacy bookmarks continue to work.
+          // Match local SIS ID only — that's the 6-digit credential
+          // staff know the kid by. FLEID is never visible in the UI;
+          // it stays server-side for FAST + state reporting.
           ilike(studentsTable.localSisId, `${q}%`),
-          ilike(studentsTable.studentId, `${q}%`),
         ),
       ),
     )

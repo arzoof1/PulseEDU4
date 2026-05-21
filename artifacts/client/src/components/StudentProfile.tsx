@@ -2086,7 +2086,7 @@ export default function StudentProfile({
             <div style={{ color: "#6b7280", marginBottom: 6 }}>
               Grade {header.grade}
               {header.gender && <> &middot; {header.gender}</>}
-              <> &middot; {header.localSisId ?? header.studentId}</>
+              <> &middot; {header.localSisId ?? "—"}</>
             </div>
             <div>
               {header.flags.ell && <Chip label="ELL" sev="info" />}

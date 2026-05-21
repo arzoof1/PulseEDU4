@@ -385,6 +385,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
     .select({
       id: studentsTable.id,
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -413,6 +414,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
     authorizationId: number;
     studentDbId: number;
     studentId: string;
+    localSisId: string | null;
     firstName: string;
     lastName: string;
     grade: number;
@@ -440,6 +442,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
         .select({
           id: studentsTable.id,
           studentId: studentsTable.studentId,
+          localSisId: studentsTable.localSisId,
           firstName: studentsTable.firstName,
           lastName: studentsTable.lastName,
           grade: studentsTable.grade,
@@ -460,6 +463,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           authorizationId: sibAuth.id,
           studentDbId: s.id,
           studentId: s.studentId,
+          localSisId: s.localSisId ?? null,
           firstName: s.firstName,
           lastName: s.lastName,
           grade: s.grade,
@@ -485,6 +489,7 @@ router.post("/pickup/lookup", requireStaff, async (req, res) => {
           authorizationId: auth.id,
           studentDbId: primary.id,
           studentId: primary.studentId,
+          localSisId: primary.localSisId ?? null,
           firstName: primary.firstName,
           lastName: primary.lastName,
           grade: primary.grade,
@@ -884,7 +889,12 @@ router.get("/pickup/teacher-queue", requireStaff, async (req, res) => {
   const ids = entries.map((e) => e.studentId);
   let nameById = new Map<
     number,
-    { firstName: string; lastName: string; grade: number }
+    {
+      firstName: string;
+      lastName: string;
+      grade: number;
+      localSisId: string | null;
+    }
   >();
   if (ids.length > 0) {
     const rows = await db
@@ -893,6 +903,7 @@ router.get("/pickup/teacher-queue", requireStaff, async (req, res) => {
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
+        localSisId: studentsTable.localSisId,
       })
       .from(studentsTable)
       .where(
@@ -910,6 +921,7 @@ router.get("/pickup/teacher-queue", requireStaff, async (req, res) => {
       const n = nameById.get(e.studentId);
       return {
         studentDbId: e.studentId,
+        localSisId: n?.localSisId ?? null,
         firstName: n?.firstName ?? "",
         lastName: n?.lastName ?? "",
         grade: n?.grade ?? null,
@@ -940,6 +952,7 @@ router.get("/pickup/walkers", requireStaff, async (req, res) => {
     .select({
       id: studentsTable.id,
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,

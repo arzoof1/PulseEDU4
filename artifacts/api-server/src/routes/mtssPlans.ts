@@ -277,6 +277,7 @@ router.get("/mtss-plans", async (req, res) => {
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
+      localSisId: studentsTable.localSisId,
     })
     .from(studentMtssPlansTable)
     .leftJoin(
@@ -337,6 +338,7 @@ router.get("/mtss-plans", async (req, res) => {
         studentName:
           r.firstName && r.lastName ? `${r.firstName} ${r.lastName}` : null,
         studentGrade: r.grade ?? null,
+        studentLocalSisId: r.localSisId ?? null,
         effectiveTeacherIds: effective,
         effectiveTeachers: effective.map((id) => ({
           staffId: id,
