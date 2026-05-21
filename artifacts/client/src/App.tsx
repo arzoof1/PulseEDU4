@@ -20744,14 +20744,55 @@ function App() {
                 ({activeKiosks.length})
               </span>
             </h2>
-            <button type="button" onClick={loadActiveKiosks}>
-              Refresh
-            </button>
+            <div style={{ display: "flex", gap: "0.5rem", flexWrap: "wrap" }}>
+              <button type="button" onClick={loadActiveKiosks}>
+                Refresh
+              </button>
+              {/* Bulk reset — clears every live kiosk activation for the
+                  current school in one click. Use when stale activations
+                  from earlier testing are blocking fresh kiosk-card scans
+                  with "Room already has a kiosk". Confirms first since
+                  this logs out every kiosk in the building. */}
+              <button
+                type="button"
+                style={{
+                  background: "var(--accent)",
+                  color: "#fff",
+                  border: "1px solid var(--accent)",
+                }}
+                onClick={async () => {
+                  if (
+                    !window.confirm(
+                      `Force-deactivate ALL ${activeKiosks.length} active kiosks in this school? Every room becomes free to scan into. Anyone currently using a kiosk will see the activation screen on their next tap.`,
+                    )
+                  )
+                    return;
+                  const res = await authFetch(
+                    "/api/kiosk/activations/deactivate-all",
+                    { method: "POST" },
+                  );
+                  if (res.ok) {
+                    const data = (await res.json()) as { deactivated: number };
+                    window.alert(
+                      `Deactivated ${data.deactivated} kiosk activation${data.deactivated === 1 ? "" : "s"}. Every room is now free to scan into.`,
+                    );
+                    loadActiveKiosks();
+                  } else {
+                    window.alert("Failed to deactivate. Please try again.");
+                  }
+                }}
+              >
+                Force-deactivate all
+              </button>
+            </div>
           </div>
           <p style={{ color: "var(--text-subtle)", marginTop: "0.5rem" }}>
             Devices currently in kiosk mode. Force-deactivating logs the
             device out immediately — students at that kiosk will see the
-            activation screen on their next interaction.
+            activation screen on their next interaction. Use{" "}
+            <strong>Force-deactivate all</strong> when stale activations
+            are blocking fresh kiosk-card scans with "Room already has a
+            kiosk."
           </p>
           <HowToUseHelp title="How to use Active Kiosks">
             <HowToSection title="What this page is">

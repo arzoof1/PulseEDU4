@@ -657,6 +657,40 @@ router.post(
   },
 );
 
+// Bulk-revoke every currently-live kiosk activation in the caller's
+// school. Use case: stale activations from earlier testing are blocking
+// fresh kiosk-card scans with "Room already has a kiosk." This frees
+// every room in one click. Returns the number of rows revoked so the
+// admin UI can show a confirmation toast.
+router.post(
+  "/kiosk/activations/deactivate-all",
+  requireAdmin,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    const result = await db
+      .update(kioskActivationsTable)
+      .set({
+        deactivatedAt: new Date(),
+        deactivatedByStaffId: staff.id,
+      })
+      .where(
+        and(
+          eq(kioskActivationsTable.schoolId, schoolId),
+          isNull(kioskActivationsTable.deactivatedAt),
+        ),
+      )
+      .returning({ id: kioskActivationsTable.id });
+    req.log.info(
+      { schoolId, count: result.length, actorStaffId: staff.id },
+      "kiosk_activations_bulk_deactivate",
+    );
+    res.json({ deactivated: result.length });
+  },
+);
+
 router.get("/admin/notifications", requireAdmin, async (req, res) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
