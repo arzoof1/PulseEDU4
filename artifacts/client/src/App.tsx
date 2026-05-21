@@ -5783,6 +5783,15 @@ function App() {
   const [apiDestinationMap, setApiDestinationMap] = useState<
     Record<string, string[]>
   >({});
+  // Canonical list of every destination-flagged location for this school.
+  // The Teacher Allowlist columns are sourced from here, NOT from
+  // `apiDestinationMap` — that map only contains destinations that
+  // already have at least one origin pair, so a newly-added restroom
+  // (or any destination missing from the mesh) would silently fail to
+  // appear as a column.
+  const [allDestinationLocations, setAllDestinationLocations] = useState<
+    string[]
+  >([]);
   const [copiedRoom, setCopiedRoom] = useState<string | null>(null);
 
   useEffect(() => {
@@ -5989,6 +5998,24 @@ function App() {
       )
       .catch((err) =>
         console.error("Failed to load location destinations:", err),
+      );
+
+    authFetch("/api/locations")
+      .then((res) => res.json())
+      .then(
+        (
+          data: { name: string; isDestination: boolean; active: boolean }[],
+        ) => {
+          setAllDestinationLocations(
+            data
+              .filter((l) => l.isDestination && l.active)
+              .map((l) => l.name)
+              .sort((a, b) => a.localeCompare(b)),
+          );
+        },
+      )
+      .catch((err) =>
+        console.error("Failed to load locations:", err),
       );
 
     authFetch("/api/teacher-allowlist")
@@ -21193,9 +21220,17 @@ function App() {
           staffUsers={staffUsers}
           allDestinations={(() => {
             const set = new Set<string>();
+            // Pair-derived destinations (legacy source). Kept so the
+            // column set stays a superset during the brief window
+            // before /api/locations returns.
             for (const arr of Object.values(effectiveDestinationsByRoom)) {
               for (const d of arr) set.add(d);
             }
+            // Canonical destination universe — every active, destination-
+            // flagged location for this school. Ensures newly-added
+            // restrooms / offices show up as columns even before the
+            // origin→destination mesh is wired.
+            for (const name of allDestinationLocations) set.add(name);
             const RESTROOM_RE = /(restroom|bathroom|\brr\b|\bwc\b)/i;
             const collator = new Intl.Collator(undefined, {
               numeric: true,
