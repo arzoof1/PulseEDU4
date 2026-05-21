@@ -126,6 +126,13 @@ async function runSeed(): Promise<void> {
 // iterating).
 const seedInBackground = process.env.NODE_ENV === "production";
 
+function safeCronErrorMsg(errorMsg?: string | null): string | undefined {
+  if (!errorMsg) return undefined;
+  return errorMsg
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, "[redacted-email]")
+    .slice(0, 240);
+}
+
 function startListening(): void {
     app.listen(port, (err) => {
       if (err) {
@@ -160,10 +167,9 @@ function startListening(): void {
                     {
                       schoolId: r.schoolId,
                       status: r.status,
-                      emailTo: r.emailTo,
                       requested: r.totals.requested,
                       backlog: r.totals.unreviewedClosedBacklog,
-                      errorMsg: r.errorMsg,
+                      errorMsg: safeCronErrorMsg(r.errorMsg),
                     },
                     "Daily digest fired",
                   );
@@ -209,8 +215,7 @@ function startListening(): void {
                       {
                         parentId: r.parentId,
                         studentId: r.studentId,
-                        email: r.email,
-                        errorMsg: r.errorMsg,
+                        errorMsg: safeCronErrorMsg(r.errorMsg),
                       },
                       "Weekly HeartBEAT email failed for row",
                     );

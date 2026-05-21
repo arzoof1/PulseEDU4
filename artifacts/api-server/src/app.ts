@@ -1,4 +1,5 @@
 import express, { type Express } from "express";
+import helmet from "helmet";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
@@ -50,6 +51,33 @@ declare module "express-session" {
 }
 
 const app: Express = express();
+const isProduction = process.env.NODE_ENV === "production";
+
+function csvEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function frameAncestors(): string[] {
+  const configured = csvEnv("SECURITY_FRAME_ANCESTORS");
+  if (configured.length > 0) return configured;
+
+  const ancestors = ["'self'"];
+  const publicApp = process.env.PUBLIC_APP_URL?.trim();
+  if (publicApp) ancestors.push(publicApp.replace(/\/+$/, ""));
+
+  // Replit previews are iframe-based in development; keep that opt-in and
+  // production-configurable instead of using X-Frame-Options DENY/SAMEORIGIN.
+  if (!isProduction) {
+    ancestors.push("http://localhost:5173", "http://localhost:5174");
+    const replit = process.env.REPLIT_DEV_DOMAIN?.trim();
+    if (replit) ancestors.push(`https://${replit}`);
+  }
+
+  return ancestors;
+}
 
 // Required so express-session honors X-Forwarded-Proto from the Replit proxy
 // (TLS terminates upstream, so without this `secure: true` cookies are dropped).
@@ -65,6 +93,41 @@ if (!databaseUrl) {
 }
 
 const PgSession = connectPgSimple(session);
+
+app.use(
+  helmet({
+    // Development Vite/React tooling can require eval/inline assets. Keep CSP
+    // strict in production and disabled locally to avoid breaking dev UX.
+    contentSecurityPolicy: isProduction
+      ? {
+          useDefaults: true,
+          directives: {
+            "default-src": ["'self'"],
+            "base-uri": ["'self'"],
+            "object-src": ["'none'"],
+            "frame-ancestors": frameAncestors(),
+            "form-action": ["'self'"],
+            "img-src": ["'self'", "data:", "blob:", "https:"],
+            "media-src": ["'self'", "data:", "blob:", "https:"],
+            "connect-src": ["'self'", ...csvEnv("CSP_CONNECT_SRC")],
+            "script-src": ["'self'"],
+            "style-src": ["'self'", "'unsafe-inline'"],
+          },
+        }
+      : false,
+    crossOriginEmbedderPolicy: false,
+    // frame-ancestors is more precise than X-Frame-Options for this app's
+    // preview/deployment needs; avoid emitting a conflicting legacy header.
+    frameguard: false,
+    hsts: isProduction
+      ? {
+          maxAge: 15552000,
+          includeSubDomains: true,
+        }
+      : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  }),
+);
 
 app.use(
   pinoHttp({

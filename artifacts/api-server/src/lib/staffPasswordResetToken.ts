@@ -1,10 +1,18 @@
 import crypto from "node:crypto";
 
 const RESET_TOKEN_TTL_MS = 1000 * 60 * 30; // 30 minutes
-const SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.AUTH_TOKEN_SECRET ||
-  "dev-only-insecure-secret-change-me";
+
+function requireTokenSecret(): string {
+  const secret = process.env.AUTH_TOKEN_SECRET || process.env.SESSION_SECRET;
+  if (!secret) {
+    throw new Error(
+      "AUTH_TOKEN_SECRET or SESSION_SECRET is required for password reset token signing",
+    );
+  }
+  return secret;
+}
+
+const SECRET = requireTokenSecret();
 
 type StaffPasswordResetPayload = {
   kind: "staff_password_reset";
