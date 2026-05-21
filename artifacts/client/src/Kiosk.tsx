@@ -2192,6 +2192,9 @@ function GetInLineOverlay({
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [position, setPosition] = useState<number | null>(null);
+  // Mirror the main pass-creation form: students should be able to
+  // scan their badge to populate the ID field here too.
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   // Auto-close after a brief confirmation so the next person can use the
   // overlay without a stale message lingering.
@@ -2232,19 +2235,34 @@ function GetInLineOverlay({
   }
 
   return (
-    <div
-      style={{
-        position: "fixed",
-        inset: 0,
-        background: "rgba(0,0,0,0.7)",
-        zIndex: 20,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "2rem",
-      }}
-      onClick={onClose}
-    >
+    <>
+      {scannerOpen && (
+        <CameraScanner
+          onScan={(text) => {
+            // Same extraction the main pass form uses: badge QRs encode
+            // /kiosk?signin=<id>; hardware scanners emit the raw id.
+            const trimmed = text.trim();
+            const m = trimmed.match(/[?&]signin=([^&\s]+)/);
+            const id = m ? decodeURIComponent(m[1]) : trimmed;
+            setScannerOpen(false);
+            if (id) setStudentId(id);
+          }}
+          onCancel={() => setScannerOpen(false)}
+        />
+      )}
+      <div
+        style={{
+          position: "fixed",
+          inset: 0,
+          background: "rgba(0,0,0,0.7)",
+          zIndex: 20,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "center",
+          padding: "2rem",
+        }}
+        onClick={onClose}
+      >
       <div
         onClick={(e) => e.stopPropagation()}
         style={{
@@ -2295,18 +2313,39 @@ function GetInLineOverlay({
             onSubmit={submit}
             style={{ display: "flex", flexDirection: "column", gap: "0.85rem" }}
           >
-            <Field label="Your Student ID">
-              <input
-                type="text"
-                inputMode="numeric"
-                autoComplete="off"
-                autoFocus
-                value={studentId}
-                onChange={(e) => setStudentId(e.target.value)}
-                placeholder="e.g. 12345"
-                style={inputStyle}
-                disabled={submitting}
-              />
+            <Field label="Scan or enter your ID">
+              <div style={{ display: "flex", gap: "0.5rem" }}>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  autoComplete="off"
+                  autoFocus
+                  value={studentId}
+                  onChange={(e) => setStudentId(e.target.value)}
+                  placeholder="e.g. 12345"
+                  style={{ ...inputStyle, flex: 1 }}
+                  disabled={submitting}
+                />
+                <button
+                  type="button"
+                  onClick={() => setScannerOpen(true)}
+                  disabled={submitting}
+                  aria-label="Scan badge with camera"
+                  title="Scan badge with camera"
+                  style={{
+                    background: "rgba(255,255,255,0.1)",
+                    border: "1px solid rgba(255,255,255,0.2)",
+                    borderRadius: 8,
+                    color: "#fff",
+                    width: 56,
+                    fontSize: "1.5rem",
+                    cursor: "pointer",
+                    flexShrink: 0,
+                  }}
+                >
+                  📷
+                </button>
+              </div>
             </Field>
             <Field label="Where are you going?">
               <select
@@ -2358,7 +2397,8 @@ function GetInLineOverlay({
           </form>
         )}
       </div>
-    </div>
+      </div>
+    </>
   );
 }
 
