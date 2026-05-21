@@ -6587,3 +6587,156 @@ export async function remapBenchmarkDeliveriesToRealTeachersOnce(): Promise<void
   }
   logger.info({ updated }, "[seed] benchmark_deliveries remapped to real teachers");
 }
+
+// One-shot: give every Parrott (school_id=1) student a clean 7-period schedule
+// (one teacher per period) so the tardy-pass flow (and any other code that
+// joins through section_roster) has a section to land on. Idempotent: skips
+// once every active student already has exactly 7 distinct period enrollments.
+export async function fillStudentSchedulesAtParrottOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+
+  // Per-grade ordered subject layout: index i = period i+1.
+  // Course names match existing class_sections.course_name verbatim.
+  const SUBJECT_LAYOUT: Record<number, string[]> = {
+    6: [
+      "ELA — Grade 6", "Math — Grade 6", "Science — Grade 6",
+      "Social Studies — Grade 6", "PE", "Art", "Music",
+    ],
+    7: [
+      "ELA — Grade 7", "Math — Grade 7", "Science — Grade 7",
+      "Social Studies — Grade 7", "PE", "Art", "Music",
+    ],
+    8: [
+      "ELA — Grade 8", "Math — Grade 8", "Science — Grade 8",
+      "Social Studies — Grade 8", "PE", "Art", "Music",
+    ],
+  };
+
+  // Collect the teacher pool for each course (any teacher who already owns a
+  // section of that course at school 1 is eligible).
+  const teacherRows = await db.execute<{
+    course_name: string;
+    teacher_staff_id: number;
+  }>(sql`
+    SELECT DISTINCT course_name, teacher_staff_id
+      FROM class_sections
+     WHERE school_id = ${SCHOOL_ID} AND is_planning = false
+  `);
+  const teachersByCourse = new Map<string, number[]>();
+  for (const r of teacherRows.rows) {
+    const arr = teachersByCourse.get(r.course_name) ?? [];
+    if (!arr.includes(r.teacher_staff_id)) arr.push(r.teacher_staff_id);
+    teachersByCourse.set(r.course_name, arr);
+  }
+  for (const [, ids] of teachersByCourse) ids.sort((a, b) => a - b);
+
+  // Ensure a section exists for every (period, course, teacher) we need.
+  // The unique index is (teacher_staff_id, period), so a teacher gets ONE
+  // section per period. If they already teach that period some other course
+  // we keep that section and skip — we'll just not assign students to it.
+  const sectionIdByKey = new Map<string, number>(); // `${period}|${teacher}` -> sectionId
+  for (const grade of [6, 7, 8] as const) {
+    const layout = SUBJECT_LAYOUT[grade];
+    for (let i = 0; i < 7; i++) {
+      const period = i + 1;
+      const course = layout[i];
+      const pool = teachersByCourse.get(course) ?? [];
+      for (const teacherId of pool) {
+        const ins = await db.execute<{ id: number }>(sql`
+          INSERT INTO class_sections
+            (school_id, teacher_staff_id, period, course_name, is_planning)
+          VALUES (${SCHOOL_ID}, ${teacherId}, ${period}, ${course}, false)
+          ON CONFLICT (teacher_staff_id, period) DO NOTHING
+          RETURNING id
+        `);
+        let sid: number | null = ins.rows[0]?.id ?? null;
+        if (sid == null) {
+          const found = await db.execute<{ id: number; course_name: string }>(sql`
+            SELECT id, course_name FROM class_sections
+             WHERE school_id = ${SCHOOL_ID}
+               AND teacher_staff_id = ${teacherId}
+               AND period = ${period}
+             LIMIT 1
+          `);
+          if (found.rows[0]?.course_name === course) {
+            sid = found.rows[0].id;
+          }
+        }
+        if (sid != null) sectionIdByKey.set(`${period}|${teacherId}`, sid);
+      }
+    }
+  }
+
+  // Pull students keyed for round-robin.
+  const students = await db.execute<{ student_id: string; grade: string }>(sql`
+    SELECT student_id, grade FROM students
+     WHERE school_id = ${SCHOOL_ID}
+     ORDER BY student_id
+  `);
+  if (students.rows.length === 0) return;
+
+  // Idempotency check: if every student already has exactly 7 periods, bail.
+  const cov = await db.execute<{ ok: number; total: number }>(sql`
+    WITH per AS (
+      SELECT sr.student_id, COUNT(DISTINCT cs.period) AS pc
+        FROM section_roster sr
+        JOIN class_sections cs ON cs.id = sr.section_id
+       WHERE sr.school_id = ${SCHOOL_ID}
+       GROUP BY sr.student_id
+    )
+    SELECT
+      (SELECT COUNT(*) FROM per WHERE pc = 7)::int AS ok,
+      (SELECT COUNT(*) FROM students WHERE school_id = ${SCHOOL_ID})::int AS total
+  `);
+  if (
+    cov.rows[0] &&
+    cov.rows[0].ok === cov.rows[0].total &&
+    cov.rows[0].total > 0
+  ) {
+    return;
+  }
+
+  let perStudentInserts = 0;
+  let perStudentDeletes = 0;
+  const byGradeIdx: Record<number, number> = { 6: 0, 7: 0, 8: 0 };
+  for (const s of students.rows) {
+    const grade = Number(s.grade);
+    if (!SUBJECT_LAYOUT[grade]) continue;
+    const idx = byGradeIdx[grade]++;
+    const layout = SUBJECT_LAYOUT[grade];
+
+    // Wipe and rewrite this student's enrollments for school 1 so they end up
+    // with exactly 7 sections (one per period 1..7).
+    const del = await db.execute(sql`
+      DELETE FROM section_roster
+       WHERE school_id = ${SCHOOL_ID} AND student_id = ${s.student_id}
+    `);
+    perStudentDeletes += (del.rowCount ?? 0);
+
+    const targetSectionIds: number[] = [];
+    for (let i = 0; i < 7; i++) {
+      const period = i + 1;
+      const course = layout[i];
+      const pool = teachersByCourse.get(course) ?? [];
+      if (pool.length === 0) continue;
+      const teacherId = pool[idx % pool.length];
+      const sid = sectionIdByKey.get(`${period}|${teacherId}`);
+      if (sid != null) targetSectionIds.push(sid);
+    }
+    if (targetSectionIds.length === 0) continue;
+    const values = targetSectionIds.map(
+      (sid) => sql`(${SCHOOL_ID}, ${sid}, ${s.student_id})`,
+    );
+    await db.execute(sql`
+      INSERT INTO section_roster (school_id, section_id, student_id)
+      VALUES ${sql.join(values, sql`, `)}
+      ON CONFLICT ON CONSTRAINT section_roster_section_student_unique DO NOTHING
+    `);
+    perStudentInserts += targetSectionIds.length;
+  }
+
+  logger.info(
+    { students: students.rows.length, perStudentInserts, perStudentDeletes },
+    "[seed] Parrott student schedules filled (7 periods each)",
+  );
+}
