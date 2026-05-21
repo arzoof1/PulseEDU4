@@ -41,6 +41,7 @@ import {
   seedBenchmarkDeliveriesOnce,
   remapBenchmarkDeliveriesToRealTeachersOnce,
   fillStudentSchedulesAtParrottOnce,
+  rebalanceFlagsAtParrottOnce,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
 } from "./seed";
@@ -224,6 +225,7 @@ async function runSeed(): Promise<void> {
     await seedBenchmarkDeliveriesOnce();
     await remapBenchmarkDeliveriesToRealTeachersOnce();
     await fillStudentSchedulesAtParrottOnce();
+    await rebalanceFlagsAtParrottOnce();
   } catch (err) {
     logger.error({ err }, "[boot] benchmark catalog ensure failed");
   }

@@ -6740,3 +6740,91 @@ export async function fillStudentSchedulesAtParrottOnce(): Promise<void> {
     "[seed] Parrott student schedules filled (7 periods each)",
   );
 }
+
+// One-shot: rebalance Parrott (school_id=1) IEP/504/ELL flags to a realistic
+// ~25% combined coverage — ~15% IEP, ~5% 504, ~5% ELL. Buckets are mutually
+// exclusive (a student lands in at most one). Assignment is deterministic by
+// sorted student_id so students-per-bucket aligns with the schedule
+// round-robin, spreading flagged kids evenly across sections. Idempotent:
+// skips when current rates are already within ±1pp of target.
+export async function rebalanceFlagsAtParrottOnce(): Promise<void> {
+  const SCHOOL_ID = 1;
+  const TARGET_IEP_PCT = 0.15;
+  const TARGET_504_PCT = 0.05;
+  const TARGET_ELL_PCT = 0.05;
+  const TOL_PP = 0.01;
+
+  const cur = await db.execute<{
+    total: number; iep: number; p504: number; ell: number;
+  }>(sql`
+    SELECT COUNT(*)::int AS total,
+           SUM(CASE WHEN ese THEN 1 ELSE 0 END)::int AS iep,
+           SUM(CASE WHEN is_504 THEN 1 ELSE 0 END)::int AS p504,
+           SUM(CASE WHEN ell THEN 1 ELSE 0 END)::int AS ell
+      FROM students WHERE school_id = ${SCHOOL_ID}
+  `);
+  const stats = cur.rows[0];
+  if (!stats || stats.total === 0) return;
+  const inTol = (
+    Math.abs(stats.iep / stats.total - TARGET_IEP_PCT) <= TOL_PP &&
+    Math.abs(stats.p504 / stats.total - TARGET_504_PCT) <= TOL_PP &&
+    Math.abs(stats.ell / stats.total - TARGET_ELL_PCT) <= TOL_PP
+  );
+  if (inTol) return;
+
+  const ids = await db.execute<{ student_id: string }>(sql`
+    SELECT student_id FROM students WHERE school_id = ${SCHOOL_ID}
+    ORDER BY student_id
+  `);
+  const total = ids.rows.length;
+  const nIep  = Math.round(total * TARGET_IEP_PCT);
+  const n504  = Math.round(total * TARGET_504_PCT);
+  const nEll  = Math.round(total * TARGET_ELL_PCT);
+
+  // Buckets are contiguous slices of the sorted student_id list. Since the
+  // schedule round-robin also keys off sorted student_id, slicing this way
+  // naturally distributes flagged kids across both teachers of every section.
+  const iepIds  = ids.rows.slice(0, nIep).map((r) => r.student_id);
+  const p504Ids = ids.rows.slice(nIep, nIep + n504).map((r) => r.student_id);
+  const ellIds  = ids.rows.slice(nIep + n504, nIep + n504 + nEll).map((r) => r.student_id);
+
+  // Clear all flags first, then set the target buckets.
+  await db.execute(sql`
+    UPDATE students SET ese = false, is_504 = false, ell = false
+     WHERE school_id = ${SCHOOL_ID}
+  `);
+
+  async function setFlag(column: "ese" | "is_504" | "ell", studentIds: string[]) {
+    if (studentIds.length === 0) return;
+    const BATCH = 200;
+    for (let i = 0; i < studentIds.length; i += BATCH) {
+      const slice = studentIds.slice(i, i + BATCH);
+      const list = sql.join(slice.map((s) => sql`${s}`), sql`, `);
+      if (column === "ese") {
+        await db.execute(sql`
+          UPDATE students SET ese = true
+           WHERE school_id = ${SCHOOL_ID} AND student_id IN (${list})
+        `);
+      } else if (column === "is_504") {
+        await db.execute(sql`
+          UPDATE students SET is_504 = true
+           WHERE school_id = ${SCHOOL_ID} AND student_id IN (${list})
+        `);
+      } else {
+        await db.execute(sql`
+          UPDATE students SET ell = true
+           WHERE school_id = ${SCHOOL_ID} AND student_id IN (${list})
+        `);
+      }
+    }
+  }
+
+  await setFlag("ese", iepIds);
+  await setFlag("is_504", p504Ids);
+  await setFlag("ell", ellIds);
+
+  logger.info(
+    { total, iep: nIep, p504: n504, ell: nEll },
+    "[seed] Parrott flags rebalanced to target distribution",
+  );
+}
