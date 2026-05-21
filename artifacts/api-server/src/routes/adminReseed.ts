@@ -125,6 +125,184 @@ router.post("/parrott-finish", async (req, res) => {
   }
 });
 
+// Repair pass: fixes accommodation category mismatch (each flag category gets
+// items from its own category in the library — ELL students get ELL items,
+// 504 students get 504 items, ESE students get IEP items) AND re-owns
+// benchmark_deliveries onto the active teacher roster by subject + grade
+// (the seed.ts remap uses hardcoded display names from the original demo
+// roster, which don't match the randomized Parrott rebuild names).
+router.post("/parrott-repair", async (req, res) => {
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "superuser_required" });
+    return;
+  }
+  const SCHOOL_ID = 1;
+  try {
+    // ---------------- 1. Accommodations: category-aware reassign ----------
+    // Library categories observed: '504', 'ELL', 'IEP', plus default 'Strategy'.
+    // Mapping: ESE → IEP, 504 → 504, ELL → ELL. Strategy items used as
+    // fallback if a category bucket is empty (defensive).
+    const libRes = await db.execute<{ id: number; category: string }>(
+      sql`SELECT id, category FROM school_accommodations WHERE school_id = ${SCHOOL_ID} AND active = true`,
+    );
+    const byCat = new Map<string, number[]>();
+    for (const r of libRes.rows) {
+      const k = (r.category || "Strategy").toUpperCase();
+      const arr = byCat.get(k) ?? [];
+      arr.push(r.id);
+      byCat.set(k, arr);
+    }
+    const pickPool = (cat: "IEP" | "504" | "ELL"): number[] => {
+      const direct = byCat.get(cat);
+      if (direct && direct.length) return direct;
+      return byCat.get("STRATEGY") ?? [];
+    };
+
+    // Wipe + rebuild for school 1.
+    await db.execute(
+      sql`DELETE FROM student_accommodations WHERE school_id = ${SCHOOL_ID}`,
+    );
+
+    const flagged = await db.execute<{
+      student_id: string;
+      ese: boolean;
+      is_504: boolean;
+      ell: boolean;
+    }>(sql`
+      SELECT student_id, ese, is_504, ell FROM students
+      WHERE school_id = ${SCHOOL_ID} AND (ese = true OR is_504 = true OR ell = true)
+      ORDER BY student_id
+    `);
+
+    const newAccoms: Array<typeof studentAccommodationsTable.$inferInsert> = [];
+    const seen = new Set<string>(); // dedupe (student, accommodation) pairs
+    for (const row of flagged.rows) {
+      const sid = row.student_id;
+      let h = 0;
+      for (let i = 0; i < sid.length; i++) h = (h * 31 + sid.charCodeAt(i)) >>> 0;
+      const total = 2 + (h % 3); // 2..4 accommodations total
+
+      // Build the per-student pool: one item from EACH flag the student
+      // carries, then fill the rest from any of their flag pools so the
+      // total lands in 2..4.
+      const pools: Array<{ cat: "IEP" | "504" | "ELL"; pool: number[] }> = [];
+      if (row.ese) pools.push({ cat: "IEP", pool: pickPool("IEP") });
+      if (row.is_504) pools.push({ cat: "504", pool: pickPool("504") });
+      if (row.ell) pools.push({ cat: "ELL", pool: pickPool("ELL") });
+
+      const picks: number[] = [];
+      // Guarantee one item per flag the student carries (round 1).
+      for (let i = 0; i < pools.length && picks.length < total; i++) {
+        const p = pools[i]!;
+        if (!p.pool.length) continue;
+        const id = p.pool[(h + i) % p.pool.length]!;
+        if (!picks.includes(id)) picks.push(id);
+      }
+      // Fill remaining slots, cycling through the student's flag pools.
+      let cursor = 0;
+      let safety = 0;
+      while (picks.length < total && safety++ < 50) {
+        const p = pools[cursor % pools.length]!;
+        cursor++;
+        if (!p.pool.length) continue;
+        const id = p.pool[(h + cursor + 7) % p.pool.length]!;
+        if (!picks.includes(id)) picks.push(id);
+      }
+
+      for (const accId of picks) {
+        const key = `${sid}:${accId}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        newAccoms.push({
+          schoolId: SCHOOL_ID,
+          studentId: sid,
+          accommodationId: accId,
+        });
+      }
+    }
+    for (let i = 0; i < newAccoms.length; i += 500) {
+      await db.insert(studentAccommodationsTable).values(newAccoms.slice(i, i + 500));
+    }
+
+    // ---------------- 2. Benchmark deliveries: re-own by subject + grade --
+    // Build active teacher roster bucketed by subject + grade. Display name
+    // suffix is "- ELA G6" / "- Math G7" from the rebuild.
+    const teachers = await db.execute<{ id: number; display_name: string }>(sql`
+      SELECT id, display_name FROM staff
+      WHERE school_id = ${SCHOOL_ID} AND active = true
+        AND (display_name LIKE '% - ELA G%' OR display_name LIKE '% - Math G%')
+    `);
+    const teachersByKey = new Map<string, number[]>(); // "ela:6" -> [ids]
+    for (const t of teachers.rows) {
+      const m = /- (ELA|Math) G(\d)/.exec(t.display_name);
+      if (!m) continue;
+      const key = `${m[1]!.toLowerCase()}:${m[2]}`;
+      const arr = teachersByKey.get(key) ?? [];
+      arr.push(t.id);
+      teachersByKey.set(key, arr);
+    }
+
+    // Walk all deliveries; reassign each to a teacher of matching
+    // subject+grade. Grade comes from segment 2 of the benchmark code
+    // ("MA.6.AR..." / "ELA.7.R...").
+    const deliveries = await db.execute<{
+      id: number;
+      subject: string;
+      benchmark_code: string;
+    }>(sql`
+      SELECT id, subject, benchmark_code FROM benchmark_deliveries
+      WHERE school_id = ${SCHOOL_ID}
+    `);
+
+    let updated = 0;
+    let unmatched = 0;
+    const cursorByKey = new Map<string, number>();
+    for (const d of deliveries.rows) {
+      const parts = d.benchmark_code.split(".");
+      const grade = parts[1];
+      if (!grade) {
+        unmatched++;
+        continue;
+      }
+      const key = `${d.subject}:${grade}`;
+      const pool = teachersByKey.get(key);
+      if (!pool || !pool.length) {
+        unmatched++;
+        continue;
+      }
+      const cur = cursorByKey.get(key) ?? 0;
+      const tid = pool[cur % pool.length]!;
+      cursorByKey.set(key, cur + 1);
+      await db.execute(
+        sql`UPDATE benchmark_deliveries SET teacher_staff_id = ${tid} WHERE id = ${d.id}`,
+      );
+      updated++;
+    }
+
+    res.json({
+      ok: true,
+      accommodations: { students: flagged.rows.length, rows: newAccoms.length },
+      deliveries: {
+        total: deliveries.rows.length,
+        reassigned: updated,
+        unmatched,
+        teachersInRotation: teachers.rows.length,
+      },
+    });
+  } catch (err) {
+    req.log.error({ err }, "parrott-repair failed");
+    res.status(500).json({
+      error: "repair_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 router.post("/parrott-rebuild", async (req, res) => {
   const staff = await loadStaff(req);
   if (!staff) {
