@@ -109,7 +109,11 @@ export default function TeacherInstructionLogTab({
     try {
       const [catRes, cntRes, hisRes] = await Promise.all([
         authFetch(
-          `/api/teacher-roster/benchmark-catalog?subject=${subject}${teacherQuery}`,
+          // allGrades=1: server returns the full school catalog for the
+          // subject (not just the teacher's roster grades) so the pill
+          // row can offer every grade and the user can log against any
+          // of them. We then narrow client-side via selectedGrades.
+          `/api/teacher-roster/benchmark-catalog?subject=${subject}&allGrades=1${teacherQuery}`,
         ),
         authFetch(
           `/api/teacher-roster/benchmark-deliveries/counts?subject=${subject}${teacherQuery}`,
@@ -139,24 +143,32 @@ export default function TeacherInstructionLogTab({
       setHistory(hisJson.rows ?? []);
       setOwnerCanDelete(hisJson.ownerCanDelete);
 
-      // Capture the teacher's grades for the pill row. Selection is left
-      // untouched — the user opts in by clicking pills. If the grade set
-      // changes (teacher switched), drop any stale picks but do not
-      // auto-select anything.
-      const gs = (catJson.grades ?? []).slice().sort((a, b) => a - b);
+      // Derive pill row from the grades actually present in the
+      // (school-wide) catalog. This way a 6th-grade teacher's roster
+      // doesn't hide G7 / G8 pills — the user can choose to log against
+      // any grade in the school catalog. Selection stays opt-in; if the
+      // available set shrinks (subject change), prune stale picks.
+      const tokens = new Set<string>();
+      for (const r of catJson.benchmarks ?? []) {
+        const parts = r.code.split(".");
+        if (parts.length >= 2 && parts[1]) tokens.add(parts[1].toUpperCase());
+      }
+      const sortable = (t: string) => (t === "K" ? -1 : Number(t));
+      const gs = Array.from(tokens)
+        .map((t) => (t === "K" ? 0 : Number(t)))
+        .filter((n) => Number.isFinite(n))
+        .sort((a, b) => a - b);
       setTeacherGrades((prev) => {
         const same =
           prev.length === gs.length && prev.every((v, i) => v === gs[i]);
         if (!same) {
-          const allowed = new Set(
-            gs.map((g) => (String(g) === "0" ? "K" : String(g).toUpperCase())),
-          );
           setSelectedGrades(
-            (cur) => new Set([...cur].filter((tok) => allowed.has(tok))),
+            (cur) => new Set([...cur].filter((tok) => tokens.has(tok))),
           );
         }
         return same ? prev : gs;
       });
+      void sortable; // kept for future K-grade ordering
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load");
     } finally {

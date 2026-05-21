@@ -208,20 +208,26 @@ router.get(
       )
       .orderBy(asc(schoolBenchmarksTable.category), asc(schoolBenchmarksTable.code));
 
-    // Filter by the teacher's actual grade levels. A 6th-grade teacher
-    // should only see 6th-grade benchmarks. If we can't determine any
-    // grades (teacher has no roster yet, or none of the codes encode a
-    // recognizable grade), fall back to the unfiltered list so the
-    // dropdown isn't empty.
+    // Default behavior: filter to the teacher's actual grade levels so a
+    // 6th-grade teacher doesn't see 7th/8th standards. The client can
+    // opt out by passing `allGrades=1` — used when rendering the
+    // multi-grade picker pills so the user can choose to log against any
+    // grade present in the school's catalog (e.g. for a guest lesson,
+    // substitute coverage, or a proxy-logging Core Team member).
     const grades = await teacherGrades(schoolId, teacherId);
-    const allowed = gradeTokensForTeacherGrades(grades);
+    const allGrades =
+      typeof req.query.allGrades === "string" &&
+      (req.query.allGrades === "1" || req.query.allGrades.toLowerCase() === "true");
     let filtered = rows;
-    if (allowed.size > 0) {
-      const matches = rows.filter((r) => {
-        const tok = gradeTokenFromCode(r.code);
-        return tok != null && allowed.has(tok);
-      });
-      if (matches.length > 0) filtered = matches;
+    if (!allGrades) {
+      const allowed = gradeTokensForTeacherGrades(grades);
+      if (allowed.size > 0) {
+        const matches = rows.filter((r) => {
+          const tok = gradeTokenFromCode(r.code);
+          return tok != null && allowed.has(tok);
+        });
+        if (matches.length > 0) filtered = matches;
+      }
     }
     res.json({ subject, teacherId, grades, benchmarks: filtered });
   },
