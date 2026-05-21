@@ -50,6 +50,18 @@ function todayISO(): string {
   return `${d.getFullYear()}-${m}-${day}`;
 }
 
+// Pull the grade token out of a Florida benchmark code:
+// "ELA.6.R.1.1" → "6", "MA.7.NSO.1.1" → "7", "ELA.K.R.1.1" → "K".
+function gradeTokenOf(code: string): string | null {
+  const parts = code.split(".");
+  return parts.length >= 2 && parts[1] ? parts[1].toUpperCase() : null;
+}
+
+function gradeLabel(g: number | string): string {
+  const s = String(g).toUpperCase();
+  return s === "K" || s === "0" ? "K" : `G${s}`;
+}
+
 export default function TeacherInstructionLogTab({
   teacherId,
   isOwnRoster,
@@ -62,6 +74,13 @@ export default function TeacherInstructionLogTab({
   const [ownerCanDelete, setOwnerCanDelete] = useState<boolean>(isOwnRoster);
   const [loading, setLoading] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Grade picker (multi-select). teacherGrades comes from the catalog
+  // endpoint (derived from the teacher's actual rostered students);
+  // selectedGrades is the user's narrowing on top of that. Defaults to
+  // all of teacherGrades — i.e. no narrowing — once the catalog loads.
+  const [teacherGrades, setTeacherGrades] = useState<number[]>([]);
+  const [selectedGrades, setSelectedGrades] = useState<Set<string>>(new Set());
 
   // Add-form state
   const [selectedCodes, setSelectedCodes] = useState<string[]>([]);
@@ -94,7 +113,10 @@ export default function TeacherInstructionLogTab({
       if (!catRes.ok) throw new Error(`catalog ${catRes.status}`);
       if (!cntRes.ok) throw new Error(`counts ${cntRes.status}`);
       if (!hisRes.ok) throw new Error(`history ${hisRes.status}`);
-      const catJson = (await catRes.json()) as { benchmarks: CatalogRow[] };
+      const catJson = (await catRes.json()) as {
+        benchmarks: CatalogRow[];
+        grades?: number[];
+      };
       const cntJson = (await cntRes.json()) as {
         counts: Record<string, CountEntry>;
       };
@@ -106,6 +128,20 @@ export default function TeacherInstructionLogTab({
       setCounts(cntJson.counts ?? {});
       setHistory(hisJson.rows ?? []);
       setOwnerCanDelete(hisJson.ownerCanDelete);
+
+      // Capture the teacher's grades. Default the picker to "all selected"
+      // the first time we see them, or when the grade set itself changes
+      // (e.g. teacher switched). Preserves the user's narrowing across
+      // subject swaps as long as the underlying grade set is unchanged.
+      const gs = (catJson.grades ?? []).slice().sort((a, b) => a - b);
+      setTeacherGrades((prev) => {
+        const same =
+          prev.length === gs.length && prev.every((v, i) => v === gs[i]);
+        if (!same) {
+          setSelectedGrades(new Set(gs.map((g) => gradeLabel(g))));
+        }
+        return same ? prev : gs;
+      });
     } catch (e) {
       setErr(e instanceof Error ? e.message : "Failed to load");
     } finally {
@@ -117,16 +153,46 @@ export default function TeacherInstructionLogTab({
     void loadAll();
   }, [loadAll]);
 
+  // Narrow the catalog (used by the Add picker AND the Filter-history
+  // dropdown) to whichever grades the user currently has selected.
+  // When the user has every grade checked, this is a no-op.
+  const gradeFilteredCatalog = useMemo(() => {
+    if (selectedGrades.size === 0) return catalog;
+    return catalog.filter((r) => {
+      const tok = gradeTokenOf(r.code);
+      return tok != null && selectedGrades.has(tok);
+    });
+  }, [catalog, selectedGrades]);
+
+  // History rows respect the same grade filter so the user can scope a
+  // pivot down to e.g. only G7 standards without resetting other state.
+  const gradeFilteredHistory = useMemo(() => {
+    if (selectedGrades.size === 0) return history;
+    return history.filter((r) => {
+      const tok = gradeTokenOf(r.benchmarkCode);
+      return tok != null && selectedGrades.has(tok);
+    });
+  }, [history, selectedGrades]);
+
   // Group catalog by category for the picker.
   const grouped = useMemo(() => {
     const m = new Map<string, CatalogRow[]>();
-    for (const r of catalog) {
+    for (const r of gradeFilteredCatalog) {
       const k = r.category ?? "(uncategorized)";
       if (!m.has(k)) m.set(k, []);
       m.get(k)!.push(r);
     }
     return Array.from(m.entries()).sort(([a], [b]) => a.localeCompare(b));
-  }, [catalog]);
+  }, [gradeFilteredCatalog]);
+
+  const toggleGrade = (tok: string) => {
+    setSelectedGrades((prev) => {
+      const next = new Set(prev);
+      if (next.has(tok)) next.delete(tok);
+      else next.add(tok);
+      return next;
+    });
+  };
 
   const toggleCode = (code: string) => {
     setSelectedCodes((prev) =>
@@ -214,6 +280,53 @@ export default function TeacherInstructionLogTab({
             ))}
           </select>
         </label>
+        {teacherGrades.length > 0 && (
+          <div
+            style={{
+              display: "flex",
+              gap: 6,
+              alignItems: "center",
+              fontSize: 13,
+            }}
+          >
+            <span>Grades:</span>
+            {teacherGrades.map((g) => {
+              const tok = gradeLabel(g).replace(/^G/, ""); // store as "6","7","8" / "K"
+              const t = String(g) === "0" ? "K" : String(g).toUpperCase();
+              const checked = selectedGrades.has(t);
+              return (
+                <label
+                  key={g}
+                  style={{
+                    display: "inline-flex",
+                    alignItems: "center",
+                    gap: 4,
+                    padding: "3px 8px",
+                    borderRadius: 999,
+                    border: "1px solid",
+                    borderColor: checked ? "#1e3a8a" : "#cbd5e1",
+                    background: checked ? "#dbeafe" : "white",
+                    color: checked ? "#1e3a8a" : "#475569",
+                    cursor: "pointer",
+                    fontWeight: checked ? 600 : 400,
+                    fontSize: 12,
+                    userSelect: "none",
+                  }}
+                >
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => toggleGrade(t)}
+                    style={{ margin: 0 }}
+                  />
+                  {gradeLabel(g)}
+                  {/* tok kept for codepath clarity; not rendered */}
+                  <span style={{ display: "none" }}>{tok}</span>
+                </label>
+              );
+            })}
+          </div>
+        )}
         <label style={{ fontSize: 13 }}>
           Filter history:&nbsp;
           <select
@@ -221,7 +334,7 @@ export default function TeacherInstructionLogTab({
             onChange={(e) => setFilterBenchmark(e.target.value)}
           >
             <option value="">All benchmarks</option>
-            {catalog.map((c) => (
+            {gradeFilteredCatalog.map((c) => (
               <option key={c.code} value={c.code}>
                 {benchmarkLabel(c.code)}
               </option>
@@ -384,11 +497,16 @@ export default function TeacherInstructionLogTab({
       {/* History */}
       <div>
         <div style={{ fontSize: 13, fontWeight: 600, marginBottom: 6 }}>
-          History ({history.length})
+          History ({gradeFilteredHistory.length})
         </div>
-        {history.length === 0 ? (
+        {gradeFilteredHistory.length === 0 ? (
           <div style={{ fontSize: 12, color: "#6b7280" }}>
-            No entries yet for this subject{filterBenchmark ? " / benchmark" : ""}.
+            No entries yet for this subject{filterBenchmark ? " / benchmark" : ""}
+            {selectedGrades.size > 0 &&
+              selectedGrades.size < teacherGrades.length
+              ? " in the selected grade(s)"
+              : ""}
+            .
           </div>
         ) : (
           <table
@@ -407,7 +525,7 @@ export default function TeacherInstructionLogTab({
               </tr>
             </thead>
             <tbody>
-              {history.map((r) => (
+              {gradeFilteredHistory.map((r) => (
                 <tr key={r.id} style={{ borderTop: "1px solid #e5e7eb" }}>
                   <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>
                     {r.benchmarkCode}
