@@ -833,38 +833,36 @@ router.get(
     // Pull mastery once: every (student, code) item response in the
     // current SY for the codes in scope. Then bucket by teacher using
     // the roster map.
+    // Pull mastery once for every (student, code) in the current SY for
+    // the codes in scope. We deliberately do NOT pass the roster student
+    // list as a SQL parameter — `ANY(${arr})` with drizzle's sql tag
+    // expands into one placeholder per value, which blows past the
+    // node-postgres parameter limit on schools with hundreds of kids.
+    // The (school_id, subject, school_year, benchmark_code) filter
+    // already prunes hard; we filter to roster kids in JS below.
     const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
-    const allRosterStudents = Array.from(
-      new Set(rosterRows.map((r) => r.studentId)),
-    );
-    let masteryRows: Array<{
+    const codeLiteral = `{${codeList
+      .map((c) => `"${c.replace(/"/g, '\\"')}"`)
+      .join(",")}}`;
+    const masteryRows = (
+      await db.execute(sql`
+        SELECT student_id,
+               benchmark_code,
+               SUM(points_earned)::int AS earned,
+               SUM(points_possible)::int AS possible
+          FROM student_fast_item_responses
+         WHERE school_id = ${schoolId}
+           AND subject = ${subject}
+           AND school_year = ${currentSY}
+           AND benchmark_code = ANY(${codeLiteral}::text[])
+         GROUP BY student_id, benchmark_code
+      `)
+    ).rows as Array<{
       student_id: string;
       benchmark_code: string;
       earned: number | null;
       possible: number | null;
-    }> = [];
-    if (allRosterStudents.length > 0) {
-      masteryRows = (
-        await db.execute(sql`
-          SELECT student_id,
-                 benchmark_code,
-                 SUM(points_earned)::int AS earned,
-                 SUM(points_possible)::int AS possible
-            FROM student_fast_item_responses
-           WHERE school_id = ${schoolId}
-             AND subject = ${subject}
-             AND school_year = ${currentSY}
-             AND benchmark_code = ANY(${codeList})
-             AND student_id = ANY(${allRosterStudents})
-           GROUP BY student_id, benchmark_code
-        `)
-      ).rows as Array<{
-        student_id: string;
-        benchmark_code: string;
-        earned: number | null;
-        possible: number | null;
-      }>;
-    }
+    }>;
 
     // Index roster: studentId → which teachers carry that kid. Mastery
     // points feed into every responsible teacher (a kid might be in
