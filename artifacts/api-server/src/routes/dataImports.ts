@@ -3062,9 +3062,10 @@ const FAST_PRIOR_YEAR_CONFIG: KindConfig<ParsedFastPriorYear> = {
 // ~40 repeating Category / Benchmark / Points Earned / Points Possible
 // quadruplets per student.
 //
-// Phase 1 scope: ELA Reading only. Math + Writing variants ship in
-// Phase 6 — the detector returns a clear "subject not yet supported"
-// message for those headers so admins know to wait.
+// Phase 6 scope: ELA Reading + Mathematics (grades 3–8). Writing
+// uses a rubric-scored layout without the per-benchmark quadruplets
+// the rest of this parser depends on; the detector surfaces a
+// friendly "not yet supported" rejection until samples are in hand.
 //
 // Storage model:
 //   - One row in student_fast_scores per (student, subject,
@@ -3108,11 +3109,15 @@ type FloridaParse =
       totalItems: number;
     };
 
-// Florida occasionally prefixes a benchmark with a strand code:
-//   "RP|ELA.6.R.1.1" → "ELA.6.R.1.1"
-// We store the bare code so heatmap aggregations can group cleanly.
+// Florida prefixes benchmarks with one or more strand-code segments
+// separated by "|". The number of segments varies by subject:
+//   ELA  (2 segments): "RP|ELA.6.R.1.1"             → "ELA.6.R.1.1"
+//   Math (3 segments): "GRDP|MA.6.DP.1|MA.6.DP.1.6" → "MA.6.DP.1.6"
+// We always want the LAST segment (the most-specific benchmark) so
+// heatmap and MTSS aggregations roll up cleanly. Using lastIndexOf
+// covers both shapes; an unprefixed code passes through unchanged.
 function stripBenchmarkStrand(raw: string): string {
-  const i = raw.indexOf("|");
+  const i = raw.lastIndexOf("|");
   return (i >= 0 ? raw.slice(i + 1) : raw).trim();
 }
 
