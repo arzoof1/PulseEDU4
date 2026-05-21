@@ -234,3 +234,9 @@ id = "oWMko7gJdGFnIcnr2Loxt"
 uri = "file://attached_assets/PulseEDU_Workflow_Guide_v4.pdf"
 type = "pdf"
 title = "PulseEDU Workflow Guide v4 (with 4 new roles)"
+
+[[outputs]]
+id = "rfjti7kQ27JiJPhkpz2U5"
+uri = "file://exports/prod_seed_benchmark_deliveries.sql.txt"
+type = "text"
+title = "prod_seed_benchmark_deliveries.sql"
