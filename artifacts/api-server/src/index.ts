@@ -48,6 +48,7 @@ import { sendWeeklyHeartbeatEmails } from "./lib/weeklyHeartbeatEmail";
 import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
+import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
 
 // -----------------------------------------------------------------------------
 // Process-level error surface. Without these handlers an unhandled promise
@@ -451,6 +452,48 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule feature licensing override sweep",
+          );
+        }
+
+        // Pickup queue end-of-day auto-clear. Inserts an `auto_cleared`
+        // event for every student who entered the queue today but
+        // didn't get a terminal release. Append-only — preserves the
+        // audit trail and resets the Admin Hub "Still on campus" tile
+        // for the next morning. Default 22:00 school-local; override
+        // via PICKUP_AUTOCLEAR_CRON / PICKUP_AUTOCLEAR_TZ.
+        const pickupClearExpr =
+          process.env.PICKUP_AUTOCLEAR_CRON ?? "0 22 * * *";
+        const pickupClearTz =
+          process.env.PICKUP_AUTOCLEAR_TZ ?? "America/New_York";
+        try {
+          cron.schedule(
+            pickupClearExpr,
+            async () => {
+              try {
+                const r = await runPickupEndOfDayAutoClear(
+                  new Date(),
+                  pickupClearTz,
+                );
+                if (r.studentsCleared > 0) {
+                  logger.info(r, "Pickup end-of-day auto-clear complete");
+                }
+              } catch (cronErr) {
+                logger.error(
+                  { err: cronErr },
+                  "Pickup end-of-day auto-clear failed",
+                );
+              }
+            },
+            { timezone: pickupClearTz },
+          );
+          logger.info(
+            { expr: pickupClearExpr, tz: pickupClearTz },
+            "Pickup end-of-day auto-clear scheduled",
+          );
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule pickup end-of-day auto-clear",
           );
         }
       }

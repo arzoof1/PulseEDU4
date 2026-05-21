@@ -1292,17 +1292,39 @@ router.get("/pickup/reconciliation", requireStaff, async (req, res) => {
     );
   const releasedSet = new Set(released.map((r) => r.studentId));
 
-  const all = await db
-    .select({
-      id: studentsTable.id,
-      studentId: studentsTable.studentId,
-      firstName: studentsTable.firstName,
-      lastName: studentsTable.lastName,
-      grade: studentsTable.grade,
-      dismissalMode: studentsTable.dismissalMode,
-    })
-    .from(studentsTable)
-    .where(eq(studentsTable.schoolId, schoolId));
+  // Only consider students who actually entered the queue today —
+  // anything else (absent, never came through the dismissal flow) is
+  // not "still on campus", that would balloon the tile to the entire
+  // roster.
+  const onQueueToday = await db
+    .selectDistinct({ studentId: pickupQueueEventsTable.studentId })
+    .from(pickupQueueEventsTable)
+    .where(
+      and(
+        eq(pickupQueueEventsTable.schoolId, schoolId),
+        gte(pickupQueueEventsTable.occurredAt, new Date(sinceIso)),
+      ),
+    );
+  const onQueueSet = new Set(onQueueToday.map((r) => r.studentId));
+
+  const all = onQueueSet.size === 0
+    ? []
+    : await db
+        .select({
+          id: studentsTable.id,
+          studentId: studentsTable.studentId,
+          firstName: studentsTable.firstName,
+          lastName: studentsTable.lastName,
+          grade: studentsTable.grade,
+          dismissalMode: studentsTable.dismissalMode,
+        })
+        .from(studentsTable)
+        .where(
+          and(
+            eq(studentsTable.schoolId, schoolId),
+            inArray(studentsTable.id, Array.from(onQueueSet)),
+          ),
+        );
 
   const stillOnCampus = all
     .filter((s) => !releasedSet.has(s.id))
