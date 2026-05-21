@@ -15,6 +15,11 @@ import { verifyAuthToken } from "../lib/authToken.js";
 import { runDspParrottReseed } from "../lib/dspParrottReseed.js";
 import { rebuildDspSections } from "../lib/rebuildDspSections.js";
 import { rebuildParrott } from "../lib/parrottRebuild.js";
+import {
+  seedBenchmarkDeliveriesOnce,
+  remapBenchmarkDeliveriesToRealTeachersOnce,
+} from "../seed.js";
+import { studentAccommodationsTable } from "@workspace/db";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 
 // Hardcoded so this bootstrap can ONLY ever reset chris.clifford's password.
@@ -36,6 +41,89 @@ async function loadStaff(req: Request) {
   const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
   return s && s.active ? s : null;
 }
+
+// Finish-up pass after parrott-rebuild: seeds benchmark_deliveries (and
+// remaps them onto the live teacher roster) and backfills accommodations
+// for any flagged student (ESE/504/ELL) currently missing them. Idempotent.
+router.post("/parrott-finish", async (req, res) => {
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "superuser_required" });
+    return;
+  }
+  const SCHOOL_ID = 1;
+  try {
+    // 1. Benchmark deliveries: idempotent seeder is a no-op if rows exist.
+    await seedBenchmarkDeliveriesOnce();
+    await remapBenchmarkDeliveriesToRealTeachersOnce();
+    const dRes = await db.execute<{ n: number }>(
+      sql`SELECT COUNT(*)::int AS n FROM benchmark_deliveries WHERE school_id = ${SCHOOL_ID}`,
+    );
+    const deliveries = Number(dRes.rows[0]?.n ?? 0);
+
+    // 2. Accommodations backfill for any flagged student missing them
+    // (catches the ELL cohort the original rebuild skipped, plus any
+    // ESE/504 student that somehow ended up with zero). Deterministic
+    // count of 2-4 per student, drawn from the school's active library.
+    const libRes = await db.execute<{ id: number }>(
+      sql`SELECT id FROM school_accommodations WHERE school_id = ${SCHOOL_ID} AND active = true`,
+    );
+    const accommIds = libRes.rows.map((r) => r.id);
+
+    const missingRes = await db.execute<{ student_id: string }>(sql`
+      SELECT s.student_id
+      FROM students s
+      WHERE s.school_id = ${SCHOOL_ID}
+        AND (s.ese = true OR s.is_504 = true OR s.ell = true)
+        AND NOT EXISTS (
+          SELECT 1 FROM student_accommodations sa
+          WHERE sa.school_id = s.school_id AND sa.student_id = s.student_id
+        )
+    `);
+    const missingIds = missingRes.rows.map((r) => r.student_id);
+
+    let addedAccommodations = 0;
+    if (missingIds.length && accommIds.length) {
+      // Deterministic by student_id hash so re-runs (after a wipe) produce
+      // the same shape.
+      const newRows: Array<typeof studentAccommodationsTable.$inferInsert> = [];
+      for (const sid of missingIds) {
+        let h = 0;
+        for (let i = 0; i < sid.length; i++) h = (h * 31 + sid.charCodeAt(i)) >>> 0;
+        const n = 2 + (h % 3); // 2, 3, or 4
+        const start = h % accommIds.length;
+        for (let k = 0; k < n; k++) {
+          newRows.push({
+            schoolId: SCHOOL_ID,
+            studentId: sid,
+            accommodationId: accommIds[(start + k) % accommIds.length]!,
+          });
+        }
+      }
+      for (let i = 0; i < newRows.length; i += 500) {
+        await db.insert(studentAccommodationsTable).values(newRows.slice(i, i + 500));
+      }
+      addedAccommodations = newRows.length;
+    }
+
+    res.json({
+      ok: true,
+      benchmarkDeliveries: deliveries,
+      backfilledStudents: missingIds.length,
+      addedAccommodations,
+    });
+  } catch (err) {
+    req.log.error({ err }, "parrott-finish failed");
+    res.status(500).json({
+      error: "finish_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
 
 router.post("/parrott-rebuild", async (req, res) => {
   const staff = await loadStaff(req);

@@ -770,7 +770,8 @@ export async function rebuildParrott(): Promise<{
     if (accommIds.length === 0) {
       log.push(`WARNING: no accommodations in library for school ${SCHOOL_ID}`);
     } else {
-      const flagged = new Set([...eseIds, ...fiveIds]); // 504 + ESE get accommodations
+      // All three flag categories get accommodations (ESE, 504, ELL).
+      const flagged = new Set([...eseIds, ...fiveIds, ...ellIds]);
       const accomRows: Array<typeof studentAccommodationsTable.$inferInsert> = [];
       for (const sid of flagged) {
         const n = 2 + Math.floor(rng() * 3); // 2-4 accommodations
