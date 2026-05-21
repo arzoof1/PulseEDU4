@@ -1215,7 +1215,7 @@ export async function ensureAdminHubSchema() {
     sql`CREATE INDEX IF NOT EXISTS oss_log_days_by_school_day ON oss_log_days(school_id, day)`,
   );
 
-  // ---- discipline_reasons (school-managed list) ----
+  // ---- discipline_reasons (school + district scopes) ----
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS discipline_reasons (
       id SERIAL PRIMARY KEY,
@@ -1226,8 +1226,57 @@ export async function ensureAdminHubSchema() {
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+  // Add district_id (district-scoped master list) and allow school_id
+  // to be NULL when a row is a district master entry. Existing rows
+  // keep their school_id and remain school-scoped.
   await db.execute(
-    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_school_label_uq ON discipline_reasons(school_id, label)`,
+    sql`ALTER TABLE discipline_reasons ADD COLUMN IF NOT EXISTS district_id INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE discipline_reasons ALTER COLUMN school_id DROP NOT NULL`,
+  );
+  // Replace the old (school_id, label) global unique with two partials
+  // — one per scope.
+  await db.execute(
+    sql`DROP INDEX IF EXISTS discipline_reasons_school_label_uq`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_school_label_uq
+        ON discipline_reasons(school_id, label)
+        WHERE school_id IS NOT NULL`,
+  );
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS discipline_reasons_district_label_uq
+        ON discipline_reasons(district_id, label)
+        WHERE district_id IS NOT NULL`,
+  );
+  // Exactly one of (school_id, district_id) must be set. Guards against
+  // a row that is both (or neither) — shouldn't happen via the API but
+  // we want the database to refuse it either way.
+  await db.execute(sql`
+    DO $$
+    BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint
+        WHERE conname = 'discipline_reasons_scope_xor_chk'
+      ) THEN
+        ALTER TABLE discipline_reasons
+          ADD CONSTRAINT discipline_reasons_scope_xor_chk
+          CHECK ((school_id IS NULL) <> (district_id IS NULL));
+      END IF;
+    END$$;
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS discipline_reasons_by_district
+        ON discipline_reasons(district_id) WHERE district_id IS NOT NULL`,
+  );
+
+  // ---- iss_admin_logs / oss_logs: day_count (admin-entered, for reports) ----
+  await db.execute(
+    sql`ALTER TABLE iss_admin_logs ADD COLUMN IF NOT EXISTS day_count INTEGER`,
+  );
+  await db.execute(
+    sql`ALTER TABLE oss_logs ADD COLUMN IF NOT EXISTS day_count INTEGER`,
   );
 
   // ---- school_closed_days (no-school calendar) ----

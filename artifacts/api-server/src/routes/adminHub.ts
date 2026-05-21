@@ -24,6 +24,7 @@ import {
 import {
   db,
   staffTable,
+  schoolsTable,
   studentsTable,
   issAdminLogsTable,
   issAdminLogAuditTable,
@@ -35,7 +36,7 @@ import {
   disciplineReasonsTable,
   issAcknowledgementsTable,
 } from "@workspace/db";
-import { and, eq, gte, lte, sql, inArray, desc } from "drizzle-orm";
+import { and, eq, gte, lte, or, sql, inArray, desc } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 
 const router: IRouter = Router();
@@ -106,7 +107,8 @@ async function resolveStudent(schoolId: number, studentId: string) {
 }
 
 // Resolve & validate `reason` body field. Either reasonId pointing at an
-// active discipline_reasons row, or a free-text reasonText fallback.
+// active discipline_reasons row (school-scoped OR district-scoped for
+// the school's district), or a free-text reasonText fallback.
 async function resolveReason(
   schoolId: number,
   body: Record<string, unknown>,
@@ -115,13 +117,24 @@ async function resolveReason(
   if (rid !== undefined && rid !== null && rid !== "") {
     const n = typeof rid === "number" ? rid : Number(rid);
     if (!Number.isInteger(n) || n <= 0) return "reasonId must be a positive integer";
+    // Look up the school's district once so we can accept a district-
+    // scoped reason from the master list as well.
+    const [school] = await db
+      .select({ districtId: schoolsTable.districtId })
+      .from(schoolsTable)
+      .where(eq(schoolsTable.id, schoolId));
     const [r] = await db
       .select()
       .from(disciplineReasonsTable)
       .where(
         and(
           eq(disciplineReasonsTable.id, n),
-          eq(disciplineReasonsTable.schoolId, schoolId),
+          school?.districtId
+            ? or(
+                eq(disciplineReasonsTable.schoolId, schoolId),
+                eq(disciplineReasonsTable.districtId, school.districtId),
+              )
+            : eq(disciplineReasonsTable.schoolId, schoolId),
         ),
       );
     if (!r) return "Reason not found";
@@ -129,6 +142,18 @@ async function resolveReason(
   }
   const free = cleanText(body.reasonText, 200);
   return { reasonId: null, reasonText: free };
+}
+
+// Parse and clamp the admin-entered "days for reports" field. Returns
+// `null` when absent/empty (treated as not specified), a positive int
+// up to 60 when present, or an error string for malformed input.
+function parseDayCount(raw: unknown): number | null | string {
+  if (raw === undefined || raw === null || raw === "") return null;
+  const n = typeof raw === "number" ? raw : Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 60) {
+    return "dayCount must be an integer between 1 and 60";
+  }
+  return n;
 }
 
 // Validate the body's `dates` array → unique YYYY-MM-DD list.
@@ -404,6 +429,13 @@ router.post(
     const notes = cleanText(body.notes, 4000);
     const overrideCapacity = Boolean(body.overrideCapacity);
 
+    const dayCountOrErr = parseDayCount(body.dayCount);
+    if (typeof dayCountOrErr === "string") {
+      res.status(400).json({ error: dayCountOrErr });
+      return;
+    }
+    const dayCount = dayCountOrErr;
+
     // Capacity check: hard-block always, soft-warn requires override.
     const [settings] = await db
       .select({
@@ -469,6 +501,7 @@ router.post(
         reasonId: reason.reasonId,
         reasonText: reason.reasonText,
         notes,
+        dayCount,
         createdById: staff.id,
         createdByName: staff.displayName,
       })
@@ -1186,6 +1219,13 @@ router.post(
     const dates = datesOrErr;
     const notes = cleanText(body.notes, 4000);
 
+    const dayCountOrErr = parseDayCount(body.dayCount);
+    if (typeof dayCountOrErr === "string") {
+      res.status(400).json({ error: dayCountOrErr });
+      return;
+    }
+    const dayCount = dayCountOrErr;
+
     const [log] = await db
       .insert(ossLogsTable)
       .values({
@@ -1194,6 +1234,7 @@ router.post(
         reasonId: reason.reasonId,
         reasonText: reason.reasonText,
         notes,
+        dayCount,
         createdById: staff.id,
         createdByName: staff.displayName,
       })

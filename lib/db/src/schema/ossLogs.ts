@@ -26,6 +26,10 @@ export const ossLogsTable = pgTable(
     reasonId: integer("reason_id"),
     reasonText: text("reason_text"),
     notes: text("notes"),
+    // Admin-entered "days for reports" — parallel to iss_admin_logs.day_count.
+    // Independent of oss_log_days rows so reports can count assigned days
+    // without re-deriving them from per-day rows.
+    dayCount: integer("day_count"),
     createdById: integer("created_by_id").notNull(),
     createdByName: text("created_by_name").notNull(),
     cancelledAt: timestamp("cancelled_at", { withTimezone: true }),
