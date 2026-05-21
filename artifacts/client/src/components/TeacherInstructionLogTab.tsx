@@ -85,8 +85,10 @@ export default function TeacherInstructionLogTab({
 
   // Grade picker (multi-select). teacherGrades comes from the catalog
   // endpoint (derived from the teacher's actual rostered students);
-  // selectedGrades is the user's narrowing on top of that. Defaults to
-  // all of teacherGrades — i.e. no narrowing — once the catalog loads.
+  // selectedGrades is the user's narrowing on top of that. Starts EMPTY
+  // intentionally — the user picks grades themselves. An empty set is
+  // treated as "no narrowing" (show every benchmark the teacher has
+  // access to), so the dropdown is never blank by default.
   const [teacherGrades, setTeacherGrades] = useState<number[]>([]);
   const [selectedGrades, setSelectedGrades] = useState<Set<string>>(new Set());
 
@@ -137,16 +139,21 @@ export default function TeacherInstructionLogTab({
       setHistory(hisJson.rows ?? []);
       setOwnerCanDelete(hisJson.ownerCanDelete);
 
-      // Capture the teacher's grades. Default the picker to "all selected"
-      // the first time we see them, or when the grade set itself changes
-      // (e.g. teacher switched). Preserves the user's narrowing across
-      // subject swaps as long as the underlying grade set is unchanged.
+      // Capture the teacher's grades for the pill row. Selection is left
+      // untouched — the user opts in by clicking pills. If the grade set
+      // changes (teacher switched), drop any stale picks but do not
+      // auto-select anything.
       const gs = (catJson.grades ?? []).slice().sort((a, b) => a - b);
       setTeacherGrades((prev) => {
         const same =
           prev.length === gs.length && prev.every((v, i) => v === gs[i]);
         if (!same) {
-          setSelectedGrades(new Set(gs.map((g) => gradeLabel(g))));
+          const allowed = new Set(
+            gs.map((g) => (String(g) === "0" ? "K" : String(g).toUpperCase())),
+          );
+          setSelectedGrades(
+            (cur) => new Set([...cur].filter((tok) => allowed.has(tok))),
+          );
         }
         return same ? prev : gs;
       });
