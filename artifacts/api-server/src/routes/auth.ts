@@ -23,6 +23,18 @@ declare module "express-session" {
 const router: IRouter = Router();
 
 const GENERIC_LOGIN_ERROR = "Invalid email or password";
+const PASSWORD_POLICY_ERROR =
+  "newPassword must be at least 8 characters and include uppercase, lowercase, number, and special character";
+
+function meetsStaffPasswordPolicy(password: string): boolean {
+  return (
+    password.length >= 8 &&
+    /[A-Z]/.test(password) &&
+    /[a-z]/.test(password) &&
+    /\d/.test(password) &&
+    /[^A-Za-z0-9]/.test(password)
+  );
+}
 
 function publicStaff(row: typeof staffTable.$inferSelect) {
   return {
@@ -159,10 +171,10 @@ router.post("/auth/change-password", async (req: Request, res) => {
     typeof currentPassword !== "string" ||
     typeof newPassword !== "string" ||
     !currentPassword ||
-    newPassword.length < 8
+    !meetsStaffPasswordPolicy(newPassword)
   ) {
     res.status(400).json({
-      error: "currentPassword and newPassword (min 8 chars) are required",
+      error: PASSWORD_POLICY_ERROR,
     });
     return;
   }
