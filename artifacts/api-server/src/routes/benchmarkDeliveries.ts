@@ -641,4 +641,313 @@ router.get(
   },
 );
 
+// ----------------------------- per-benchmark teacher drilldown -------------
+//
+// Powers the Instructional Coverage row-click drawer. Given a benchmark
+// (either exact code, e.g. "ELA.7.R.1.1", or a suffix that spans grades,
+// e.g. "R.1.1"), return one row per teacher who has students in a
+// matching grade, with their delivery count, last-taught date, and the
+// mastery their roster achieved on that benchmark in the current SY.
+//
+// Multi-tenancy: every read filters by school_id. Core Team gated.
+router.get(
+  "/insights/instructional-coverage/benchmark",
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    if (!isCoreTeam(staff)) {
+      res.status(403).json({ error: "Core Team required" });
+      return;
+    }
+    const subject = parseSubject(req.query.subject);
+    if (!subject) {
+      res.status(400).json({ error: "subject required" });
+      return;
+    }
+    const codeParam =
+      typeof req.query.code === "string" ? req.query.code.trim() : "";
+    const suffixParam =
+      typeof req.query.suffix === "string" ? req.query.suffix.trim() : "";
+    if (!codeParam && !suffixParam) {
+      res.status(400).json({ error: "code or suffix required" });
+      return;
+    }
+    const gradeParam =
+      typeof req.query.grade === "string" ? req.query.grade.trim() : "";
+
+    // Resolve the set of catalog codes this drilldown spans. Suffix
+    // mode collapses cross-grade duplicates (e.g. R.1.1 across G6/G7/G8).
+    const catalog = await db
+      .select({
+        code: schoolBenchmarksTable.code,
+        category: schoolBenchmarksTable.category,
+        label: schoolBenchmarksTable.label,
+      })
+      .from(schoolBenchmarksTable)
+      .where(
+        and(
+          eq(schoolBenchmarksTable.schoolId, schoolId),
+          eq(schoolBenchmarksTable.subject, subject),
+          eq(schoolBenchmarksTable.active, true),
+        ),
+      );
+
+    const suffixOf = (c: string) => {
+      const parts = c.split(".");
+      return parts.length > 2 ? parts.slice(2).join(".") : c;
+    };
+    const matchingCodes = catalog.filter((r) => {
+      if (codeParam && r.code !== codeParam) return false;
+      if (suffixParam && suffixOf(r.code) !== suffixParam) return false;
+      if (gradeParam && gradeTokenFromCode(r.code) !== gradeParam) return false;
+      return true;
+    });
+    if (matchingCodes.length === 0) {
+      res.json({
+        subject,
+        codes: [],
+        teachers: [],
+        schoolYear: schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ),
+      });
+      return;
+    }
+    const codeList = matchingCodes.map((c) => c.code);
+    const category = matchingCodes[0].category;
+    const label = matchingCodes[0].label;
+
+    // Grade → codes lookup: a teacher who teaches Grade 6 is responsible
+    // for the Grade-6 variants of this benchmark only.
+    const codesByGrade = new Map<string, string[]>();
+    for (const c of matchingCodes) {
+      const g = gradeTokenFromCode(c.code);
+      if (!g) continue;
+      const arr = codesByGrade.get(g) ?? [];
+      arr.push(c.code);
+      codesByGrade.set(g, arr);
+    }
+    const relevantGrades = new Set(codesByGrade.keys());
+
+    // Teacher roster: (teacherStaffId, studentId, gradeToken). Walks
+    // class_sections → section_roster → students. is_planning sections
+    // are excluded so an unscheduled prep section doesn't fake
+    // attribution.
+    const rosterRows = await db
+      .select({
+        teacherStaffId: classSectionsTable.teacherStaffId,
+        studentId: studentsTable.studentId,
+        grade: studentsTable.grade,
+      })
+      .from(classSectionsTable)
+      .innerJoin(
+        sectionRosterTable,
+        and(
+          eq(sectionRosterTable.schoolId, classSectionsTable.schoolId),
+          eq(sectionRosterTable.sectionId, classSectionsTable.id),
+        ),
+      )
+      .innerJoin(
+        studentsTable,
+        and(
+          eq(studentsTable.schoolId, sectionRosterTable.schoolId),
+          eq(studentsTable.studentId, sectionRosterTable.studentId),
+        ),
+      )
+      .where(
+        and(
+          eq(classSectionsTable.schoolId, schoolId),
+          eq(classSectionsTable.isPlanning, false),
+        ),
+      );
+
+    // Per-teacher: which codes apply (based on grades they teach), and
+    // which student IDs feed into their mastery roll-up.
+    type TeacherAgg = {
+      teacherStaffId: number;
+      codes: Set<string>;
+      grades: Set<string>;
+      students: Set<string>;
+    };
+    const teacherMap = new Map<number, TeacherAgg>();
+    for (const r of rosterRows) {
+      const g = r.grade === 0 ? "K" : String(r.grade);
+      if (!relevantGrades.has(g)) continue;
+      const existing = teacherMap.get(r.teacherStaffId) ?? {
+        teacherStaffId: r.teacherStaffId,
+        codes: new Set<string>(),
+        grades: new Set<string>(),
+        students: new Set<string>(),
+      };
+      existing.grades.add(g);
+      for (const code of codesByGrade.get(g) ?? []) existing.codes.add(code);
+      existing.students.add(r.studentId);
+      teacherMap.set(r.teacherStaffId, existing);
+    }
+
+    // Also include teachers who logged a delivery for any of these
+    // codes but somehow aren't on the active roster (data hygiene
+    // case). They get "—" for mastery but their teaching is visible.
+    const deliveryRows = await db
+      .select({
+        teacherStaffId: benchmarkDeliveriesTable.teacherStaffId,
+        benchmarkCode: benchmarkDeliveriesTable.benchmarkCode,
+        deliveredOn: benchmarkDeliveriesTable.deliveredOn,
+      })
+      .from(benchmarkDeliveriesTable)
+      .where(
+        and(
+          eq(benchmarkDeliveriesTable.schoolId, schoolId),
+          eq(benchmarkDeliveriesTable.subject, subject),
+          inArray(benchmarkDeliveriesTable.benchmarkCode, codeList),
+        ),
+      );
+
+    type DeliveryAgg = { count: number; lastTaughtOn: string | null };
+    const deliveryByTeacher = new Map<number, DeliveryAgg>();
+    for (const d of deliveryRows) {
+      const cur = deliveryByTeacher.get(d.teacherStaffId) ?? {
+        count: 0,
+        lastTaughtOn: null,
+      };
+      cur.count += 1;
+      if (!cur.lastTaughtOn || d.deliveredOn > cur.lastTaughtOn) {
+        cur.lastTaughtOn = d.deliveredOn;
+      }
+      deliveryByTeacher.set(d.teacherStaffId, cur);
+      if (!teacherMap.has(d.teacherStaffId)) {
+        teacherMap.set(d.teacherStaffId, {
+          teacherStaffId: d.teacherStaffId,
+          codes: new Set<string>([d.benchmarkCode]),
+          grades: new Set<string>(),
+          students: new Set<string>(),
+        });
+      } else {
+        teacherMap.get(d.teacherStaffId)!.codes.add(d.benchmarkCode);
+      }
+    }
+
+    // Pull mastery once: every (student, code) item response in the
+    // current SY for the codes in scope. Then bucket by teacher using
+    // the roster map.
+    const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+    const allRosterStudents = Array.from(
+      new Set(rosterRows.map((r) => r.studentId)),
+    );
+    let masteryRows: Array<{
+      student_id: string;
+      benchmark_code: string;
+      earned: number | null;
+      possible: number | null;
+    }> = [];
+    if (allRosterStudents.length > 0) {
+      masteryRows = (
+        await db.execute(sql`
+          SELECT student_id,
+                 benchmark_code,
+                 SUM(points_earned)::int AS earned,
+                 SUM(points_possible)::int AS possible
+            FROM student_fast_item_responses
+           WHERE school_id = ${schoolId}
+             AND subject = ${subject}
+             AND school_year = ${currentSY}
+             AND benchmark_code = ANY(${codeList})
+             AND student_id = ANY(${allRosterStudents})
+           GROUP BY student_id, benchmark_code
+        `)
+      ).rows as Array<{
+        student_id: string;
+        benchmark_code: string;
+        earned: number | null;
+        possible: number | null;
+      }>;
+    }
+
+    // Index roster: studentId → which teachers carry that kid. Mastery
+    // points feed into every responsible teacher (a kid might be in
+    // multiple sections; that's fine — same roster math as the rest of
+    // the app).
+    const teachersForStudent = new Map<string, Set<number>>();
+    for (const r of rosterRows) {
+      const set = teachersForStudent.get(r.studentId) ?? new Set<number>();
+      set.add(r.teacherStaffId);
+      teachersForStudent.set(r.studentId, set);
+    }
+
+    const masteryByTeacher = new Map<
+      number,
+      { earned: number; possible: number; studentIds: Set<string> }
+    >();
+    for (const m of masteryRows) {
+      const teachers = teachersForStudent.get(m.student_id);
+      if (!teachers) continue;
+      for (const t of teachers) {
+        // Only count if this teacher is responsible for this code's
+        // grade (prevents a science teacher who happens to also have
+        // these kids on a roster from getting attributed).
+        const agg = teacherMap.get(t);
+        if (!agg || !agg.codes.has(m.benchmark_code)) continue;
+        const cur = masteryByTeacher.get(t) ?? {
+          earned: 0,
+          possible: 0,
+          studentIds: new Set<string>(),
+        };
+        cur.earned += m.earned ?? 0;
+        cur.possible += m.possible ?? 0;
+        cur.studentIds.add(m.student_id);
+        masteryByTeacher.set(t, cur);
+      }
+    }
+
+    // Resolve staff display names in one round-trip.
+    const staffIds = Array.from(teacherMap.keys());
+    const staffRows = staffIds.length
+      ? await db
+          .select({
+            id: staffTable.id,
+            displayName: staffTable.displayName,
+          })
+          .from(staffTable)
+          .where(inArray(staffTable.id, staffIds))
+      : [];
+    const nameById = new Map<number, string>();
+    for (const s of staffRows) {
+      nameById.set(s.id, s.displayName || `Staff #${s.id}`);
+    }
+
+    const teachers = Array.from(teacherMap.values()).map((t) => {
+      const d = deliveryByTeacher.get(t.teacherStaffId);
+      const m = masteryByTeacher.get(t.teacherStaffId);
+      const masteryPct =
+        m && m.possible > 0 ? Math.round((m.earned / m.possible) * 100) : null;
+      const gradeArr = Array.from(t.grades).sort((a, b) =>
+        a === "K" ? -1 : b === "K" ? 1 : Number(a) - Number(b),
+      );
+      return {
+        teacherStaffId: t.teacherStaffId,
+        name: nameById.get(t.teacherStaffId) ?? `Staff #${t.teacherStaffId}`,
+        grades: gradeArr,
+        rosterStudents: t.students.size,
+        codes: Array.from(t.codes).sort(),
+        deliveries: d?.count ?? 0,
+        lastTaughtOn: d?.lastTaughtOn ?? null,
+        masteryPct,
+        studentsAssessed: m?.studentIds.size ?? 0,
+      };
+    });
+
+    res.json({
+      subject,
+      codes: codeList,
+      category,
+      label,
+      schoolYear: currentSY,
+      teachers,
+    });
+  },
+);
+
 export default router;
