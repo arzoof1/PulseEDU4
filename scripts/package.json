@@ -12,6 +12,7 @@
     "seed-pickup-badges": "tsx ./src/seedPickupBadges.ts",
     "reseed-dsp": "tsx ./src/dspParrottReseed.ts",
     "fix-dsp-names": "tsx ./src/dspParrottFixNames.ts",
+    "seed-teacher-locations": "tsx ./src/seedTeacherLocations.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
