@@ -40,35 +40,51 @@ export default function TeacherAllowlistAdmin({
     [staffUsers, filter],
   );
 
-  const save = async (staffName: string, destinations: string[]) => {
-    setSavingFor(staffName);
+  // Apply the new selection optimistically so the checkbox flips
+  // immediately, then PUT in the background. On failure, roll the
+  // row back to its prior state. This is what makes single-cell
+  // clicks feel responsive — the previous version awaited the
+  // round trip before re-rendering, which felt laggy on slow
+  // links or large grids.
+  const save = (staffName: string, destinations: string[]) => {
+    const sorted = [...destinations].sort();
+    const prior = allowlistMap[staffName];
+    const next = { ...allowlistMap };
+    if (sorted.length === 0) delete next[staffName];
+    else next[staffName] = sorted;
+    onChange(next);
     setErrorFor(null);
-    try {
-      const res = await authFetch(
-        `/api/teacher-allowlist/${encodeURIComponent(staffName)}`,
-        {
-          method: "PUT",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ destinations }),
-        },
-      );
-      if (!res.ok) {
-        const text = await res.text();
-        throw new Error(text || "Save failed.");
+    setSavingFor(staffName);
+
+    void (async () => {
+      try {
+        const res = await authFetch(
+          `/api/teacher-allowlist/${encodeURIComponent(staffName)}`,
+          {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ destinations: sorted }),
+          },
+        );
+        if (!res.ok) {
+          const text = await res.text();
+          throw new Error(text || "Save failed.");
+        }
+      } catch (e: unknown) {
+        // Roll back to the prior selection so the grid matches
+        // what the server actually has.
+        const rollback = { ...allowlistMap };
+        if (prior === undefined) delete rollback[staffName];
+        else rollback[staffName] = prior;
+        onChange(rollback);
+        setErrorFor({
+          name: staffName,
+          msg: e instanceof Error ? e.message : "Save failed.",
+        });
+      } finally {
+        setSavingFor((cur) => (cur === staffName ? null : cur));
       }
-      const next = { ...allowlistMap, [staffName]: [...destinations].sort() };
-      if (destinations.length === 0) {
-        delete next[staffName];
-      }
-      onChange(next);
-    } catch (e: unknown) {
-      setErrorFor({
-        name: staffName,
-        msg: e instanceof Error ? e.message : "Save failed.",
-      });
-    } finally {
-      setSavingFor(null);
-    }
+    })();
   };
 
   const toggle = (staffName: string, destination: string) => {
