@@ -81,7 +81,9 @@ const FALLBACK_END_MIN = 15 * 60 + 30;   // 3:30pm
 // -----------------------------------------------------------------------------
 let nextFireAtMs = 0;
 const recentStudents = new Map<string, number>();
-let houseRotationIdx = 0;
+// Last house id we awarded to, so we can softly avoid back-to-back repeats
+// when picking a random house. Null = no prior pick (e.g. fresh boot).
+let lastHouseId: number | null = null;
 let cachedWindow: { date: string; startMin: number; endMin: number } | null = null;
 
 // -----------------------------------------------------------------------------
@@ -204,7 +206,10 @@ export async function runDemoHeartbeatTick(
     }
   }
 
-  // Pick a house round-robin.
+  // Pick a random house. To avoid Falcon (the lowest-id house) hogging the
+  // feed because of any startup bias, we just draw uniformly across all
+  // houses for the school, with a soft guard that prevents two awards in
+  // a row landing on the same house when more than one house exists.
   const houseRows = await db.execute<{ id: number }>(sql`
     SELECT id FROM houses WHERE school_id = ${DEMO_SCHOOL_ID} ORDER BY id ASC
   `);
@@ -214,8 +219,11 @@ export async function runDemoHeartbeatTick(
     if (!force) nextFireAtMs = now + jitteredDelay();
     return { fired: false, reason: "no-houses" };
   }
-  const houseId = houseIds[houseRotationIdx % houseIds.length];
-  houseRotationIdx = (houseRotationIdx + 1) % houseIds.length;
+  const candidates =
+    houseIds.length > 1 && lastHouseId !== null
+      ? houseIds.filter((id) => id !== lastHouseId)
+      : houseIds;
+  const houseId = candidates[Math.floor(Math.random() * candidates.length)];
 
   // Eligible students.
   pruneRecent(now);
@@ -281,6 +289,7 @@ export async function runDemoHeartbeatTick(
   });
 
   recentStudents.set(pick.studentId, now);
+  lastHouseId = houseId;
   if (!force) nextFireAtMs = now + jitteredDelay();
   return { fired: true };
 }
@@ -307,7 +316,7 @@ export async function runDemoHeartbeatReset(): Promise<{ deleted: number }> {
 
   nextFireAtMs = 0;
   recentStudents.clear();
-  houseRotationIdx = 0;
+  lastHouseId = null;
   cachedWindow = null;
 
   logger.info({ deleted }, "demo heartbeat midnight reset complete");
