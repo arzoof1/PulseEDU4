@@ -185,10 +185,11 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
       : `/api/pulse/events?schoolId=${schoolId}&windowMinutes=120&limit=24`
     : null;
 
-  const houses = usePolling<HousesPayload>(housesUrl, 30_000);
-  // Polled separately from /houses so the action feed and sequencer
-  // queue refresh independently of the leaderboard math.
-  const events = usePolling<EventsPayload>(eventsUrl, 30_000);
+  const houses = usePolling<HousesPayload>(housesUrl, 15_000);
+  // Polled aggressively (5s) so a fresh PBIS award — Spotlight or
+  // anywhere else — reaches the signage and jumps to the front of
+  // the queue within seconds, not half a minute.
+  const events = usePolling<EventsPayload>(eventsUrl, 5_000);
 
   // ---------------------------------------------------------------------------
   // SEQUENCER — one award at a time, choreographed.
