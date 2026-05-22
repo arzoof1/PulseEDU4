@@ -53,6 +53,11 @@ import { startReminderScheduler } from "./lib/scheduler";
 import { runAstYearEndLapse } from "./cron/astLapse";
 import { runFeatureLicensingOverrideSweep } from "./cron/featureLicensingOverrideSweep";
 import { runPickupEndOfDayAutoClear } from "./cron/pickupEndOfDayAutoClear";
+import {
+  runDemoHeartbeatTick,
+  runDemoHeartbeatReset,
+  isDemoHeartbeatEnabled,
+} from "./cron/demoHeartbeat";
 
 // -----------------------------------------------------------------------------
 // Process-level error surface. Without these handlers an unhandled promise
@@ -504,6 +509,52 @@ function startListening(): void {
           logger.error(
             { err: schedErr },
             "Failed to schedule pickup end-of-day auto-clear",
+          );
+        }
+      }
+
+      // Demo Heartbeat — ambient fake PBIS awards for the houses signage.
+      // Gated by DEMO_MODE=true. Hard-pinned to Parrott (school_id=1).
+      // Tick every minute; the tick itself enforces jittered 90-180s
+      // cadence + bell-schedule window + anti-repeat. Midnight purge
+      // wipes only rows tagged `__demo_heartbeat__` — real awards are
+      // never touched. See cron/demoHeartbeat.ts for the full design.
+      if (isDemoHeartbeatEnabled() && process.env.NODE_ENV !== "test") {
+        try {
+          cron.schedule(
+            "* * * * *",
+            async () => {
+              try {
+                const r = await runDemoHeartbeatTick();
+                if (r.fired) {
+                  logger.info(r, "Demo heartbeat tick fired");
+                }
+              } catch (cronErr) {
+                logger.error({ err: cronErr }, "Demo heartbeat tick failed");
+              }
+            },
+            { timezone: "America/New_York" },
+          );
+          cron.schedule(
+            "0 0 * * *",
+            async () => {
+              try {
+                const r = await runDemoHeartbeatReset();
+                logger.info(r, "Demo heartbeat midnight reset fired");
+              } catch (cronErr) {
+                logger.error(
+                  { err: cronErr },
+                  "Demo heartbeat midnight reset failed",
+                );
+              }
+            },
+            { timezone: "America/New_York" },
+          );
+          logger.info("Demo heartbeat scheduled (Parrott only)");
+        } catch (schedErr) {
+          logger.error(
+            { err: schedErr },
+            "Failed to schedule demo heartbeat",
           );
         }
       }

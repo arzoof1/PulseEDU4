@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Activity, Trophy, Filter, Users, Sparkles, Star } from "lucide-react";
 import { usePolling, schoolIdFromUrl } from "./usePolling";
 
@@ -190,6 +190,30 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
     : null;
 
   const houses = usePolling<HousesPayload>(housesUrl, 30_000);
+  // Track prior totalPoints per house so we can fire an in-bar pulse
+  // animation whenever a house's total grows. Stored as a counter that
+  // increments on every detected gain — we feed that counter into a React
+  // `key` on the pulse element, which remounts the node and replays the
+  // CSS animation. Without the counter, identical class names wouldn't
+  // re-run the animation on a second consecutive gain.
+  const prevTotalsRef = useRef<Map<number, number>>(new Map());
+  const [pulseTicks, setPulseTicks] = useState<Record<number, number>>({});
+  useEffect(() => {
+    const list = houses.data?.houses ?? [];
+    if (list.length === 0) return;
+    const next: Record<number, number> = { ...pulseTicks };
+    let changed = false;
+    for (const h of list) {
+      const prev = prevTotalsRef.current.get(h.id);
+      if (prev !== undefined && h.totalPoints > prev) {
+        next[h.id] = (next[h.id] ?? 0) + 1;
+        changed = true;
+      }
+      prevTotalsRef.current.set(h.id, h.totalPoints);
+    }
+    if (changed) setPulseTicks(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [houses.data]);
   // Polled separately from /houses so the action feed and featured-popup
   // queue refresh independently of the leaderboard math.
   const events = usePolling<EventsPayload>(eventsUrl, 30_000);
@@ -236,6 +260,24 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
 
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white overflow-hidden relative">
+      {/* In-bar "heartbeat" pulse: a soft glow blip that rises from the
+          bottom of a house's vertical bar to the top whenever that
+          house gains points. Replayed by remounting the node on a
+          counter-bound key. Kept under 1s so back-to-back awards stack
+          visually without queuing. */}
+      <style>{`
+        @keyframes housePulseUp {
+          0%   { transform: translateY(0%);    opacity: 0; }
+          15%  { opacity: 1; }
+          85%  { opacity: 1; }
+          100% { transform: translateY(-100%); opacity: 0; }
+        }
+        @keyframes houseBarFlash {
+          0%   { box-shadow: 0 0 50px -10px var(--bar-glow); }
+          50%  { box-shadow: 0 0 90px 8px  var(--bar-glow); }
+          100% { box-shadow: 0 0 50px -10px var(--bar-glow); }
+        }
+      `}</style>
       <div
         className="absolute inset-0 opacity-[0.04] pointer-events-none"
         style={{ backgroundImage: "radial-gradient(circle at 1px 1px, white 1px, transparent 0)", backgroundSize: "24px 24px" }}
@@ -359,6 +401,7 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
               const posPct = meterTotal > 0 ? (h.positiveCount / meterTotal) * 100 : 50;
               const negPct = 100 - posPct;
               const isLeader = leader?.id === h.id;
+              const pulseTick = pulseTicks[h.id] ?? 0;
               return (
                 <div key={h.id} className="relative h-full flex flex-col">
                   {/* Frame */}
@@ -369,7 +412,16 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                         height: `${pct}%`,
                         background: gradientFromColor(h.color),
                         boxShadow: `0 0 50px -10px ${h.color}b3`,
+                        // CSS var consumed by the houseBarFlash keyframe so the
+                        // glow tint matches the house color without inlining
+                        // the hex into the animation.
+                        ["--bar-glow" as string]: `${h.color}cc`,
+                        // Re-trigger the bar flash on each pulse tick by
+                        // remounting via key on the wrapper below; the
+                        // animation itself runs unconditionally on mount.
+                        animation: pulseTick > 0 ? "houseBarFlash 900ms ease-out" : undefined,
                       }}
+                      key={`bar-${h.id}-${pulseTick}`}
                     >
                       <div className="absolute inset-x-0 top-2 text-center text-sm font-black text-white drop-shadow tabular-nums">
                         {h.totalPoints.toLocaleString()}
@@ -382,6 +434,22 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                           {h.weekPoints > 0 ? "+" : ""}
                           {h.weekPoints} pts this week
                         </div>
+                      )}
+                      {/* Rising-pulse blip — sits inside the filled portion of
+                          the bar and rides from the bottom up to the top edge
+                          of the fill. Keyed on pulseTick so React remounts and
+                          the CSS animation replays on every detected gain. */}
+                      {pulseTick > 0 && (
+                        <div
+                          key={`pulse-${h.id}-${pulseTick}`}
+                          className="pointer-events-none absolute inset-x-0 bottom-0 h-6"
+                          style={{
+                            background: `linear-gradient(to top, transparent 0%, ${h.color}00 0%, #ffffffcc 50%, transparent 100%)`,
+                            filter: `drop-shadow(0 0 12px ${h.color})`,
+                            animation: "housePulseUp 900ms ease-out forwards",
+                            mixBlendMode: "screen",
+                          }}
+                        />
                       )}
                     </div>
                     {/* Featured popup rotates 5s per item — only on the leading bar */}
