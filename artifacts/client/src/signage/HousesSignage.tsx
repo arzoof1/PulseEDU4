@@ -229,12 +229,6 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
   // "Now celebrating" card appears in Phoenix's bar, not always the
   // leader's. Falls back to the leader before any award has been seen.
   const [lastPulsedHouseId, setLastPulsedHouseId] = useState<number | null>(null);
-  // Shared "ambient" tick. Increments once for every award detection,
-  // regardless of which house received the points. Every bar keys a
-  // small, soft pulse element off this counter so the whole row breathes
-  // in sync with the awarded bar — keeps the dashboard feeling alive
-  // without stealing focus from the actual award.
-  const [ambientTick, setAmbientTick] = useState(0);
   useEffect(() => {
     const list = houses.data?.houses ?? [];
     if (list.length === 0) return;
@@ -252,7 +246,6 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
     }
     if (changed) {
       setPulseTicks(next);
-      setAmbientTick((t) => t + 1);
       if (mostRecentGainHouseId !== null) setLastPulsedHouseId(mostRecentGainHouseId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -333,16 +326,6 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
           0%   { box-shadow: 0 0  50px -10px var(--bar-glow); }
           45%  { box-shadow: 0 0 130px  20px var(--bar-glow); }
           100% { box-shadow: 0 0  50px -10px var(--bar-glow); }
-        }
-        /* Soft ambient pulse — runs on EVERY bar in sync each time any
-           house gains points. Smaller, dimmer, faster than the strong
-           rise so it reads as background "breathing" rather than a
-           competing award. */
-        @keyframes houseAmbientRise {
-          0%   { transform: translateY(0%)   scale(0.10); opacity: 0; }
-          18%  { transform: translateY(-15%) scale(0.25); opacity: 0.55; }
-          70%  { transform: translateY(-70%) scale(0.45); opacity: 0.45; }
-          100% { transform: translateY(-100%) scale(0.60); opacity: 0; }
         }
       `}</style>
       <div
@@ -501,28 +484,6 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                           {h.weekPoints > 0 ? "+" : ""}
                           {h.weekPoints} pts this week
                         </div>
-                      )}
-                      {/* AMBIENT SOFT PULSE — fires on every bar in sync
-                          every time ANY house gains points. Keyed on the
-                          shared ambientTick so all 4 bars remount and
-                          animate together. Subtle on purpose so the
-                          strong pulse on the awarded bar still owns the
-                          eye. */}
-                      {ambientTick > 0 && (
-                        <div
-                          key={`ambient-${h.id}-${ambientTick}`}
-                          className="pointer-events-none absolute left-1/2 bottom-0 z-0"
-                          style={{
-                            width: "100%",
-                            height: "100%",
-                            marginLeft: "-50%",
-                            transformOrigin: "center bottom",
-                            background: `radial-gradient(ellipse 25% 40% at 50% 100%, #ffffffaa 0%, ${h.color}99 40%, transparent 75%)`,
-                            filter: `drop-shadow(0 0 12px ${h.color}aa)`,
-                            animation: "houseAmbientRise 900ms ease-out forwards",
-                            mixBlendMode: "screen",
-                          }}
-                        />
                       )}
                       {/* RISING SPARK — thin at bottom, blooms wide as it
                           climbs the bar. Transform-origin "center bottom"
