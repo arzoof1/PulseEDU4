@@ -266,6 +266,18 @@ function BehaviorRiskChip({
 }) {
   const s = SEVERITY_STYLES[sev];
   const [open, setOpen] = useState(false);
+  // Anchor for popover positioning. Popover is rendered as
+  // `position: fixed` (computed from the anchor's bounding rect) so
+  // it can escape ancestor `overflow: hidden/auto` containers — the
+  // surrounding `.card` clips on the X axis, which was hiding the
+  // popover behind the next card.
+  const anchorRef = useRef<HTMLSpanElement | null>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+  useEffect(() => {
+    if (!open || !anchorRef.current) return;
+    const r = anchorRef.current.getBoundingClientRect();
+    setPos({ top: r.bottom + 4, left: r.left });
+  }, [open]);
   // Server flag counts negative PBIS; surface those first, then any
   // support notes from the same window as supplementary context.
   const negatives = recentPbis
@@ -275,6 +287,7 @@ function BehaviorRiskChip({
   const hasDetail = negatives.length > 0 || notes.length > 0;
   return (
     <span
+      ref={anchorRef}
       style={{ position: "relative", display: "inline-block" }}
       onMouseEnter={() => setOpen(true)}
       onMouseLeave={() => setOpen(false)}
@@ -310,14 +323,14 @@ function BehaviorRiskChip({
           </span>
         )}
       </span>
-      {open && hasDetail && (
+      {open && hasDetail && pos && (
         <div
           role="dialog"
           style={{
-            position: "absolute",
-            zIndex: 50,
-            top: "calc(100% + 4px)",
-            left: 0,
+            position: "fixed",
+            zIndex: 1000,
+            top: pos.top,
+            left: pos.left,
             minWidth: 280,
             maxWidth: 360,
             background: "white",
