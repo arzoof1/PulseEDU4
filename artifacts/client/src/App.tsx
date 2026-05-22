@@ -20523,6 +20523,28 @@ function App() {
               authUser?.isSchoolPsychologist,
           )}
           onOpenSafetyPlan={(sid) => setSafetyPlanStudentId(sid)}
+          backLabel={(() => {
+            // Map the return-to section to a human label so the back
+            // button on Student Profile reflects where the user
+            // actually came from (Teacher Roster, a specific
+            // dashboard, etc.) rather than the legacy default
+            // "Back to Investigations".
+            const labels: Record<string, string> = {
+              teacherRoster: "Back to Teacher Roster",
+              myWatchList: "Back to My Watchlist",
+              insightsWatchlist: "Back to Investigations",
+              houseRankings: "Back to House Rankings",
+              engagementDashboard: "Back to Engagement",
+              behaviorDashboard: "Back to Behavior",
+              academicsDashboard: "Back to Academics",
+              academicsTrajectory: "Back to Academics Trajectory",
+              attendanceDashboard: "Back to Attendance",
+              sebSelDashboard: "Back to SEB/SEL",
+              equityDashboard: "Back to Equity",
+              earlyWarningDashboard: "Back to Early Warning",
+            };
+            return labels[studentProfileReturnTo] ?? "Back";
+          })()}
           onBack={() => {
             const target = studentProfileReturnTo;
             setSelectedInsightsStudentId(null);

@@ -497,6 +497,11 @@ function WholeChildRadar({ axes }: { axes: ProfilePayload["radar"]["axes"] }) {
 interface Props {
   studentId: string;
   onBack: () => void;
+  // Caller-supplied label for the back button so the affordance
+  // reflects where the user actually came from (e.g. "Back to Teacher
+  // Roster", "Back to Watchlist"). Defaults to the legacy
+  // "Back to Investigations" copy for older call sites.
+  backLabel?: string;
   // True when the signed-in user is on the core team (Admin / SuperUser /
   // Behavior Specialist / MTSS Coordinator / PBIS Coordinator). Drives the
   // visibility of the inline "Edit demographics" panel that calls
@@ -1799,6 +1804,7 @@ function DismissalModeChip({
 export default function StudentProfile({
   studentId,
   onBack,
+  backLabel = "Back to Investigations",
   canManage = false,
   canEditSafetyPlan = false,
   isAdmin = false,
@@ -1952,7 +1958,7 @@ export default function StudentProfile({
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
         <button type="button" onClick={onBack} style={{ marginBottom: "0.5rem" }}>
-          ← Back to Investigations
+          ← {backLabel}
         </button>
         <p style={{ color: "var(--text-subtle)" }}>Loading profile…</p>
       </div>
@@ -1962,7 +1968,7 @@ export default function StudentProfile({
     return (
       <div className="card" style={{ marginBottom: "1rem" }}>
         <button type="button" onClick={onBack} style={{ marginBottom: "0.5rem" }}>
-          ← Back to Investigations
+          ← {backLabel}
         </button>
         <p style={{ color: "#991b1b" }}>{error ?? "Failed to load."}</p>
       </div>
@@ -1995,7 +2001,7 @@ export default function StudentProfile({
               cursor: "pointer",
             }}
           >
-            ← Back to Investigations
+            ← {backLabel}
           </button>
           <div style={{ display: "flex", alignItems: "center", gap: "0.4rem", flexWrap: "wrap" }}>
             <span style={{ color: "#6b7280", fontSize: "0.85rem" }}>Window:</span>
