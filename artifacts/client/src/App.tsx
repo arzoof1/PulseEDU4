@@ -22,6 +22,7 @@ import CaseOutcomesPage from "./components/CaseOutcomesPage";
 import WatchlistNetwork from "./components/WatchlistNetwork";
 import WatchlistStudentGraph from "./components/WatchlistStudentGraph";
 import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
+import ClassPhotoDayPage from "./components/ClassPhotoDayPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
@@ -19797,6 +19798,20 @@ function App() {
         <PickupSettingsPage />
       )}
 
+      {activeSection === "settings" && canManageSettings && settingsTile === "class-photo-day" && (
+        <ClassPhotoDayPage
+          defaultTeacherId={authUser?.id ?? null}
+          isCoreTeam={
+            Boolean(authUser?.isSuperUser) ||
+            isAdmin ||
+            Boolean(authUser?.isEseCoordinator) ||
+            isBehaviorSpec ||
+            isMtss
+          }
+          onBack={() => setSettingsTile(null)}
+        />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "cameras" && (
         <CameraRegistryPage />
       )}
@@ -19935,6 +19950,17 @@ function App() {
               const superOn = ssRec[`superFeature${k}`] !== false;
               return n + (adminOn && superOn ? 1 : 0);
             }, 0);
+            // Class Photo Day — line the class up and snap student photos
+            // one by one. Reuses the per-student upload pipe but adds a
+            // queue/auto-advance UX optimized for batch capture.
+            tiles.push({
+              id: "class-photo-day",
+              icon: "📸",
+              title: "Class Photo Day",
+              subtitle:
+                "Line a class up — take each student's photo in sequence, one tap each.",
+              group: "people-access",
+            });
             tiles.push({
               id: "staff-directory",
               icon: "📞",

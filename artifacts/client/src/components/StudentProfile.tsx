@@ -891,11 +891,12 @@ function StudentPhotoManager({
   // confirm does it actually upload.
   const [previewBlob, setPreviewBlob] = useState<Blob | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  // Photo-edit actions are hidden behind a pencil toggle so the row
-  // next to the avatar reads as a clean "name + photo" identity strip
-  // until someone actually wants to change it. Opens the camera panel
-  // also force-opens the action row so Cancel/Capture stay reachable.
-  const [actionsOpen, setActionsOpen] = useState(false);
+  // Photo-edit actions used to be hidden behind a pencil toggle, but
+  // that buried the primary affordance (everyone with access to this
+  // panel is *here* to manage the photo). Default-open the actions so
+  // Upload / Take photo / Remove are visible immediately. The pencil
+  // still toggles for users who want a cleaner identity strip.
+  const [actionsOpen, setActionsOpen] = useState(true);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
