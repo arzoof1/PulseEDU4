@@ -19,6 +19,13 @@ interface Student {
   // path below already null-checks so existing callers that always set
   // a number remain safe.
   pm3?: number | null;
+  // Optional per-student pills shown next to the name. Program (ESE|504)
+  // and MTSS (Tier 2+|Tier 3) are mutually exclusive within their group;
+  // BQ ELA / BQ Math are independent ("lowest 25% prior-year FAST").
+  programPill?: "ESE" | "504" | null;
+  mtssPill?: "Tier 2+" | "Tier 3" | null;
+  bqEla?: boolean;
+  bqMath?: boolean;
 }
 
 interface Props {
@@ -174,6 +181,39 @@ export default function BandStudentsDrawer({
                         >
                           {s.studentName}
                         </button>
+                        {(s.programPill ||
+                          s.mtssPill ||
+                          s.bqEla ||
+                          s.bqMath) && (
+                          <span style={pillRowStyle}>
+                            {s.programPill && (
+                              <span style={pillStyle(PILL_TONES.program)}>
+                                {s.programPill}
+                              </span>
+                            )}
+                            {s.mtssPill && (
+                              <span
+                                style={pillStyle(
+                                  s.mtssPill === "Tier 3"
+                                    ? PILL_TONES.tier3
+                                    : PILL_TONES.tier2,
+                                )}
+                              >
+                                {s.mtssPill}
+                              </span>
+                            )}
+                            {s.bqEla && (
+                              <span style={pillStyle(PILL_TONES.bq)}>
+                                BQ ELA
+                              </span>
+                            )}
+                            {s.bqMath && (
+                              <span style={pillStyle(PILL_TONES.bq)}>
+                                BQ Math
+                              </span>
+                            )}
+                          </span>
+                        )}
                       </td>
                       <td style={tdStyleNum}>
                         {s.grade != null
@@ -286,3 +326,38 @@ const linkBtnStyle: React.CSSProperties = {
   font: "inherit",
   textAlign: "left",
 };
+
+const pillRowStyle: React.CSSProperties = {
+  display: "inline-flex",
+  flexWrap: "wrap",
+  gap: 4,
+  marginLeft: 6,
+  verticalAlign: "middle",
+};
+
+const PILL_TONES = {
+  // Program (ESE / 504) — slate so it reads as a status, not a risk.
+  program: { bg: "#f1f5f9", fg: "#334155", border: "#cbd5e1" },
+  // Tier 2+ — amber (watch). Tier 3 — red (urgent).
+  tier2: { bg: "#fef3c7", fg: "#92400e", border: "#fde68a" },
+  tier3: { bg: "#fee2e2", fg: "#b91c1c", border: "#fecaca" },
+  // BQ = "lowest 25% prior-year FAST" — violet to match insights accent.
+  bq: { bg: "#ede9fe", fg: "#5b21b6", border: "#ddd6fe" },
+} as const;
+
+function pillStyle(tone: { bg: string; fg: string; border: string }): React.CSSProperties {
+  return {
+    display: "inline-block",
+    padding: "1px 6px",
+    borderRadius: 999,
+    fontSize: 10,
+    fontWeight: 700,
+    lineHeight: 1.4,
+    textTransform: "uppercase",
+    letterSpacing: "0.03em",
+    background: tone.bg,
+    color: tone.fg,
+    border: `1px solid ${tone.border}`,
+    whiteSpace: "nowrap",
+  };
+}

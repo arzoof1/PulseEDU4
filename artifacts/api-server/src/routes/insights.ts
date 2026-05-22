@@ -3249,6 +3249,10 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     pm1: number | null;
     pm3: number | null;
     subject?: "ela" | "math";
+    programPill?: "ESE" | "504" | null;
+    mtssPill?: "Tier 2+" | "Tier 3" | null;
+    bqEla?: boolean;
+    bqMath?: boolean;
   };
   const hits: Hit[] = [];
   for (const { subject: subj, rec: r } of tagged) {
@@ -3270,12 +3274,66 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
 
   const CAP = 200;
   const truncated = hits.length > CAP;
+  const visible = truncated ? hits.slice(0, CAP) : hits;
+
+  // Decorate with the four pill flags (only for the visible slice — we
+  // never show pills for rows we don't render). Two cheap queries scoped
+  // to the trimmed studentId set.
+  const visibleIds = Array.from(new Set(visible.map((h) => h.studentId)));
+  if (visibleIds.length > 0) {
+    type FlagRow = { student_id: string; ese: boolean; is_504: boolean };
+    const flagRes = await db.execute<FlagRow>(sql`
+      SELECT student_id, ese, is_504
+      FROM students
+      WHERE school_id = ${schoolId} AND student_id = ANY(${visibleIds})
+    `);
+    const flagMap = new Map<string, FlagRow>();
+    for (const r of flagRes.rows) flagMap.set(r.student_id, r);
+
+    type TierRow = { student_id: string; tier: number };
+    const tierRes = await db.execute<TierRow>(sql`
+      SELECT student_id, MAX(tier)::int AS tier
+      FROM student_mtss_plans
+      WHERE school_id = ${schoolId}
+        AND closed_at IS NULL
+        AND student_id = ANY(${visibleIds})
+      GROUP BY student_id
+    `);
+    const tierMap = new Map<string, number>();
+    for (const r of tierRes.rows) tierMap.set(r.student_id, Number(r.tier));
+
+    type BqRow = { student_id: string; subject: string; prior_year_bq: boolean };
+    const bqRes = await db.execute<BqRow>(sql`
+      SELECT student_id, subject, prior_year_bq
+      FROM student_fast_scores
+      WHERE school_id = ${schoolId}
+        AND subject IN ('ela','math')
+        AND prior_year_bq = true
+        AND student_id = ANY(${visibleIds})
+    `);
+    const bqEla = new Set<string>();
+    const bqMath = new Set<string>();
+    for (const r of bqRes.rows) {
+      if (r.subject === "ela") bqEla.add(r.student_id);
+      else if (r.subject === "math") bqMath.add(r.student_id);
+    }
+
+    for (const h of visible) {
+      const f = flagMap.get(h.studentId);
+      h.programPill = f?.ese ? "ESE" : f?.is_504 ? "504" : null;
+      const t = tierMap.get(h.studentId);
+      h.mtssPill = t === 3 ? "Tier 3" : t === 2 ? "Tier 2+" : null;
+      h.bqEla = bqEla.has(h.studentId);
+      h.bqMath = bqMath.has(h.studentId);
+    }
+  }
+
   res.json({
     subject: subjects[0],
     subjects,
     archetype: wantArchetype,
     subKey,
-    students: truncated ? hits.slice(0, CAP) : hits,
+    students: visible,
     truncated,
     total: hits.length,
   });

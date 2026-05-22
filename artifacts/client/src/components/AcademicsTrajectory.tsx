@@ -344,6 +344,10 @@ interface TrajStudent {
   grade: number | null;
   pm1: number | null;
   pm3: number | null;
+  programPill?: "ESE" | "504" | null;
+  mtssPill?: "Tier 2+" | "Tier 3" | null;
+  bqEla?: boolean;
+  bqMath?: boolean;
 }
 
 interface TrajectoryStudentsResponse {
