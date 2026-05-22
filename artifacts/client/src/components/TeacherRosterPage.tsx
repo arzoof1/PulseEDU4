@@ -153,6 +153,14 @@ interface Props {
   // active safety plans) but is non-clickable — hover still shows the
   // contents popover.
   onOpenSafetyPlan?: (studentId: string) => void;
+  // Fires whenever the user picks a different teacher from the
+  // dropdown. The host (App.tsx) uses this to remember the picked
+  // teacher across page unmounts — e.g. when a SuperUser opens a
+  // Student Profile (spider) and clicks Back, we want to land back on
+  // the *picked* teacher's roster, not on the SuperUser's own (which
+  // doesn't exist). For roles where the dropdown is locked to self,
+  // this still fires once on first load and is harmless.
+  onTeacherChange?: (teacherId: number) => void;
 }
 
 // Red "SP" pill that appears immediately after the student's name when
@@ -1075,11 +1083,17 @@ export default function TeacherRosterPage({
   onBack,
   onOpenSpider,
   onOpenSafetyPlan,
+  onTeacherChange,
 }: Props) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
   const [teacherId, setTeacherId] = useState<number | null>(
     defaultTeacherId,
   );
+  // Bubble every teacher change up to the host so it can remember the
+  // picked teacher across unmounts (spider round-trip, etc).
+  useEffect(() => {
+    if (teacherId != null && onTeacherChange) onTeacherChange(teacherId);
+  }, [teacherId, onTeacherChange]);
   const [period, setPeriod] = useState<number | null>(null);
   const [tab, setTab] = useState<RosterTab>("roster");
   const [data, setData] = useState<RosterResponse | null>(null);

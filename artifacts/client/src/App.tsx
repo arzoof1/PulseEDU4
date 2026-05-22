@@ -4582,6 +4582,16 @@ function App() {
   // them on the Watchlist. Defaults to "insightsWatchlist" for legacy
   // callers; the Teacher Roster Spider pill sets it to "teacherRoster"
   // before navigating.
+  // Remembers the teacher the user picked from the Teacher Roster
+  // dropdown so a spider round-trip (Roster → Student Profile → Back)
+  // lands back on the *picked* teacher, not on the signed-in user's
+  // own staff id. Only matters for core team / SuperUsers — a regular
+  // teacher can only see themselves anyway. Null on first load (App
+  // falls back to authUser.id).
+  const [teacherRosterTeacherId, setTeacherRosterTeacherId] = useState<
+    number | null
+  >(null);
+
   const [studentProfileReturnTo, setStudentProfileReturnTo] = useState<
     | "insightsWatchlist"
     | "myWatchList"
@@ -17249,7 +17259,14 @@ function App() {
             isBehaviorSpec ||
             isMtss
           }
-          defaultTeacherId={authUser?.id ?? null}
+          // Prefer the last-picked teacher (preserved across spider
+          // round-trips for core team / SuperUsers who pick someone
+          // other than themselves). Falls back to the signed-in user's
+          // own staff id on first load.
+          defaultTeacherId={
+            teacherRosterTeacherId ?? authUser?.id ?? null
+          }
+          onTeacherChange={(id) => setTeacherRosterTeacherId(id)}
           onBack={() => setActiveSection("hallPasses")}
           onOpenSpider={(studentId) => {
             setSelectedInsightsStudentId(studentId);
