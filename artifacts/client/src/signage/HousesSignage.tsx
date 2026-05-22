@@ -217,18 +217,29 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
 
   useEffect(() => {
     const list = events.data?.events ?? [];
-    if (!seededRef.current) {
-      // First poll after mount: mark everything we already have as seen so
-      // we don't replay history. Only events that arrive on subsequent
-      // polls will trigger a celebration sequence.
-      for (const e of list) seenIdsRef.current.add(e.id);
-      seededRef.current = true;
-      return;
-    }
-    // Newest first → push oldest first so playback order matches arrival.
+    // Threshold for the first-poll seed: events older than this are
+    // considered "history" and silently marked as seen so they don't
+    // flood the screen on page load. Events newer than this are treated
+    // as fresh and run through the celebration sequence — that way an
+    // award you just made (e.g. via Spotlight) right before opening the
+    // signage tab still gets celebrated.
+    const FRESH_CUTOFF_MS = 60_000;
+    const cutoff = Date.now() - FRESH_CUTOFF_MS;
+
+    // Newest events arrive first from the API; we want them played
+    // NEWEST FIRST as well — a freshly-awarded student should jump to
+    // the front of the queue, ahead of anything still pending.
     const fresh: PulseEventLite[] = [];
     for (const e of list) {
       if (seenIdsRef.current.has(e.id)) continue;
+      // On first poll, history events get marked seen but skipped.
+      if (!seededRef.current) {
+        const t = new Date(e.createdAt).getTime();
+        if (!Number.isFinite(t) || t < cutoff) {
+          seenIdsRef.current.add(e.id);
+          continue;
+        }
+      }
       seenIdsRef.current.add(e.id);
       if (
         e.kind === "positive" &&
@@ -239,9 +250,11 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
         fresh.push(e);
       }
     }
+    seededRef.current = true;
     if (fresh.length === 0) return;
-    fresh.reverse();
-    pendingRef.current.push(...fresh);
+    // Prepend so the newest events play next — anything already queued
+    // from a prior poll gets pushed back behind them.
+    pendingRef.current.unshift(...fresh);
     setEnqueueTick((t) => t + 1);
   }, [events.data]);
 
