@@ -445,16 +445,17 @@ export default function StudentBenchmarksPanel({
                       <th style={{ textAlign: "left" }}>Benchmark</th>
                       <th style={{ textAlign: "left" }}>Category</th>
                       <th style={{ textAlign: "right" }}>Attempts</th>
-                      <th style={{ textAlign: "right" }}>Earned / Possible</th>
-                      <th style={{ textAlign: "right" }}>Mastery</th>
+                      <th
+                        style={{ textAlign: "right" }}
+                        title="Mastery % (earned / possible). Cell color = status: green At/Above, yellow Near, orange/red Below."
+                      >
+                        Mastery
+                      </th>
                       <th
                         style={{ textAlign: "left", paddingLeft: 8 }}
                         title="Mastery trend across all windows on file (PM1 → PM3, across years)"
                       >
                         Trend
-                      </th>
-                      <th style={{ textAlign: "left", paddingLeft: 8 }}>
-                        Status
                       </th>
                     </tr>
                   </thead>
@@ -496,17 +497,35 @@ export default function StudentBenchmarksPanel({
                               {i === 0 ? cat : ""}
                             </td>
                             <td style={{ textAlign: "right" }}>{r.attempts}</td>
-                            <td style={{ textAlign: "right" }}>
-                              {r.earned} / {r.possible}
-                            </td>
                             <td
                               style={{
                                 textAlign: "right",
-                                fontWeight: 700,
-                                color: col.fg,
+                                whiteSpace: "nowrap",
                               }}
+                              title={`${statusLabel(r.status)} — ${r.earned}/${r.possible} pts`}
                             >
-                              {r.masteryPct}%
+                              <span
+                                style={{
+                                  background: col.bg,
+                                  color: col.fg,
+                                  border: `1px solid ${col.fg}33`,
+                                  borderRadius: 6,
+                                  padding: "0.05rem 0.4rem",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {r.masteryPct}%
+                              </span>
+                              <span
+                                style={{
+                                  marginLeft: 6,
+                                  color: "#6b7280",
+                                  fontSize: "0.72rem",
+                                  fontVariantNumeric: "tabular-nums",
+                                }}
+                              >
+                                {r.earned}/{r.possible}
+                              </span>
                             </td>
                             <td style={{ paddingLeft: 8 }}>
                               {(() => {
@@ -532,21 +551,6 @@ export default function StudentBenchmarksPanel({
                                   />
                                 );
                               })()}
-                            </td>
-                            <td style={{ paddingLeft: 8 }}>
-                              <span
-                                style={{
-                                  background: col.bg,
-                                  color: col.fg,
-                                  border: `1px solid ${col.fg}33`,
-                                  borderRadius: 999,
-                                  padding: "0.05rem 0.5rem",
-                                  fontSize: "0.7rem",
-                                  fontWeight: 600,
-                                }}
-                              >
-                                {statusLabel(r.status)}
-                              </span>
                             </td>
                           </tr>
                         );
