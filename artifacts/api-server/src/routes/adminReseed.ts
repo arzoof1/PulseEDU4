@@ -125,6 +125,202 @@ router.post("/parrott-finish", async (req, res) => {
   }
 });
 
+// Seed-only: wipe and rebuild benchmark_deliveries for Parrott (school 1)
+// so that PM3 > PM1 students have visibly more lessons logged than flat /
+// regressing students. Pure data — no aggregation / report logic touched.
+// ELA + Math only.
+router.post("/parrott-seed-deliveries", async (req, res) => {
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "superuser_required" });
+    return;
+  }
+  const SCHOOL_ID = 1;
+  try {
+    // -- 1. WIPE --------------------------------------------------------
+    const wipedRes = await db.execute<{ n: number }>(sql`
+      WITH d AS (
+        DELETE FROM benchmark_deliveries WHERE school_id = ${SCHOOL_ID} RETURNING 1
+      )
+      SELECT COUNT(*)::int AS n FROM d
+    `);
+    const wiped = Number(wipedRes.rows[0]?.n ?? 0);
+
+    // -- 2. LOAD ENROLLMENTS -------------------------------------------
+    // One row per (student, subject, grade, teacher). Picks the section's
+    // grade out of the course_name ("ELA — Grade 7" -> 7). Skips planning.
+    const enrollRes = await db.execute<{
+      student_id: string;
+      teacher_staff_id: number;
+      subject: string;
+      grade: number;
+    }>(sql`
+      SELECT
+        sr.student_id,
+        cs.teacher_staff_id,
+        LOWER(SPLIT_PART(cs.course_name, ' ', 1)) AS subject,
+        NULLIF(REGEXP_REPLACE(cs.course_name, '.*Grade ([0-9]+).*', '\\1'), cs.course_name)::int AS grade
+      FROM section_roster sr
+      JOIN class_sections cs ON cs.id = sr.section_id
+      WHERE sr.school_id = ${SCHOOL_ID}
+        AND cs.is_planning = false
+        AND (cs.course_name ILIKE 'ELA%' OR cs.course_name ILIKE 'Math%')
+    `);
+
+    // -- 3. LOAD PM SCORES ---------------------------------------------
+    const pmRes = await db.execute<{
+      student_id: string;
+      subject: string;
+      pm1: number | null;
+      pm3: number | null;
+    }>(sql`
+      SELECT student_id, subject, pm1, pm3
+      FROM student_fast_scores
+      WHERE school_id = ${SCHOOL_ID} AND subject IN ('ela','math')
+    `);
+    const pmMap = new Map<string, { pm1: number | null; pm3: number | null }>();
+    for (const r of pmRes.rows) {
+      pmMap.set(`${r.student_id}|${r.subject}`, { pm1: r.pm1, pm3: r.pm3 });
+    }
+
+    // -- 4. LOAD BENCHMARK CATALOG by (subject, grade) -----------------
+    const bRes = await db.execute<{ code: string; subject: string }>(sql`
+      SELECT code, subject FROM school_benchmarks
+      WHERE school_id = ${SCHOOL_ID} AND subject IN ('ela','math') AND active = true
+    `);
+    // group by subject+grade (grade derived from code prefix .<g>.)
+    const catalog = new Map<string, string[]>(); // key = "subject|grade"
+    for (const r of bRes.rows) {
+      const parts = r.code.split(".");
+      if (parts.length < 2) continue;
+      const gTok = parts[1]!.toUpperCase();
+      const g = gTok === "K" ? 0 : Number(gTok);
+      if (!Number.isFinite(g)) continue;
+      const key = `${r.subject}|${g}`;
+      const arr = catalog.get(key) ?? [];
+      arr.push(r.code);
+      catalog.set(key, arr);
+    }
+
+    // -- 5. PLAN COUNTS PER (student, subject) -------------------------
+    // delta = PM3 - PM1.  Mapping (with seeded jitter):
+    //   delta >= +15  -> 12..18 lessons
+    //   delta +1..+14 ->  7..11
+    //   delta -5..  0 ->  3..6
+    //   delta <  -5   ->  1..3
+    //   missing       ->  4..7
+    function band(pm1: number | null, pm3: number | null): [number, number] {
+      if (pm1 == null || pm3 == null) return [4, 7];
+      const d = pm3 - pm1;
+      if (d >= 15) return [12, 18];
+      if (d >= 1) return [7, 11];
+      if (d >= -5) return [3, 6];
+      return [1, 3];
+    }
+    // Deterministic seeded RNG (mulberry32).
+    function mkRng(seedStr: string): () => number {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < seedStr.length; i++) {
+        h ^= seedStr.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      let a = h;
+      return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    // -- 6. SCHOOL YEAR WEEKDAYS POOL ----------------------------------
+    // Aug 11 2025 (Mon) .. May 22 2026 (Fri). Skip weekends.
+    const yearStart = new Date(Date.UTC(2025, 7, 11));
+    const yearEnd = new Date(Date.UTC(2026, 4, 22));
+    const weekdays: string[] = [];
+    for (
+      let d = new Date(yearStart);
+      d <= yearEnd;
+      d = new Date(d.getTime() + 86400000)
+    ) {
+      const dow = d.getUTCDay();
+      if (dow === 0 || dow === 6) continue;
+      weekdays.push(d.toISOString().slice(0, 10));
+    }
+
+    // -- 7. GENERATE ROWS ----------------------------------------------
+    type Row = typeof import("@workspace/db").benchmarkDeliveriesTable.$inferInsert;
+    const out: Row[] = [];
+    let skippedNoCatalog = 0;
+    for (const e of enrollRes.rows) {
+      const subject = e.subject;
+      if (subject !== "ela" && subject !== "math") continue;
+      const codes = catalog.get(`${subject}|${e.grade}`) ?? [];
+      if (codes.length === 0) {
+        skippedNoCatalog++;
+        continue;
+      }
+      const pm = pmMap.get(`${e.student_id}|${subject}`) ?? { pm1: null, pm3: null };
+      const [lo, hi] = band(pm.pm1, pm.pm3);
+      const rng = mkRng(`${e.student_id}|${subject}|${e.teacher_staff_id}`);
+      const count = lo + Math.floor(rng() * (hi - lo + 1));
+      // pick `count` benchmark codes WITH REPLACEMENT (a teacher can revisit
+      // a standard across many days) — but cap repeats per code at ~3 to
+      // keep the spread realistic.
+      const codeUseCap = 3;
+      const codeUses = new Map<string, number>();
+      for (let i = 0; i < count; i++) {
+        // up to 8 tries to find a non-capped code
+        let code: string | null = null;
+        for (let attempt = 0; attempt < 8; attempt++) {
+          const c = codes[Math.floor(rng() * codes.length)]!;
+          if ((codeUses.get(c) ?? 0) < codeUseCap) {
+            code = c;
+            break;
+          }
+        }
+        if (!code) code = codes[Math.floor(rng() * codes.length)]!;
+        codeUses.set(code, (codeUses.get(code) ?? 0) + 1);
+        const day = weekdays[Math.floor(rng() * weekdays.length)]!;
+        out.push({
+          schoolId: SCHOOL_ID,
+          teacherStaffId: e.teacher_staff_id,
+          subject,
+          benchmarkCode: code,
+          deliveredOn: day,
+          notes: null,
+        });
+      }
+    }
+
+    // -- 8. BULK INSERT ------------------------------------------------
+    const { benchmarkDeliveriesTable } = await import("@workspace/db");
+    const CHUNK = 1000;
+    for (let i = 0; i < out.length; i += CHUNK) {
+      await db.insert(benchmarkDeliveriesTable).values(out.slice(i, i + CHUNK));
+    }
+
+    res.json({
+      ok: true,
+      wiped,
+      enrollments: enrollRes.rows.length,
+      inserted: out.length,
+      skippedNoCatalog,
+    });
+  } catch (err) {
+    req.log.error({ err }, "parrott-seed-deliveries failed");
+    res.status(500).json({
+      error: "seed_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 // Repair pass: fixes accommodation category mismatch (each flag category gets
 // items from its own category in the library — ELL students get ELL items,
 // 504 students get 504 items, ESE students get IEP items) AND re-owns
