@@ -10,6 +10,7 @@ import {
   HelpToggleButton,
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
+import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
 import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
 import AstInsightsPage from "./components/ast/AstInsightsPage";
@@ -4542,7 +4543,24 @@ function App() {
     | "compAdmin"
     | "compInsights"
     | "pickupTags"
+    | "tileHome"
   >("hallPasses");
+  // Tile Home is a full-screen launcher that takes over the viewport.
+  // When the user enters it from the top-right header button we stash
+  // the section they came from here so the "Back to app" pill (top-left
+  // of the tile page) can return them to exactly that view, sidebar and
+  // all. Defaults to hallPasses if Tile Home is somehow opened cold.
+  const previousClassicSectionRef = useRef<typeof activeSection>("hallPasses");
+  const goToTileHome = () => {
+    if (activeSection !== "tileHome") {
+      previousClassicSectionRef.current = activeSection;
+    }
+    setActiveSection("tileHome");
+  };
+  const returnToClassic = () => {
+    const target = previousClassicSectionRef.current;
+    setActiveSection(target === "tileHome" ? "hallPasses" : target);
+  };
   const [selectedWatchlistCaseId, setSelectedWatchlistCaseId] = useState<
     number | null
   >(null);
@@ -8724,6 +8742,298 @@ function App() {
     );
   }
 
+  // -----------------------------------------------------------------
+  // TILE HOME — full-screen launcher. Renders BEFORE the normal app
+  // shell so it can take over the entire viewport (no sidebar, no
+  // header). Role/feature gates mirror the sidebar exactly so a teacher
+  // only sees teacher-visible tiles, an admin sees admin tiles, etc.
+  // A single "Back to app" pill in the top-left corner returns the
+  // user to whichever classic page they came from.
+  // -----------------------------------------------------------------
+  if (activeSection === "tileHome") {
+    const tiles: TileHomeTile[] = [];
+    const add = (
+      cond: boolean,
+      tile: Omit<TileHomeTile, "group" | "accent"> & {
+        group: TileHomeTile["group"];
+        accent?: string;
+      },
+    ) => {
+      if (!cond) return;
+      const accentByGroup: Record<TileHomeTile["group"], string> = {
+        quick: "#22d3ee",
+        insights: "#a78bfa",
+        recognition: "#f59e0b",
+        support: "#34d399",
+        family: "#f472b6",
+        admin: "#94a3b8",
+      };
+      tiles.push({
+        ...tile,
+        accent: tile.accent ?? accentByGroup[tile.group],
+      });
+    };
+    // Quick Access — every staff member's day-of toolkit
+    add(effectiveFeatures.HallPasses !== false, {
+      key: "hallPasses",
+      label: "Hall Passes",
+      description: "Issue and end timed passes for student movement.",
+      emoji: "🚪",
+      group: "quick",
+    });
+    add(effectiveFeatures.TardyPass !== false, {
+      key: "tardies",
+      label: "Tardy Pass",
+      description: "Log late arrivals and print entry slips.",
+      emoji: "⏰",
+      group: "quick",
+    });
+    add(!isNonExemptOnly, {
+      key: "teacherRoster",
+      label: "Teacher Roster",
+      description: "Your class lists, FAST scores, and student quick actions.",
+      emoji: "👥",
+      group: "quick",
+    });
+    add(effectiveFeatures.Pbis && !isNonExemptOnly, {
+      key: "pbis",
+      label: "PBIS Points",
+      description: "Award positive behavior points to students.",
+      emoji: "⭐",
+      group: "quick",
+    });
+    add(effectiveFeatures.Pbis && !isNonExemptOnly, {
+      key: "houseRankings",
+      label: "House Rankings",
+      description: "Live school-wide house leaderboard for projection.",
+      emoji: "🏆",
+      group: "quick",
+    });
+    add(effectiveFeatures.Accommodations && !isNonExemptOnly, {
+      key: "accommodations",
+      label: "Accommodations",
+      description: "IEP / 504 accommodations for your active classes.",
+      emoji: "📋",
+      group: "quick",
+    });
+    add(effectiveFeatures.RequestPullout && !isFrontOfficeOnly && !isNonExemptOnly, {
+      key: "requestPullout",
+      label: "Request Pullout",
+      description: "Refer a student for behavior/intervention pullout.",
+      emoji: "📤",
+      group: "quick",
+    });
+    add(!isNonExemptOnly || isAdmin, {
+      key: "ast",
+      label: "AST",
+      description: "Alternate Schedule Time — tutoring & make-up.",
+      emoji: "🕒",
+      group: "quick",
+    });
+    add(true, {
+      key: "comp",
+      label: "Comp Time",
+      description: "Clock in/out and view accrued comp time.",
+      emoji: "⌛",
+      group: "quick",
+    });
+    // Insights
+    add(!isNonExemptOnly, {
+      key: "insightsWatchlist",
+      label: "Watch List",
+      description: "Data-driven risk alerts across your roster.",
+      emoji: "🔎",
+      group: "insights",
+    });
+    add(!isNonExemptOnly, {
+      key: "myWatchList",
+      label: "My Watch List",
+      description: "Students you're personally tracking.",
+      emoji: "📌",
+      group: "insights",
+    });
+    add(canAccessPbisHub || isAdmin, {
+      key: "insights",
+      label: "Insights Hub",
+      description: "Dashboards: engagement, behavior, academics, equity.",
+      emoji: "📊",
+      group: "insights",
+    });
+    // Recognition
+    add(effectiveFeatures.SchoolStore && !isNonExemptOnly, {
+      key: "schoolStore",
+      label: "School Store",
+      description: "Browse the school-wide PBIS reward catalog.",
+      emoji: "🎁",
+      group: "recognition",
+    });
+    add(canAccessPbisHub, {
+      key: "pbisHub",
+      label: "PBIS Hub",
+      description: "Manage points, reasons, milestones, and houses.",
+      emoji: "🎯",
+      group: "recognition",
+    });
+    // Behavior & Support
+    add(effectiveFeatures.LogIntervention && !isNonExemptOnly, {
+      key: "logIntervention",
+      label: "Log Intervention",
+      description: "Document classroom academic/behavior interventions.",
+      emoji: "📝",
+      group: "support",
+    });
+    add(canManageMtssPlans, {
+      key: "mtssPlans",
+      label: "MTSS Plans",
+      description: "Tier 2/3 plans with weekly progress monitoring.",
+      emoji: "🧭",
+      group: "support",
+    });
+    add(isAdmin || isBehaviorSpec || canManageBehaviorLists, {
+      key: "safetyPlans",
+      label: "Safety Plans",
+      description: "Per-student behavioral & physical safety checklists.",
+      emoji: "🛡️",
+      group: "support",
+    });
+    add(canVerifyPullouts, {
+      key: "verifyPullouts",
+      label: "Verify Pullouts",
+      description: "Approve or deny pending pullout requests.",
+      emoji: "✅",
+      group: "support",
+    });
+    add(canAccessPbisHub || isAdmin, {
+      key: "interventionReports",
+      label: "Intervention Reports",
+      description: "School-wide intervention audit and effectiveness.",
+      emoji: "📈",
+      group: "support",
+    });
+    add(isAdmin || isBehaviorSpec, {
+      key: "adminHub",
+      label: "Admin Hub",
+      description: "Disciplinary actions and administrative overrides.",
+      emoji: "🏛️",
+      group: "support",
+    });
+    add(isAdmin || isBehaviorSpec, {
+      key: "watchlistHub",
+      label: "Investigations",
+      description: "Deep watchlist cases and student investigations.",
+      emoji: "🗂️",
+      group: "support",
+    });
+    add(canViewIssDashboard, {
+      key: "issDashboard",
+      label: "ISS Dashboard",
+      description: "In-school suspension roster and attendance.",
+      emoji: "🚸",
+      group: "support",
+    });
+    // Family
+    add(effectiveFeatures.FamilyComm && !isNonExemptOnly, {
+      key: "student",
+      label: "Family Communication",
+      description: "Parent contact logs and automated notifications.",
+      emoji: "✉️",
+      group: "family",
+    });
+    add(isAdmin, {
+      key: "parentAccess",
+      label: "Parent Access",
+      description: "Manage parent portal invites and accounts.",
+      emoji: "🔑",
+      group: "family",
+    });
+    // School Admin
+    add(isAdmin, {
+      key: "staffRoles",
+      label: "Staff & Roles",
+      description: "Staff directory, role assignments, permissions.",
+      emoji: "👤",
+      group: "admin",
+    });
+    add(canManageBellSchedules || isAdmin, {
+      key: "bellSchedule",
+      label: "Bell Schedules",
+      description: "School-wide period timings and overrides.",
+      emoji: "🔔",
+      group: "admin",
+    });
+    add(effectiveFeatures.Displays && isAdmin, {
+      key: "displays",
+      label: "Displays",
+      description: "Digital signage TVs and playlist content.",
+      emoji: "📺",
+      group: "admin",
+    });
+    add(canAccessPbisHub || isAdmin, {
+      key: "trustedAdultsAdmin",
+      label: "Trusted Adults",
+      description: "Student-to-staff trusted adult connections.",
+      emoji: "🤝",
+      group: "admin",
+    });
+    add(isAdmin, {
+      key: "activeKiosks",
+      label: "Active Kiosks",
+      description: "Monitor and troubleshoot live check-in kiosks.",
+      emoji: "🖥️",
+      group: "admin",
+    });
+    add(canManagePickupTags, {
+      key: "pickupTags",
+      label: "Pickup Tags",
+      description: "Print car-rider and walker dismissal tags.",
+      emoji: "🎫",
+      group: "admin",
+    });
+
+    return (
+      <RoleProvider value={rolesFromAuthUser(authUser)}>
+        <div style={{ position: "relative" }}>
+          <button
+            type="button"
+            onClick={returnToClassic}
+            aria-label="Back to app"
+            style={{
+              position: "fixed",
+              top: 16,
+              left: 16,
+              zIndex: 1000,
+              background: "rgba(255,255,255,0.08)",
+              border: "1px solid rgba(255,255,255,0.18)",
+              color: "white",
+              padding: "8px 14px",
+              borderRadius: 999,
+              fontSize: 13,
+              fontWeight: 600,
+              cursor: "pointer",
+              backdropFilter: "blur(8px)",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              boxShadow: "0 4px 12px rgba(0,0,0,0.3)",
+            }}
+          >
+            <span aria-hidden="true">←</span> Back to app
+          </button>
+          <TileHome
+            tiles={tiles}
+            onPick={(key) => {
+              previousClassicSectionRef.current =
+                key as typeof activeSection;
+              setActiveSection(key as typeof activeSection);
+            }}
+            userName={authUser?.displayName ?? currentStaffUser}
+            schoolName={schoolSettings.schoolName}
+          />
+        </div>
+      </RoleProvider>
+    );
+  }
+
   return (
     <RoleProvider value={rolesFromAuthUser(authUser)}>
     <div className="app-shell">
@@ -8986,6 +9296,33 @@ function App() {
               <option value="mine">My Records Only</option>
             </select>
           </label>
+          {/* Tile Home launcher — top-right pill. Stashes the current
+              section so the full-screen tile page's "Back to app"
+              button can return the user to exactly this view. */}
+          <button
+            type="button"
+            onClick={goToTileHome}
+            aria-label="Open Tile Home"
+            title="Tile Home"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              background:
+                "linear-gradient(135deg, rgba(124,58,237,0.18), rgba(34,211,238,0.18))",
+              border: "1px solid rgba(124,58,237,0.45)",
+              borderRadius: 8,
+              padding: "4px 12px",
+              cursor: "pointer",
+              fontSize: 13,
+              fontWeight: 600,
+              color: "inherit",
+              marginRight: 6,
+            }}
+          >
+            <span aria-hidden="true" style={{ fontSize: 14 }}>⊞</span>
+            Tile Home
+          </button>
           {/* Global help toggle. Default ON; persists in localStorage so
               once a user dismisses the in-page "How to use" shells they
               stay hidden across reloads until re-enabled here. */}
