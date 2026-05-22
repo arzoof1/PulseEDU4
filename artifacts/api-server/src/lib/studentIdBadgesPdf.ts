@@ -32,6 +32,11 @@ export interface StudentBadgeInput {
   firstName: string;
   lastName: string;
   grade: number | null;
+  // End-of-day dismissal mode (car_rider / walker / bus / aftercare /
+  // parent_pickup_only). Rendered as a human label next to the grade
+  // so front-office staff can answer "is Maya a walker today?" from
+  // the badge alone. Null/unknown → omitted.
+  dismissalMode?: string | null;
   schoolName: string;
   // Same QR contract as the kiosk card: the kiosk page reads
   // `?signin=<studentId>` and pre-fills the sign-in field.
@@ -49,6 +54,21 @@ export interface StudentBadgeInput {
   photoBytes?: Buffer | null;
 }
 
+// Human label for a stored dismissal_mode value. Mirrors the
+// DISMISSAL_OPTIONS list on the client so the badge reads the same
+// as the StudentProfile chip.
+function dismissalLabel(mode: string | null | undefined): string | null {
+  if (!mode) return null;
+  switch (mode) {
+    case "car_rider": return "Car Rider";
+    case "walker": return "Walker";
+    case "bus": return "Bus";
+    case "aftercare": return "Aftercare";
+    case "parent_pickup_only": return "Parent Pickup";
+    default: return null;
+  }
+}
+
 export async function renderStudentBadgesPdf(
   badges: StudentBadgeInput[],
   size: BadgeSize = "lanyard",
@@ -56,9 +76,15 @@ export async function renderStudentBadgesPdf(
   const [W, H] = size === "cr80" ? [CR80_W, CR80_H] : [LANYARD_W, LANYARD_H];
   const doc = new PDFDocument({
     size: [W, H],
+    // Bottom margin intentionally small: the badge layout positions
+    // every element absolutely and we need to write the crisis
+    // hotline lines almost flush against the page edge. A larger
+    // bottom margin makes pdfkit auto-page text() calls whose y
+    // crosses (pageHeight - bottomMargin), which is exactly the
+    // bug that shipped the 741741 line to a phantom second page.
     margins: {
       top: PAGE_MARGIN,
-      bottom: PAGE_MARGIN,
+      bottom: 2,
       left: PAGE_MARGIN,
       right: PAGE_MARGIN,
     },
@@ -115,22 +141,30 @@ async function renderLanyardBadge(
     .restore();
 
   if (badge.house) {
+    // Bigger letter-in-circle "logo" — until we add svg-to-pdfkit +
+    // lucide-static to render real glyphs, the first letter on a
+    // larger white disc is the closest we can get to a recognizable
+    // house emblem in plain pdfkit.
     const letter = (badge.house.name.charAt(0) || "H").toUpperCase();
     doc
       .save()
       .fillColor("#ffffff")
-      .circle(20, ribbonH / 2 + 2, 11)
+      .circle(22, ribbonH / 2 + 2, 13)
       .fill()
       .restore();
     doc
       .fillColor(ribbonColor)
-      .fontSize(13)
-      .text(letter, 16, ribbonH / 2 - 5, { lineBreak: false });
+      .fontSize(16)
+      .text(letter, 16, ribbonH / 2 - 6, {
+        width: 12,
+        align: "center",
+        lineBreak: false,
+      });
     doc
       .fillColor("#ffffff")
-      .fontSize(11)
-      .text(`${badge.house.name} House`, 36, ribbonH / 2 - 4, {
-        width: W - 44,
+      .fontSize(12)
+      .text(`${badge.house.name} House`, 40, ribbonH / 2 - 5, {
+        width: W - 48,
         lineBreak: false,
       });
   } else {
@@ -154,9 +188,11 @@ async function renderLanyardBadge(
 
   // Photo slot — rectangle (user explicitly approved rectangle on
   // the ID badge in Phase 4). Falls back to a colored initials bubble
-  // when no photo bytes are available.
-  const photoW = 90;
-  const photoH = 108;
+  // when no photo bytes are available. Slightly compressed from the
+  // original 90×108 to make room for the new "Grade · Car Rider"
+  // line + the crisis hotline footer without overflowing the page.
+  const photoW = 88;
+  const photoH = 100;
   const photoX = (W - photoW) / 2;
   const photoY = ribbonH + 18;
   if (badge.photoBytes) {
@@ -186,7 +222,7 @@ async function renderLanyardBadge(
     drawInitialsBubble(doc, badge, photoX, photoY, photoW, photoH);
   }
 
-  const nameY = photoY + photoH + 8;
+  const nameY = photoY + photoH + 6;
   doc
     .fillColor("#111827")
     .fontSize(14)
@@ -196,29 +232,34 @@ async function renderLanyardBadge(
       ellipsis: true,
       height: 18,
     });
-  if (badge.grade !== null) {
+  // "Grade 6 · Car Rider" — combine grade and dismissal so the
+  // front-office desk can answer the dismissal question without
+  // looking the student up.
+  const dLabel = dismissalLabel(badge.dismissalMode);
+  const gradeBits: string[] = [];
+  if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
+  if (dLabel) gradeBits.push(dLabel);
+  if (gradeBits.length > 0) {
     doc
       .fillColor("#475569")
       .fontSize(9)
-      .text(`Grade ${badge.grade}`, PAGE_MARGIN, nameY + 18, {
+      .text(gradeBits.join(" · "), PAGE_MARGIN, nameY + 18, {
         width: W - PAGE_MARGIN * 2,
         align: "center",
         lineBreak: false,
       });
   }
 
-  // Layout note: the badge page is 243×306pt. Previously the QR
-  // (78pt) + 4pt gap + barcode (22pt) put the barcode bottom at
-  // y=310, which overflowed the page by 4pt and auto-spilled the
-  // human-readable ID line onto a second page when printed. We've
-  // also dropped the printed ID number per school request — if a
-  // student loses their badge we don't want their student number
-  // exposed in plain text on the front. The QR + barcode still
-  // encode the ID so kiosk sign-in keeps working.
+  // Layout note: page is 243×306. Targets:
+  //   QR 56pt → barcode 16pt → crisis line 1 → crisis line 2
+  // Final y of crisis line 2 must clear (H - bottomMargin) = 304.
+  // Bottom margin lowered to 2 in the PDFDocument config above so
+  // text() at y=294 doesn't trigger pdfkit's auto-page (the bug
+  // that put "Text HOME to 741741" on a phantom page 2).
   const qrBuf = await renderQrBuffer(badge);
-  const qrSize = 62;
+  const qrSize = 56;
   const qrX = (W - qrSize) / 2;
-  const qrY = nameY + 36;
+  const qrY = nameY + 34;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
   const barcodePng = await renderBarcodeBuffer(badge.studentId);
@@ -231,20 +272,21 @@ async function renderLanyardBadge(
   // Crisis hotlines — required on FL student IDs grades 6-12 by
   // HB 383 (effective 2021-07-01): 988 Suicide & Crisis Lifeline +
   // a text line. We include the Crisis Text Line (HOME → 741741)
-  // as the companion text channel. Lines are deliberately small but
-  // legible (6.5pt) and centered at the very bottom of the badge.
+  // as the companion text channel. 988 line is red so it's the
+  // first thing the eye finds on the lower half of the badge.
+  const crisisY1 = bcY + bcH + 5;
   doc
     .fillColor("#b91c1c")
-    .fontSize(6.5)
-    .text("Crisis? Call or text 988", PAGE_MARGIN, H - 18, {
+    .fontSize(7)
+    .text("Crisis? Call or text 988", PAGE_MARGIN, crisisY1, {
       width: W - PAGE_MARGIN * 2,
       align: "center",
       lineBreak: false,
     });
   doc
     .fillColor("#475569")
-    .fontSize(6.5)
-    .text("Crisis Text Line: text HOME to 741741", PAGE_MARGIN, H - 10, {
+    .fontSize(7)
+    .text("Crisis Text Line: text HOME to 741741", PAGE_MARGIN, crisisY1 + 10, {
       width: W - PAGE_MARGIN * 2,
       align: "center",
       lineBreak: false,
@@ -340,11 +382,15 @@ async function renderCr80Badge(
       ellipsis: true,
       height: 16,
     });
-  if (badge.grade !== null) {
+  const cr80Dlabel = dismissalLabel(badge.dismissalMode);
+  const cr80Bits: string[] = [];
+  if (badge.grade !== null) cr80Bits.push(`Grade ${badge.grade}`);
+  if (cr80Dlabel) cr80Bits.push(cr80Dlabel);
+  if (cr80Bits.length > 0) {
     doc
       .fillColor("rgba(255,255,255,0.85)")
       .fontSize(8)
-      .text(`Grade ${badge.grade}`, 8, nameY + 16, {
+      .text(cr80Bits.join(" · "), 8, nameY + 16, {
         width: leftColW - 12,
         lineBreak: false,
       });

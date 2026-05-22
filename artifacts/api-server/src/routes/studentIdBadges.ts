@@ -233,6 +233,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     firstName: s.firstName,
     lastName: s.lastName,
     grade: s.grade,
+    dismissalMode: s.dismissalMode ?? null,
     schoolName,
     baseUrl,
     house:
