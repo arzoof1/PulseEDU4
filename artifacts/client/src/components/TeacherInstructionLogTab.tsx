@@ -317,21 +317,22 @@ export default function TeacherInstructionLogTab({
           >
             <span>Grades:</span>
             {teacherGrades.map((g) => {
-              const tok = gradeLabel(g).replace(/^G/, ""); // store as "6","7","8" / "K"
               const t = String(g) === "0" ? "K" : String(g).toUpperCase();
               const checked = selectedGrades.has(t);
               return (
-                <label
+                <button
                   key={g}
+                  type="button"
+                  onClick={() => toggleGrade(t)}
+                  aria-pressed={checked}
                   style={{
                     display: "inline-flex",
                     alignItems: "center",
-                    gap: 4,
-                    padding: "3px 8px",
+                    padding: "3px 10px",
                     borderRadius: 999,
                     border: "1px solid",
-                    borderColor: checked ? "#1e3a8a" : "#cbd5e1",
-                    background: checked ? "#dbeafe" : "white",
+                    borderColor: checked ? "#93c5fd" : "#cbd5e1",
+                    background: checked ? "#eff6ff" : "white",
                     color: checked ? "#1e3a8a" : "#475569",
                     cursor: "pointer",
                     fontWeight: checked ? 600 : 400,
@@ -339,16 +340,8 @@ export default function TeacherInstructionLogTab({
                     userSelect: "none",
                   }}
                 >
-                  <input
-                    type="checkbox"
-                    checked={checked}
-                    onChange={() => toggleGrade(t)}
-                    style={{ margin: 0 }}
-                  />
                   {gradeLabel(g)}
-                  {/* tok kept for codepath clarity; not rendered */}
-                  <span style={{ display: "none" }}>{tok}</span>
-                </label>
+                </button>
               );
             })}
           </div>
