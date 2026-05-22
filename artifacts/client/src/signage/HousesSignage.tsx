@@ -86,37 +86,63 @@ function gradientFromColor(hex: string): string {
 // for ~5 seconds before swapping to the next. Resets cleanly when the queue
 // shrinks (e.g. when the underlying poll returns fewer recent positives).
 // =============================================================================
+// Each celebration card is displayed for HOLD_MS, then hidden for GAP_MS
+// before the next one fades in. The gap is what makes it visually
+// unambiguous that a *new* award is being celebrated — without it,
+// rapid-fire awards look like one continuous strip.
 const FEATURED_HOLD_MS = 5_000;
+const FEATURED_GAP_MS = 3_000;
 
 function FeaturedPopup({
   events,
   barPct,
 }: {
   events: PulseEventLite[];
-  // Height (in %) of the leading house's bar fill. We use this to keep the
-  // popup visually attached to the TOP of the bar rather than the top of
-  // the frame — otherwise the popup floats in empty space when the leader's
+  // Height (in %) of the host bar's fill. We use this to keep the
+  // popup visually attached to the TOP of the bar rather than the top
+  // of the frame — otherwise the popup floats in empty space when the
   // bar is short (early in a school year, or first day after rollout).
   barPct: number;
 }) {
   const [idx, setIdx] = useState(0);
+  const [showing, setShowing] = useState(true);
 
   useEffect(() => {
     // Snap back to the head of the queue whenever the underlying list
     // changes — that way "newest first" stays true even if the previously-
     // featured event scrolled off after a poll.
     setIdx(0);
+    setShowing(true);
   }, [events.map((e) => e.id).join("|")]);
 
   useEffect(() => {
     if (events.length <= 1) return;
-    const t = window.setInterval(() => {
-      setIdx((i) => (i + 1) % events.length);
-    }, FEATURED_HOLD_MS);
-    return () => window.clearInterval(t);
+    let cancelled = false;
+    let timer: number | undefined;
+    function loop() {
+      if (cancelled) return;
+      // Show card for HOLD_MS …
+      setShowing(true);
+      timer = window.setTimeout(() => {
+        if (cancelled) return;
+        // … then hide for GAP_MS …
+        setShowing(false);
+        timer = window.setTimeout(() => {
+          if (cancelled) return;
+          // … then advance index and restart cycle.
+          setIdx((i) => (i + 1) % events.length);
+          loop();
+        }, FEATURED_GAP_MS);
+      }, FEATURED_HOLD_MS);
+    }
+    loop();
+    return () => {
+      cancelled = true;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
   }, [events.length]);
 
-  if (events.length === 0) return null;
+  if (events.length === 0 || !showing) return null;
   const e = events[idx % events.length];
 
   // Bar fill top edge in % from frame top. We sit the popup ~12px below
@@ -198,20 +224,30 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
   // re-run the animation on a second consecutive gain.
   const prevTotalsRef = useRef<Map<number, number>>(new Map());
   const [pulseTicks, setPulseTicks] = useState<Record<number, number>>({});
+  // The house id of the most recent award. Drives WHICH bar the
+  // celebration popup attaches to — so when Phoenix gets points the
+  // "Now celebrating" card appears in Phoenix's bar, not always the
+  // leader's. Falls back to the leader before any award has been seen.
+  const [lastPulsedHouseId, setLastPulsedHouseId] = useState<number | null>(null);
   useEffect(() => {
     const list = houses.data?.houses ?? [];
     if (list.length === 0) return;
     const next: Record<number, number> = { ...pulseTicks };
     let changed = false;
+    let mostRecentGainHouseId: number | null = null;
     for (const h of list) {
       const prev = prevTotalsRef.current.get(h.id);
       if (prev !== undefined && h.totalPoints > prev) {
         next[h.id] = (next[h.id] ?? 0) + 1;
         changed = true;
+        mostRecentGainHouseId = h.id;
       }
       prevTotalsRef.current.set(h.id, h.totalPoints);
     }
-    if (changed) setPulseTicks(next);
+    if (changed) {
+      setPulseTicks(next);
+      if (mostRecentGainHouseId !== null) setLastPulsedHouseId(mostRecentGainHouseId);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [houses.data]);
   // Polled separately from /houses so the action feed and featured-popup
@@ -266,16 +302,30 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
           counter-bound key. Kept under 1s so back-to-back awards stack
           visually without queuing. */}
       <style>{`
-        @keyframes housePulseUp {
-          0%   { transform: translateY(0%);    opacity: 0; }
-          15%  { opacity: 1; }
-          85%  { opacity: 1; }
-          100% { transform: translateY(-100%); opacity: 0; }
+        /* Dramatic rising "heartbeat": starts as a small spark anchored
+           to the bottom of the bar, then climbs and inflates as it rises,
+           culminating right under the name/points label at the top. The
+           transform-origin is bottom-center so scaling grows outward and
+           upward from the source point, giving a flame/plume shape. */
+        @keyframes housePulseRise {
+          0%   { transform: translateY(0%)    scale(0.10); opacity: 0; }
+          12%  { transform: translateY(-8%)   scale(0.18); opacity: 1; }
+          55%  { transform: translateY(-55%)  scale(0.55); opacity: 1; }
+          85%  { transform: translateY(-92%)  scale(1.05); opacity: 0.95; }
+          100% { transform: translateY(-100%) scale(1.30); opacity: 0; }
+        }
+        /* Arrival burst — a bright halo that blooms behind the name/points
+           label exactly when the rising spark reaches the top. Times its
+           peak around 80% so it overlaps the climax of the rise. */
+        @keyframes housePulseBurst {
+          0%, 55% { opacity: 0; transform: scale(0.45); }
+          78%     { opacity: 1; transform: scale(1.25); }
+          100%    { opacity: 0; transform: scale(2.00); }
         }
         @keyframes houseBarFlash {
-          0%   { box-shadow: 0 0 50px -10px var(--bar-glow); }
-          50%  { box-shadow: 0 0 90px 8px  var(--bar-glow); }
-          100% { box-shadow: 0 0 50px -10px var(--bar-glow); }
+          0%   { box-shadow: 0 0  50px -10px var(--bar-glow); }
+          45%  { box-shadow: 0 0 130px  20px var(--bar-glow); }
+          100% { box-shadow: 0 0  50px -10px var(--bar-glow); }
         }
       `}</style>
       <div
@@ -435,25 +485,49 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                           {h.weekPoints} pts this week
                         </div>
                       )}
-                      {/* Rising-pulse blip — sits inside the filled portion of
-                          the bar and rides from the bottom up to the top edge
-                          of the fill. Keyed on pulseTick so React remounts and
-                          the CSS animation replays on every detected gain. */}
+                      {/* RISING SPARK — thin at bottom, blooms wide as it
+                          climbs the bar. Transform-origin "center bottom"
+                          so the scale ramp grows outward from the source.
+                          Keyed on pulseTick so the animation replays from
+                          scratch on every gain. */}
                       {pulseTick > 0 && (
                         <div
-                          key={`pulse-${h.id}-${pulseTick}`}
-                          className="pointer-events-none absolute inset-x-0 bottom-0 h-6"
+                          key={`pulse-rise-${h.id}-${pulseTick}`}
+                          className="pointer-events-none absolute left-1/2 bottom-0 z-10"
                           style={{
-                            background: `linear-gradient(to top, transparent 0%, ${h.color}00 0%, #ffffffcc 50%, transparent 100%)`,
-                            filter: `drop-shadow(0 0 12px ${h.color})`,
-                            animation: "housePulseUp 900ms ease-out forwards",
+                            width: "100%",
+                            height: "100%",
+                            marginLeft: "-50%",
+                            transformOrigin: "center bottom",
+                            background: `radial-gradient(ellipse 35% 55% at 50% 100%, #ffffff 0%, ${h.color} 35%, ${h.color}66 60%, transparent 80%)`,
+                            filter: `drop-shadow(0 0 24px ${h.color}) drop-shadow(0 0 48px #ffffff80)`,
+                            animation: "housePulseRise 1300ms cubic-bezier(0.25, 0.8, 0.3, 1) forwards",
+                            mixBlendMode: "screen",
+                          }}
+                        />
+                      )}
+                      {/* ARRIVAL BURST — bright halo that blooms behind the
+                          name/points label as the spark reaches the top. */}
+                      {pulseTick > 0 && (
+                        <div
+                          key={`pulse-burst-${h.id}-${pulseTick}`}
+                          className="pointer-events-none absolute inset-x-0 top-0 h-28 z-10"
+                          style={{
+                            background: `radial-gradient(ellipse 60% 80% at 50% 25%, #ffffff 0%, ${h.color} 35%, transparent 75%)`,
+                            filter: `drop-shadow(0 0 32px #ffffff)`,
+                            animation: "housePulseBurst 1300ms ease-out forwards",
                             mixBlendMode: "screen",
                           }}
                         />
                       )}
                     </div>
-                    {/* Featured popup rotates 5s per item — only on the leading bar */}
-                    {isLeader && <FeaturedPopup events={featuredQueue} barPct={pct} />}
+                    {/* Celebration popup follows the bar that just got
+                        awarded. Falls back to the leader before any award
+                        has been seen this session. */}
+                    {(lastPulsedHouseId === h.id ||
+                      (lastPulsedHouseId === null && isLeader)) && (
+                      <FeaturedPopup events={featuredQueue} barPct={pct} />
+                    )}
                   </div>
 
                   {/* Label + member count */}
