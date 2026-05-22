@@ -2711,7 +2711,26 @@ export default function StudentProfile({
               Academics pillar (rather than a separate sub-tab) so it
               sits next to FAST PM scores and reads as the "deep" view
               of the same data. Visibility check happens server-side. */}
-          <StudentBenchmarksPanel studentId={data.header.studentId} />
+          <StudentBenchmarksPanel
+            studentId={data.header.studentId}
+            subject="ela"
+            showHeader={false}
+            showTopBorder={true}
+          />
+        </Card>
+
+        {/* Math FAST Benchmarks live in their own pillar card so they
+            sit beside ELA in the pillars grid (middle column on wide
+            screens) and so future per-subject context (attendance,
+            ODRs in math class) can stack above or below this card
+            without crowding the Academics pillar. */}
+        <Card title="Math (FAST Benchmarks)">
+          <StudentBenchmarksPanel
+            studentId={data.header.studentId}
+            subject="math"
+            showHeader={false}
+            showTopBorder={false}
+          />
         </Card>
 
         <Card

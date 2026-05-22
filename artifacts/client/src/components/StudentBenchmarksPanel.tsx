@@ -519,28 +519,58 @@ function SubjectColumn({
   );
 }
 
+// `subject` prop renders a single subject column for that subject
+// (used when callers want to place ELA and Math in different layout
+// cells on the page). Omitted prop keeps the original behavior of
+// rendering ELA + Math side-by-side under a shared "FAST Benchmarks"
+// header — preserved for any other callers.
 export default function StudentBenchmarksPanel({
   studentId,
+  subject,
+  showHeader = true,
+  showTopBorder = true,
 }: {
   studentId: string;
+  subject?: SubjectKey;
+  showHeader?: boolean;
+  showTopBorder?: boolean;
 }) {
-  return (
-    <div
-      style={{
-        marginTop: "0.75rem",
-        paddingTop: "0.6rem",
-        borderTop: "1px dashed #e5e7eb",
-      }}
-    >
-      <div
-        style={{
-          fontWeight: 600,
-          fontSize: "0.85rem",
-          marginBottom: "0.5rem",
-        }}
-      >
-        FAST Benchmarks
+  const wrapperStyle: React.CSSProperties = {
+    marginTop: showTopBorder ? "0.75rem" : 0,
+    paddingTop: showTopBorder ? "0.6rem" : 0,
+    borderTop: showTopBorder ? "1px dashed #e5e7eb" : undefined,
+  };
+  if (subject) {
+    return (
+      <div style={wrapperStyle}>
+        {showHeader && (
+          <div
+            style={{
+              fontWeight: 600,
+              fontSize: "0.85rem",
+              marginBottom: "0.5rem",
+            }}
+          >
+            FAST Benchmarks — {SUBJECT_LABEL[subject]}
+          </div>
+        )}
+        <SubjectColumn studentId={studentId} subject={subject} />
       </div>
+    );
+  }
+  return (
+    <div style={wrapperStyle}>
+      {showHeader && (
+        <div
+          style={{
+            fontWeight: 600,
+            fontSize: "0.85rem",
+            marginBottom: "0.5rem",
+          }}
+        >
+          FAST Benchmarks
+        </div>
+      )}
       <div
         style={{
           display: "grid",
