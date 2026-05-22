@@ -181,7 +181,9 @@ export default function TeacherInstructionLogTab({
   // dropdown) to whichever grades the user currently has selected.
   // When the user has every grade checked, this is a no-op.
   const gradeFilteredCatalog = useMemo(() => {
-    if (selectedGrades.size === 0) return catalog;
+    // No grades chosen → empty list. The picker shows a "pick a grade"
+    // hint instead, so the user always logs against an explicit grade.
+    if (selectedGrades.size === 0) return [];
     return catalog.filter((r) => {
       const tok = gradeTokenOf(r.code);
       return tok != null && selectedGrades.has(tok);
@@ -401,6 +403,17 @@ export default function TeacherInstructionLogTab({
                   marginBottom: 8,
                 }}
               >
+                {grouped.length === 0 && (
+                  <div
+                    style={{
+                      fontSize: 12,
+                      color: "#6b7280",
+                      padding: "8px 4px",
+                    }}
+                  >
+                    Pick a grade above to see benchmarks.
+                  </div>
+                )}
                 {grouped.map(([cat, codes]) => (
                   <div key={cat} style={{ marginBottom: 8 }}>
                     <div
