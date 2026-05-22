@@ -1,18 +1,13 @@
 // FAST Phase 3 — Per-student benchmark history panel.
 //
-// Drops into the Academics pillar on the Student Profile page. Shows
-// every benchmark this student has been tested on for the selected
-// subject + school year, grouped by category, with a category-level
-// rollup card at the top. Window switcher (PM1/PM2/PM3) toggles
-// in-place without a round-trip.
+// Student-at-a-glance view: ELA and Math render side-by-side as two
+// independent columns, each with its own window/year/sort controls.
+// Drops into the Academics pillar on the Student Profile page.
 //
-// Color scale (≥T green, ≥T-10 yellow, ≥T-30 orange, else red) is
-// identical to the Phase 2 teacher heatmap on purpose — heatmap and
-// profile should feel like one product.
-//
-// MTSS pill: read path is wired but never lights up until Phase 5
-// starts persisting benchmark-tagged plans. Server returns
-// `mtssTagged: false` for every benchmark today.
+// Compact 3-column table (Benchmark · Mastery · Trend) so two
+// subjects can sit side-by-side in the profile panel without
+// horizontal scroll. Category + attempts are inlined under the
+// benchmark code to free horizontal space.
 
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { authFetch } from "../lib/authToken";
@@ -65,16 +60,9 @@ interface PayloadShape {
   availableSchoolYears: string[];
   thresholdPct: number;
   windows: WindowBlock[];
-  // Phase 4 — chronological mastery% per benchmark across ALL years
-  // this student has data for. Optional so the server can omit it
-  // without breaking the type during older clients.
   historyByCode?: Record<string, HistoryPoint[]>;
 }
 
-// Tiny inline SVG sparkline. Domain is the count of points; range is
-// 0–100% (FAST mastery). Renders a polyline + endpoint dot colored by
-// the final point's status. Returns null when fewer than 2 points
-// exist — a single point isn't a trend.
 function Sparkline({
   points,
   thresholdPct,
@@ -103,18 +91,12 @@ function Sparkline({
   const lastIdx = points.length - 1;
   const lastPct = points[lastIdx].pct;
   const endColor = cellColor(lastPct, thresholdPct).fg;
-  // Faint threshold rule so the eye anchors the line against the cut.
   const thresholdY = padY + innerH * (1 - thresholdPct / 100);
   const label = points
     .map((p) => `${p.schoolYear} ${p.window.toUpperCase()}: ${p.pct}%`)
     .join(" → ");
   return (
-    <svg
-      width={width}
-      height={height}
-      role="img"
-      aria-label={label}
-    >
+    <svg width={width} height={height} role="img" aria-label={label}>
       <title>{label}</title>
       <line
         x1={padX}
@@ -131,14 +113,12 @@ function Sparkline({
   );
 }
 
-type SubjectKey = "ela" | "math" | "algebra1" | "geometry";
+type SubjectKey = "ela" | "math";
 type SortKey = "category" | "mastery_asc" | "code";
 
 const SUBJECT_LABEL: Record<SubjectKey, string> = {
   ela: "ELA",
   math: "Math",
-  algebra1: "Algebra 1",
-  geometry: "Geometry",
 };
 
 // Same palette as TeacherBenchmarksTab — DO NOT change one without
@@ -160,23 +140,14 @@ function statusLabel(s: "below" | "near" | "at_above"): string {
   return "Below";
 }
 
-export default function StudentBenchmarksPanel({
+function SubjectColumn({
   studentId,
+  subject,
 }: {
   studentId: string;
+  subject: SubjectKey;
 }) {
-  const [subject, setSubjectRaw] = useState<SubjectKey>("ela");
   const [schoolYear, setSchoolYear] = useState<string | null>(null);
-
-  // Subject changes reset the school-year selection so the next load
-  // re-resolves to "most recent year with data for the NEW subject".
-  // Without this reset, a stale year picked for ELA would suppress
-  // the default when the user switches to Math (and that year might
-  // have no Math data at all).
-  const setSubject = (next: SubjectKey) => {
-    setSubjectRaw(next);
-    setSchoolYear(null);
-  };
   const [activeWindow, setActiveWindow] = useState<string | null>(null);
   const [sortKey, setSortKey] = useState<SortKey>("category");
   const [data, setData] = useState<PayloadShape | null>(null);
@@ -205,13 +176,9 @@ export default function StudentBenchmarksPanel({
         const json = (await r.json()) as PayloadShape;
         if (cancelled) return;
         setData(json);
-        // Default to the most recent window in this year (server
-        // returns PM1 → PM3 order; "most recent" is the last entry).
         if (json.windows.length > 0) {
           const last = json.windows[json.windows.length - 1]!;
           setActiveWindow((prev) => {
-            // Keep user's selection if it still exists in the new
-            // year's window set; else snap to most-recent.
             if (prev && json.windows.some((w) => w.window === prev)) {
               return prev;
             }
@@ -246,58 +213,25 @@ export default function StudentBenchmarksPanel({
     } else if (sortKey === "code") {
       rows.sort((a, b) => a.code.localeCompare(b.code));
     }
-    // "category" — already sorted by (category, code) on the server.
     return rows;
   }, [currentWindow, sortKey]);
 
-  // Group by category for the table render. Preserves the sorted
-  // order so "mastery_asc" still groups visually but within each
-  // category the rows are mastery-ascending.
-  const grouped = useMemo<Map<string, BenchmarkRow[]>>(() => {
-    const m = new Map<string, BenchmarkRow[]>();
-    for (const r of sortedBenchmarks) {
-      const key = r.category ?? "Uncategorized";
-      const list = m.get(key) ?? [];
-      list.push(r);
-      m.set(key, list);
-    }
-    return m;
-  }, [sortedBenchmarks]);
-
   return (
-    <div
-      style={{
-        marginTop: "0.75rem",
-        paddingTop: "0.6rem",
-        borderTop: "1px dashed #e5e7eb",
-      }}
-    >
+    <div style={{ minWidth: 0 }}>
       <div
         style={{
           display: "flex",
           alignItems: "center",
-          gap: "0.5rem",
+          gap: "0.4rem",
           flexWrap: "wrap",
-          marginBottom: "0.5rem",
+          marginBottom: "0.4rem",
         }}
       >
-        <div style={{ fontWeight: 600, fontSize: "0.85rem" }}>
-          FAST Benchmarks
+        <div style={{ fontWeight: 700, fontSize: "0.8rem" }}>
+          {SUBJECT_LABEL[subject]}
         </div>
         <select
-          aria-label="Subject"
-          value={subject}
-          onChange={(e) => setSubject(e.target.value as SubjectKey)}
-          style={selectStyle}
-        >
-          {(Object.keys(SUBJECT_LABEL) as SubjectKey[]).map((k) => (
-            <option key={k} value={k}>
-              {SUBJECT_LABEL[k]}
-            </option>
-          ))}
-        </select>
-        <select
-          aria-label="School year"
+          aria-label={`${SUBJECT_LABEL[subject]} school year`}
           value={schoolYear ?? data?.schoolYear ?? ""}
           onChange={(e) => setSchoolYear(e.target.value || null)}
           disabled={!data || data.availableSchoolYears.length === 0}
@@ -313,18 +247,18 @@ export default function StudentBenchmarksPanel({
           )}
         </select>
         <select
-          aria-label="Sort"
+          aria-label={`${SUBJECT_LABEL[subject]} sort`}
           value={sortKey}
           onChange={(e) => setSortKey(e.target.value as SortKey)}
           style={selectStyle}
         >
           <option value="category">Sort: Category</option>
-          <option value="mastery_asc">Sort: Mastery % (low → high)</option>
-          <option value="code">Sort: Benchmark code</option>
+          <option value="mastery_asc">Sort: Mastery low → high</option>
+          <option value="code">Sort: Code</option>
         </select>
         {data && (
-          <span style={{ color: "#6b7280", fontSize: "0.75rem" }}>
-            Mastery threshold {data.thresholdPct}%
+          <span style={{ color: "#6b7280", fontSize: "0.7rem" }}>
+            ≥ {data.thresholdPct}%
           </span>
         )}
       </div>
@@ -346,17 +280,16 @@ export default function StudentBenchmarksPanel({
       )}
       {!loading && !error && data && data.windows.length === 0 && (
         <div style={mutedStyle}>
-          No FAST item-level data imported for this subject/year yet.
+          No FAST data imported for {SUBJECT_LABEL[subject]} yet.
         </div>
       )}
 
       {data && data.windows.length > 0 && (
         <>
-          {/* Window picker */}
           <div
             role="tablist"
-            aria-label="FAST window"
-            style={{ display: "flex", gap: 4, marginBottom: "0.6rem" }}
+            aria-label={`${SUBJECT_LABEL[subject]} FAST window`}
+            style={{ display: "flex", gap: 4, marginBottom: "0.5rem" }}
           >
             {data.windows.map((w) => {
               const active = w.window === activeWindow;
@@ -368,13 +301,13 @@ export default function StudentBenchmarksPanel({
                   aria-selected={active}
                   onClick={() => setActiveWindow(w.window)}
                   style={{
-                    padding: "0.25rem 0.7rem",
+                    padding: "0.2rem 0.55rem",
                     border: "1px solid",
                     borderColor: active ? "#1e40af" : "#d1d5db",
                     background: active ? "#dbeafe" : "white",
                     color: active ? "#1e3a8a" : "#374151",
                     fontWeight: active ? 700 : 500,
-                    fontSize: "0.8rem",
+                    fontSize: "0.75rem",
                     borderRadius: 6,
                     cursor: "pointer",
                   }}
@@ -387,15 +320,14 @@ export default function StudentBenchmarksPanel({
 
           {currentWindow && (
             <>
-              {/* Category rollup */}
               {currentWindow.categoryRollups.length > 0 && (
                 <div
                   style={{
                     display: "grid",
                     gridTemplateColumns:
-                      "repeat(auto-fit, minmax(160px, 1fr))",
+                      "repeat(auto-fit, minmax(130px, 1fr))",
                     gap: 6,
-                    marginBottom: "0.6rem",
+                    marginBottom: "0.5rem",
                   }}
                 >
                   {currentWindow.categoryRollups.map((c) => {
@@ -409,24 +341,23 @@ export default function StudentBenchmarksPanel({
                           color: col.fg,
                           border: `1px solid ${col.fg}33`,
                           borderRadius: 6,
-                          padding: "0.4rem 0.55rem",
+                          padding: "0.35rem 0.5rem",
                         }}
                       >
-                        <div style={{ fontSize: "0.7rem", opacity: 0.85 }}>
+                        <div style={{ fontSize: "0.65rem", opacity: 0.85 }}>
                           {c.category}
                         </div>
                         <div
                           style={{
-                            fontSize: "1.1rem",
+                            fontSize: "1rem",
                             fontWeight: 700,
                             lineHeight: 1.1,
                           }}
                         >
                           {c.masteryPct}%
                         </div>
-                        <div style={{ fontSize: "0.7rem", opacity: 0.85 }}>
-                          {c.benchmarkCount} benchmark
-                          {c.benchmarkCount === 1 ? "" : "s"}
+                        <div style={{ fontSize: "0.65rem", opacity: 0.85 }}>
+                          {c.benchmarkCount} bm
                         </div>
                       </div>
                     );
@@ -434,143 +365,153 @@ export default function StudentBenchmarksPanel({
                 </div>
               )}
 
-              {/* Benchmark rows */}
-              <div style={{ overflowX: "auto" }}>
-                <table
-                  className="pulse-table"
-                  style={{ width: "100%", fontSize: "0.8rem" }}
-                >
-                  <thead>
-                    <tr style={{ color: "#6b7280" }}>
-                      <th style={{ textAlign: "left" }}>Benchmark</th>
-                      <th style={{ textAlign: "left" }}>Category</th>
-                      <th style={{ textAlign: "right" }}>Attempts</th>
-                      <th
-                        style={{ textAlign: "right" }}
-                        title="Mastery % (earned / possible). Cell color = status: green At/Above, yellow Near, orange/red Below."
-                      >
-                        Mastery
-                      </th>
-                      <th
-                        style={{ textAlign: "left", paddingLeft: 8 }}
-                        title="Mastery trend across all windows on file (PM1 → PM3, across years)"
-                      >
-                        Trend
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {Array.from(grouped.entries()).map(([cat, rows]) =>
-                      rows.map((r, i) => {
-                        const col = cellColor(r.masteryPct, data.thresholdPct);
-                        return (
-                          <tr key={`${cat}|${r.code}`}>
-                            <td
-                              style={{
-                                fontFamily:
-                                  "ui-monospace, SFMono-Regular, Menlo, monospace",
-                              }}
-                            >
-                              {r.code}
-                              {r.mtssTagged && (
-                                <span
-                                  title="MTSS plan targets this benchmark"
-                                  style={{
-                                    marginLeft: 6,
-                                    background: "#ede9fe",
-                                    color: "#5b21b6",
-                                    border: "1px solid #c4b5fd",
-                                    borderRadius: 999,
-                                    fontSize: "0.65rem",
-                                    fontWeight: 700,
-                                    padding: "0.05rem 0.4rem",
-                                  }}
-                                >
-                                  MTSS
-                                </span>
-                              )}
-                            </td>
-                            <td style={{ color: "#6b7280" }}>
-                              {/* Only print the category on the first row
-                                  of each group so the eye reads the
-                                  grouping without column noise. */}
-                              {i === 0 ? cat : ""}
-                            </td>
-                            <td style={{ textAlign: "right" }}>{r.attempts}</td>
-                            <td
-                              style={{
-                                textAlign: "right",
-                                whiteSpace: "nowrap",
-                              }}
-                              title={`${statusLabel(r.status)} — ${r.earned}/${r.possible} pts`}
-                            >
+              <table
+                className="pulse-table"
+                style={{
+                  width: "100%",
+                  fontSize: "0.75rem",
+                  tableLayout: "fixed",
+                }}
+              >
+                <thead>
+                  <tr style={{ color: "#6b7280" }}>
+                    <th style={{ textAlign: "left" }}>Benchmark</th>
+                    <th style={{ textAlign: "right", width: "32%" }}>
+                      Mastery
+                    </th>
+                    <th
+                      style={{
+                        textAlign: "left",
+                        paddingLeft: 6,
+                        width: 74,
+                      }}
+                      title="Mastery trend across all windows on file"
+                    >
+                      Trend
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {sortedBenchmarks.map((r) => {
+                    const col = cellColor(r.masteryPct, data.thresholdPct);
+                    return (
+                      <tr key={r.code}>
+                        <td style={{ paddingRight: 4 }}>
+                          <div
+                            style={{
+                              fontFamily:
+                                "ui-monospace, SFMono-Regular, Menlo, monospace",
+                              whiteSpace: "nowrap",
+                              overflow: "hidden",
+                              textOverflow: "ellipsis",
+                            }}
+                            title={`${r.code}${r.category ? ` — ${r.category}` : ""}`}
+                          >
+                            {r.code}
+                            {r.mtssTagged && (
                               <span
+                                title="MTSS plan targets this benchmark"
                                 style={{
-                                  background: col.bg,
-                                  color: col.fg,
-                                  border: `1px solid ${col.fg}33`,
-                                  borderRadius: 6,
-                                  padding: "0.05rem 0.4rem",
+                                  marginLeft: 5,
+                                  background: "#ede9fe",
+                                  color: "#5b21b6",
+                                  border: "1px solid #c4b5fd",
+                                  borderRadius: 999,
+                                  fontSize: "0.6rem",
                                   fontWeight: 700,
+                                  padding: "0.02rem 0.35rem",
                                 }}
                               >
-                                {r.masteryPct}%
+                                MTSS
                               </span>
-                              <span
-                                style={{
-                                  marginLeft: 6,
-                                  color: "#6b7280",
-                                  fontSize: "0.72rem",
-                                  fontVariantNumeric: "tabular-nums",
-                                }}
-                              >
-                                {r.earned}/{r.possible}
-                              </span>
-                            </td>
-                            <td style={{ paddingLeft: 8 }}>
-                              {(() => {
-                                const hist =
-                                  data.historyByCode?.[r.code] ?? [];
-                                if (hist.length < 2) {
-                                  return (
-                                    <span
-                                      style={{
-                                        color: "#9ca3af",
-                                        fontSize: "0.7rem",
-                                      }}
-                                      title="Need ≥ 2 windows for a trend"
-                                    >
-                                      —
-                                    </span>
-                                  );
-                                }
-                                return (
-                                  <Sparkline
-                                    points={hist}
-                                    thresholdPct={data.thresholdPct}
-                                  />
-                                );
-                              })()}
-                            </td>
-                          </tr>
-                        );
-                      }),
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                            )}
+                          </div>
+                          {r.category && (
+                            <div
+                              style={{
+                                color: "#9ca3af",
+                                fontSize: "0.65rem",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                              }}
+                            >
+                              {r.category} · {r.attempts} att
+                            </div>
+                          )}
+                        </td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            whiteSpace: "nowrap",
+                          }}
+                          title={`${statusLabel(r.status)} — ${r.earned}/${r.possible} pts (${r.attempts} attempt${r.attempts === 1 ? "" : "s"})`}
+                        >
+                          <span
+                            style={{
+                              background: col.bg,
+                              color: col.fg,
+                              border: `1px solid ${col.fg}33`,
+                              borderRadius: 6,
+                              padding: "0.05rem 0.4rem",
+                              fontWeight: 700,
+                            }}
+                          >
+                            {r.masteryPct}%
+                          </span>
+                          <span
+                            style={{
+                              marginLeft: 5,
+                              color: "#6b7280",
+                              fontSize: "0.68rem",
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {r.earned}/{r.possible}
+                          </span>
+                        </td>
+                        <td style={{ paddingLeft: 6 }}>
+                          {(() => {
+                            const hist =
+                              data.historyByCode?.[r.code] ?? [];
+                            if (hist.length < 2) {
+                              return (
+                                <span
+                                  style={{
+                                    color: "#9ca3af",
+                                    fontSize: "0.7rem",
+                                  }}
+                                  title="Need ≥ 2 windows for a trend"
+                                >
+                                  —
+                                </span>
+                              );
+                            }
+                            return (
+                              <Sparkline
+                                points={hist}
+                                thresholdPct={data.thresholdPct}
+                              />
+                            );
+                          })()}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
 
               {currentWindow.overallMasteryPct != null && (
                 <div
                   style={{
-                    marginTop: "0.4rem",
-                    fontSize: "0.75rem",
+                    marginTop: "0.35rem",
+                    fontSize: "0.7rem",
                     color: "#6b7280",
                   }}
                 >
-                  Overall: {currentWindow.totalEarned} /{" "}
+                  Overall: {currentWindow.totalEarned}/
                   {currentWindow.totalPossible} pts (
-                  {currentWindow.overallMasteryPct}%) across{" "}
+                  {currentWindow.overallMasteryPct}%) ·{" "}
                   {currentWindow.benchmarks.length} benchmark
                   {currentWindow.benchmarks.length === 1 ? "" : "s"}
                 </div>
@@ -583,11 +524,47 @@ export default function StudentBenchmarksPanel({
   );
 }
 
+export default function StudentBenchmarksPanel({
+  studentId,
+}: {
+  studentId: string;
+}) {
+  return (
+    <div
+      style={{
+        marginTop: "0.75rem",
+        paddingTop: "0.6rem",
+        borderTop: "1px dashed #e5e7eb",
+      }}
+    >
+      <div
+        style={{
+          fontWeight: 600,
+          fontSize: "0.85rem",
+          marginBottom: "0.5rem",
+        }}
+      >
+        FAST Benchmarks
+      </div>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+          gap: "1rem",
+        }}
+      >
+        <SubjectColumn studentId={studentId} subject="ela" />
+        <SubjectColumn studentId={studentId} subject="math" />
+      </div>
+    </div>
+  );
+}
+
 const selectStyle: React.CSSProperties = {
   border: "1px solid #d1d5db",
   borderRadius: 6,
-  padding: "0.2rem 0.4rem",
-  fontSize: "0.8rem",
+  padding: "0.15rem 0.35rem",
+  fontSize: "0.75rem",
   background: "white",
 };
 
