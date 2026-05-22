@@ -514,6 +514,53 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
         </div>
         <div className="font-semibold">PulseEDU · School Operations</div>
       </footer>
+      <DemoFireButton />
     </div>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// DemoFireButton — small bottom-right control that POSTs to the demo
+// heartbeat fire endpoint. Bypasses cadence + bell-window so the operator
+// can demo the in-bar pulse + action-feed on demand. The server gates the
+// endpoint behind isDemoHeartbeatEnabled() so this is a no-op in prod.
+// -----------------------------------------------------------------------------
+function DemoFireButton() {
+  const [busy, setBusy] = useState(false);
+  const [flash, setFlash] = useState<null | "ok" | "skip" | "err">(null);
+  async function fire() {
+    if (busy) return;
+    setBusy(true);
+    setFlash(null);
+    try {
+      const r = await fetch("/api/demo-heartbeat/fire", { method: "POST" });
+      if (!r.ok) {
+        setFlash("err");
+      } else {
+        const data = (await r.json()) as { fired: boolean };
+        setFlash(data.fired ? "ok" : "skip");
+      }
+    } catch {
+      setFlash("err");
+    } finally {
+      setBusy(false);
+      window.setTimeout(() => setFlash(null), 2500);
+    }
+  }
+  const label =
+    flash === "ok" ? "Fired ✓" :
+    flash === "skip" ? "Skipped (cooldown)" :
+    flash === "err" ? "Failed" :
+    busy ? "Firing…" : "Fire heartbeat";
+  return (
+    <button
+      type="button"
+      onClick={fire}
+      disabled={busy}
+      title="Force one demo PBIS award now (bypasses cadence + school hours)"
+      className="fixed bottom-3 right-4 z-50 text-[11px] font-medium px-3 py-1.5 rounded-full bg-white/10 hover:bg-white/20 text-white/70 hover:text-white border border-white/15 backdrop-blur-sm transition-colors disabled:opacity-50"
+    >
+      {label}
+    </button>
   );
 }

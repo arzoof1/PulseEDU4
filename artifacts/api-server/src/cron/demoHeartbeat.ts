@@ -25,13 +25,16 @@
 //      grow visibly through the day.
 //   5. Tagged `note = '__demo_heartbeat__'` so the midnight reset can
 //      purge cleanly without touching any real teacher-entered award.
+//   6. Admin can force-fire one award on demand via the "Fire heartbeat"
+//      button on the houses signage page — bypasses cadence + window
+//      gates but still respects anti-repeat + house rotation + marker.
 //
 // Scope: hard-pinned to Parrott (school_id = 1). The user has no
 // onboarded schools yet, but other dev schools exist in the DB and
 // we don't want this ambient drip running there. When real tenants
 // onboard, gate this behind DEMO_MODE env *and* a per-school flag.
 
-import { and, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, eq, sql } from "drizzle-orm";
 import {
   db,
   bellSchedulesTable,
@@ -61,8 +64,7 @@ export function isDemoHeartbeatEnabled(): boolean {
 }
 
 // Cadence jitter — 90 to 180 seconds between fires (avg ~135s = ~26 awards
-// across a 7-hour school day). Plenty for the feed to never go quiet, far
-// short of "firehose" territory.
+// across a 7-hour school day).
 const MIN_DELAY_MS = 90_000;
 const MAX_DELAY_MS = 180_000;
 
@@ -78,15 +80,9 @@ const FALLBACK_END_MIN = 15 * 60 + 30;   // 3:30pm
 // Module-scope state (single-process; demo cadence doesn't need durability)
 // -----------------------------------------------------------------------------
 let nextFireAtMs = 0;
-const recentStudents = new Map<string, number>(); // studentId → lastFiredMs
+const recentStudents = new Map<string, number>();
 let houseRotationIdx = 0;
-
-// Cached bell-schedule window, refreshed when the date rolls over.
-let cachedWindow: {
-  date: string;
-  startMin: number;
-  endMin: number;
-} | null = null;
+let cachedWindow: { date: string; startMin: number; endMin: number } | null = null;
 
 // -----------------------------------------------------------------------------
 // Helpers
@@ -95,7 +91,6 @@ function jitteredDelay(): number {
   return MIN_DELAY_MS + Math.floor(Math.random() * (MAX_DELAY_MS - MIN_DELAY_MS));
 }
 
-// School-local "HH:MM" + "YYYY-MM-DD" via Intl, so we don't fight UTC.
 function nowInTz(tz: string): { dateKey: string; minutesSinceMidnight: number } {
   const fmt = new Intl.DateTimeFormat("en-CA", {
     timeZone: tz,
@@ -120,7 +115,6 @@ function nowInTz(tz: string): { dateKey: string; minutesSinceMidnight: number } 
 }
 
 function hhmmToMinutes(s: string): number {
-  // Tolerates "HH:MM" and "HH:MM:SS".
   const [h, m] = s.split(":").map((x) => parseInt(x, 10));
   if (!Number.isFinite(h) || !Number.isFinite(m)) return NaN;
   return h * 60 + m;
@@ -133,7 +127,6 @@ async function getBellWindow(
   if (cachedWindow && cachedWindow.date === dateKey) {
     return { startMin: cachedWindow.startMin, endMin: cachedWindow.endMin };
   }
-
   const [defaultSched] = await db
     .select({ id: bellSchedulesTable.id })
     .from(bellSchedulesTable)
@@ -169,11 +162,7 @@ async function getBellWindow(
 }
 
 function isSchoolDay(dateKey: string, tz: string): boolean {
-  // "en-US" weekday short — Mon..Fri only.
-  const fmt = new Intl.DateTimeFormat("en-US", {
-    timeZone: tz,
-    weekday: "short",
-  });
+  const fmt = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" });
   const day = fmt.format(new Date(`${dateKey}T12:00:00Z`));
   return ["Mon", "Tue", "Wed", "Thu", "Fri"].includes(day);
 }
@@ -185,47 +174,50 @@ function pruneRecent(now: number) {
 }
 
 // -----------------------------------------------------------------------------
-// Tick — called every minute by cron
+// Tick — called every minute by cron, OR force-fired by the admin button
 // -----------------------------------------------------------------------------
-export async function runDemoHeartbeatTick(): Promise<{ fired: boolean; reason?: string }> {
+export async function runDemoHeartbeatTick(
+  opts: { force?: boolean } = {},
+): Promise<{ fired: boolean; reason?: string }> {
+  const force = opts.force === true;
+
   if (!isDemoHeartbeatEnabled()) {
     return { fired: false, reason: "DEMO_MODE off" };
   }
 
   const now = Date.now();
-  if (now < nextFireAtMs) {
+  if (!force && now < nextFireAtMs) {
     return { fired: false, reason: "cadence-wait" };
   }
 
   const { dateKey, minutesSinceMidnight } = nowInTz(DEMO_TZ);
 
-  if (!isSchoolDay(dateKey, DEMO_TZ)) {
-    // Push the next eval out a bit so weekends don't hot-loop the DB.
-    nextFireAtMs = now + 5 * 60_000;
-    return { fired: false, reason: "weekend" };
+  if (!force) {
+    if (!isSchoolDay(dateKey, DEMO_TZ)) {
+      nextFireAtMs = now + 5 * 60_000;
+      return { fired: false, reason: "weekend" };
+    }
+    const { startMin, endMin } = await getBellWindow(DEMO_SCHOOL_ID, dateKey);
+    if (minutesSinceMidnight < startMin || minutesSinceMidnight >= endMin) {
+      nextFireAtMs = now + 5 * 60_000;
+      return { fired: false, reason: "outside-bell-window" };
+    }
   }
 
-  const { startMin, endMin } = await getBellWindow(DEMO_SCHOOL_ID, dateKey);
-  if (minutesSinceMidnight < startMin || minutesSinceMidnight >= endMin) {
-    nextFireAtMs = now + 5 * 60_000;
-    return { fired: false, reason: "outside-bell-window" };
-  }
-
-  // Pick a house round-robin. We refresh the house list on each fire so
-  // newly-added houses get rotated in without a server restart.
+  // Pick a house round-robin.
   const houseRows = await db.execute<{ id: number }>(sql`
     SELECT id FROM houses WHERE school_id = ${DEMO_SCHOOL_ID} ORDER BY id ASC
   `);
   const houseIds = (houseRows as unknown as { rows: Array<{ id: number }> })
     .rows.map((r) => r.id);
   if (houseIds.length === 0) {
-    nextFireAtMs = now + jitteredDelay();
+    if (!force) nextFireAtMs = now + jitteredDelay();
     return { fired: false, reason: "no-houses" };
   }
   const houseId = houseIds[houseRotationIdx % houseIds.length];
   houseRotationIdx = (houseRotationIdx + 1) % houseIds.length;
 
-  // Eligible students: in this house, in this school, not on cooldown.
+  // Eligible students.
   pruneRecent(now);
   const cooldownIds = Array.from(recentStudents.keys());
   const studentRows = await db
@@ -245,16 +237,13 @@ export async function runDemoHeartbeatTick(): Promise<{ fired: boolean; reason?:
     );
 
   if (studentRows.length === 0) {
-    // All students on cooldown for this house — try again sooner with a
-    // different house next time.
-    nextFireAtMs = now + 30_000;
+    if (!force) nextFireAtMs = now + 30_000;
     return { fired: false, reason: "house-cooled-down" };
   }
 
   const pick = studentRows[Math.floor(Math.random() * studentRows.length)];
 
-  // Pick a positive PBIS reason — defaults to small point values so the
-  // ambient drip doesn't drown out the bigger Spotlight awards.
+  // Positive PBIS reason, biased to 1-3 pts.
   const reasons = await db
     .select({
       name: pbisReasonsTable.name,
@@ -269,12 +258,10 @@ export async function runDemoHeartbeatTick(): Promise<{ fired: boolean; reason?:
     );
 
   if (reasons.length === 0) {
-    nextFireAtMs = now + jitteredDelay();
+    if (!force) nextFireAtMs = now + jitteredDelay();
     return { fired: false, reason: "no-positive-reasons" };
   }
 
-  // Bias toward 1-3 point reasons so the drip stays small. Falls back to
-  // any positive reason if none match.
   const small = reasons.filter(
     (r) => typeof r.defaultPoints === "number" && r.defaultPoints >= 1 && r.defaultPoints <= 3,
   );
@@ -294,14 +281,13 @@ export async function runDemoHeartbeatTick(): Promise<{ fired: boolean; reason?:
   });
 
   recentStudents.set(pick.studentId, now);
-  nextFireAtMs = now + jitteredDelay();
+  if (!force) nextFireAtMs = now + jitteredDelay();
   return { fired: true };
 }
 
 // -----------------------------------------------------------------------------
 // Midnight reset — purge yesterday's demo drip so totals don't accumulate
-// across days. Only touches rows tagged with DEMO_MARKER, so real awards
-// are untouched.
+// across days. Only touches rows tagged with DEMO_MARKER.
 // -----------------------------------------------------------------------------
 export async function runDemoHeartbeatReset(): Promise<{ deleted: number }> {
   if (!isDemoHeartbeatEnabled()) {
@@ -319,7 +305,6 @@ export async function runDemoHeartbeatReset(): Promise<{ deleted: number }> {
   const deleted = (res as unknown as { rows: Array<{ deleted: number }> })
     .rows[0]?.deleted ?? 0;
 
-  // Reset in-memory cadence state so the next morning starts fresh.
   nextFireAtMs = 0;
   recentStudents.clear();
   houseRotationIdx = 0;
