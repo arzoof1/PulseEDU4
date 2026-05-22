@@ -150,49 +150,68 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
     `);
     const wiped = Number(wipedRes.rows[0]?.n ?? 0);
 
-    // -- 2. LOAD ENROLLMENTS -------------------------------------------
-    // One row per (student, subject, grade, teacher). Picks the section's
-    // grade out of the course_name ("ELA — Grade 7" -> 7). Skips planning.
-    const enrollRes = await db.execute<{
-      student_id: string;
+    // -- 2. LOAD ELA/MATH TEACHERS + their grade --------------------------
+    // One row per (teacher, subject, grade). A teacher only ever owns one
+    // (subject, grade) combo at Parrott per the rebuild naming.
+    const teacherRes = await db.execute<{
       teacher_staff_id: number;
       subject: string;
       grade: number;
     }>(sql`
-      SELECT
-        sr.student_id,
+      SELECT DISTINCT
         cs.teacher_staff_id,
         LOWER(SPLIT_PART(cs.course_name, ' ', 1)) AS subject,
         NULLIF(REGEXP_REPLACE(cs.course_name, '.*Grade ([0-9]+).*', '\\1'), cs.course_name)::int AS grade
-      FROM section_roster sr
-      JOIN class_sections cs ON cs.id = sr.section_id
-      WHERE sr.school_id = ${SCHOOL_ID}
+      FROM class_sections cs
+      WHERE cs.school_id = ${SCHOOL_ID}
         AND cs.is_planning = false
         AND (cs.course_name ILIKE 'ELA%' OR cs.course_name ILIKE 'Math%')
     `);
 
-    // -- 3. LOAD PM SCORES ---------------------------------------------
-    const pmRes = await db.execute<{
-      student_id: string;
+    // -- 3. PM-IMPROVER % PER TEACHER -------------------------------------
+    // For each teacher: across their rostered students with both PM1+PM3,
+    // what fraction improved by ≥1 point? Drives the soft correlation
+    // between "teacher delivered more often" and "students improved".
+    const improverRes = await db.execute<{
+      teacher_staff_id: number;
       subject: string;
-      pm1: number | null;
-      pm3: number | null;
+      improver_pct: number;
     }>(sql`
-      SELECT student_id, subject, pm1, pm3
-      FROM student_fast_scores
-      WHERE school_id = ${SCHOOL_ID} AND subject IN ('ela','math')
+      WITH roster AS (
+        SELECT cs.teacher_staff_id,
+               LOWER(SPLIT_PART(cs.course_name, ' ', 1)) AS subject,
+               sr.student_id
+        FROM section_roster sr
+        JOIN class_sections cs ON cs.id = sr.section_id
+        WHERE sr.school_id = ${SCHOOL_ID} AND cs.is_planning = false
+          AND (cs.course_name ILIKE 'ELA%' OR cs.course_name ILIKE 'Math%')
+      )
+      SELECT
+        r.teacher_staff_id,
+        r.subject,
+        COALESCE(
+          AVG(CASE WHEN f.pm3 IS NOT NULL AND f.pm1 IS NOT NULL AND f.pm3 - f.pm1 >= 1
+                   THEN 1.0 ELSE 0.0 END)
+            FILTER (WHERE f.pm1 IS NOT NULL AND f.pm3 IS NOT NULL),
+          0.4
+        )::float AS improver_pct
+      FROM roster r
+      LEFT JOIN student_fast_scores f
+        ON f.school_id = ${SCHOOL_ID}
+       AND f.student_id = r.student_id
+       AND f.subject = r.subject
+      GROUP BY r.teacher_staff_id, r.subject
     `);
-    const pmMap = new Map<string, { pm1: number | null; pm3: number | null }>();
-    for (const r of pmRes.rows) {
-      pmMap.set(`${r.student_id}|${r.subject}`, { pm1: r.pm1, pm3: r.pm3 });
+    const improverMap = new Map<string, number>();
+    for (const r of improverRes.rows) {
+      improverMap.set(`${r.teacher_staff_id}|${r.subject}`, Number(r.improver_pct));
     }
 
-    // -- 4. LOAD BENCHMARK CATALOG by (subject, grade) -----------------
+    // -- 4. LOAD BENCHMARK CATALOG by (subject, grade) --------------------
     const bRes = await db.execute<{ code: string; subject: string }>(sql`
       SELECT code, subject FROM school_benchmarks
       WHERE school_id = ${SCHOOL_ID} AND subject IN ('ela','math') AND active = true
     `);
-    // group by subject+grade (grade derived from code prefix .<g>.)
     const catalog = new Map<string, string[]>(); // key = "subject|grade"
     for (const r of bRes.rows) {
       const parts = r.code.split(".");
@@ -206,22 +225,7 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
       catalog.set(key, arr);
     }
 
-    // -- 5. PLAN COUNTS PER (student, subject) -------------------------
-    // delta = PM3 - PM1.  Mapping (with seeded jitter):
-    //   delta >= +15  -> 12..18 lessons
-    //   delta +1..+14 ->  7..11
-    //   delta -5..  0 ->  3..6
-    //   delta <  -5   ->  1..3
-    //   missing       ->  4..7
-    function band(pm1: number | null, pm3: number | null): [number, number] {
-      if (pm1 == null || pm3 == null) return [4, 7];
-      const d = pm3 - pm1;
-      if (d >= 15) return [12, 18];
-      if (d >= 1) return [7, 11];
-      if (d >= -5) return [3, 6];
-      return [1, 3];
-    }
-    // Deterministic seeded RNG (mulberry32).
+    // -- 5. RNG helper ----------------------------------------------------
     function mkRng(seedStr: string): () => number {
       let h = 2166136261 >>> 0;
       for (let i = 0; i < seedStr.length; i++) {
@@ -238,8 +242,7 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
       };
     }
 
-    // -- 6. SCHOOL YEAR WEEKDAYS POOL ----------------------------------
-    // Aug 11 2025 (Mon) .. May 22 2026 (Fri). Skip weekends.
+    // -- 6. SCHOOL YEAR WEEKDAYS POOL ------------------------------------
     const yearStart = new Date(Date.UTC(2025, 7, 11));
     const yearEnd = new Date(Date.UTC(2026, 4, 22));
     const weekdays: string[] = [];
@@ -253,48 +256,57 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
       weekdays.push(d.toISOString().slice(0, 10));
     }
 
-    // -- 7. GENERATE ROWS ----------------------------------------------
+    // -- 7. GENERATE ROWS at the (teacher, benchmark) level --------------
+    // Each teacher rolls a per-benchmark count from this distribution
+    // (no teacher would touch one standard 30+ times in one year):
+    //   5%  -> 0   (didn't get to it / skipped)
+    //   25% -> 1-2 (light touch)
+    //   60% -> 3-7 (typical)
+    //   10% -> 8-9 (heavy emphasis)
+    // Teachers with a stronger improver % on their roster get nudged
+    // toward the upper end of each band (boost ∈ [-1, +2]).
     type Row = typeof import("@workspace/db").benchmarkDeliveriesTable.$inferInsert;
     const out: Row[] = [];
     let skippedNoCatalog = 0;
-    for (const e of enrollRes.rows) {
-      const subject = e.subject;
+    for (const t of teacherRes.rows) {
+      const subject = t.subject;
       if (subject !== "ela" && subject !== "math") continue;
-      const codes = catalog.get(`${subject}|${e.grade}`) ?? [];
+      const codes = catalog.get(`${subject}|${t.grade}`) ?? [];
       if (codes.length === 0) {
         skippedNoCatalog++;
         continue;
       }
-      const pm = pmMap.get(`${e.student_id}|${subject}`) ?? { pm1: null, pm3: null };
-      const [lo, hi] = band(pm.pm1, pm.pm3);
-      const rng = mkRng(`${e.student_id}|${subject}|${e.teacher_staff_id}`);
-      const count = lo + Math.floor(rng() * (hi - lo + 1));
-      // pick `count` benchmark codes WITH REPLACEMENT (a teacher can revisit
-      // a standard across many days) — but cap repeats per code at ~3 to
-      // keep the spread realistic.
-      const codeUseCap = 3;
-      const codeUses = new Map<string, number>();
-      for (let i = 0; i < count; i++) {
-        // up to 8 tries to find a non-capped code
-        let code: string | null = null;
-        for (let attempt = 0; attempt < 8; attempt++) {
-          const c = codes[Math.floor(rng() * codes.length)]!;
-          if ((codeUses.get(c) ?? 0) < codeUseCap) {
-            code = c;
-            break;
-          }
+      const improverPct =
+        improverMap.get(`${t.teacher_staff_id}|${subject}`) ?? 0.4;
+      // improverPct is roughly 0.2..0.7 in practice → boost from -1 to +2.
+      const boost = Math.round((improverPct - 0.4) * 6);
+      const rng = mkRng(`${t.teacher_staff_id}|${subject}`);
+      for (const code of codes) {
+        const roll = rng();
+        let lo: number, hi: number;
+        if (roll < 0.05) {
+          continue; // 0 deliveries — skip insert
+        } else if (roll < 0.30) {
+          lo = 1; hi = 2;
+        } else if (roll < 0.90) {
+          lo = 3; hi = 7;
+        } else {
+          lo = 8; hi = 9;
         }
-        if (!code) code = codes[Math.floor(rng() * codes.length)]!;
-        codeUses.set(code, (codeUses.get(code) ?? 0) + 1);
-        const day = weekdays[Math.floor(rng() * weekdays.length)]!;
-        out.push({
-          schoolId: SCHOOL_ID,
-          teacherStaffId: e.teacher_staff_id,
-          subject,
-          benchmarkCode: code,
-          deliveredOn: day,
-          notes: null,
-        });
+        let count = lo + Math.floor(rng() * (hi - lo + 1)) + boost;
+        if (count < 1) count = 1;
+        if (count > 9) count = 9; // hard cap — single digits only
+        for (let i = 0; i < count; i++) {
+          const day = weekdays[Math.floor(rng() * weekdays.length)]!;
+          out.push({
+            schoolId: SCHOOL_ID,
+            teacherStaffId: t.teacher_staff_id,
+            subject,
+            benchmarkCode: code,
+            deliveredOn: day,
+            notes: null,
+          });
+        }
       }
     }
 
@@ -308,7 +320,7 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
     res.json({
       ok: true,
       wiped,
-      enrollments: enrollRes.rows.length,
+      teachers: teacherRes.rows.length,
       inserted: out.length,
       skippedNoCatalog,
     });
