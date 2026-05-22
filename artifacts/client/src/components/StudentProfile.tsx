@@ -238,6 +238,234 @@ function Chip({
   );
 }
 
+// Behavior-aware chip: same visual as <Chip>, but reveals a small
+// popover on hover/focus listing the recent negative PBIS entries +
+// support notes that produced the count. Lets a Core Team member
+// confirm "what actually happened" without leaving the page header.
+function BehaviorRiskChip({
+  label,
+  sev,
+  recentPbis,
+  recentSupportNotes,
+}: {
+  label: string;
+  sev: "info" | "watch" | "high";
+  recentPbis: Array<{
+    polarity: string;
+    reason: string;
+    staffName: string;
+    createdAt: string;
+    points: number;
+  }>;
+  recentSupportNotes: Array<{
+    noteType: string;
+    noteText: string;
+    staffName: string;
+    createdAt: string;
+  }>;
+}) {
+  const s = SEVERITY_STYLES[sev];
+  const [open, setOpen] = useState(false);
+  // Server flag counts negative PBIS; surface those first, then any
+  // support notes from the same window as supplementary context.
+  const negatives = recentPbis
+    .filter((p) => p.polarity === "negative")
+    .slice(0, 6);
+  const notes = recentSupportNotes.slice(0, 3);
+  const hasDetail = negatives.length > 0 || notes.length > 0;
+  return (
+    <span
+      style={{ position: "relative", display: "inline-block" }}
+      onMouseEnter={() => setOpen(true)}
+      onMouseLeave={() => setOpen(false)}
+      onFocus={() => setOpen(true)}
+      onBlur={() => setOpen(false)}
+    >
+      <span
+        tabIndex={0}
+        role="button"
+        aria-haspopup="dialog"
+        aria-expanded={open}
+        style={{
+          display: "inline-block",
+          padding: "0.15rem 0.55rem",
+          background: s.background,
+          color: s.color,
+          border: `1px solid ${s.border}`,
+          borderRadius: 999,
+          fontSize: "0.75rem",
+          fontWeight: 600,
+          marginRight: 4,
+          marginBottom: 4,
+          cursor: hasDetail ? "help" : "default",
+        }}
+      >
+        {label}
+        {hasDetail && (
+          <span
+            aria-hidden
+            style={{ marginLeft: 4, opacity: 0.7, fontWeight: 700 }}
+          >
+            ⓘ
+          </span>
+        )}
+      </span>
+      {open && hasDetail && (
+        <div
+          role="dialog"
+          style={{
+            position: "absolute",
+            zIndex: 50,
+            top: "calc(100% + 4px)",
+            left: 0,
+            minWidth: 280,
+            maxWidth: 360,
+            background: "white",
+            border: "1px solid #d1d5db",
+            borderRadius: 8,
+            boxShadow: "0 6px 20px rgba(0,0,0,0.12)",
+            padding: "0.6rem 0.7rem",
+            fontWeight: 400,
+            color: "#111827",
+            fontSize: "0.78rem",
+            lineHeight: 1.35,
+          }}
+        >
+          {negatives.length > 0 && (
+            <>
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: "0.72rem",
+                  color: "#6b7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginBottom: 4,
+                }}
+              >
+                Recent negative PBIS
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  listStyle: "none",
+                  display: "grid",
+                  gap: 4,
+                }}
+              >
+                {negatives.map((p, i) => {
+                  const when = new Date(p.createdAt);
+                  const dateStr = isNaN(when.valueOf())
+                    ? p.createdAt
+                    : when.toLocaleDateString();
+                  return (
+                    <li
+                      key={`pbis-${i}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        columnGap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "#6b7280",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {dateStr}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 600 }}>
+                          {p.reason || "(no reason)"}
+                        </span>
+                        <span style={{ color: "#6b7280" }}>
+                          {" · "}
+                          {p.staffName || "Staff"}
+                          {p.points ? ` · ${p.points}pt` : ""}
+                        </span>
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+          {notes.length > 0 && (
+            <>
+              <div
+                style={{
+                  fontWeight: 700,
+                  fontSize: "0.72rem",
+                  color: "#6b7280",
+                  textTransform: "uppercase",
+                  letterSpacing: "0.04em",
+                  marginTop: negatives.length > 0 ? 8 : 0,
+                  marginBottom: 4,
+                }}
+              >
+                Recent support notes
+              </div>
+              <ul
+                style={{
+                  margin: 0,
+                  padding: 0,
+                  listStyle: "none",
+                  display: "grid",
+                  gap: 4,
+                }}
+              >
+                {notes.map((n, i) => {
+                  const when = new Date(n.createdAt);
+                  const dateStr = isNaN(when.valueOf())
+                    ? n.createdAt
+                    : when.toLocaleDateString();
+                  const text =
+                    n.noteText.length > 90
+                      ? n.noteText.slice(0, 87) + "…"
+                      : n.noteText;
+                  return (
+                    <li
+                      key={`note-${i}`}
+                      style={{
+                        display: "grid",
+                        gridTemplateColumns: "auto 1fr",
+                        columnGap: 6,
+                      }}
+                    >
+                      <span
+                        style={{
+                          color: "#6b7280",
+                          fontVariantNumeric: "tabular-nums",
+                          whiteSpace: "nowrap",
+                        }}
+                      >
+                        {dateStr}
+                      </span>
+                      <span style={{ minWidth: 0 }}>
+                        <span style={{ fontWeight: 600 }}>{n.noteType}</span>
+                        <span style={{ color: "#6b7280" }}>
+                          {" · "}
+                          {n.staffName || "Staff"}
+                        </span>
+                        {text && (
+                          <div style={{ color: "#374151" }}>{text}</div>
+                        )}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </>
+          )}
+        </div>
+      )}
+    </span>
+  );
+}
+
 function Card({
   title,
   children,
@@ -2537,9 +2765,24 @@ export default function StudentProfile({
         <div className="card" style={{ marginBottom: 0 }}>
           <h3 style={{ margin: "0 0 0.5rem 0", fontSize: "1rem" }}>Things to know</h3>
           <div>
-            {riskFlags.map((f) => (
-              <Chip key={f.code} label={f.label} sev={f.severity} />
-            ))}
+            {riskFlags.map((f) => {
+              // Behavior flags get a hover popover with the actual
+              // recent PBIS / support-note entries so the reader can
+              // see "what happened" without leaving the header.
+              const isBehavior = f.code.startsWith("BEHAVIOR");
+              if (isBehavior) {
+                return (
+                  <BehaviorRiskChip
+                    key={f.code}
+                    label={f.label}
+                    sev={f.severity}
+                    recentPbis={pillars.behavior.recentPbis}
+                    recentSupportNotes={pillars.behavior.recentSupportNotes}
+                  />
+                );
+              }
+              return <Chip key={f.code} label={f.label} sev={f.severity} />;
+            })}
           </div>
         </div>
       )}
