@@ -91,7 +91,7 @@ function gradientFromColor(hex: string): string {
 // unambiguous that a *new* award is being celebrated — without it,
 // rapid-fire awards look like one continuous strip.
 const FEATURED_HOLD_MS = 5_000;
-const FEATURED_GAP_MS = 3_000;
+const FEATURED_GAP_MS = 6_000;
 
 function FeaturedPopup({
   events,
