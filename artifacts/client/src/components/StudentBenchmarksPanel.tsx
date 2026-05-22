@@ -369,34 +369,25 @@ function SubjectColumn({
                 className="pulse-table"
                 style={{
                   width: "100%",
-                  fontSize: "0.75rem",
+                  fontSize: "0.72rem",
                   tableLayout: "fixed",
                 }}
               >
                 <thead>
                   <tr style={{ color: "#6b7280" }}>
                     <th style={{ textAlign: "left" }}>Benchmark</th>
-                    <th style={{ textAlign: "right", width: "32%" }}>
-                      Mastery
-                    </th>
-                    <th
-                      style={{
-                        textAlign: "left",
-                        paddingLeft: 6,
-                        width: 74,
-                      }}
-                      title="Mastery trend across all windows on file"
-                    >
-                      Trend
+                    <th style={{ textAlign: "right" }}>
+                      Mastery · Trend
                     </th>
                   </tr>
                 </thead>
                 <tbody>
                   {sortedBenchmarks.map((r) => {
                     const col = cellColor(r.masteryPct, data.thresholdPct);
+                    const hist = data.historyByCode?.[r.code] ?? [];
                     return (
                       <tr key={r.code}>
-                        <td style={{ paddingRight: 4 }}>
+                        <td style={{ paddingRight: 4, minWidth: 0 }}>
                           <div
                             style={{
                               fontFamily:
@@ -417,9 +408,9 @@ function SubjectColumn({
                                   color: "#5b21b6",
                                   border: "1px solid #c4b5fd",
                                   borderRadius: 999,
-                                  fontSize: "0.6rem",
+                                  fontSize: "0.58rem",
                                   fontWeight: 700,
-                                  padding: "0.02rem 0.35rem",
+                                  padding: "0.02rem 0.3rem",
                                 }}
                               >
                                 MTSS
@@ -430,11 +421,12 @@ function SubjectColumn({
                             <div
                               style={{
                                 color: "#9ca3af",
-                                fontSize: "0.65rem",
+                                fontSize: "0.62rem",
                                 whiteSpace: "nowrap",
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
                               }}
+                              title={r.category}
                             >
                               {r.category} · {r.attempts} att
                             </div>
@@ -449,51 +441,54 @@ function SubjectColumn({
                         >
                           <span
                             style={{
-                              background: col.bg,
-                              color: col.fg,
-                              border: `1px solid ${col.fg}33`,
-                              borderRadius: 6,
-                              padding: "0.05rem 0.4rem",
-                              fontWeight: 700,
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 5,
+                              justifyContent: "flex-end",
                             }}
                           >
-                            {r.masteryPct}%
-                          </span>
-                          <span
-                            style={{
-                              marginLeft: 5,
-                              color: "#6b7280",
-                              fontSize: "0.68rem",
-                              fontVariantNumeric: "tabular-nums",
-                            }}
-                          >
-                            {r.earned}/{r.possible}
-                          </span>
-                        </td>
-                        <td style={{ paddingLeft: 6 }}>
-                          {(() => {
-                            const hist =
-                              data.historyByCode?.[r.code] ?? [];
-                            if (hist.length < 2) {
-                              return (
-                                <span
-                                  style={{
-                                    color: "#9ca3af",
-                                    fontSize: "0.7rem",
-                                  }}
-                                  title="Need ≥ 2 windows for a trend"
-                                >
-                                  —
-                                </span>
-                              );
-                            }
-                            return (
+                            <span
+                              style={{
+                                background: col.bg,
+                                color: col.fg,
+                                border: `1px solid ${col.fg}33`,
+                                borderRadius: 6,
+                                padding: "0.05rem 0.35rem",
+                                fontWeight: 700,
+                              }}
+                            >
+                              {r.masteryPct}%
+                            </span>
+                            <span
+                              style={{
+                                color: "#6b7280",
+                                fontSize: "0.64rem",
+                                fontVariantNumeric: "tabular-nums",
+                              }}
+                            >
+                              {r.earned}/{r.possible}
+                            </span>
+                            {hist.length >= 2 ? (
                               <Sparkline
                                 points={hist}
                                 thresholdPct={data.thresholdPct}
+                                width={48}
+                                height={16}
                               />
-                            );
-                          })()}
+                            ) : (
+                              <span
+                                style={{
+                                  color: "#d1d5db",
+                                  fontSize: "0.7rem",
+                                  width: 48,
+                                  textAlign: "center",
+                                }}
+                                title="Need ≥ 2 windows for a trend"
+                              >
+                                —
+                              </span>
+                            )}
+                          </span>
                         </td>
                       </tr>
                     );
@@ -549,8 +544,8 @@ export default function StudentBenchmarksPanel({
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
-          gap: "1rem",
+          gridTemplateColumns: "repeat(auto-fit, minmax(260px, 1fr))",
+          gap: "0.75rem",
         }}
       >
         <SubjectColumn studentId={studentId} subject="ela" />
