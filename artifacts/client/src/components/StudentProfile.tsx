@@ -2541,6 +2541,59 @@ export default function StudentProfile({
       {/* Whole-child radar */}
       <WholeChildRadar axes={data.radar.axes} />
 
+      {/* FAST Analysis Over Time — full-width section above the
+          pillars grid. Pulled out of the Academics card so each
+          subject gets ~half the page width, the trend sparkline is
+          readable at a glance, and the page reads as "trajectory
+          first, pillar deep-dives below". */}
+      <div className="card" style={{ marginBottom: 0 }}>
+        <div
+          style={{
+            display: "flex",
+            alignItems: "baseline",
+            justifyContent: "space-between",
+            borderBottom: "3px solid #1e3a8a",
+            paddingBottom: "0.4rem",
+            marginBottom: "0.75rem",
+          }}
+        >
+          <h2
+            style={{
+              margin: 0,
+              fontSize: "1.15rem",
+              color: "#1e3a8a",
+              letterSpacing: "0.01em",
+            }}
+          >
+            FAST Analysis Over Time
+          </h2>
+          <span style={{ color: "#6b7280", fontSize: "0.78rem" }}>
+            ELA &amp; Math · PM1 → PM2 → PM3
+          </span>
+        </div>
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns:
+              "repeat(auto-fit, minmax(min(100%, 420px), 1fr))",
+            gap: "1.25rem",
+          }}
+        >
+          <StudentBenchmarksPanel
+            studentId={data.header.studentId}
+            subject="ela"
+            showHeader={true}
+            showTopBorder={false}
+          />
+          <StudentBenchmarksPanel
+            studentId={data.header.studentId}
+            subject="math"
+            showHeader={true}
+            showTopBorder={false}
+          />
+        </div>
+      </div>
+
       {/* Pillars grid */}
       <div
         style={{
@@ -2707,30 +2760,11 @@ export default function StudentProfile({
               </ul>
             </div>
           )}
-          {/* FAST Phase 3 — per-benchmark history. Mounts inside the
-              Academics pillar (rather than a separate sub-tab) so it
-              sits next to FAST PM scores and reads as the "deep" view
-              of the same data. Visibility check happens server-side. */}
-          <StudentBenchmarksPanel
-            studentId={data.header.studentId}
-            subject="ela"
-            showHeader={false}
-            showTopBorder={true}
-          />
-        </Card>
-
-        {/* Math FAST Benchmarks live in their own pillar card so they
-            sit beside ELA in the pillars grid (middle column on wide
-            screens) and so future per-subject context (attendance,
-            ODRs in math class) can stack above or below this card
-            without crowding the Academics pillar. */}
-        <Card title="Math (FAST Benchmarks)">
-          <StudentBenchmarksPanel
-            studentId={data.header.studentId}
-            subject="math"
-            showHeader={false}
-            showTopBorder={false}
-          />
+          {/* FAST per-benchmark history (ELA + Math) lives in the
+              full-width "FAST Analysis Over Time" section above the
+              pillars grid — not inside this card — so each subject
+              gets ~half the page width and the trend sparkline is
+              readable. */}
         </Card>
 
         <Card

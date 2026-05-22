@@ -373,11 +373,15 @@ function SubjectColumn({
                   tableLayout: "fixed",
                 }}
               >
+                <colgroup>
+                  <col style={{ width: "48%" }} />
+                  <col style={{ width: "52%" }} />
+                </colgroup>
                 <thead>
                   <tr style={{ color: "#6b7280" }}>
                     <th style={{ textAlign: "left" }}>Benchmark</th>
                     <th style={{ textAlign: "right" }}>
-                      Mastery · Trend
+                      Mastery · PM1 · PM2 · PM3
                     </th>
                   </tr>
                 </thead>
@@ -472,15 +476,16 @@ function SubjectColumn({
                               <Sparkline
                                 points={hist}
                                 thresholdPct={data.thresholdPct}
-                                width={48}
-                                height={16}
+                                width={120}
+                                height={24}
                               />
                             ) : (
                               <span
                                 style={{
                                   color: "#d1d5db",
                                   fontSize: "0.7rem",
-                                  width: 48,
+                                  width: 120,
+                                  display: "inline-block",
                                   textAlign: "center",
                                 }}
                                 title="Need ≥ 2 windows for a trend"
