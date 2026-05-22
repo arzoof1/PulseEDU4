@@ -3,12 +3,6 @@ type ModuleMap = Record<string, () => Promise<Record<string, unknown>>>;
 export const modules: ModuleMap = {
   "./components/mockups/heartbeat/ReportToggle.tsx": () => import("../components/mockups/heartbeat/ReportToggle.tsx"),
   "./components/mockups/heartbeat/Snapshot.tsx": () => import("../components/mockups/heartbeat/Snapshot.tsx"),
-  "./components/mockups/hub-viz/ClimbLadder.tsx": () => import("../components/mockups/hub-viz/ClimbLadder.tsx"),
-  "./components/mockups/hub-viz/GrowthTower.tsx": () => import("../components/mockups/hub-viz/GrowthTower.tsx"),
-  "./components/mockups/hub-viz/L3Funnel.tsx": () => import("../components/mockups/hub-viz/L3Funnel.tsx"),
-  "./components/mockups/hub-viz/StandardSpine.tsx": () => import("../components/mockups/hub-viz/StandardSpine.tsx"),
-  "./components/mockups/hub-viz/TeacherHeat.tsx": () => import("../components/mockups/hub-viz/TeacherHeat.tsx"),
-  "./components/mockups/hub-viz/TopMovers.tsx": () => import("../components/mockups/hub-viz/TopMovers.tsx"),
   "./components/mockups/pulse-screens/DotMigration.tsx": () => import("../components/mockups/pulse-screens/DotMigration.tsx"),
   "./components/mockups/pulse-screens/HousesPbis.tsx": () => import("../components/mockups/pulse-screens/HousesPbis.tsx"),
   "./components/mockups/pulse-screens/MyWatchList.tsx": () => import("../components/mockups/pulse-screens/MyWatchList.tsx"),
@@ -19,6 +13,12 @@ export const modules: ModuleMap = {
   "./components/mockups/pulse-screens/TransitionMatrix.tsx": () => import("../components/mockups/pulse-screens/TransitionMatrix.tsx"),
   "./components/mockups/pulse-screens/TwoTowerFlow.tsx": () => import("../components/mockups/pulse-screens/TwoTowerFlow.tsx"),
   "./components/mockups/pulse-screens/WatchListRedesign.tsx": () => import("../components/mockups/pulse-screens/WatchListRedesign.tsx"),
+  "./components/mockups/hub-viz/ClimbLadder.tsx": () => import("../components/mockups/hub-viz/ClimbLadder.tsx"),
+  "./components/mockups/hub-viz/GrowthTower.tsx": () => import("../components/mockups/hub-viz/GrowthTower.tsx"),
+  "./components/mockups/hub-viz/L3Funnel.tsx": () => import("../components/mockups/hub-viz/L3Funnel.tsx"),
+  "./components/mockups/hub-viz/StandardSpine.tsx": () => import("../components/mockups/hub-viz/StandardSpine.tsx"),
+  "./components/mockups/hub-viz/TeacherHeat.tsx": () => import("../components/mockups/hub-viz/TeacherHeat.tsx"),
+  "./components/mockups/hub-viz/TopMovers.tsx": () => import("../components/mockups/hub-viz/TopMovers.tsx"),
   "./components/mockups/watchlist-hub/Hub.tsx": () => import("../components/mockups/watchlist-hub/Hub.tsx"),
   "./components/mockups/watchlist-hub/Network.tsx": () => import("../components/mockups/watchlist-hub/Network.tsx")
 };
