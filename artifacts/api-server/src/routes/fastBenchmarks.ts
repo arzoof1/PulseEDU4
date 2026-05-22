@@ -1734,12 +1734,18 @@ router.get(
           eq(studentFastItemResponsesTable.subject, subject),
         ),
       );
-    // Aggregate (schoolYear, window, code) → mastery%.
+    // Aggregate (schoolYear, window, code) → mastery%. NOTE: Florida
+    // math benchmark codes can contain literal "|" characters
+    // (e.g. "MA.7.DP.2|MA.7.DP.2.1"), so the composite key uses an
+    // ASCII delimiter that can't appear in a code. Bug fixed 2026-05:
+    // previously used "|" which truncated math codes on split and
+    // caused the profile sparkline to never light up for Math.
+    const SEP = "\u0001";
     interface HistAgg { earned: number; possible: number }
     const histAgg = new Map<string, HistAgg>();
     for (const r of historyRows) {
       if (r.pointsPossible == null || r.pointsPossible <= 0) continue;
-      const key = `${r.schoolYear}|${r.window}|${r.benchmarkCode}`;
+      const key = `${r.schoolYear}${SEP}${r.window}${SEP}${r.benchmarkCode}`;
       const prior = histAgg.get(key) ?? { earned: 0, possible: 0 };
       prior.earned += r.pointsEarned ?? 0;
       prior.possible += r.pointsPossible;
@@ -1754,7 +1760,13 @@ router.get(
     > = {};
     for (const [key, agg] of histAgg.entries()) {
       if (agg.possible === 0) continue;
-      const [sy, win, code] = key.split("|");
+      // Split into exactly 3 parts so a "|" or any other char in the
+      // benchmark code survives intact.
+      const firstSep = key.indexOf(SEP);
+      const secondSep = key.indexOf(SEP, firstSep + 1);
+      const sy = key.slice(0, firstSep);
+      const win = key.slice(firstSep + 1, secondSep);
+      const code = key.slice(secondSep + 1);
       const list = historyByCode[code] ?? [];
       list.push({
         schoolYear: sy,
