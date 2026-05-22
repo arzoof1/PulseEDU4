@@ -39,6 +39,10 @@ interface PulseEventLite {
   what: string;
   points: number | null;
   createdAt: string;
+  // House of the awarded student — only present (non-null) for positive
+  // PBIS events. Drives the rise-and-deliver sequencer on the bar that
+  // matches this id.
+  houseId: number | null;
 }
 
 interface EventsPayload {
@@ -80,71 +84,37 @@ function gradientFromColor(hex: string): string {
 }
 
 // =============================================================================
-// FeaturedPopup — celebratory card pinned inside the leading house's bar.
+// CELEBRATION SEQUENCER — choreographed rise-and-deliver per award.
 // -----------------------------------------------------------------------------
-// Spec: when multiple awards arrive at once we queue them and hold each one
-// for ~5 seconds before swapping to the next. Resets cleanly when the queue
-// shrinks (e.g. when the underlying poll returns fewer recent positives).
+// One award at a time. Each new positive-PBIS event runs through three
+// phases on its house's bar:
+//
+//   1. RISE   (RISE_MS)   — animation climbs the bar. Tile is hidden.
+//   2. SHOW   (HOLD_MS)   — animation done; celebration tile is "delivered"
+//                           at the top of the bar.
+//   3. GAP    (GAP_MS)    — bar goes quiet; nothing on screen. Then the
+//                           next queued event plays. This blank beat makes
+//                           it unambiguous that the NEXT card is a new
+//                           award, not a continuation of the previous one.
+//
+// Only ONE bar is ever active at a time, on the entire screen.
 // =============================================================================
-// Each celebration card is displayed for HOLD_MS, then hidden for GAP_MS
-// before the next one fades in. The gap is what makes it visually
-// unambiguous that a *new* award is being celebrated — without it,
-// rapid-fire awards look like one continuous strip.
-const FEATURED_HOLD_MS = 5_000;
-const FEATURED_GAP_MS = 6_000;
+const RISE_MS = 1_300;
+const HOLD_MS = 5_000;
+const GAP_MS = 6_000;
 
 function FeaturedPopup({
-  events,
+  event,
   barPct,
 }: {
-  events: PulseEventLite[];
+  event: PulseEventLite;
   // Height (in %) of the host bar's fill. We use this to keep the
   // popup visually attached to the TOP of the bar rather than the top
   // of the frame — otherwise the popup floats in empty space when the
   // bar is short (early in a school year, or first day after rollout).
   barPct: number;
 }) {
-  const [idx, setIdx] = useState(0);
-  const [showing, setShowing] = useState(true);
-
-  useEffect(() => {
-    // Snap back to the head of the queue whenever the underlying list
-    // changes — that way "newest first" stays true even if the previously-
-    // featured event scrolled off after a poll.
-    setIdx(0);
-    setShowing(true);
-  }, [events.map((e) => e.id).join("|")]);
-
-  useEffect(() => {
-    if (events.length <= 1) return;
-    let cancelled = false;
-    let timer: number | undefined;
-    function loop() {
-      if (cancelled) return;
-      // Show card for HOLD_MS …
-      setShowing(true);
-      timer = window.setTimeout(() => {
-        if (cancelled) return;
-        // … then hide for GAP_MS …
-        setShowing(false);
-        timer = window.setTimeout(() => {
-          if (cancelled) return;
-          // … then advance index and restart cycle.
-          setIdx((i) => (i + 1) % events.length);
-          loop();
-        }, FEATURED_GAP_MS);
-      }, FEATURED_HOLD_MS);
-    }
-    loop();
-    return () => {
-      cancelled = true;
-      if (timer !== undefined) window.clearTimeout(timer);
-    };
-  }, [events.length]);
-
-  if (events.length === 0 || !showing) return null;
-  const e = events[idx % events.length];
-
+  const e = event;
   // Bar fill top edge in % from frame top. We sit the popup ~12px below
   // that edge so it visually overlaps the top of the colored bar. If the
   // bar is very tall the popup must still leave room for the points label
@@ -216,43 +186,93 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
     : null;
 
   const houses = usePolling<HousesPayload>(housesUrl, 30_000);
-  // Track prior totalPoints per house so we can fire an in-bar pulse
-  // animation whenever a house's total grows. Stored as a counter that
-  // increments on every detected gain — we feed that counter into a React
-  // `key` on the pulse element, which remounts the node and replays the
-  // CSS animation. Without the counter, identical class names wouldn't
-  // re-run the animation on a second consecutive gain.
-  const prevTotalsRef = useRef<Map<number, number>>(new Map());
-  const [pulseTicks, setPulseTicks] = useState<Record<number, number>>({});
-  // The house id of the most recent award. Drives WHICH bar the
-  // celebration popup attaches to — so when Phoenix gets points the
-  // "Now celebrating" card appears in Phoenix's bar, not always the
-  // leader's. Falls back to the leader before any award has been seen.
-  const [lastPulsedHouseId, setLastPulsedHouseId] = useState<number | null>(null);
-  useEffect(() => {
-    const list = houses.data?.houses ?? [];
-    if (list.length === 0) return;
-    const next: Record<number, number> = { ...pulseTicks };
-    let changed = false;
-    let mostRecentGainHouseId: number | null = null;
-    for (const h of list) {
-      const prev = prevTotalsRef.current.get(h.id);
-      if (prev !== undefined && h.totalPoints > prev) {
-        next[h.id] = (next[h.id] ?? 0) + 1;
-        changed = true;
-        mostRecentGainHouseId = h.id;
-      }
-      prevTotalsRef.current.set(h.id, h.totalPoints);
-    }
-    if (changed) {
-      setPulseTicks(next);
-      if (mostRecentGainHouseId !== null) setLastPulsedHouseId(mostRecentGainHouseId);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [houses.data]);
-  // Polled separately from /houses so the action feed and featured-popup
+  // Polled separately from /houses so the action feed and sequencer
   // queue refresh independently of the leaderboard math.
   const events = usePolling<EventsPayload>(eventsUrl, 30_000);
+
+  // ---------------------------------------------------------------------------
+  // SEQUENCER — one award at a time, choreographed.
+  // ---------------------------------------------------------------------------
+  // On first successful events poll we snapshot every existing event id as
+  // "already seen" so historical events don't replay when the screen loads.
+  // From then on, any new positive-PBIS event with a known houseId is
+  // pushed onto `pendingRef`. A driver effect drains the queue in order:
+  //
+  //   idle → rising (RISE_MS) → showing (HOLD_MS) → idle (GAP_MS) → next
+  //
+  // Only one event is ever active. While idle, every bar is quiet.
+  const seenIdsRef = useRef<Set<string>>(new Set());
+  const seededRef = useRef(false);
+  const pendingRef = useRef<PulseEventLite[]>([]);
+  const [active, setActive] = useState<{
+    event: PulseEventLite;
+    phase: "rising" | "showing";
+  } | null>(null);
+  // Bump on every new-event detection so the driver effect can wake up
+  // immediately rather than waiting for its next natural tick.
+  const [enqueueTick, setEnqueueTick] = useState(0);
+
+  useEffect(() => {
+    const list = events.data?.events ?? [];
+    if (!seededRef.current) {
+      // First poll after mount: mark everything we already have as seen so
+      // we don't replay history. Only events that arrive on subsequent
+      // polls will trigger a celebration sequence.
+      for (const e of list) seenIdsRef.current.add(e.id);
+      seededRef.current = true;
+      return;
+    }
+    // Newest first → push oldest first so playback order matches arrival.
+    const fresh: PulseEventLite[] = [];
+    for (const e of list) {
+      if (seenIdsRef.current.has(e.id)) continue;
+      seenIdsRef.current.add(e.id);
+      if (
+        e.kind === "positive" &&
+        e.source === "pbis" &&
+        (e.points ?? 0) > 0 &&
+        e.houseId != null
+      ) {
+        fresh.push(e);
+      }
+    }
+    if (fresh.length === 0) return;
+    fresh.reverse();
+    pendingRef.current.push(...fresh);
+    setEnqueueTick((t) => t + 1);
+  }, [events.data]);
+
+  useEffect(() => {
+    // Single driver loop. Runs whenever we go idle OR a new event lands.
+    if (active !== null) return;
+    const next = pendingRef.current.shift();
+    if (!next) return;
+    let cancelled = false;
+    setActive({ event: next, phase: "rising" });
+    const riseTimer = window.setTimeout(() => {
+      if (cancelled) return;
+      setActive({ event: next, phase: "showing" });
+      const holdTimer = window.setTimeout(() => {
+        if (cancelled) return;
+        // Tile cleared. GAP is the *next* idle window — we just go null
+        // and let the gap delay before picking up the next event.
+        setActive(null);
+        // Defer the next pick by GAP_MS via setTimeout that bumps the
+        // tick; the driver will re-run when active flips to null.
+        window.setTimeout(() => {
+          if (cancelled) return;
+          setEnqueueTick((t) => t + 1);
+        }, GAP_MS);
+      }, HOLD_MS);
+      // Cancel the hold timer if the effect is torn down mid-show.
+      // We rely on the outer cancelled flag — clear inline:
+      void holdTimer;
+    }, RISE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(riseTimer);
+    };
+  }, [active, enqueueTick]);
 
   if (!validSchool) {
     return <ScreenError message="No schoolId in the URL." />;
@@ -288,12 +308,6 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
   const recentForFeed = allEvents
     .filter((e) => typeof e.points === "number" && e.points !== 0)
     .slice(0, 6);
-  // Featured popup queue = positive PBIS only — that's the celebratory
-  // moment we want to broadcast on the leading bar.
-  const featuredQueue = allEvents
-    .filter((e) => e.kind === "positive" && e.source === "pbis" && (e.points ?? 0) > 0)
-    .slice(0, 8);
-
   return (
     <div className="min-h-screen w-full bg-gradient-to-b from-slate-950 via-slate-900 to-slate-950 text-white overflow-hidden relative">
       {/* In-bar "heartbeat" pulse: a soft glow blip that rises from the
@@ -451,7 +465,12 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
               const posPct = meterTotal > 0 ? (h.positiveCount / meterTotal) * 100 : 50;
               const negPct = 100 - posPct;
               const isLeader = leader?.id === h.id;
-              const pulseTick = pulseTicks[h.id] ?? 0;
+              // Sequencer hooks: only the bar matching the active event
+              // animates, and only during its rising phase. Everything
+              // else stays quiet.
+              const isRising = active?.phase === "rising" && active.event.houseId === h.id;
+              const isShowing = active?.phase === "showing" && active.event.houseId === h.id;
+              const sequenceKey = active?.event.id ?? "idle";
               return (
                 <div key={h.id} className="relative h-full flex flex-col">
                   {/* Frame */}
@@ -466,12 +485,10 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                         // glow tint matches the house color without inlining
                         // the hex into the animation.
                         ["--bar-glow" as string]: `${h.color}cc`,
-                        // Re-trigger the bar flash on each pulse tick by
-                        // remounting via key on the wrapper below; the
-                        // animation itself runs unconditionally on mount.
-                        animation: pulseTick > 0 ? "houseBarFlash 900ms ease-out" : undefined,
+                        // Flash only while the spark is rising on THIS bar.
+                        animation: isRising ? "houseBarFlash 1300ms ease-out" : undefined,
                       }}
-                      key={`bar-${h.id}-${pulseTick}`}
+                      key={`bar-${h.id}-${sequenceKey}-${isRising ? "rise" : "idle"}`}
                     >
                       <div className="absolute inset-x-0 top-2 text-center text-sm font-black text-white drop-shadow tabular-nums">
                         {h.totalPoints.toLocaleString()}
@@ -485,14 +502,12 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                           {h.weekPoints} pts this week
                         </div>
                       )}
-                      {/* RISING SPARK — thin at bottom, blooms wide as it
-                          climbs the bar. Transform-origin "center bottom"
-                          so the scale ramp grows outward from the source.
-                          Keyed on pulseTick so the animation replays from
-                          scratch on every gain. */}
-                      {pulseTick > 0 && (
+                      {/* RISING SPARK — only renders during the rising
+                          phase of THIS bar's active event. Keyed on the
+                          event id so each celebration replays cleanly. */}
+                      {isRising && (
                         <div
-                          key={`pulse-rise-${h.id}-${pulseTick}`}
+                          key={`pulse-rise-${h.id}-${sequenceKey}`}
                           className="pointer-events-none absolute left-1/2 bottom-0 z-10"
                           style={{
                             width: "100%",
@@ -501,32 +516,32 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
                             transformOrigin: "center bottom",
                             background: `radial-gradient(ellipse 35% 55% at 50% 100%, #ffffff 0%, ${h.color} 35%, ${h.color}66 60%, transparent 80%)`,
                             filter: `drop-shadow(0 0 24px ${h.color}) drop-shadow(0 0 48px #ffffff80)`,
-                            animation: "housePulseRise 1300ms cubic-bezier(0.25, 0.8, 0.3, 1) forwards",
+                            animation: `housePulseRise ${RISE_MS}ms cubic-bezier(0.25, 0.8, 0.3, 1) forwards`,
                             mixBlendMode: "screen",
                           }}
                         />
                       )}
-                      {/* ARRIVAL BURST — bright halo that blooms behind the
-                          name/points label as the spark reaches the top. */}
-                      {pulseTick > 0 && (
+                      {/* ARRIVAL BURST — halo that blooms behind the
+                          name/points label as the spark reaches the top.
+                          Times out with the rise so the tile gets
+                          "delivered" into a clean frame. */}
+                      {isRising && (
                         <div
-                          key={`pulse-burst-${h.id}-${pulseTick}`}
+                          key={`pulse-burst-${h.id}-${sequenceKey}`}
                           className="pointer-events-none absolute inset-x-0 top-0 h-28 z-10"
                           style={{
                             background: `radial-gradient(ellipse 60% 80% at 50% 25%, #ffffff 0%, ${h.color} 35%, transparent 75%)`,
                             filter: `drop-shadow(0 0 32px #ffffff)`,
-                            animation: "housePulseBurst 1300ms ease-out forwards",
+                            animation: `housePulseBurst ${RISE_MS}ms ease-out forwards`,
                             mixBlendMode: "screen",
                           }}
                         />
                       )}
                     </div>
-                    {/* Celebration popup follows the bar that just got
-                        awarded. Falls back to the leader before any award
-                        has been seen this session. */}
-                    {(lastPulsedHouseId === h.id ||
-                      (lastPulsedHouseId === null && isLeader)) && (
-                      <FeaturedPopup events={featuredQueue} barPct={pct} />
+                    {/* Celebration tile — delivered after the rise
+                        completes, on the awarded bar only. */}
+                    {isShowing && active && (
+                      <FeaturedPopup event={active.event} barPct={pct} />
                     )}
                   </div>
 

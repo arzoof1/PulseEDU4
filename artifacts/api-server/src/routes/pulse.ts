@@ -39,6 +39,10 @@ interface PulseEvent {
   detail: string;
   points: number | null;
   createdAt: string;          // ISO
+  // House the awarded student belongs to. Populated on positive PBIS
+  // events so the houses signage can fire its rise-and-deliver animation
+  // on the correct bar. Null for non-PBIS events or unaffiliated students.
+  houseId: number | null;
 }
 
 function resolveSchoolId(req: Request, res: Response): number | null {
@@ -69,12 +73,20 @@ function maskName(first: string, last: string): { display: string; initials: str
 }
 
 async function loadStudentLookup(schoolId: number, studentIds: string[]) {
-  if (studentIds.length === 0) return new Map<string, { firstName: string; lastName: string }>();
+  if (studentIds.length === 0)
+    return new Map<string, { firstName: string; lastName: string; houseId: number | null }>();
   const rows = await db
-    .select({ studentId: studentsTable.studentId, firstName: studentsTable.firstName, lastName: studentsTable.lastName })
+    .select({
+      studentId: studentsTable.studentId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      houseId: studentsTable.houseId,
+    })
     .from(studentsTable)
     .where(and(eq(studentsTable.schoolId, schoolId), inArray(studentsTable.studentId, studentIds)));
-  return new Map(rows.map((r) => [r.studentId, { firstName: r.firstName, lastName: r.lastName }]));
+  return new Map(
+    rows.map((r) => [r.studentId, { firstName: r.firstName, lastName: r.lastName, houseId: r.houseId ?? null }]),
+  );
 }
 
 // Strip sensitive free-text and staff names from a feed before sending it
@@ -150,6 +162,7 @@ async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string
     const r = lookup.get(sid);
     return maskName(r?.firstName ?? "Student", r?.lastName ?? "");
   };
+  const houseFor = (sid: string) => lookup.get(sid)?.houseId ?? null;
 
   const events: PulseEvent[] = [];
 
@@ -166,6 +179,7 @@ async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string
       detail: r.note ?? "",
       points: r.points,
       createdAt: r.createdAt,
+      houseId: houseFor(r.studentId),
     });
   }
   for (const r of tardyRows) {
@@ -181,6 +195,7 @@ async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string
       detail: r.reason || "",
       points: null,
       createdAt: r.createdAt,
+      houseId: null,
     });
   }
   for (const r of pulloutRows) {
@@ -196,6 +211,7 @@ async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string
       detail: r.editedReason ?? r.reason ?? "",
       points: null,
       createdAt: r.requestedAt,
+      houseId: null,
     });
   }
   for (const r of interventionRows) {
@@ -211,6 +227,7 @@ async function gatherEvents(schoolId: number, sinceIso: string, untilIso: string
       detail: r.note ?? "",
       points: null,
       createdAt: r.createdAt,
+      houseId: null,
     });
   }
 
@@ -416,6 +433,7 @@ router.get("/pulse/student-timeline", async (req, res) => {
         detail: r.note ?? "",
         points: r.points,
         createdAt: r.createdAt,
+        houseId: student.houseId ?? null,
       });
     }
     for (const r of tardyRows) {
@@ -433,6 +451,7 @@ router.get("/pulse/student-timeline", async (req, res) => {
         detail: r.reason || "",
         points: null,
         createdAt: r.createdAt,
+        houseId: null,
       });
     }
     for (const r of pulloutRows) {
@@ -447,6 +466,7 @@ router.get("/pulse/student-timeline", async (req, res) => {
         detail: r.editedReason ?? r.reason ?? "",
         points: null,
         createdAt: r.requestedAt,
+        houseId: null,
       });
     }
     for (const r of interventionRows) {
@@ -461,6 +481,7 @@ router.get("/pulse/student-timeline", async (req, res) => {
         detail: r.note ?? "",
         points: null,
         createdAt: r.createdAt,
+        houseId: null,
       });
     }
 
