@@ -77,7 +77,6 @@ export default function TeacherInstructionLogTab({
   const [subject, setSubject] = useState<string>("ela");
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
   const [counts, setCounts] = useState<Record<string, CountEntry>>({});
-  const [filterBenchmark, setFilterBenchmark] = useState<string>("");
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [ownerCanDelete, setOwnerCanDelete] = useState<boolean>(isOwnRoster);
   const [loading, setLoading] = useState<boolean>(false);
@@ -119,9 +118,7 @@ export default function TeacherInstructionLogTab({
           `/api/teacher-roster/benchmark-deliveries/counts?subject=${subject}${teacherQuery}`,
         ),
         authFetch(
-          `/api/teacher-roster/benchmark-deliveries?subject=${subject}${
-            filterBenchmark ? `&benchmark=${encodeURIComponent(filterBenchmark)}` : ""
-          }${teacherQuery}`,
+          `/api/teacher-roster/benchmark-deliveries?subject=${subject}${teacherQuery}`,
         ),
       ]);
       if (!catRes.ok) throw new Error(`catalog ${catRes.status}`);
@@ -174,7 +171,7 @@ export default function TeacherInstructionLogTab({
     } finally {
       setLoading(false);
     }
-  }, [subject, filterBenchmark, teacherQuery]);
+  }, [subject, teacherQuery]);
 
   useEffect(() => {
     void loadAll();
@@ -299,7 +296,6 @@ export default function TeacherInstructionLogTab({
             value={subject}
             onChange={(e) => {
               setSubject(e.target.value);
-              setFilterBenchmark("");
               setSelectedCodes([]);
             }}
           >
@@ -357,20 +353,6 @@ export default function TeacherInstructionLogTab({
             })}
           </div>
         )}
-        <label style={{ fontSize: 13 }}>
-          Filter history:&nbsp;
-          <select
-            value={filterBenchmark}
-            onChange={(e) => setFilterBenchmark(e.target.value)}
-          >
-            <option value="">All benchmarks</option>
-            {gradeFilteredCatalog.map((c) => (
-              <option key={c.code} value={c.code}>
-                {benchmarkLabel(c.code)}
-              </option>
-            ))}
-          </select>
-        </label>
         <button onClick={downloadCsv} style={{ padding: "4px 10px" }}>
           Export CSV
         </button>
@@ -547,7 +529,7 @@ export default function TeacherInstructionLogTab({
         </div>
         {gradeFilteredHistory.length === 0 ? (
           <div style={{ fontSize: 12, color: "#6b7280" }}>
-            No entries yet for this subject{filterBenchmark ? " / benchmark" : ""}
+            No entries yet for this subject
             {selectedGrades.size > 0 &&
               selectedGrades.size < teacherGrades.length
               ? " in the selected grade(s)"
