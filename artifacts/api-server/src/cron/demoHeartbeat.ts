@@ -63,10 +63,10 @@ export function isDemoHeartbeatEnabled(): boolean {
   return process.env.NODE_ENV !== "production";
 }
 
-// Cadence jitter — 90 to 180 seconds between fires (avg ~135s = ~26 awards
+// Cadence jitter — 30 to 45 seconds between fires (avg ~37s = ~95 awards
 // across a 7-hour school day).
-const MIN_DELAY_MS = 90_000;
-const MAX_DELAY_MS = 180_000;
+const MIN_DELAY_MS = 30_000;
+const MAX_DELAY_MS = 45_000;
 
 // Anti-repeat: a student can't be picked again within this window.
 const STUDENT_COOLDOWN_MS = 10 * 60_000; // 10 minutes
