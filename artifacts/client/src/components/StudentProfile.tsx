@@ -2057,6 +2057,43 @@ export default function StudentProfile({
             <li><strong>Family</strong> — communication log + emergency contacts (read-only).</li>
           </ul>
         </HowToSection>
+        <HowToSection title="FAST Benchmarks panel (Academics)">
+          ELA and Math render side-by-side, each with its own
+          PM1/PM2/PM3 toggle, school-year picker, and sort. The colored
+          mastery pill, E/P count (e.g. <code>2/3</code>), and tiny
+          trend line all sit in one cell per benchmark so both subjects
+          fit on screen without horizontal scroll. Category rollup
+          tiles above the table are weighted by points (not an average
+          of percents), so a high-point benchmark moves the rollup
+          correctly.
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Trend sparkline</strong> — plots mastery % for
+              that single benchmark in chronological order across every
+              PM window on file (current year is PM1 → PM2 → PM3;
+              prior-year FAST data extends the line back when imported,
+              up to ~6 points). The dashed rule is the school's mastery
+              threshold; the endpoint dot is colored by the most recent
+              window's status (green at/above, yellow near, orange/red
+              below). Hover to see each point as <code>SY PMx: %</code>.
+              If only one window exists for a code, the line is
+              suppressed and shows "—" — one point isn't a trend. The
+              line is per benchmark code (e.g. "is this kid improving
+              on MA.7.AR.1.2?"), not per subject.
+            </li>
+            <li>
+              <strong>Color palette</strong> — green ≥ threshold,
+              yellow within 10 points, orange within 30, red otherwise.
+              Identical to the teacher heatmap so heatmap + profile
+              read as one product.
+            </li>
+            <li>
+              <strong>MTSS pill</strong> on a benchmark row means an
+              active MTSS plan for this student targets that code
+              (lights up automatically once Phase 5 writes plan tags).
+            </li>
+          </ul>
+        </HowToSection>
         <RoleSection for="teacher" title="What teachers can do here">
           You see this profile for any student on your roster. Use the
           intervention history below the pillars when building parent
