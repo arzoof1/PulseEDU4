@@ -337,6 +337,194 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
   }
 });
 
+// Seed-only: ensure every (teacher, period) section at Parrott has 1-3
+// students on an active safety plan. Plans are per (school, student), so
+// once a student is picked they appear on every teacher's roster they're
+// in — but we drive selection per section so no period ends up empty.
+// Wipes existing safety_plans + audit for school 1 first; safety plan
+// library is preserved.
+router.post("/parrott-seed-safety-plans", async (req, res) => {
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "superuser_required" });
+    return;
+  }
+  const SCHOOL_ID = 1;
+  try {
+    // -- 1. WIPE existing plans + audit (library preserved) --------------
+    const wipedRes = await db.execute<{ n: number }>(sql`
+      WITH d AS (
+        DELETE FROM safety_plans WHERE school_id = ${SCHOOL_ID} RETURNING 1
+      )
+      SELECT COUNT(*)::int AS n FROM d
+    `);
+    const wiped = Number(wipedRes.rows[0]?.n ?? 0);
+    await db.execute(sql`
+      DELETE FROM safety_plan_audit WHERE school_id = ${SCHOOL_ID}
+    `);
+
+    // -- 2. LOAD library items (active only) -----------------------------
+    const libRes = await db.execute<{ label: string }>(sql`
+      SELECT label FROM safety_plan_library
+      WHERE school_id = ${SCHOOL_ID} AND active = true
+      ORDER BY sort_order ASC, id ASC
+    `);
+    const libLabels = libRes.rows.map((r) => r.label);
+    if (libLabels.length === 0) {
+      res.status(400).json({
+        error: "no_library",
+        message:
+          "Safety plan library is empty for school 1 — run /parrott-rebuild first.",
+      });
+      return;
+    }
+
+    // -- 3. LOAD every non-planning section + its roster -----------------
+    const secRes = await db.execute<{
+      section_id: number;
+      teacher_staff_id: number;
+      period: number;
+      student_id: string;
+    }>(sql`
+      SELECT cs.id AS section_id,
+             cs.teacher_staff_id,
+             cs.period,
+             sr.student_id
+      FROM class_sections cs
+      JOIN section_roster sr ON sr.section_id = cs.id
+      WHERE cs.school_id = ${SCHOOL_ID} AND cs.is_planning = false
+    `);
+    // Group by section.
+    type Section = {
+      sectionId: number;
+      teacherStaffId: number;
+      period: number;
+      students: string[];
+    };
+    const sections = new Map<number, Section>();
+    for (const r of secRes.rows) {
+      let sec = sections.get(r.section_id);
+      if (!sec) {
+        sec = {
+          sectionId: r.section_id,
+          teacherStaffId: r.teacher_staff_id,
+          period: r.period,
+          students: [],
+        };
+        sections.set(r.section_id, sec);
+      }
+      sec.students.push(r.student_id);
+    }
+
+    // -- 4. Deterministic RNG (mulberry32) -------------------------------
+    function mkRng(seedStr: string): () => number {
+      let h = 2166136261 >>> 0;
+      for (let i = 0; i < seedStr.length; i++) {
+        h ^= seedStr.charCodeAt(i);
+        h = Math.imul(h, 16777619) >>> 0;
+      }
+      let a = h;
+      return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    // -- 5. Per-section pick: ensure 1-3 plan students per section -------
+    // Iterate sections in stable order. Track which students already have
+    // a plan; for each section, count its existing plan students and only
+    // pick more if below this section's target.
+    const planned = new Set<string>();
+    const orderedSections = [...sections.values()].sort(
+      (a, b) =>
+        a.period - b.period ||
+        a.teacherStaffId - b.teacherStaffId ||
+        a.sectionId - b.sectionId,
+    );
+    for (const sec of orderedSections) {
+      const rng = mkRng(`sp|${sec.sectionId}`);
+      const target = 1 + Math.floor(rng() * 3); // 1, 2, or 3
+      const existing = sec.students.filter((sid) => planned.has(sid)).length;
+      let need = Math.max(0, target - existing);
+      if (need === 0) continue;
+      // Shuffle this section's students deterministically, then take the
+      // first `need` who don't already have a plan.
+      const pool = sec.students.slice();
+      for (let i = pool.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [pool[i], pool[j]] = [pool[j]!, pool[i]!];
+      }
+      for (const sid of pool) {
+        if (need === 0) break;
+        if (planned.has(sid)) continue;
+        planned.add(sid);
+        need--;
+      }
+    }
+
+    // -- 6. Build safety_plans rows --------------------------------------
+    type Row = typeof import("@workspace/db").safetyPlansTable.$inferInsert;
+    const NOTE_POOL = [
+      "Escort to dismissal; clear backpack check daily.",
+      "Bathroom escort during instructional time; supervised lunch seating.",
+      "Front-office sign-in each morning; restricted from auditorium during transitions.",
+      "Buddy-system between classes; counselor check-in M/W/F.",
+      "Separation from named peer (see counselor); modified PE participation.",
+    ];
+    const rows: Row[] = [];
+    let idx = 0;
+    for (const sid of planned) {
+      const rng = mkRng(`sp-items|${sid}`);
+      const itemCount = 2 + Math.floor(rng() * 3); // 2-4 items
+      const shuffled = libLabels.slice();
+      for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(rng() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j]!, shuffled[i]!];
+      }
+      const items = shuffled.slice(0, itemCount).map((label) => ({
+        label,
+        active: true,
+      }));
+      rows.push({
+        schoolId: SCHOOL_ID,
+        studentId: sid,
+        status: "active",
+        items,
+        notes: NOTE_POOL[idx % NOTE_POOL.length]!,
+      });
+      idx++;
+    }
+    for (let i = 0; i < rows.length; i += 500) {
+      await db
+        .insert(
+          (await import("@workspace/db")).safetyPlansTable,
+        )
+        .values(rows.slice(i, i + 500));
+    }
+
+    res.json({
+      ok: true,
+      wiped,
+      sections: orderedSections.length,
+      plansInserted: rows.length,
+      libraryItems: libLabels.length,
+    });
+  } catch (err) {
+    req.log.error({ err }, "parrott-seed-safety-plans failed");
+    res.status(500).json({
+      error: "seed_failed",
+      message: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 // Repair pass: fixes accommodation category mismatch (each flag category gets
 // items from its own category in the library — ELL students get ELL items,
 // 504 students get 504 items, ESE students get IEP items) AND re-owns
