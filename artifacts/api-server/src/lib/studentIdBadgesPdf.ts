@@ -207,8 +207,16 @@ async function renderLanyardBadge(
       });
   }
 
+  // Layout note: the badge page is 243×306pt. Previously the QR
+  // (78pt) + 4pt gap + barcode (22pt) put the barcode bottom at
+  // y=310, which overflowed the page by 4pt and auto-spilled the
+  // human-readable ID line onto a second page when printed. We've
+  // also dropped the printed ID number per school request — if a
+  // student loses their badge we don't want their student number
+  // exposed in plain text on the front. The QR + barcode still
+  // encode the ID so kiosk sign-in keeps working.
   const qrBuf = await renderQrBuffer(badge);
-  const qrSize = 78;
+  const qrSize = 70;
   const qrX = (W - qrSize) / 2;
   const qrY = nameY + 36;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
@@ -219,15 +227,6 @@ async function renderLanyardBadge(
   const bcX = (W - bcW) / 2;
   const bcY = qrY + qrSize + 4;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
-
-  doc
-    .fillColor("#111827")
-    .fontSize(9)
-    .text(`ID ${badge.localSisId ?? badge.studentId}`, PAGE_MARGIN, H - 16, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      lineBreak: false,
-    });
 }
 
 async function renderCr80Badge(
@@ -328,13 +327,9 @@ async function renderCr80Badge(
         lineBreak: false,
       });
   }
-  doc
-    .fillColor("rgba(255,255,255,0.85)")
-    .fontSize(7)
-    .text(`ID ${badge.localSisId ?? badge.studentId}`, 8, H - 14, {
-      width: leftColW - 12,
-      lineBreak: false,
-    });
+  // Visible "ID …" line removed by request — a lost CR80 badge would
+  // otherwise expose the student number in plain text. QR + Code 128
+  // still encode the ID for kiosk sign-in.
 
   // Right column — QR on top, Code 128 below.
   const qrBuf = await renderQrBuffer(badge);
