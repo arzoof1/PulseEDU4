@@ -216,17 +216,39 @@ async function renderLanyardBadge(
   // exposed in plain text on the front. The QR + barcode still
   // encode the ID so kiosk sign-in keeps working.
   const qrBuf = await renderQrBuffer(badge);
-  const qrSize = 70;
+  const qrSize = 62;
   const qrX = (W - qrSize) / 2;
   const qrY = nameY + 36;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
   const barcodePng = await renderBarcodeBuffer(badge.studentId);
   const bcW = W - PAGE_MARGIN * 2 - 30;
-  const bcH = 22;
+  const bcH = 16;
   const bcX = (W - bcW) / 2;
   const bcY = qrY + qrSize + 4;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
+
+  // Crisis hotlines — required on FL student IDs grades 6-12 by
+  // HB 383 (effective 2021-07-01): 988 Suicide & Crisis Lifeline +
+  // a text line. We include the Crisis Text Line (HOME → 741741)
+  // as the companion text channel. Lines are deliberately small but
+  // legible (6.5pt) and centered at the very bottom of the badge.
+  doc
+    .fillColor("#b91c1c")
+    .fontSize(6.5)
+    .text("Crisis? Call or text 988", PAGE_MARGIN, H - 18, {
+      width: W - PAGE_MARGIN * 2,
+      align: "center",
+      lineBreak: false,
+    });
+  doc
+    .fillColor("#475569")
+    .fontSize(6.5)
+    .text("Crisis Text Line: text HOME to 741741", PAGE_MARGIN, H - 10, {
+      width: W - PAGE_MARGIN * 2,
+      align: "center",
+      lineBreak: false,
+    });
 }
 
 async function renderCr80Badge(
@@ -345,10 +367,21 @@ async function renderCr80Badge(
   const bcY = qrY + qrSize + 4;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
 
+  // Crisis hotlines — see lanyard comment above (FL HB 383 mandate).
+  // CR80 has less vertical room; we stack the two lines tightly in
+  // the right column under the barcode.
+  doc
+    .fillColor("#b91c1c")
+    .fontSize(6)
+    .text("Crisis? Call or text 988", rightColX, bcY + bcH + 2, {
+      width: rightColW,
+      align: "center",
+      lineBreak: false,
+    });
   doc
     .fillColor("#475569")
     .fontSize(6)
-    .text("Scan to sign in", rightColX, bcY + bcH + 2, {
+    .text("Text HOME to 741741", rightColX, bcY + bcH + 10, {
       width: rightColW,
       align: "center",
       lineBreak: false,
