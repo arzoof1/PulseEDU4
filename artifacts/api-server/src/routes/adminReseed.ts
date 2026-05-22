@@ -284,16 +284,20 @@ router.post("/parrott-seed-deliveries", async (req, res) => {
       for (const code of codes) {
         const roll = rng();
         let lo: number, hi: number;
+        let bandBoost = boost;
         if (roll < 0.05) {
           continue; // 0 deliveries — skip insert
-        } else if (roll < 0.30) {
-          lo = 1; hi = 2;
-        } else if (roll < 0.90) {
+        } else if (roll < 0.40) {
+          // Light-touch band (35%) — kept low even for high-improver
+          // teachers so the histogram has a clear 1-3 tail.
+          lo = 1; hi = 3;
+          bandBoost = Math.min(boost, 0);
+        } else if (roll < 0.92) {
           lo = 3; hi = 7;
         } else {
           lo = 8; hi = 9;
         }
-        let count = lo + Math.floor(rng() * (hi - lo + 1)) + boost;
+        let count = lo + Math.floor(rng() * (hi - lo + 1)) + bandBoost;
         if (count < 1) count = 1;
         if (count > 9) count = 9; // hard cap — single digits only
         for (let i = 0; i < count; i++) {
