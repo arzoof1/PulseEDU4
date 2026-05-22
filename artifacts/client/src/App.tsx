@@ -17231,13 +17231,15 @@ function App() {
 
       {activeSection === "teacherRoster" && (
         // PrivacyGate forces a heavy-blur + drag-to-unlock confirmation
-        // every time the teacher enters this page, regardless of where
-        // they came from (Spotlight, dashboards, anywhere). The roster
-        // surfaces FAST scores, IEP/504/ELL flags, and safety plan
-        // indicators that can never land on a student-facing display.
-        // The gate re-arms on every visit because the conditional
-        // unmount + remount above resets PrivacyGate's internal state.
-        <PrivacyGate>
+        // before showing FAST scores, IEP/504/ELL flags, and safety
+        // plan indicators that can never land on a student-facing
+        // display. With `sessionKey="teacherRoster"`, the unlock
+        // persists in sessionStorage for the browser tab — so a
+        // teacher who has already confirmed once does not have to
+        // re-slide every time they round-trip (Roster → Student
+        // Profile → Roster). Closing the tab re-arms the gate, which
+        // is the correct trigger for "device may now be mirrored".
+        <PrivacyGate sessionKey="teacherRoster">
         <TeacherRosterPage
           isCoreTeam={
             Boolean(authUser?.isSuperUser) ||

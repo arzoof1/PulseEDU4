@@ -42,11 +42,21 @@ interface PrivacyGateProps {
   footerHint?: string;
   // ARIA label for the slider handle.
   sliderAriaLabel?: string;
+  // Session-scope key. When set, the unlock persists in
+  // `sessionStorage` under this key, so a teacher who has already
+  // confirmed once does not have to re-slide every time they
+  // round-trip (e.g. Roster → Student Profile → Roster). Persistence
+  // is per browser tab and clears when the tab closes — which is the
+  // right balance for the "is the device mirrored?" concern: a fresh
+  // session is still gated, but in-session navigation is not.
+  sessionKey?: string;
   // Children render behind the gate from the moment the gate opens
   // (so the page is loading in the background). They are blurred
   // until the teacher drags to unlock.
   children: ReactNode;
 }
+
+const SESSION_KEY_PREFIX = "pulseedu.privacyGate.unlocked.";
 
 export default function PrivacyGate({
   title = "Hold on — private student data ahead",
@@ -62,9 +72,27 @@ export default function PrivacyGate({
   sliderDoneLabel = "UNLOCKED",
   footerHint = "Slide the handle all the way to the right to confirm and view the page.",
   sliderAriaLabel = "Slide to confirm and view roster",
+  sessionKey = "default",
   children,
 }: PrivacyGateProps) {
-  const [unlocked, setUnlocked] = useState(false);
+  const storageKey = SESSION_KEY_PREFIX + sessionKey;
+  const [unlocked, setUnlocked] = useState<boolean>(() => {
+    if (typeof window === "undefined") return false;
+    try {
+      return window.sessionStorage.getItem(storageKey) === "1";
+    } catch {
+      return false;
+    }
+  });
+
+  const markUnlocked = () => {
+    setUnlocked(true);
+    try {
+      window.sessionStorage.setItem(storageKey, "1");
+    } catch {
+      /* private mode / disabled storage — fall back to in-memory only */
+    }
+  };
 
   if (unlocked) return <>{children}</>;
 
@@ -82,7 +110,7 @@ export default function PrivacyGate({
         sliderDoneLabel={sliderDoneLabel}
         sliderAriaLabel={sliderAriaLabel}
         footerHint={footerHint}
-        onUnlock={() => setUnlocked(true)}
+        onUnlock={markUnlocked}
       />
     </>
   );
