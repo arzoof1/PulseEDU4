@@ -204,12 +204,15 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
   const seenIdsRef = useRef<Set<string>>(new Set());
   const seededRef = useRef(false);
   const pendingRef = useRef<PulseEventLite[]>([]);
+  // True while a rise→show→gap sequence is in flight. Prevents the driver
+  // effect from starting a second sequence on top of the first.
+  const runningRef = useRef(false);
   const [active, setActive] = useState<{
     event: PulseEventLite;
     phase: "rising" | "showing";
   } | null>(null);
-  // Bump on every new-event detection so the driver effect can wake up
-  // immediately rather than waiting for its next natural tick.
+  // Bump on every new-event detection AND at the end of each sequence so
+  // the driver effect wakes up to pick the next event.
   const [enqueueTick, setEnqueueTick] = useState(0);
 
   useEffect(() => {
@@ -243,36 +246,31 @@ export default function HousesSignage({ schoolId: schoolIdProp }: HousesSignageP
   }, [events.data]);
 
   useEffect(() => {
-    // Single driver loop. Runs whenever we go idle OR a new event lands.
-    if (active !== null) return;
+    // Single driver. Re-entrant safe via runningRef — re-firing while a
+    // sequence is playing is a no-op. We deliberately do NOT return a
+    // cleanup that cancels timers: tearing down mid-sequence would cancel
+    // the phase transition and the celebration tile would never get
+    // rendered. The signage screen is a long-lived display, so accepting
+    // a tiny shutdown leak is the right trade.
+    if (runningRef.current) return;
     const next = pendingRef.current.shift();
     if (!next) return;
-    let cancelled = false;
+    runningRef.current = true;
     setActive({ event: next, phase: "rising" });
-    const riseTimer = window.setTimeout(() => {
-      if (cancelled) return;
+    window.setTimeout(() => {
+      // Rise complete — deliver the celebration tile.
       setActive({ event: next, phase: "showing" });
-      const holdTimer = window.setTimeout(() => {
-        if (cancelled) return;
-        // Tile cleared. GAP is the *next* idle window — we just go null
-        // and let the gap delay before picking up the next event.
+      window.setTimeout(() => {
+        // Hold complete — clear the tile, then wait out the gap before
+        // releasing the lock so the next event can play.
         setActive(null);
-        // Defer the next pick by GAP_MS via setTimeout that bumps the
-        // tick; the driver will re-run when active flips to null.
         window.setTimeout(() => {
-          if (cancelled) return;
+          runningRef.current = false;
           setEnqueueTick((t) => t + 1);
         }, GAP_MS);
       }, HOLD_MS);
-      // Cancel the hold timer if the effect is torn down mid-show.
-      // We rely on the outer cancelled flag — clear inline:
-      void holdTimer;
     }, RISE_MS);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(riseTimer);
-    };
-  }, [active, enqueueTick]);
+  }, [enqueueTick]);
 
   if (!validSchool) {
     return <ScreenError message="No schoolId in the URL." />;
