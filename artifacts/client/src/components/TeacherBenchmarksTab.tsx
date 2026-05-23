@@ -332,8 +332,24 @@ export default function TeacherBenchmarksTab({
 
   // Per-teacher instruction delivery counts for the current school year.
   // Drives the BenchmarkStar badge on column headers + Progress Report
-  // rows. Refetches on (teacher, subject) change; the heatmap window
-  // picker doesn't affect it (counts are always SY-to-date).
+  // rows. Refetches on (teacher, subject) change AND when the tab/window
+  // regains focus — so a delivery logged on the sibling Instruction Log
+  // tab (or anywhere else) is reflected the moment the user comes back
+  // to this view. The heatmap window picker doesn't affect it (counts
+  // are always SY-to-date).
+  const [countsRefreshKey, setCountsRefreshKey] = useState(0);
+  useEffect(() => {
+    const bump = () => setCountsRefreshKey((k) => k + 1);
+    const onVis = () => {
+      if (document.visibilityState === "visible") bump();
+    };
+    window.addEventListener("focus", bump);
+    document.addEventListener("visibilitychange", onVis);
+    return () => {
+      window.removeEventListener("focus", bump);
+      document.removeEventListener("visibilitychange", onVis);
+    };
+  }, []);
   useEffect(() => {
     if (teacherId == null) {
       setDeliveryCounts({});
@@ -354,7 +370,7 @@ export default function TeacherBenchmarksTab({
     return () => {
       cancelled = true;
     };
-  }, [teacherId, subject]);
+  }, [teacherId, subject, countsRefreshKey]);
 
   // Phase 4 — Growth fetch. Only fires when the toggle is on AND both
   // windows are picked. When the user toggles ON for the first time
