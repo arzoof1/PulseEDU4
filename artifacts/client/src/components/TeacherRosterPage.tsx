@@ -1343,8 +1343,22 @@ export default function TeacherRosterPage({
       >
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           {onBack && (
-            <button onClick={onBack} style={{ padding: "4px 10px" }}>
-              ← Back
+            <button
+              onClick={() => {
+                // If the user is on the Benchmarks or Instruction Log
+                // sub-tab, "Back" should step back to the Roster sub-tab
+                // first — not exit the page entirely. Only when they're
+                // already on the Roster sub-tab do we leave the page.
+                if (tab !== "roster") {
+                  setTab("roster");
+                  return;
+                }
+                onBack();
+              }}
+              style={{ padding: "4px 10px" }}
+              title={tab !== "roster" ? "Back to Roster" : "Back"}
+            >
+              ← {tab !== "roster" ? "Back to Roster" : "Back"}
             </button>
           )}
           <h2 style={{ margin: 0 }}>Teacher Roster</h2>
