@@ -83,6 +83,16 @@ export default function TeacherInstructionLogTab({
   const [counts, setCounts] = useState<Record<string, CountEntry>>({});
   const [history, setHistory] = useState<HistoryRow[]>([]);
   const [ownerCanDelete, setOwnerCanDelete] = useState<boolean>(isOwnRoster);
+  // Inline-edit state for a history row. Only one row is edited at a
+  // time. editId is the row's id (null = nothing being edited);
+  // editDraft holds the working copy of the editable fields.
+  const [editId, setEditId] = useState<number | null>(null);
+  const [editDraft, setEditDraft] = useState<{
+    benchmarkCode: string;
+    deliveredOn: string;
+    notes: string;
+  }>({ benchmarkCode: "", deliveredOn: "", notes: "" });
+  const [editSaving, setEditSaving] = useState<boolean>(false);
   const [loading, setLoading] = useState<boolean>(false);
   const [err, setErr] = useState<string | null>(null);
 
@@ -154,11 +164,14 @@ export default function TeacherInstructionLogTab({
       const hisJson = (await hisRes.json()) as {
         rows: HistoryRow[];
         ownerCanDelete: boolean;
+        canEdit?: boolean;
       };
       setCatalog(catJson.benchmarks ?? []);
       setCounts(cntJson.counts ?? {});
       setHistory(hisJson.rows ?? []);
-      setOwnerCanDelete(hisJson.ownerCanDelete);
+      // Server returns `canEdit` (preferred) and `ownerCanDelete` as an
+      // alias for back-compat. Older bundles won't break either way.
+      setOwnerCanDelete(hisJson.canEdit ?? hisJson.ownerCanDelete);
 
       // Derive pill row from the grades actually present in the
       // (school-wide) catalog. This way a 6th-grade teacher's roster
@@ -300,6 +313,57 @@ export default function TeacherInstructionLogTab({
       return;
     }
     await loadAll();
+  };
+
+  const startEdit = (row: HistoryRow) => {
+    setEditId(row.id);
+    setEditDraft({
+      benchmarkCode: row.benchmarkCode,
+      deliveredOn: row.deliveredOn,
+      notes: row.notes ?? "",
+    });
+  };
+
+  const cancelEdit = () => {
+    setEditId(null);
+  };
+
+  const saveEdit = async () => {
+    if (editId == null) return;
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(editDraft.deliveredOn)) {
+      alert("Delivered date must be a valid date.");
+      return;
+    }
+    if (!editDraft.benchmarkCode.trim()) {
+      alert("Benchmark code is required.");
+      return;
+    }
+    setEditSaving(true);
+    try {
+      const res = await authFetch(
+        `/api/teacher-roster/benchmark-deliveries/${editId}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            benchmarkCode: editDraft.benchmarkCode.trim(),
+            deliveredOn: editDraft.deliveredOn,
+            notes: editDraft.notes.trim() || null,
+          }),
+        },
+      );
+      if (!res.ok) {
+        const j = (await res.json().catch(() => ({}))) as { error?: string };
+        alert(j.error ?? "Edit failed");
+        return;
+      }
+      setEditId(null);
+      await loadAll();
+    } catch (e) {
+      alert(e instanceof Error ? e.message : "Edit failed");
+    } finally {
+      setEditSaving(false);
+    }
   };
 
   const downloadCsv = () => {
@@ -578,39 +642,174 @@ export default function TeacherInstructionLogTab({
                 <th style={{ padding: "6px 8px" }}>Benchmark</th>
                 <th style={{ padding: "6px 8px", width: 110 }}>Delivered</th>
                 <th style={{ padding: "6px 8px" }}>Notes</th>
-                <th style={{ padding: "6px 8px", width: 80 }}></th>
+                <th style={{ padding: "6px 8px", width: 130 }}></th>
               </tr>
             </thead>
             <tbody>
-              {gradeFilteredHistory.map((r) => (
-                <tr key={r.id} style={{ borderTop: "1px solid #e5e7eb" }}>
-                  <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>
-                    {r.benchmarkCode}
-                  </td>
-                  <td style={{ padding: "6px 8px" }}>{r.deliveredOn}</td>
-                  <td style={{ padding: "6px 8px", color: "#374151" }}>
-                    {r.notes ?? ""}
-                  </td>
-                  <td style={{ padding: "6px 8px", textAlign: "right" }}>
-                    {ownerCanDelete && (
-                      <button
-                        onClick={() => remove(r.id)}
+              {gradeFilteredHistory.map((r) => {
+                const isEditing = editId === r.id;
+                if (isEditing) {
+                  return (
+                    <tr
+                      key={r.id}
+                      style={{
+                        borderTop: "1px solid #e5e7eb",
+                        background: "#fffbeb",
+                      }}
+                    >
+                      <td style={{ padding: "6px 8px" }}>
+                        <input
+                          type="text"
+                          value={editDraft.benchmarkCode}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              benchmarkCode: e.target.value,
+                            }))
+                          }
+                          style={{
+                            width: "100%",
+                            fontFamily: "monospace",
+                            fontSize: 12,
+                            padding: "3px 6px",
+                            border: "1px solid #d1d5db",
+                            borderRadius: 3,
+                          }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 8px" }}>
+                        <input
+                          type="date"
+                          value={editDraft.deliveredOn}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              deliveredOn: e.target.value,
+                            }))
+                          }
+                          style={{
+                            fontSize: 12,
+                            padding: "3px 6px",
+                            border: "1px solid #d1d5db",
+                            borderRadius: 3,
+                          }}
+                        />
+                      </td>
+                      <td style={{ padding: "6px 8px" }}>
+                        <input
+                          type="text"
+                          value={editDraft.notes}
+                          onChange={(e) =>
+                            setEditDraft((d) => ({
+                              ...d,
+                              notes: e.target.value,
+                            }))
+                          }
+                          placeholder="Notes (optional)"
+                          style={{
+                            width: "100%",
+                            fontSize: 12,
+                            padding: "3px 6px",
+                            border: "1px solid #d1d5db",
+                            borderRadius: 3,
+                          }}
+                        />
+                      </td>
+                      <td
                         style={{
-                          padding: "2px 8px",
-                          fontSize: 11,
-                          color: "#b91c1c",
-                          border: "1px solid #fca5a5",
-                          background: "white",
-                          borderRadius: 3,
-                          cursor: "pointer",
+                          padding: "6px 8px",
+                          textAlign: "right",
+                          whiteSpace: "nowrap",
                         }}
                       >
-                        Delete
-                      </button>
-                    )}
-                  </td>
-                </tr>
-              ))}
+                        <button
+                          onClick={saveEdit}
+                          disabled={editSaving}
+                          style={{
+                            padding: "2px 8px",
+                            fontSize: 11,
+                            color: "white",
+                            border: "1px solid #047857",
+                            background: "#059669",
+                            borderRadius: 3,
+                            cursor: editSaving ? "wait" : "pointer",
+                            marginRight: 4,
+                          }}
+                        >
+                          {editSaving ? "Saving…" : "Save"}
+                        </button>
+                        <button
+                          onClick={cancelEdit}
+                          disabled={editSaving}
+                          style={{
+                            padding: "2px 8px",
+                            fontSize: 11,
+                            color: "#374151",
+                            border: "1px solid #d1d5db",
+                            background: "white",
+                            borderRadius: 3,
+                            cursor: editSaving ? "wait" : "pointer",
+                          }}
+                        >
+                          Cancel
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                }
+                return (
+                  <tr key={r.id} style={{ borderTop: "1px solid #e5e7eb" }}>
+                    <td style={{ padding: "6px 8px", fontFamily: "monospace" }}>
+                      {r.benchmarkCode}
+                    </td>
+                    <td style={{ padding: "6px 8px" }}>{r.deliveredOn}</td>
+                    <td style={{ padding: "6px 8px", color: "#374151" }}>
+                      {r.notes ?? ""}
+                    </td>
+                    <td
+                      style={{
+                        padding: "6px 8px",
+                        textAlign: "right",
+                        whiteSpace: "nowrap",
+                      }}
+                    >
+                      {ownerCanDelete && (
+                        <>
+                          <button
+                            onClick={() => startEdit(r)}
+                            style={{
+                              padding: "2px 8px",
+                              fontSize: 11,
+                              color: "#1d4ed8",
+                              border: "1px solid #93c5fd",
+                              background: "white",
+                              borderRadius: 3,
+                              cursor: "pointer",
+                              marginRight: 4,
+                            }}
+                          >
+                            Edit
+                          </button>
+                          <button
+                            onClick={() => remove(r.id)}
+                            style={{
+                              padding: "2px 8px",
+                              fontSize: 11,
+                              color: "#b91c1c",
+                              border: "1px solid #fca5a5",
+                              background: "white",
+                              borderRadius: 3,
+                              cursor: "pointer",
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         )}

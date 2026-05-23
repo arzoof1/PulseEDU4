@@ -332,10 +332,16 @@ router.get(
       .where(and(...conds))
       .orderBy(desc(benchmarkDeliveriesTable.deliveredOn), desc(benchmarkDeliveriesTable.id))
       .limit(500);
+    // canEdit: the viewer may edit/delete rows in this history list.
+    // Owner-of-record always can; Core Team also can (mirrors the
+    // proxy-create permission). ownerCanDelete kept for back-compat
+    // with older client bundles still in the field.
+    const canEdit = teacherId === staff.id || isCoreTeam(staff);
     res.json({
       subject,
       teacherId,
-      ownerCanDelete: teacherId === staff.id,
+      ownerCanDelete: canEdit,
+      canEdit,
       rows,
     });
   },
@@ -497,14 +503,153 @@ router.delete(
       res.status(404).json({ error: "not found" });
       return;
     }
-    if (row.teacherStaffId !== staff.id) {
-      res.status(403).json({ error: "Only the owning teacher can delete" });
+    if (row.teacherStaffId !== staff.id && !isCoreTeam(staff)) {
+      res
+        .status(403)
+        .json({ error: "Only the owning teacher or Core Team can delete" });
       return;
     }
     await db
       .delete(benchmarkDeliveriesTable)
       .where(eq(benchmarkDeliveriesTable.id, id));
     res.json({ ok: true });
+  },
+);
+
+// ----------------------------- update --------------------------------------
+// Lets the owning teacher (or Core Team on their behalf) correct a logged
+// entry without having to delete and re-create it. Editable fields are
+// deliveredOn, notes, and benchmarkCode. Subject is immutable — a subject
+// change is effectively a different entry, so use create/delete for that.
+router.patch(
+  "/teacher-roster/benchmark-deliveries/:id",
+  async (req: Request, res: Response) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = await resolveStaff(req);
+    if (!staff) {
+      res.status(401).json({ error: "Sign-in required" });
+      return;
+    }
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) {
+      res.status(400).json({ error: "bad id" });
+      return;
+    }
+    const [row] = await db
+      .select()
+      .from(benchmarkDeliveriesTable)
+      .where(
+        and(
+          eq(benchmarkDeliveriesTable.id, id),
+          eq(benchmarkDeliveriesTable.schoolId, schoolId),
+        ),
+      );
+    if (!row) {
+      res.status(404).json({ error: "not found" });
+      return;
+    }
+    if (row.teacherStaffId !== staff.id && !isCoreTeam(staff)) {
+      res
+        .status(403)
+        .json({ error: "Only the owning teacher or Core Team can edit" });
+      return;
+    }
+    const body = (req.body ?? {}) as {
+      deliveredOn?: unknown;
+      notes?: unknown;
+      benchmarkCode?: unknown;
+    };
+    const patch: {
+      deliveredOn?: string;
+      notes?: string | null;
+      benchmarkCode?: string;
+    } = {};
+    if (body.deliveredOn !== undefined) {
+      if (
+        typeof body.deliveredOn !== "string" ||
+        !/^\d{4}-\d{2}-\d{2}$/.test(body.deliveredOn)
+      ) {
+        res.status(400).json({ error: "deliveredOn must be YYYY-MM-DD" });
+        return;
+      }
+      // Mirror POST: no future dates, must fall in the current school year.
+      if (body.deliveredOn > todayISO()) {
+        res.status(400).json({ error: "Cannot log a date in the future" });
+        return;
+      }
+      const currentSY = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      const deliveredSY = schoolYearLabelFor(
+        new Date(`${body.deliveredOn}T12:00:00`),
+        DEFAULT_SCHOOL_TZ,
+      );
+      if (deliveredSY !== currentSY) {
+        res.status(400).json({
+          error: `Date must be in the current school year (${currentSY})`,
+        });
+        return;
+      }
+      patch.deliveredOn = body.deliveredOn;
+    }
+    if (body.notes !== undefined) {
+      if (body.notes === null || body.notes === "") {
+        patch.notes = null;
+      } else if (typeof body.notes === "string") {
+        const trimmed = body.notes.trim();
+        if (trimmed.length > 280) {
+          res.status(400).json({ error: "notes too long (max 280)" });
+          return;
+        }
+        patch.notes = trimmed || null;
+      } else {
+        res.status(400).json({ error: "notes must be string or null" });
+        return;
+      }
+    }
+    if (body.benchmarkCode !== undefined) {
+      if (
+        typeof body.benchmarkCode !== "string" ||
+        body.benchmarkCode.trim() === ""
+      ) {
+        res.status(400).json({ error: "benchmarkCode required" });
+        return;
+      }
+      const trimmedCode = body.benchmarkCode.trim();
+      // Mirror POST: verify the code lives in this school's catalog for
+      // the row's (immutable) subject. Prevents typos / cross-subject
+      // drift from silently corrupting counts.
+      const [hit] = await db
+        .select({ code: schoolBenchmarksTable.code })
+        .from(schoolBenchmarksTable)
+        .where(
+          and(
+            eq(schoolBenchmarksTable.schoolId, schoolId),
+            eq(schoolBenchmarksTable.subject, row.subject),
+            eq(schoolBenchmarksTable.code, trimmedCode),
+          ),
+        );
+      if (!hit) {
+        res
+          .status(400)
+          .json({ error: `Unknown benchmark code: ${trimmedCode}` });
+        return;
+      }
+      patch.benchmarkCode = trimmedCode;
+    }
+    if (Object.keys(patch).length === 0) {
+      res.json({ ok: true, updated: 0 });
+      return;
+    }
+    await db
+      .update(benchmarkDeliveriesTable)
+      .set(patch)
+      .where(
+        and(
+          eq(benchmarkDeliveriesTable.id, id),
+          eq(benchmarkDeliveriesTable.schoolId, schoolId),
+        ),
+      );
+    res.json({ ok: true, updated: 1 });
   },
 );
 
