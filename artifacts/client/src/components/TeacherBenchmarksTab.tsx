@@ -337,6 +337,10 @@ export default function TeacherBenchmarksTab({
   // tab (or anywhere else) is reflected the moment the user comes back
   // to this view. The heatmap window picker doesn't affect it (counts
   // are always SY-to-date).
+  // Bumps every 10s, plus on window focus / tab-visible, so a delivery
+  // logged elsewhere in the app shows up here within ~10s without the
+  // user having to refresh. In-app tab switches don't fire focus events,
+  // hence the poll.
   const [countsRefreshKey, setCountsRefreshKey] = useState(0);
   useEffect(() => {
     const bump = () => setCountsRefreshKey((k) => k + 1);
@@ -345,9 +349,11 @@ export default function TeacherBenchmarksTab({
     };
     window.addEventListener("focus", bump);
     document.addEventListener("visibilitychange", onVis);
+    const interval = window.setInterval(bump, 10_000);
     return () => {
       window.removeEventListener("focus", bump);
       document.removeEventListener("visibilitychange", onVis);
+      window.clearInterval(interval);
     };
   }, []);
   useEffect(() => {
