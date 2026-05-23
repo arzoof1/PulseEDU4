@@ -73,6 +73,10 @@ export default function TeacherInstructionLogTab({
   // Form is editable for the owning teacher OR a Core Team member viewing
   // someone else's roster (proxy logging).
   const canEdit = isOwnRoster || isCoreTeam;
+  // Proxy logging is shown whenever a Core Team member is viewing a
+  // teacher that isn't themselves. We compare against the signed-in
+  // user via the isOwnRoster prop, but see the teacherQuery note for
+  // why we can't rely on isOwnRoster for the actual save target.
   const proxyLogging = !isOwnRoster && isCoreTeam;
   const [subject, setSubject] = useState<string>("ela");
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
@@ -99,8 +103,17 @@ export default function TeacherInstructionLogTab({
   const [saveErr, setSaveErr] = useState<string | null>(null);
   const [saveOk, setSaveOk] = useState<string | null>(null);
 
-  const teacherQuery =
-    teacherId && !isOwnRoster ? `&teacherId=${teacherId}` : "";
+  // Always pass teacherId when we have one. Previously this was gated on
+  // !isOwnRoster, but `isOwnRoster = teacherId === defaultTeacherId` and
+  // defaultTeacherId is the *last-picked* teacher (persisted across
+  // visits in App.tsx), so an admin re-opening the page with Donna
+  // pre-selected got isOwnRoster=true and the param was dropped — the
+  // server then defaulted to the admin's own id, so reads + writes
+  // landed on the admin's record while the Benchmarks tab (which always
+  // sends teacherId) correctly read Donna's. Result: badges disagreed
+  // between the two sub-tabs. Server already enforces Core Team for any
+  // cross-staff teacherId, so unconditionally sending it is safe.
+  const teacherQuery = teacherId ? `&teacherId=${teacherId}` : "";
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -252,9 +265,12 @@ export default function TeacherInstructionLogTab({
             benchmarkCodes: selectedCodes,
             deliveredOn,
             notes: notes.trim() || undefined,
-            // Proxy logging: Core Team logging on behalf of the teacher
-            // currently displayed. Server validates the override.
-            teacherId: proxyLogging && teacherId ? teacherId : undefined,
+            // Always target the displayed teacher when we have an id —
+            // same reasoning as teacherQuery above (isOwnRoster can be
+            // a false positive after the admin re-opens the page with
+            // a previously-picked teacher). Server enforces Core Team
+            // for any cross-staff write.
+            teacherId: teacherId ?? undefined,
           }),
         },
       );
