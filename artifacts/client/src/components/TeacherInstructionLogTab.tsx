@@ -114,11 +114,18 @@ export default function TeacherInstructionLogTab({
           // of them. We then narrow client-side via selectedGrades.
           `/api/teacher-roster/benchmark-catalog?subject=${subject}&allGrades=1${teacherQuery}`,
         ),
+        // cache: "no-store" on counts + history so the badge and the
+        // visible row list always reflect the latest deliveries after a
+        // save or a tab switch. Express weak-ETag can otherwise replay a
+        // stale body via 304 and the page looks frozen. Matches the same
+        // treatment in TeacherBenchmarksTab.
         authFetch(
           `/api/teacher-roster/benchmark-deliveries/counts?subject=${subject}${teacherQuery}`,
+          { cache: "no-store" },
         ),
         authFetch(
           `/api/teacher-roster/benchmark-deliveries?subject=${subject}${teacherQuery}`,
+          { cache: "no-store" },
         ),
       ]);
       if (!catRes.ok) throw new Error(`catalog ${catRes.status}`);

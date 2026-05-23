@@ -362,8 +362,14 @@ export default function TeacherBenchmarksTab({
       return;
     }
     let cancelled = false;
+    // cache: "no-store" — counts must reflect deliveries logged on the
+    // sibling Instruction Log tab the moment the user switches back here.
+    // Without it the browser HTTP cache + Express weak-ETag can replay a
+    // stale 304 body and the header star stays at 0 even though the
+    // Instruction Log circle shows the new count. See bug 5/23/26.
     authFetch(
       `/api/teacher-roster/benchmark-deliveries/counts?subject=${subject}&teacherId=${teacherId}`,
+      { cache: "no-store" },
     )
       .then(async (r) => (r.ok ? r.json() : { counts: {} }))
       .then((j) => {
