@@ -47,7 +47,10 @@ interface PlacementResponse {
   windowVisible: number;
   rows: PlacementRow[];
   overrideCount: number;
-  levelCounts: { l5: number; l4: number; l3: number };
+  // Optional defensively: an older server (pre-deploy) won't return
+  // this field. Component guards against undefined to avoid crashing
+  // mid-deploy when the bundled client outruns the API.
+  levelCounts?: { l5: number; l4: number; l3: number };
   canSaveOverride: boolean;
 }
 
@@ -210,9 +213,15 @@ export default function AlgebraPlacementReview({
         {data && (
           <span style={{ color: "var(--text-subtle, #6b7280)", fontSize: 13 }}>
             · {data.schoolYear} · {data.rows.length} student
-            {data.rows.length === 1 ? "" : "s"} (L5 {data.levelCounts.l5} · L4{" "}
-            {data.levelCounts.l4} · L3 {data.levelCounts.l3}) ·{" "}
-            {data.overrideCount} opt-out
+            {data.rows.length === 1 ? "" : "s"}
+            {data.levelCounts && (
+              <>
+                {" "}
+                (L5 {data.levelCounts.l5} · L4 {data.levelCounts.l4} · L3{" "}
+                {data.levelCounts.l3})
+              </>
+            )}{" "}
+            · {data.overrideCount} opt-out
             {data.overrideCount === 1 ? "" : "s"}
           </span>
         )}
