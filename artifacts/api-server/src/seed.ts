@@ -2211,6 +2211,45 @@ export async function ensureFastScoresSchema() {
   await db.execute(
     sql`CREATE UNIQUE INDEX IF NOT EXISTS student_fast_scores_student_subject_year_unique ON student_fast_scores (school_id, student_id, subject, school_year)`,
   );
+  // Historical FAST + Algebra I placement review (Phase 1). The
+  // is_historical flag distinguishes prior-year backfill rows from
+  // current-PM rows for the trajectory chip + the Placement Review
+  // report. Defaults to FALSE so the FAST score schema stays
+  // backwards-compatible (every legacy row reads as non-historical).
+  await db.execute(
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS is_historical BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE student_fast_scores ADD COLUMN IF NOT EXISTS imported_as_historical_at TIMESTAMPTZ`,
+  );
+}
+
+// ---------------------------------------------------------------------------
+// algebra_placement_overrides — audit row per (school, student, school_year)
+// for the new Algebra I Placement Review report. Idempotent CREATE TABLE
+// + UNIQUE INDEX so a fresh tenant boots cleanly.
+// ---------------------------------------------------------------------------
+export async function ensureAlgebraPlacementOverridesSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS algebra_placement_overrides (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      school_year TEXT NOT NULL,
+      decision TEXT NOT NULL DEFAULT 'regular_8th',
+      justification TEXT NOT NULL,
+      opt_out_file_object_key TEXT,
+      decided_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS algebra_placement_overrides_unique ON algebra_placement_overrides (school_id, student_id, school_year)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS algebra_placement_overrides_school_year_idx ON algebra_placement_overrides (school_id, school_year)`,
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -2317,6 +2356,12 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseConsistencySchema();
   await ensureCaseFootageRequestsSchema();
   await ensureCaseOutcomeCatalogSchema();
+  await ensureAlgebraPlacementOverridesSchema();
+  // FAST history visibility window (Phase 1 of Historical FAST work).
+  // Default 3 years, hard-capped 2..5 by the route validator.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS fast_history_years_visible INTEGER NOT NULL DEFAULT 3`,
+  );
   const schools = await db.select().from(schoolsTable);
   for (const school of schools) {
     const [{ c }] = (await db.execute(

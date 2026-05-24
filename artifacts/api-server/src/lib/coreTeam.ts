@@ -133,6 +133,43 @@ export function canManagePickup(staff: {
   );
 }
 
+// Algebra I Placement Review gates (Phase 1 Historical FAST work).
+//
+// VIEW: admin + Core Team + Counselor (Guidance Counselor counts as
+// counselor for this purpose). Core Team sees the report rows but no
+// Override button — that's a separate save gate below.
+export function canViewAlgebraPlacement(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(staff.isCounselor || staff.isGuidanceCounselor)
+  );
+}
+
+// SAVE OVERRIDE: admin + Counselor / Guidance Counselor only. Core
+// Team without admin can read the report but cannot record an
+// opt-out override. Mirrors how safety-plan edits are gated.
+export function canSaveAlgebraPlacementOverride(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+}): boolean {
+  return (
+    isAdminOrSuperUser(staff) ||
+    Boolean(staff.isCounselor || staff.isGuidanceCounselor)
+  );
+}
+
 // Comp Time approver gate. Mirrors `canApproveAst` (admin tier OR
 // explicit per-staff flag) and additionally auto-elects any staff
 // member whose role is Principal or Assistant Principal — those

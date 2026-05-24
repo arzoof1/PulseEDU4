@@ -128,6 +128,7 @@ router.put("/school-settings", async (req, res): Promise<void> => {
     workweekStart,
     compTimeRequireAuthForm,
     compTimeAuthFormObjectKey,
+    fastHistoryYearsVisible,
   } = req.body ?? {};
 
   const updates: Partial<typeof schoolSettingsTable.$inferInsert> = {};
@@ -250,6 +251,17 @@ router.put("/school-settings", async (req, res): Promise<void> => {
       2,
       20,
       "pbisColdPeriodMultiple",
+    ),
+    // FAST history visibility (Phase 1 of Historical FAST work).
+    // 2..5 — minimum 2 so the trajectory chip always has at least
+    // a prior year to compare against; 5 cap matches the FAST launch
+    // (FL 22-23). Older imports stay dormant.
+    intRange(
+      "fastHistoryYearsVisible",
+      fastHistoryYearsVisible,
+      2,
+      5,
+      "fastHistoryYearsVisible",
     ),
   ]) {
     if (err) {

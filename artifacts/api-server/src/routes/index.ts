@@ -93,6 +93,7 @@ import featureLicensingRouter from "./featureLicensing";
 import fastCoverageRouter from "./fastCoverage";
 import districtOverviewRouter from "./districtOverview";
 import intensiveGroupsRouter from "./intensiveGroups";
+import algebraPlacementRouter from "./algebraPlacement";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -248,5 +249,6 @@ router.use(featureLicensingRouter);
 router.use(fastCoverageRouter);
 router.use(districtOverviewRouter);
 router.use(intensiveGroupsRouter);
+router.use(algebraPlacementRouter);
 
 export default router;

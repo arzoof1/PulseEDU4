@@ -3495,6 +3495,25 @@ router.post(
       });
       return;
     }
+    // Historical FAST flag (Phase 1 of Historical FAST work). When the
+    // admin checks "Import as historical (prior school year)" the
+    // importer:
+    //   1. requires schoolYear != current (a historical import for the
+    //      CURRENT year is an error — that's a normal import).
+    //   2. requires the parsed file contain ONLY a PM3 window
+    //      (prior-year context is PM3-only by product decision; no
+    //      partial-year backfills).
+    //   3. stamps is_historical = TRUE + imported_as_historical_at = NOW()
+    //      on every row written.
+    const isHistorical =
+      (req.body as { isHistorical?: unknown })?.isHistorical === true;
+    if (isHistorical && schoolYear === current) {
+      res.status(400).json({
+        error:
+          "Historical imports must target a prior school year. Uncheck the historical toggle to import current-year data.",
+      });
+      return;
+    }
     const filename = typeof (req.body as { filename?: unknown })?.filename ===
         "string" &&
       (req.body as { filename: string }).filename.trim()
@@ -3506,6 +3525,22 @@ router.post(
       return;
     }
     const subject = parsed.subject;
+    // Historical imports must be PM3-only (product decision — see
+    // "Out of scope" in the task plan). Reject if the parsed xlsx
+    // contains any non-PM3 window.
+    if (isHistorical) {
+      const nonPm3 = Array.from(parsed.windowsSeen).filter(
+        (w) => w !== "pm3",
+      );
+      if (nonPm3.length > 0 || !parsed.windowsSeen.has("pm3")) {
+        res.status(400).json({
+          error:
+            "Historical FAST imports must contain only PM3 (end-of-year) scores. " +
+            "Upload a PM3-only export to backfill prior years.",
+        });
+        return;
+      }
+    }
 
     const result = await db.transaction(async (tx) => {
       const [job] = await tx
@@ -3553,6 +3588,8 @@ router.post(
         priorYearScore: null,
         priorYearBq: false,
         importJobId: job.id,
+        isHistorical,
+        importedAsHistoricalAt: isHistorical ? now : null,
         updatedAt: now,
       }));
       for (let i = 0; i < scoreValues.length; i += 500) {
@@ -3575,6 +3612,11 @@ router.post(
               priorYearBq: sql`${studentFastScoresTable.priorYearBq}`,
               priorYearScore: sql`${studentFastScoresTable.priorYearScore}`,
               importJobId: sql`EXCLUDED.import_job_id`,
+              // Historical flag wins on conflict — re-importing a year
+              // as historical re-stamps the row; re-importing as
+              // current clears the historical mark.
+              isHistorical: sql`EXCLUDED.is_historical`,
+              importedAsHistoricalAt: sql`EXCLUDED.imported_as_historical_at`,
               updatedAt: now,
             },
           });

@@ -52,6 +52,18 @@ export const studentFastScoresTable = pgTable(
     // deletes rows whose importJobId matches the job. NULL on legacy /
     // seeded / hand-edited rows so they survive any rollback.
     importJobId: integer("import_job_id"),
+    // Phase 1 of the "Historical FAST data + Algebra I placement review"
+    // work. Rows imported through the "prior school year" toggle on the
+    // FAST importer are tagged historical so the trajectory chip + the
+    // Algebra I Placement Review can distinguish between "this is your
+    // current PM" and "this is backfilled prior-year context." The
+    // timestamp captures when the historical row was committed so we
+    // can render "Imported by admin on …" in the History tab without
+    // a second join against import_jobs.
+    isHistorical: boolean("is_historical").notNull().default(false),
+    importedAsHistoricalAt: timestamp("imported_as_historical_at", {
+      withTimezone: true,
+    }),
     createdAt: timestamp("created_at", { withTimezone: true })
       .notNull()
       .defaultNow(),

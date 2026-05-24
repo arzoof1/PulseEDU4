@@ -1016,6 +1016,10 @@ export default function DataImports({
   // can render relative to today regardless of the client clock.
   // Default to the current school year so the first Florida preview
   // call after upload has a valid year — the server re-validates.
+  // Phase-1 Historical FAST work: when true, the operator is
+  // explicitly back-filling a prior school year. Server requires the
+  // file be PM3-only and stamps is_historical=true on every row.
+  const [isHistoricalImport, setIsHistoricalImport] = useState(false);
   const [selectedSchoolYear, setSelectedSchoolYear] = useState<string>(
     () => floridaSchoolYearOptions()[0] ?? "",
   );
@@ -1428,6 +1432,7 @@ export default function DataImports({
                 xlsxBase64,
                 schoolYear: selectedSchoolYear || undefined,
                 filename,
+                isHistorical: isHistoricalImport,
               })
             : JSON.stringify({ csv: csvText, filename, mapping }),
       });
@@ -2317,6 +2322,29 @@ export default function DataImports({
                         current year for a fresh PM; pick a prior year
                         to back-fill.
                       </span>
+                      {/* Historical back-fill toggle. PM3-only is
+                          enforced server-side; the helper text below
+                          explains why. */}
+                      <label
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: 6,
+                          marginLeft: "auto",
+                          fontSize: 12,
+                          color: "var(--text-subtle)",
+                        }}
+                        title="Tag this import as historical back-fill. File must contain PM3 scores only. Used for multi-year FAST trajectory + Algebra I placement review."
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isHistoricalImport}
+                          onChange={(e) =>
+                            setIsHistoricalImport(e.target.checked)
+                          }
+                        />
+                        Import as historical (PM3-only back-fill)
+                      </label>
                     </div>
                   )}
                 </div>

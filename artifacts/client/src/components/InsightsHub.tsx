@@ -30,7 +30,8 @@ export type InsightsTileId =
   | "separations"
   | "fastBenchmarks"
   | "instructionalCoverage"
-  | "classComposer";
+  | "classComposer"
+  | "algebraPlacement";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 

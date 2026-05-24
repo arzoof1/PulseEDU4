@@ -108,6 +108,7 @@ import EngagementDashboard from "./components/EngagementDashboard";
 import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
 import AcademicsTrajectory from "./components/AcademicsTrajectory";
+import AlgebraPlacementReview from "./components/AlgebraPlacementReview";
 import AttendanceDashboard from "./components/AttendanceDashboard";
 import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
@@ -4037,6 +4038,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     group: "monitoring",
     targetSection: "earlyWarningDashboard",
   },
+  {
+    id: "algebraPlacement",
+    icon: "📐",
+    title: "Algebra I Placement Review",
+    subtitle:
+      "State-mandated review for current 7th graders at FAST Math PM3 L3+. Counselors + admins can record parent-opt-out overrides with justification and optional opt-out PDF. CSV + printable PDF.",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "algebraPlacement",
+  },
 ];
 
 // Phase 2 polish — sidebar group ownership map for the accordion behavior.
@@ -4523,6 +4534,7 @@ function App() {
     | "studentProfile"
     | "attendanceDashboard"
     | "academicsTrajectory"
+    | "algebraPlacement"
     | "trustedAdultsAdmin"
     | "displays"
     | "interventionsToday"
@@ -20688,6 +20700,10 @@ function App() {
         <FastBenchmarksDashboard
           onBack={() => setActiveSection("insights")}
         />
+      )}
+
+      {activeSection === "algebraPlacement" && canAccessFastBenchmarksInsights && (
+        <AlgebraPlacementReview onBack={() => setActiveSection("insights")} />
       )}
 
       {activeSection === "instructionalCoverage" &&

@@ -237,6 +237,15 @@ export default function IntensiveGroupComposerPage({
   const [cuspDirection, setCuspDirection] = useState<CuspDirection>("both");
   const [cuspDoubleCounters, setCuspDoubleCounters] = useState(false);
   const [cuspTrajectory, setCuspTrajectory] = useState(false);
+  // Phase-1 Historical FAST work: optional secondary filter on the
+  // cusp candidate pool. "" = behave like before (no extra filter);
+  // "first_time_l3" = only students whose CURRENT PM is the first
+  // time they hit L3 (prior PM3 was L1/L2); "consistent_l3_plus" =
+  // only students who were already L3+ last year and remain L3+.
+  // Server enforces the same enum (intensiveGroups.ts /suggest).
+  const [trajectoryFilter, setTrajectoryFilter] = useState<
+    "" | "first_time_l3" | "consistent_l3_plus"
+  >("");
 
   useEffect(() => {
     // Mode change resets the mastery-cap default so the Advanced
@@ -324,6 +333,7 @@ export default function IntensiveGroupComposerPage({
       params.set("cuspDirection", cuspDirection);
       if (cuspDoubleCounters) params.set("cuspDoubleCounters", "true");
       if (cuspTrajectory) params.set("cuspTrajectory", "true");
+      if (trajectoryFilter) params.set("trajectoryFilter", trajectoryFilter);
     }
     // Only send the % cap when the user has touched the advanced
     // section — otherwise let the server pick the mode default
@@ -1785,6 +1795,45 @@ export default function IntensiveGroupComposerPage({
                   </label>
                 );
               })()}
+              {/* Phase-1 Historical FAST: optional second filter to
+                  fold multi-year context into the candidate pool. */}
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  fontSize: 13,
+                  color: "#1f2937",
+                }}
+              >
+                Multi-year filter:
+                <select
+                  value={trajectoryFilter}
+                  onChange={(e) =>
+                    setTrajectoryFilter(
+                      e.target.value as
+                        | ""
+                        | "first_time_l3"
+                        | "consistent_l3_plus",
+                    )
+                  }
+                  style={{
+                    padding: "2px 6px",
+                    borderRadius: 4,
+                    border: "1px solid #d1d5db",
+                    background: "#fff",
+                    fontSize: 12,
+                  }}
+                >
+                  <option value="">— none —</option>
+                  <option value="first_time_l3">
+                    First-time L3 (prior year &lt; L3)
+                  </option>
+                  <option value="consistent_l3_plus">
+                    Consistent L3+ (prior + current both L3+)
+                  </option>
+                </select>
+              </label>
             </div>
 
             {/* Live calculator readout — updates ~400ms after the last

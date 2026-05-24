@@ -203,6 +203,16 @@ export const schoolSettingsTable = pgTable(
   fastTier2MinWindows: integer("fast_tier2_min_windows")
     .notNull()
     .default(2),
+  // FAST Phase 1 (Historical FAST + Algebra I placement review) —
+  // how many PM3 school years (current + prior) the multi-year FAST
+  // trajectory chip renders on Student Profile, Teacher Roster, and
+  // the MTSS plan editor. Imports older than this window remain in
+  // the database — they just don't render. 5-year cap is hard:
+  // FAST launched in FL 22-23; older data uses the FSA scale, which
+  // is not comparable.
+  fastHistoryYearsVisible: integer("fast_history_years_visible")
+    .notNull()
+    .default(3),
   // Advisory pointer to the tier_presets row last applied to this
   // school. The actual flags above are still authoritative — this is
   // purely so the School Plans grid can show "Currently: Pro" badges.

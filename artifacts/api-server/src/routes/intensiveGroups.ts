@@ -452,6 +452,27 @@ router.get("/intensive-groups/suggest", async (req, res) => {
           : "both";
   const cuspDoubleCounters = req.query.cuspDoubleCounters === "true";
   const cuspTrajectory = req.query.cuspTrajectory === "true";
+  // trajectoryFilter (Phase 1 Historical FAST work). Layered on top of
+  // the existing cuspTrajectory toggle:
+  //  - ""               → existing behavior (slipped: prior L3 → current L2).
+  //  - "first_time_l3"  → ALSO include candidates whose prior PM was
+  //                       L1 or L2 and current is L3 (climbers — first
+  //                       time hitting proficient; worth small-group
+  //                       coverage so they don't slide back).
+  //  - "consistent_l3+" → restrict candidates to those who have been
+  //                       L3+ in BOTH the prior AND current windows
+  //                       (stable proficient — useful for enrichment
+  //                       cusp recipes).
+  const trajectoryFilterRaw =
+    typeof req.query.trajectoryFilter === "string"
+      ? req.query.trajectoryFilter
+      : "";
+  const trajectoryFilter: "" | "first_time_l3" | "consistent_l3_plus" =
+    trajectoryFilterRaw === "first_time_l3"
+      ? "first_time_l3"
+      : trajectoryFilterRaw === "consistent_l3_plus"
+        ? "consistent_l3_plus"
+        : "";
 
   // Strand-cusp + double-counters is not supportable cheaply — the
   // strand check needs item-response categories for BOTH subjects.
@@ -690,15 +711,31 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     // the admin still toggles it on PM1 we reject everyone.
     if (cuspTrajectory) {
       if (!trajectoryActive) return false;
-      if (p.fastLevel !== 2) return false;
-      const wasL3InPm1 =
-        priorPm1LevelById != null &&
-        priorPm1LevelById.get(p.studentId) === 3;
-      const wasL3InPm2 =
-        window === "pm3" &&
-        priorPm2LevelById != null &&
-        priorPm2LevelById.get(p.studentId) === 3;
-      if (!wasL3InPm1 && !wasL3InPm2) return false;
+      const priorL = (
+        priorPm2LevelById != null && window === "pm3"
+          ? priorPm2LevelById.get(p.studentId)
+          : null
+      ) ?? (priorPm1LevelById != null ? priorPm1LevelById.get(p.studentId) : null);
+      // Default ("") — slipped: prior L3 → current L2.
+      // "first_time_l3" — climber: prior L1 or L2 → current L3.
+      // "consistent_l3_plus" — stable: prior L3+ AND current L3+.
+      if (trajectoryFilter === "first_time_l3") {
+        if (p.fastLevel !== 3) return false;
+        if (priorL == null || priorL >= 3) return false;
+      } else if (trajectoryFilter === "consistent_l3_plus") {
+        if (p.fastLevel == null || p.fastLevel < 3) return false;
+        if (priorL == null || priorL < 3) return false;
+      } else {
+        if (p.fastLevel !== 2) return false;
+        const wasL3InPm1 =
+          priorPm1LevelById != null &&
+          priorPm1LevelById.get(p.studentId) === 3;
+        const wasL3InPm2 =
+          window === "pm3" &&
+          priorPm2LevelById != null &&
+          priorPm2LevelById.get(p.studentId) === 3;
+        if (!wasL3InPm1 && !wasL3InPm2) return false;
+      }
     }
 
     return true;
@@ -747,6 +784,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
         cuspDirection: "both" | "below" | "above" | "strand";
         cuspDoubleCounters: boolean;
         cuspTrajectory: boolean;
+        trajectoryFilter: "" | "first_time_l3" | "consistent_l3_plus";
         chartGradeUsed: number | null;
         l3Min: number | null;
         l4Min: number | null;
@@ -771,6 +809,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
       cuspDirection,
       cuspDoubleCounters,
       cuspTrajectory,
+      trajectoryFilter,
       chartGradeUsed: cg,
       l3Min: l3,
       l4Min: l4,
