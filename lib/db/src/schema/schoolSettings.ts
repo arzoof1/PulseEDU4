@@ -286,6 +286,15 @@ export const schoolSettingsTable = pgTable(
   // that don't reshuffle mid-year can hide it without losing the
   // ability to run Class Composer manually from Insights.
   classComposerBannerDismissedSy: text("class_composer_banner_dismissed_sy"),
+  // Skill-cluster refresh banner dismissal tokens. Append-only array
+  // of "<schoolYear>|<pmWindow>|skillcluster_refresh" strings. Once
+  // an admin dismisses (e.g.) the 25-26|pm2 banner, that exact token
+  // joins the array and stops showing. A new PM window (pm3) creates
+  // a fresh token and a fresh banner.
+  skillclusterBannerDismissals: jsonb("skillcluster_banner_dismissals")
+    .$type<string[]>()
+    .notNull()
+    .default([]),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()

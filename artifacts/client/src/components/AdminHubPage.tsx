@@ -302,6 +302,13 @@ export default function AdminHubPage({
   const [reconciliation, setReconciliation] =
     useState<ReconciliationResp | null>(null);
   const [pmReadiness, setPmReadiness] = useState<PmReadinessResp | null>(null);
+  const [skillclusterBanners, setSkillclusterBanners] = useState<Array<{
+    pmWindow: string;
+    token: string;
+    title: string;
+    description: string;
+    subjects: string[];
+  }>>([]);
   const [astPending, setAstPending] = useState<number | null>(null);
   const [compPending, setCompPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
@@ -313,13 +320,14 @@ export default function AdminHubPage({
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2, r3, r4, r5, r6] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6, r7] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
         authFetch("/api/pickup/reconciliation"),
         authFetch("/api/ast/admin-pending-count"),
         authFetch("/api/comp/admin-pending-count"),
         authFetch("/api/intensive-groups/pm-readiness"),
+        authFetch("/api/intensive-groups/skillcluster-banners"),
       ]);
       if (!r1.ok) throw new Error(await r1.text());
       if (!r2.ok) throw new Error(await r2.text());
@@ -359,6 +367,20 @@ export default function AdminHubPage({
         setPmReadiness((await r6.json()) as PmReadinessResp);
       } else {
         setPmReadiness(null);
+      }
+      if (r7.ok) {
+        const d7 = (await r7.json()) as {
+          banners: Array<{
+            pmWindow: string;
+            token: string;
+            title: string;
+            description: string;
+            subjects: string[];
+          }>;
+        };
+        setSkillclusterBanners(d7.banners ?? []);
+      } else {
+        setSkillclusterBanners([]);
       }
       setError(null);
     } catch (e) {
@@ -540,6 +562,74 @@ export default function AdminHubPage({
           }}
         />
       )}
+
+      {skillclusterBanners.map((b) => (
+        <div
+          key={b.token}
+          style={{
+            ...card,
+            borderColor: b.pmWindow === "pm1" ? "#fcd34d" : "#a7f3d0",
+            background: b.pmWindow === "pm1" ? "#fffbeb" : "#ecfdf5",
+            display: "flex",
+            flexDirection: "column",
+            gap: "0.6rem",
+          }}
+        >
+          <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+            <h3 style={{ margin: 0 }}>
+              {b.pmWindow === "pm1" ? "📋" : "🔄"} {b.title}
+            </h3>
+            <span style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+              {b.subjects.map((s) => s.toUpperCase()).join(" + ")}
+            </span>
+          </div>
+          <p style={{ margin: 0, fontSize: 14 }}>{b.description}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <button
+              type="button"
+              onClick={() => onOpenClassComposer?.()}
+              disabled={!onOpenClassComposer}
+              style={{
+                padding: "0.5rem 0.9rem",
+                borderRadius: 8,
+                border: "1px solid #4338ca",
+                background: "#4338ca",
+                color: "white",
+                fontWeight: 600,
+                cursor: onOpenClassComposer ? "pointer" : "not-allowed",
+              }}
+            >
+              Open Class Composer
+            </button>
+            <button
+              type="button"
+              onClick={async () => {
+                setSkillclusterBanners((prev) =>
+                  prev.filter((x) => x.token !== b.token),
+                );
+                await authFetch(
+                  "/api/intensive-groups/skillcluster-banners/dismiss",
+                  {
+                    method: "POST",
+                    headers: { "content-type": "application/json" },
+                    body: JSON.stringify({ token: b.token }),
+                  },
+                );
+              }}
+              style={{
+                padding: "0.5rem 0.9rem",
+                borderRadius: 8,
+                border: "1px solid var(--border, #cbd5e1)",
+                background: "white",
+                color: "var(--text, #334155)",
+                cursor: "pointer",
+              }}
+            >
+              Dismiss for this PM cycle
+            </button>
+          </div>
+        </div>
+      ))}
 
       <ReconciliationTile data={reconciliation} />
 

@@ -45,6 +45,7 @@ import {
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
   ensureClassComposerPlansSchema,
+  ensureClassComposerSkillClusterSchema,
 } from "./seed";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
@@ -217,6 +218,9 @@ async function runSeed(): Promise<void> {
   // Class Composer "Master Plans" — saved/finalized plan tables for the
   // scheduler-side lock-and-build workflow. Idempotent.
   await ensureClassComposerPlansSchema();
+  // Skill-cluster mode add-ons (focus_standards column + refresh
+  // audit table + per-window banner dismissals). Idempotent.
+  await ensureClassComposerSkillClusterSchema();
   // FAST Phase 1 — per-item benchmark response storage for the Florida
   // xlsx parser. Idempotent.
   await ensureFastItemResponsesSchema();

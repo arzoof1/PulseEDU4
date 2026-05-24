@@ -5240,6 +5240,53 @@ export async function ensureDataImporterRollbackSchema(): Promise<void> {
 }
 
 // -----------------------------------------------------------------------------
+// ensureClassComposerSkillClusterSchema
+//
+// Skill-cluster mode add-ons (additive to the existing
+// class_composer_plan_groups table + new audit table).
+//   * focus_standards JSONB on plan_groups — the N benchmark codes
+//     teachers will work on; null on legacy intensive/regular/cusp groups.
+//   * class_composer_plan_group_refreshes — append-only audit log
+//     of refresh / dismiss / suggest_schedule actions per group.
+//   * skillcluster_banner_dismissals JSONB on school_settings — array
+//     of per-window dismissal tokens "<sy>|<window>|skillcluster_refresh"
+//     so PM1/PM2/PM3 banners can each be dismissed independently and
+//     reappear when a new window arrives.
+// -----------------------------------------------------------------------------
+export async function ensureClassComposerSkillClusterSchema(): Promise<void> {
+  await db.execute(
+    sql`ALTER TABLE class_composer_plan_groups ADD COLUMN IF NOT EXISTS focus_standards JSONB`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_composer_plan_group_refreshes (
+      id SERIAL PRIMARY KEY,
+      plan_id INTEGER NOT NULL,
+      plan_group_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      pm_window TEXT NOT NULL,
+      action TEXT NOT NULL,
+      prior_focus JSONB,
+      new_focus JSONB,
+      drift_summary JSONB,
+      staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS class_composer_plan_group_refreshes_group_idx
+      ON class_composer_plan_group_refreshes (plan_group_id)
+  `);
+  await db.execute(sql`
+    CREATE INDEX IF NOT EXISTS class_composer_plan_group_refreshes_school_idx
+      ON class_composer_plan_group_refreshes (school_id)
+  `);
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS skillcluster_banner_dismissals JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+}
+
+// -----------------------------------------------------------------------------
 // ensureStudentRetentionsSchema / seedStudentRetentionsIfEmpty
 //
 // Roster "R-in-a-circle" indicator. ~5% of each school's students get a

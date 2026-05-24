@@ -34,6 +34,17 @@ interface Profile {
   overallPct: number | null;
   fastLevel: 1 | 2 | 3 | 4 | 5 | null;
 }
+// Skill-cluster focus standard surfaced per group on result cards
+// and stored on locked plan groups. groupAvgPct is the group's
+// combined mastery % on this benchmark (lower = weaker priority).
+interface FocusStandard {
+  benchmarkCode: string;
+  friendlyLabel: string;
+  groupAvgPct: number;
+  coverage: number;
+  sourceWindow?: string;
+  sourceSchoolYear?: string;
+}
 interface Group {
   index: number;
   dominantCategory: string | null;
@@ -41,8 +52,9 @@ interface Group {
   avgDominantPct: number | null;
   cohesionPct: number;
   levelMix: LevelMix;
+  focusStandards?: FocusStandard[];
 }
-type Mode = "intensive" | "regular" | "cusp";
+type Mode = "intensive" | "regular" | "cusp" | "skillcluster";
 type Arrangement = "homogeneous" | "balanced";
 type CuspDirection = "both" | "below" | "above" | "strand";
 interface CuspSummary {
@@ -87,6 +99,7 @@ interface PlanGroupRecipe {
   cuspDirection?: CuspDirection;
   cuspDoubleCounters?: boolean;
   cuspTrajectory?: boolean;
+  focusCount?: number;
   summary: string;
 }
 interface PlanGroupRow {
@@ -98,6 +111,7 @@ interface PlanGroupRow {
   recipe: PlanGroupRecipe;
   studentIds: string[];
   seatsPerSection: number;
+  focusStandards?: FocusStandard[] | null;
   createdAt: string;
 }
 
@@ -110,6 +124,7 @@ interface SuggestResponse {
   mode: Mode;
   arrangement: Arrangement | null;
   cusp: CuspSummary | null;
+  focusCount: number | null;
   calcOnly: boolean;
   eligibilityMaxPct: number;
   requested: { sections: number; seats: number };
@@ -313,6 +328,9 @@ export default function IntensiveGroupComposerPage({
   const [sections, setSections] = useState(4);
   const [seats, setSeats] = useState(22);
   const [eligibilityMaxPct, setEligibilityMaxPct] = useState(70);
+  // Skill-cluster mode: how many focus standards to surface per
+  // group. Default 5; clamped to 3..7 server-side too.
+  const [focusCount, setFocusCount] = useState(5);
 
   // Cusp-mode controls. Below + above point windows are independent
   // so an admin can cast a wider net on the at-risk side (e.g. 15 pts
@@ -338,7 +356,9 @@ export default function IntensiveGroupComposerPage({
   useEffect(() => {
     // Mode change resets the mastery-cap default so the Advanced
     // expander reflects the right number when opened.
-    setEligibilityMaxPct(mode === "intensive" ? 70 : 100);
+    setEligibilityMaxPct(
+      mode === "intensive" || mode === "skillcluster" ? 70 : 100,
+    );
   }, [mode]);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [windowOpts, setWindowOpts] = useState<WindowOpt[]>([]);
@@ -414,6 +434,9 @@ export default function IntensiveGroupComposerPage({
     });
     if (mode === "regular") {
       params.set("arrangement", arrangement);
+    }
+    if (mode === "skillcluster") {
+      params.set("focusCount", String(focusCount));
     }
     if (mode === "cusp") {
       params.set("cuspPointsBelow", String(cuspPointsBelow));
@@ -843,6 +866,121 @@ export default function IntensiveGroupComposerPage({
       );
       await refreshActivePlan(activePlan.id);
       await refreshPlans(subject, grade);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  // Skill-cluster PM refresh / check-fit / dismiss handlers. None
+  // of these mutate the locked roster — they only touch
+  // focus_standards (refresh) or compute a read-only drift report
+  // (check-fit). The drift modal state below holds the result of
+  // the last check-fit so the admin can see suggestions, then
+  // either click "Refresh focus" or "Dismiss".
+  const [driftModal, setDriftModal] = useState<{
+    group: PlanGroupRow;
+    pmWindow: string;
+    suggestedMoves: Array<{
+      studentId: string;
+      fromGroupId: number;
+      toGroupId: number;
+      improvementPct: number;
+    }>;
+    studentsAnalyzed: number;
+    studentsWithCoverage: number;
+  } | null>(null);
+
+  const refreshFocusFromPm = async (g: PlanGroupRow, pmWindow: string) => {
+    if (!activePlan) return;
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      const r = await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/groups/${g.id}/refresh-focus`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pmWindow }),
+        },
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      await refreshActivePlan(activePlan.id);
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const checkFitAgainstPm = async (g: PlanGroupRow, pmWindow: string) => {
+    if (!activePlan) return;
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      const r = await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/groups/${g.id}/check-fit`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pmWindow }),
+        },
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const data = (await r.json()) as {
+        driftSummary: {
+          suggestedMoves: Array<{
+            studentId: string;
+            fromGroupId: number;
+            toGroupId: number;
+            improvementPct: number;
+          }>;
+          studentsAnalyzed: number;
+          studentsWithCoverage: number;
+        };
+      };
+      setDriftModal({
+        group: g,
+        pmWindow,
+        suggestedMoves: data.driftSummary.suggestedMoves,
+        studentsAnalyzed: data.driftSummary.studentsAnalyzed,
+        studentsWithCoverage: data.driftSummary.studentsWithCoverage,
+      });
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const skillBtnStyle = {
+    padding: "3px 8px",
+    fontSize: 11,
+    border: "1px solid #c7d2fe",
+    background: "#eef2ff",
+    color: "#3730a3",
+    borderRadius: 4,
+    cursor: "pointer",
+  } as const;
+
+  const dismissDriftCheck = async (g: PlanGroupRow, pmWindow: string) => {
+    if (!activePlan) return;
+    setPlanBusy(true);
+    try {
+      await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/groups/${g.id}/dismiss-check`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ pmWindow }),
+        },
+      );
+      setDriftModal(null);
     } finally {
       setPlanBusy(false);
     }
@@ -1359,6 +1497,69 @@ export default function IntensiveGroupComposerPage({
                           <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
                             {g.recipe?.summary ?? ""}
                           </div>
+                          {g.recipe?.mode === "skillcluster" &&
+                            g.focusStandards &&
+                            g.focusStandards.length > 0 && (
+                              <ul
+                                style={{
+                                  margin: "6px 0 0 0",
+                                  paddingLeft: 18,
+                                  fontSize: 11,
+                                  color: "#374151",
+                                }}
+                              >
+                                {g.focusStandards.map((f) => (
+                                  <li key={f.benchmarkCode}>
+                                    <strong>{f.benchmarkCode}</strong>{" "}
+                                    {f.friendlyLabel.replace(
+                                      `${f.benchmarkCode} · `,
+                                      "",
+                                    )}{" "}
+                                    <span style={{ color: "#6b7280" }}>
+                                      (grp avg {f.groupAvgPct}%
+                                      {f.sourceWindow
+                                        ? `, from ${f.sourceWindow.toUpperCase()}`
+                                        : ""}
+                                      )
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            )}
+                          {g.recipe?.mode === "skillcluster" &&
+                            activePlan.status === "draft" && (
+                              <div
+                                style={{
+                                  marginTop: 6,
+                                  display: "flex",
+                                  gap: 6,
+                                  flexWrap: "wrap",
+                                }}
+                              >
+                                <button
+                                  onClick={() => checkFitAgainstPm(g, "pm1")}
+                                  disabled={planBusy}
+                                  title="Read-only: see who would fit better in another group based on PM1. Rosters never auto-shuffle."
+                                  style={skillBtnStyle}
+                                >
+                                  Check against PM1
+                                </button>
+                                <button
+                                  onClick={() => refreshFocusFromPm(g, "pm2")}
+                                  disabled={planBusy}
+                                  style={skillBtnStyle}
+                                >
+                                  Refresh focus from PM2
+                                </button>
+                                <button
+                                  onClick={() => refreshFocusFromPm(g, "pm3")}
+                                  disabled={planBusy}
+                                  style={skillBtnStyle}
+                                >
+                                  Refresh focus from PM3
+                                </button>
+                              </div>
+                            )}
                         </div>
                         <button
                           onClick={() => unlockGroup(g)}
@@ -1787,7 +1988,7 @@ export default function IntensiveGroupComposerPage({
                 />{" "}
                 Regular (Levels 1–5)
               </label>
-              <label>
+              <label style={{ marginRight: 12 }}>
                 <input
                   type="radio"
                   name="composer-mode"
@@ -1796,7 +1997,52 @@ export default function IntensiveGroupComposerPage({
                 />{" "}
                 Cusp (Levels 2–3 bubble)
               </label>
+              <label>
+                <input
+                  type="radio"
+                  name="composer-mode"
+                  checked={mode === "skillcluster"}
+                  onChange={() => setMode("skillcluster")}
+                />{" "}
+                Skill-cluster (focus standards)
+              </label>
             </div>
+            {mode === "skillcluster" && (
+              <div
+                style={{
+                  flex: "1 1 100%",
+                  padding: 8,
+                  border: "1px solid #c7d2fe",
+                  background: "#eef2ff",
+                  borderRadius: 6,
+                  fontSize: 12,
+                  color: "#3730a3",
+                }}
+              >
+                Groups L1/L2 students by similar specific benchmark
+                weaknesses. Each group gets {focusCount} focus
+                standards. Locked rosters are never auto-shuffled —
+                use PM1 "check fit" and PM2/PM3 "refresh focus"
+                afterwards. Pool restricted to Levels&nbsp;1–2.
+                <div style={{ marginTop: 6 }}>
+                  <label>
+                    Focus standards per group:{" "}
+                    <input
+                      type="number"
+                      min={3}
+                      max={7}
+                      value={focusCount}
+                      onChange={(e) =>
+                        setFocusCount(
+                          Math.max(3, Math.min(7, Number(e.target.value) || 5)),
+                        )
+                      }
+                      style={{ width: 60 }}
+                    />
+                  </label>
+                </div>
+              </div>
+            )}
             {mode === "regular" && (
               <div>
                 <span style={{ fontWeight: 600, marginRight: 8 }}>Arrangement</span>
@@ -2324,18 +2570,48 @@ export default function IntensiveGroupComposerPage({
                     {g.students.length} students
                   </span>
                 </div>
-                <div style={{ fontSize: 13, color: "#374151", marginTop: 4 }}>
-                  Skill focus:{" "}
-                  <strong>{g.dominantCategory ?? "Mixed"}</strong>
-                </div>
-                <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  {g.dominantCategory
-                    ? `Cohesion ${g.cohesionPct}%`
-                    : `Spread cohesion ${g.cohesionPct}% (lower = more varied)`}
-                  {g.avgDominantPct != null
-                    ? ` · Avg ${g.avgDominantPct}% in focus skill`
-                    : ""}
-                </div>
+                {result?.mode === "skillcluster" &&
+                g.focusStandards &&
+                g.focusStandards.length > 0 ? (
+                  <div style={{ fontSize: 12, color: "#374151", marginTop: 4 }}>
+                    <div style={{ fontWeight: 600 }}>Focus standards:</div>
+                    <ul style={{ margin: "2px 0 0 0", paddingLeft: 18 }}>
+                      {g.focusStandards.map((f) => (
+                        <li key={f.benchmarkCode}>
+                          <strong>{f.benchmarkCode}</strong>{" "}
+                          {f.friendlyLabel.replace(
+                            `${f.benchmarkCode} · `,
+                            "",
+                          )}{" "}
+                          <span style={{ color: "#6b7280" }}>
+                            (grp avg {f.groupAvgPct}%)
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <div
+                      style={{ color: "#6b7280", marginTop: 2, fontSize: 11 }}
+                    >
+                      Cohesion {g.cohesionPct}% (share of group with these
+                      focus standards in their personal bottom-7 gaps)
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 13, color: "#374151", marginTop: 4 }}>
+                      Skill focus:{" "}
+                      <strong>{g.dominantCategory ?? "Mixed"}</strong>
+                    </div>
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
+                      {g.dominantCategory
+                        ? `Cohesion ${g.cohesionPct}%`
+                        : `Spread cohesion ${g.cohesionPct}% (lower = more varied)`}
+                      {g.avgDominantPct != null
+                        ? ` · Avg ${g.avgDominantPct}% in focus skill`
+                        : ""}
+                    </div>
+                  </>
+                )}
                 <LevelMixChips mix={g.levelMix} />
                 {activePlan && activePlan.status === "draft" && (
                   <div style={{ marginTop: 8 }}>
@@ -2466,6 +2742,116 @@ export default function IntensiveGroupComposerPage({
             </div>
           )}
         </>
+      )}
+      {driftModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(15,23,42,0.45)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 1000,
+          }}
+          onClick={() => setDriftModal(null)}
+        >
+          <div
+            style={{
+              background: "white",
+              borderRadius: 8,
+              padding: 20,
+              maxWidth: 560,
+              width: "90%",
+              maxHeight: "85vh",
+              overflow: "auto",
+              boxShadow: "0 10px 40px rgba(0,0,0,0.25)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ marginTop: 0 }}>
+              Schedule fit check · {driftModal.group.name} ·{" "}
+              {driftModal.pmWindow.toUpperCase()}
+            </h3>
+            <p style={{ fontSize: 13, color: "#374151", marginTop: 0 }}>
+              Read-only. Rosters never auto-shuffle — these are
+              suggestions for the scheduler.
+            </p>
+            <p style={{ fontSize: 12, color: "#6b7280" }}>
+              Analyzed {driftModal.studentsWithCoverage} of{" "}
+              {driftModal.studentsAnalyzed} students with{" "}
+              {driftModal.pmWindow.toUpperCase()} item responses.
+            </p>
+            {driftModal.suggestedMoves.length === 0 ? (
+              <p style={{ fontSize: 13 }}>
+                <strong>No suggested moves.</strong> Current group
+                placements still fit students' deficit profiles
+                within the 25% improvement threshold.
+              </p>
+            ) : (
+              <ul style={{ fontSize: 13, paddingLeft: 18 }}>
+                {driftModal.suggestedMoves.map((m, i) => {
+                  const toGroup = planGroups.find(
+                    (g) => g.id === m.toGroupId,
+                  );
+                  return (
+                    <li key={i} style={{ marginBottom: 4 }}>
+                      Consider moving <code>{m.studentId}</code> →{" "}
+                      <strong>{toGroup?.name ?? `Group ${m.toGroupId}`}</strong>{" "}
+                      <span style={{ color: "#059669" }}>
+                        (+{m.improvementPct}% better fit)
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+            <div
+              style={{
+                marginTop: 16,
+                display: "flex",
+                gap: 8,
+                justifyContent: "flex-end",
+              }}
+            >
+              <button
+                onClick={() =>
+                  dismissDriftCheck(driftModal.group, driftModal.pmWindow)
+                }
+                disabled={planBusy}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #d1d5db",
+                  background: "white",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Dismiss
+              </button>
+              <button
+                onClick={async () => {
+                  const g = driftModal.group;
+                  const pm = driftModal.pmWindow;
+                  setDriftModal(null);
+                  await refreshFocusFromPm(g, pm);
+                }}
+                disabled={planBusy}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #4338ca",
+                  background: "#4338ca",
+                  color: "white",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                Refresh focus standards
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

@@ -29,12 +29,20 @@ export interface ComposerPlanPdfStudent {
   overallPct: number | null;
 }
 
+export interface ComposerPlanPdfFocusStandard {
+  benchmarkCode: string;
+  friendlyLabel: string;
+  groupAvgPct: number;
+  sourceWindow?: string | null;
+}
+
 export interface ComposerPlanPdfGroup {
   groupIndex: number;
   name: string;
   recipeSummary: string;
   seatsPerSection: number;
   students: ComposerPlanPdfStudent[];
+  focusStandards?: ComposerPlanPdfFocusStandard[] | null;
 }
 
 export interface ComposerPlanPdfInput {
@@ -292,6 +300,17 @@ function drawGroupBody(
   doc.text(g.name, left, top);
   doc.font("Helvetica").fontSize(10).fillColor("#64748b");
   doc.text(g.recipeSummary);
+  if (g.focusStandards && g.focusStandards.length > 0) {
+    doc.moveDown(0.3);
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.text("Focus standards:");
+    doc.font("Helvetica").fontSize(10).fillColor("#334155");
+    for (const f of g.focusStandards) {
+      doc.text(
+        `  • ${f.benchmarkCode} — ${f.friendlyLabel.replace(`${f.benchmarkCode} · `, "")} (grp avg ${f.groupAvgPct}%${f.sourceWindow ? `, ${f.sourceWindow.toUpperCase()}` : ""})`,
+      );
+    }
+  }
   const overCap = g.students.length > g.seatsPerSection;
   doc
     .font("Helvetica")

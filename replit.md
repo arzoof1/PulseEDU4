@@ -106,6 +106,19 @@ pointer here.
   uncredited — out of scope until the FL importer captures
   prior course code.
 
+- **Deprecate Intensive mode in Class Composer (follow-up to
+  skill-cluster ship).** Skill-cluster mode now produces 5 focus
+  standards per group with PM1 sanity-check + PM2/PM3 refresh
+  banners on Admin Hub. After one full PM cycle of school usage,
+  evaluate whether the original "Intensive" mode (dominant-skill
+  bucket heuristic) still has any users; if not, hide the radio
+  and keep the code path only for legacy plan rehydration. See
+  `clusterByBenchmarkDeficit` + `pickFocusStandards` in
+  `lib/skillProfile.ts` and `/refresh-focus`, `/check-fit`,
+  `/dismiss-check`, `/skillcluster-banners` in
+  `routes/intensiveGroups.ts`. Drift threshold = 25%, coverage
+  floor = 70% of group with item responses.
+
 - **Class Composer "Master Plan" — end-to-end smoke test.**
   Walk the full flow once with real data before the next release:
   start new plan → generate intensive recipe → lock → generate

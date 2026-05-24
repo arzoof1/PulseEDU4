@@ -35,6 +35,9 @@ import {
   schoolsTable,
   classComposerPlansTable,
   classComposerPlanGroupsTable,
+  classComposerPlanGroupRefreshesTable,
+  type ClassComposerFocusStandard,
+  type ClassComposerRefreshDriftSummary,
   type ClassComposerGroupRecipe,
   type ClassComposerPlanRow,
   type ClassComposerPlanGroupRow,
@@ -51,10 +54,14 @@ import {
   computeSkillProfiles,
   clusterProfilesIntoGroups,
   clusterProfilesBalanced,
+  clusterByBenchmarkDeficit,
+  pickFocusStandards,
+  deficitMoveImprovement,
   summarizeSection,
   tallyLevelMix,
   isIntensiveCourseName,
   type StudentSkillProfile,
+  type SuggestedFocusStandard,
 } from "../lib/skillProfile.js";
 import {
   chartGradeFor,
@@ -303,6 +310,200 @@ router.post("/intensive-groups/pm-readiness/dismiss", async (req, res) => {
 });
 
 // ---------------------------------------------------------------------
+// GET /skillcluster-banners — Admin Hub banner probe for the
+// PM1/PM2/PM3 refresh workflow.
+//
+// Returns an array of banner objects (zero, one, two, or three) for
+// the current school year. A banner appears when ALL hold:
+//   (a) FAST item data is loaded for that PM window for at least one
+//       subject covered by an active skill-cluster plan;
+//   (b) ≥1 finalized (or draft, post-lock) skill-cluster plan exists
+//       at this school for the current school year — without one,
+//       there are no rosters to refresh focus standards against;
+//   (c) the token "<schoolYear>|<pmWindow>|skillcluster_refresh"
+//       is NOT in school_settings.skillcluster_banner_dismissals.
+//
+// Banner copy varies by window:
+//   pm1 → "review schedule fit" (drift / sanity-check workflow)
+//   pm2 → "refresh focus standards"
+//   pm3 → "refresh focus standards"
+// ---------------------------------------------------------------------
+router.get("/intensive-groups/skillcluster-banners", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManageGroups(staff)) {
+    res.status(403).json({ error: "Admin or Core Team required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+
+  // (b) active skill-cluster plans this SY. We scan plan rows by SY
+  // then filter by group recipe.mode in code because recipe is JSONB
+  // — keeps the query simple and the index hot path on
+  // (school_id, subject, grade, school_year).
+  const plans = await db
+    .select({
+      id: classComposerPlansTable.id,
+      subject: classComposerPlansTable.subject,
+    })
+    .from(classComposerPlansTable)
+    .where(
+      and(
+        eq(classComposerPlansTable.schoolId, schoolId),
+        eq(classComposerPlansTable.schoolYear, schoolYear),
+      ),
+    );
+  let subjectsWithSkillcluster = new Set<string>();
+  if (plans.length > 0) {
+    const planIds = plans.map((p) => p.id);
+    const groups = await db
+      .select({
+        planId: classComposerPlanGroupsTable.planId,
+        recipe: classComposerPlanGroupsTable.recipe,
+      })
+      .from(classComposerPlanGroupsTable)
+      .where(
+        and(
+          eq(classComposerPlanGroupsTable.schoolId, schoolId),
+          inArray(classComposerPlanGroupsTable.planId, planIds),
+        ),
+      );
+    const skillPlanIds = new Set(
+      groups
+        .filter((g) => g.recipe?.mode === "skillcluster")
+        .map((g) => g.planId),
+    );
+    subjectsWithSkillcluster = new Set(
+      plans.filter((p) => skillPlanIds.has(p.id)).map((p) => p.subject),
+    );
+  }
+  if (subjectsWithSkillcluster.size === 0) {
+    res.json({ schoolYear, banners: [] });
+    return;
+  }
+
+  // (a) FAST PM-window data for those subjects.
+  const subjectList = Array.from(subjectsWithSkillcluster);
+  const r = await db.execute(sql`
+    SELECT subject, window, COUNT(*)::int AS c
+      FROM student_fast_item_responses
+     WHERE school_id = ${schoolId}
+       AND school_year = ${schoolYear}
+       AND window IN ('pm1','pm2','pm3')
+       AND subject = ANY(${subjectList}::text[])
+     GROUP BY subject, window
+  `);
+  const dataByWindow = new Map<string, Set<string>>();
+  for (const row of r.rows as Array<{
+    subject: string;
+    window: string;
+    c: number;
+  }>) {
+    if ((row.c ?? 0) <= 0) continue;
+    const prior = dataByWindow.get(row.window) ?? new Set<string>();
+    prior.add(row.subject);
+    dataByWindow.set(row.window, prior);
+  }
+
+  // (c) dismissal state.
+  const [settings] = await db
+    .select({
+      dismissals: schoolSettingsTable.skillclusterBannerDismissals,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId))
+    .limit(1);
+  const dismissed = new Set<string>(settings?.dismissals ?? []);
+
+  const COPY: Record<string, { title: string; description: string }> = {
+    pm1: {
+      title: "PM1 complete — review schedule fit",
+      description:
+        "Check whether any skill-cluster students would now fit better in a different group. Rosters won't auto-shuffle — suggestions only.",
+    },
+    pm2: {
+      title: "PM2 complete — refresh focus standards",
+      description:
+        "Re-pick each skill-cluster group's focus standards using the latest PM2 data.",
+    },
+    pm3: {
+      title: "PM3 complete — refresh focus standards",
+      description:
+        "Re-pick each skill-cluster group's focus standards using the latest PM3 data.",
+    },
+  };
+
+  const banners: Array<{
+    pmWindow: string;
+    token: string;
+    title: string;
+    description: string;
+    subjects: string[];
+  }> = [];
+  for (const pmWindow of ["pm1", "pm2", "pm3"] as const) {
+    const subjectsReady = dataByWindow.get(pmWindow);
+    if (!subjectsReady || subjectsReady.size === 0) continue;
+    const token = `${schoolYear}|${pmWindow}|skillcluster_refresh`;
+    if (dismissed.has(token)) continue;
+    banners.push({
+      pmWindow,
+      token,
+      title: COPY[pmWindow].title,
+      description: COPY[pmWindow].description,
+      subjects: Array.from(subjectsReady).sort(),
+    });
+  }
+
+  res.json({ schoolYear, banners });
+});
+
+router.post(
+  "/intensive-groups/skillcluster-banners/dismiss",
+  async (req, res) => {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageGroups(staff)) {
+      res.status(403).json({ error: "Admin or Core Team required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const body = (req.body ?? {}) as { token?: string };
+    const token = typeof body.token === "string" ? body.token.trim() : "";
+    // Validate the token shape so a stray POST can't pollute the
+    // array. Token must look like "<sy>|<pm1|pm2|pm3>|skillcluster_refresh".
+    if (!/^[^|]+\|pm[123]\|skillcluster_refresh$/.test(token)) {
+      res.status(400).json({ error: "Invalid token" });
+      return;
+    }
+    const [settings] = await db
+      .select({
+        dismissals: schoolSettingsTable.skillclusterBannerDismissals,
+      })
+      .from(schoolSettingsTable)
+      .where(eq(schoolSettingsTable.schoolId, schoolId))
+      .limit(1);
+    const prior = settings?.dismissals ?? [];
+    if (prior.includes(token)) {
+      res.json({ ok: true, dismissals: prior });
+      return;
+    }
+    const next = [...prior, token];
+    await db
+      .update(schoolSettingsTable)
+      .set({ skillclusterBannerDismissals: next })
+      .where(eq(schoolSettingsTable.schoolId, schoolId));
+    req.log?.info(
+      { schoolId, token, by: staff.id },
+      "[intensive-groups] Skillcluster banner dismissed",
+    );
+    res.json({ ok: true, dismissals: next });
+  },
+);
+
+// ---------------------------------------------------------------------
 // GET /windows
 // ---------------------------------------------------------------------
 router.get("/intensive-groups/windows", async (req, res) => {
@@ -399,8 +600,20 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   // "cusp" restricts the pool to bubble kids near a cut score (see
   // cusp params below).
   const rawMode = typeof req.query.mode === "string" ? req.query.mode : "";
-  const mode: "intensive" | "regular" | "cusp" =
-    rawMode === "regular" ? "regular" : rawMode === "cusp" ? "cusp" : "intensive";
+  const mode: "intensive" | "regular" | "cusp" | "skillcluster" =
+    rawMode === "regular"
+      ? "regular"
+      : rawMode === "cusp"
+        ? "cusp"
+        : rawMode === "skillcluster"
+          ? "skillcluster"
+          : "intensive";
+  // Skill-cluster: how many focus standards to publish per group
+  // (default 5, clamped to 3..7). Ignored in other modes.
+  const focusCount = Math.max(
+    3,
+    Math.min(7, Number(req.query.focusCount) || 5),
+  );
   // Arrangement (regular only). "homogeneous" reuses the intensive
   // skill-cluster algorithm; "balanced" uses the round-robin
   // clusterer that evens out level + skill across sections.
@@ -496,7 +709,8 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   // 70% mastery filter (a defensible "struggling" floor); regular
   // and cusp default to 100% (no overall-mastery filter — the level
   // / cusp gate is the primary one).
-  const eligibilityMaxPctDefault = mode === "intensive" ? 70 : 100;
+  const eligibilityMaxPctDefault =
+    mode === "intensive" || mode === "skillcluster" ? 70 : 100;
   const eligibilityMaxPct = Math.max(
     0,
     Math.min(
@@ -554,7 +768,11 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   // "unscored") and INCLUDED in regular mode (the arrangement still
   // works off topGaps / round-robin).
   const allowedLevels =
-    mode === "intensive" ? new Set([1, 2]) : mode === "cusp" ? new Set([2, 3]) : null;
+    mode === "intensive" || mode === "skillcluster"
+      ? new Set([1, 2])
+      : mode === "cusp"
+        ? new Set([2, 3])
+        : null;
   const passesLevel = (p: StudentSkillProfile): boolean => {
     if (allowedLevels == null) return true;
     return p.fastLevel != null && allowedLevels.has(p.fastLevel);
@@ -759,9 +977,20 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   const useBalanced = mode === "regular" && arrangement === "balanced";
   const clustered = calcOnly
     ? { groups: [], overflow: [] }
-    : useBalanced
-      ? clusterProfilesBalanced(eligible, sections, seats)
-      : clusterProfilesIntoGroups(eligible, sections, seats);
+    : mode === "skillcluster"
+      ? clusterByBenchmarkDeficit(eligible, sections, seats)
+      : useBalanced
+        ? clusterProfilesBalanced(eligible, sections, seats)
+        : clusterProfilesIntoGroups(eligible, sections, seats);
+
+  // Skill-cluster: pick N focus standards per group from the group's
+  // combined item responses. Floors (≤50% group avg, ≥60% coverage)
+  // shipped in pickFocusStandards.
+  if (mode === "skillcluster") {
+    for (const g of clustered.groups) {
+      g.focusStandards = pickFocusStandards(g.students, { count: focusCount });
+    }
+  }
 
   // Attach a level-mix tally to each group + the candidate pool so
   // the UI can render the "Levels: 1×8 2×12 3×2" chip strip.
@@ -828,6 +1057,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     mode,
     arrangement: mode === "regular" ? arrangement : null,
     cusp,
+    focusCount: mode === "skillcluster" ? focusCount : null,
     calcOnly,
     eligibilityMaxPct,
     requested: { sections, seats },
@@ -1693,6 +1923,339 @@ router.delete("/intensive-groups/plans/:id/groups/:gid", async (req, res) => {
   res.json({ ok: true });
 });
 
+// ---------- Skill-cluster PM-refresh endpoints ----------
+//
+// Three companion endpoints used by the locked-group cards in the
+// composer + the Admin Hub banner flow. None of them ever mutate
+// student_ids — rosters are immutable once locked, per the product
+// rule. They only touch focus_standards + the append-only audit
+// table.
+//
+//   * POST /plans/:id/groups/:gid/refresh-focus   — recompute focus
+//     standards from a given PM window, write audit row + update
+//     focus_standards. 422 if <70% of the locked roster has data
+//     in that window.
+//   * POST /plans/:id/groups/:gid/check-fit       — read-only PM1
+//     sanity check. Returns the drift summary (per-student best-fit
+//     suggestions over the 25% threshold) without writing focus.
+//     Always records an audit row so the banner can dedupe.
+//   * POST /plans/:id/groups/:gid/dismiss-check   — record a
+//     'dismiss' audit row so the banner stops nagging.
+
+const PM_WINDOWS = new Set(["pm1", "pm2", "pm3"]);
+const COVERAGE_FLOOR_FOR_REFRESH = 0.7;
+const DRIFT_IMPROVEMENT_THRESHOLD = 0.25;
+
+function parsePmWindow(req: Request, res: Response): string | null {
+  const body = (req.body ?? {}) as { pmWindow?: string };
+  const w = typeof body.pmWindow === "string" ? body.pmWindow.toLowerCase() : "";
+  if (!PM_WINDOWS.has(w)) {
+    res
+      .status(400)
+      .json({ error: "pmWindow must be one of: pm1, pm2, pm3" });
+    return null;
+  }
+  return w;
+}
+
+async function loadPlanGroupOr404(
+  planId: number,
+  schoolId: number,
+  gid: number,
+  res: Response,
+): Promise<ClassComposerPlanGroupRow | null> {
+  const [row] = await db
+    .select()
+    .from(classComposerPlanGroupsTable)
+    .where(
+      and(
+        eq(classComposerPlanGroupsTable.id, gid),
+        eq(classComposerPlanGroupsTable.planId, planId),
+        eq(classComposerPlanGroupsTable.schoolId, schoolId),
+      ),
+    );
+  if (!row) {
+    res.status(404).json({ error: "Group not found" });
+    return null;
+  }
+  return row;
+}
+
+router.post(
+  "/intensive-groups/plans/:id/groups/:gid/refresh-focus",
+  async (req, res) => {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManagePlans(staff)) {
+      res
+        .status(403)
+        .json({ error: "Admin, Core Team, or Counselor required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const plan = await loadPlanOr404(req, res, schoolId);
+    if (!plan) return;
+    const gid = Number(req.params.gid);
+    if (!Number.isInteger(gid) || gid <= 0) {
+      res.status(400).json({ error: "Invalid group id" });
+      return;
+    }
+    const pmWindow = parsePmWindow(req, res);
+    if (!pmWindow) return;
+    const group = await loadPlanGroupOr404(plan.id, schoolId, gid, res);
+    if (!group) return;
+
+    // Only skill-cluster groups carry focus standards. Block early
+    // with a clear message rather than silently writing focus to
+    // an intensive/regular/cusp group.
+    if (group.recipe.mode !== "skillcluster") {
+      res.status(409).json({
+        error: "Focus standards only apply to skill-cluster groups.",
+      });
+      return;
+    }
+
+    const roster = group.studentIds;
+    if (roster.length === 0) {
+      res.status(422).json({ error: "Group has no students." });
+      return;
+    }
+
+    const profiles = await computeSkillProfiles({
+      schoolId,
+      subject: plan.subject,
+      schoolYear: plan.schoolYear,
+      window: pmWindow,
+      studentIds: roster,
+    });
+    const profilesWithData = profiles.filter((p) => p.benchmarks.length > 0);
+    const coverage = profilesWithData.length / roster.length;
+    if (coverage < COVERAGE_FLOOR_FOR_REFRESH) {
+      res.status(422).json({
+        error:
+          `Only ${Math.round(coverage * 100)}% of the locked roster has ` +
+          `${pmWindow.toUpperCase()} item data. Need at least ` +
+          `${Math.round(COVERAGE_FLOOR_FOR_REFRESH * 100)}% before refresh.`,
+        coverage,
+        studentsWithData: profilesWithData.length,
+        rosterSize: roster.length,
+      });
+      return;
+    }
+
+    const focusCount = Math.max(3, Math.min(7, group.recipe.focusCount ?? 5));
+    const picked = pickFocusStandards(profiles, { count: focusCount });
+    const newFocus: ClassComposerFocusStandard[] = picked.map((f) => ({
+      ...f,
+      sourceWindow: pmWindow,
+      sourceSchoolYear: plan.schoolYear,
+    }));
+
+    const priorFocus = group.focusStandards;
+    await db.insert(classComposerPlanGroupRefreshesTable).values({
+      planId: plan.id,
+      planGroupId: gid,
+      schoolId,
+      schoolYear: plan.schoolYear,
+      pmWindow,
+      action: "refresh",
+      priorFocus,
+      newFocus,
+      driftSummary: null,
+      staffId: staff.id,
+    });
+    const [updated] = await db
+      .update(classComposerPlanGroupsTable)
+      .set({ focusStandards: newFocus })
+      .where(eq(classComposerPlanGroupsTable.id, gid))
+      .returning();
+    await db
+      .update(classComposerPlansTable)
+      .set({ updatedAt: new Date() })
+      .where(eq(classComposerPlansTable.id, plan.id));
+
+    res.json({
+      group: updated,
+      priorFocus,
+      newFocus,
+      coverage,
+      studentsWithData: profilesWithData.length,
+      rosterSize: roster.length,
+    });
+  },
+);
+
+router.post(
+  "/intensive-groups/plans/:id/groups/:gid/check-fit",
+  async (req, res) => {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManagePlans(staff)) {
+      res
+        .status(403)
+        .json({ error: "Admin, Core Team, or Counselor required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const plan = await loadPlanOr404(req, res, schoolId);
+    if (!plan) return;
+    const gid = Number(req.params.gid);
+    if (!Number.isInteger(gid) || gid <= 0) {
+      res.status(400).json({ error: "Invalid group id" });
+      return;
+    }
+    const pmWindow = parsePmWindow(req, res);
+    if (!pmWindow) return;
+    const group = await loadPlanGroupOr404(plan.id, schoolId, gid, res);
+    if (!group) return;
+    if (group.recipe.mode !== "skillcluster") {
+      res.status(409).json({
+        error: "Check-fit only applies to skill-cluster groups.",
+      });
+      return;
+    }
+
+    // Pull the full set of plan groups so we can compute each student's
+    // best-fit across the *plan*, not just their current group.
+    const allGroups = await loadPlanGroups(plan.id, schoolId);
+    const skillGroups = allGroups.filter(
+      (g) => g.recipe.mode === "skillcluster",
+    );
+    const allRoster = Array.from(
+      new Set(skillGroups.flatMap((g) => g.studentIds)),
+    );
+    const profiles = await computeSkillProfiles({
+      schoolId,
+      subject: plan.subject,
+      schoolYear: plan.schoolYear,
+      window: pmWindow,
+      studentIds: allRoster,
+    });
+    const profById = new Map(profiles.map((p) => [p.studentId, p]));
+    const profilesByGroup = new Map<number, StudentSkillProfile[]>();
+    for (const g of skillGroups) {
+      profilesByGroup.set(
+        g.id,
+        g.studentIds
+          .map((id) => profById.get(id))
+          .filter((x): x is StudentSkillProfile => Boolean(x)),
+      );
+    }
+
+    const myMembers = profilesByGroup.get(gid) ?? [];
+    const myCoverage =
+      myMembers.length === 0
+        ? 0
+        : myMembers.filter((p) => p.benchmarks.length > 0).length /
+          myMembers.length;
+
+    const suggested: ClassComposerRefreshDriftSummary["suggestedMoves"] = [];
+    for (const student of myMembers) {
+      if (student.benchmarks.length === 0) continue;
+      // Best other-group improvement. Receiving group must have an
+      // open seat — rosters never auto-shuffle, so a full group can't
+      // accept this student even if it's a better fit on paper.
+      let bestImprovement = 0;
+      let bestGroupId: number | null = null;
+      for (const other of skillGroups) {
+        if (other.id === gid) continue;
+        if (other.studentIds.length >= other.seatsPerSection) continue;
+        const otherMembers = profilesByGroup.get(other.id) ?? [];
+        if (otherMembers.length === 0) continue;
+        const improvement = deficitMoveImprovement(
+          student,
+          myMembers,
+          otherMembers,
+        );
+        if (improvement > bestImprovement) {
+          bestImprovement = improvement;
+          bestGroupId = other.id;
+        }
+      }
+      if (
+        bestGroupId != null &&
+        bestImprovement >= DRIFT_IMPROVEMENT_THRESHOLD
+      ) {
+        suggested.push({
+          studentId: student.studentId,
+          fromGroupId: gid,
+          toGroupId: bestGroupId,
+          improvementPct: Math.round(bestImprovement * 100),
+        });
+      }
+    }
+
+    const driftSummary: ClassComposerRefreshDriftSummary = {
+      suggestedMoves: suggested,
+      studentsAnalyzed: myMembers.length,
+      studentsWithCoverage: myMembers.filter((p) => p.benchmarks.length > 0)
+        .length,
+    };
+
+    await db.insert(classComposerPlanGroupRefreshesTable).values({
+      planId: plan.id,
+      planGroupId: gid,
+      schoolId,
+      schoolYear: plan.schoolYear,
+      pmWindow,
+      action: "suggest_schedule",
+      priorFocus: group.focusStandards,
+      newFocus: null,
+      driftSummary,
+      staffId: staff.id,
+    });
+
+    res.json({
+      driftSummary,
+      coverage: myCoverage,
+      threshold: DRIFT_IMPROVEMENT_THRESHOLD,
+    });
+  },
+);
+
+router.post(
+  "/intensive-groups/plans/:id/groups/:gid/dismiss-check",
+  async (req, res) => {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManagePlans(staff)) {
+      res
+        .status(403)
+        .json({ error: "Admin, Core Team, or Counselor required" });
+      return;
+    }
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const plan = await loadPlanOr404(req, res, schoolId);
+    if (!plan) return;
+    const gid = Number(req.params.gid);
+    if (!Number.isInteger(gid) || gid <= 0) {
+      res.status(400).json({ error: "Invalid group id" });
+      return;
+    }
+    const pmWindow = parsePmWindow(req, res);
+    if (!pmWindow) return;
+    const group = await loadPlanGroupOr404(plan.id, schoolId, gid, res);
+    if (!group) return;
+
+    await db.insert(classComposerPlanGroupRefreshesTable).values({
+      planId: plan.id,
+      planGroupId: gid,
+      schoolId,
+      schoolYear: plan.schoolYear,
+      pmWindow,
+      action: "dismiss",
+      priorFocus: group.focusStandards,
+      newFocus: null,
+      driftSummary: null,
+      staffId: staff.id,
+    });
+    res.json({ ok: true });
+  },
+);
+
 // Shared helper: gather PDF/CSV student rows for a plan's groups by
 // hydrating each group's stored student_ids with current FAST profiles.
 async function hydratePlanStudents(
@@ -1794,6 +2357,19 @@ router.get("/intensive-groups/plans/:id/csv", async (req, res) => {
     const s = String(v);
     return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
   };
+  // Skill-cluster plans carry up to N focus standards per group.
+  // Surface them as flat columns (focus_standard_1 / focus_avg_pct_1
+  // …) so the school can pivot the CSV in Excel. We widen the header
+  // to fit the busiest group; groups with fewer focus standards just
+  // leave the trailing columns blank.
+  const maxFocus = hydrated.reduce(
+    (m, { group }) => Math.max(m, group.focusStandards?.length ?? 0),
+    0,
+  );
+  const focusHeaders: string[] = [];
+  for (let i = 1; i <= maxFocus; i++) {
+    focusHeaders.push(`focus_standard_${i}`, `focus_avg_pct_${i}`);
+  }
   const lines: string[] = [
     [
       "plan_id",
@@ -1810,11 +2386,19 @@ router.get("/intensive-groups/plans/:id/csv", async (req, res) => {
       "student_grade",
       "fast_level",
       "overall_pct",
+      ...focusHeaders,
     ]
       .map(esc)
       .join(","),
   ];
   for (const { group, students } of hydrated) {
+    const fs = group.focusStandards ?? [];
+    const focusCells: Array<string | number | null> = [];
+    for (let i = 0; i < maxFocus; i++) {
+      const f = fs[i];
+      focusCells.push(f ? f.benchmarkCode : null);
+      focusCells.push(f ? f.groupAvgPct : null);
+    }
     for (const s of students) {
       lines.push(
         [
@@ -1832,6 +2416,7 @@ router.get("/intensive-groups/plans/:id/csv", async (req, res) => {
           s.grade,
           s.fastLevel != null ? `L${s.fastLevel}` : null,
           s.overallPct != null ? Math.round(s.overallPct) : null,
+          ...focusCells,
         ]
           .map(esc)
           .join(","),
@@ -1888,6 +2473,7 @@ router.get("/intensive-groups/plans/:id/pdf", async (req, res) => {
       recipeSummary: group.recipe?.summary ?? "",
       seatsPerSection: group.seatsPerSection,
       students,
+      focusStandards: group.focusStandards ?? null,
     })),
   });
   const slug = plan.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);

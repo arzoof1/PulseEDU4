@@ -48,6 +48,18 @@ export interface CategoryWeakness {
   benchmarkCodes: string[];
 }
 
+// Per-benchmark mastery row used by skill-cluster mode. Exposed on
+// StudentSkillProfile so the cluster engine can build per-student
+// deficit vectors without re-querying item responses. Empty array
+// when the student has no item responses for the window.
+export interface BenchmarkMastery {
+  benchmarkCode: string;
+  category: string | null;
+  pct: number; // 0..100, integer
+  pointsEarned: number;
+  pointsPossible: number;
+}
+
 export interface StudentSkillProfile {
   studentId: string;
   localSisId: string | null;
@@ -78,6 +90,10 @@ export interface StudentSkillProfile {
   // students whose overall pct is otherwise healthy. Used by the
   // strand-cusp filter for Level-3 kids hiding a weak strand.
   hasBelowStrand: boolean;
+  // Per-benchmark mastery (skill-cluster mode input). Always present;
+  // empty when the student has no item responses for the window.
+  // Sorted by benchmarkCode for stable downstream iteration.
+  benchmarks: BenchmarkMastery[];
 }
 
 export interface SkillProfileInput {
@@ -254,6 +270,27 @@ export async function computeSkillProfiles(
     overall.set(studentId, o);
   }
 
+  // Per-student benchmark mastery list — built from the same
+  // benchmarkAgg map used to roll up categories so the two views
+  // are exactly consistent.
+  const benchmarksByStudent = new Map<string, BenchmarkMastery[]>();
+  for (const [key, b] of benchmarkAgg) {
+    const [studentId, code] = key.split("|");
+    if (!studentId || !code || b.possible === 0) continue;
+    const arr = benchmarksByStudent.get(studentId) ?? [];
+    arr.push({
+      benchmarkCode: code,
+      category: b.category,
+      pct: Math.round((b.earned / b.possible) * 100),
+      pointsEarned: b.earned,
+      pointsPossible: b.possible,
+    });
+    benchmarksByStudent.set(studentId, arr);
+  }
+  for (const arr of benchmarksByStudent.values()) {
+    arr.sort((a, b) => a.benchmarkCode.localeCompare(b.benchmarkCode));
+  }
+
   return students.map((s) => {
     const cats = studentCatAgg.get(s.studentId);
     let categories: CategoryWeakness[] = [];
@@ -288,6 +325,7 @@ export async function computeSkillProfiles(
       fastLevel: deriveFastLevel(rawScore, subject, s.grade, window),
       fastScore: rawScore,
       hasBelowStrand: categories.some((c) => c.pct < 50),
+      benchmarks: benchmarksByStudent.get(s.studentId) ?? [],
     };
   });
 }
@@ -336,6 +374,18 @@ export interface SuggestedGroup {
   // Share of group whose top-1 weak category matches the group's
   // dominantCategory. High = clean fit.
   cohesionPct: number;
+  // Skill-cluster mode only — the N focus standards picked from
+  // this group's combined item responses. Empty in other modes.
+  focusStandards?: SuggestedFocusStandard[];
+}
+
+// Mirror of ClassComposerFocusStandard but without source-window
+// fields (the route stamps those before persisting).
+export interface SuggestedFocusStandard {
+  benchmarkCode: string;
+  friendlyLabel: string;
+  groupAvgPct: number;
+  coverage: number; // 0..1
 }
 
 export interface ClusterResult {
@@ -736,4 +786,372 @@ const INTENSIVE_NAME_RE =
 export function isIntensiveCourseName(name: string | null | undefined): boolean {
   if (!name) return false;
   return INTENSIVE_NAME_RE.test(name);
+}
+
+// =====================================================================
+// Skill-cluster mode — vector clustering on per-benchmark deficits.
+//
+// Why a separate algorithm from clusterProfilesIntoGroups?
+//   The category-based clusterer groups by *which broad strand* each
+//   student is weakest in (e.g. "Reading: Vocabulary"). It produces
+//   readable groups but two students whose top category matches can
+//   still have very different specific-benchmark gaps inside that
+//   category. Skill-cluster instead treats each student as a vector
+//   of (benchmark → deficit) and uses farthest-first centroid seeding
+//   + nearest-centroid assignment to find tight specific-benchmark
+//   clusters.
+//
+// Determinism: profiles are pre-sorted by stableProfileKey; the
+// farthest-first seed walks profiles in that fixed order, breaking
+// distance ties by stable index. Tie-broken nearest-centroid
+// assignment uses min distance then min centroid index. Output is
+// reproducible for the same input.
+//
+// Capacity: each group caps at `seatsPerGroup`. Overflow students
+// (no remaining seat in their nearest centroid AND no remaining
+// seat in any other group) are surfaced on the result so the UI
+// can prompt the admin to add another section, mirroring the
+// existing intensive/regular ClusterResult contract.
+// =====================================================================
+
+function deficitVector(p: StudentSkillProfile): Map<string, number> {
+  const v = new Map<string, number>();
+  for (const b of p.benchmarks) {
+    // Deficit normalized to 0..1 (100% mastery → 0 deficit; 0% → 1).
+    v.set(b.benchmarkCode, Math.max(0, Math.min(1, (100 - b.pct) / 100)));
+  }
+  return v;
+}
+
+// Sparse Euclidean distance over the union of two deficit vectors.
+// Missing benchmarks default to 0 (no evidence of deficit) — a
+// reasonable null treatment because absence of data is treated as
+// "no signal of weakness here" rather than "infinitely weak".
+function vectorDistance(
+  a: Map<string, number>,
+  b: Map<string, number>,
+): number {
+  let sumSq = 0;
+  const keys = new Set<string>();
+  for (const k of a.keys()) keys.add(k);
+  for (const k of b.keys()) keys.add(k);
+  for (const k of keys) {
+    const av = a.get(k) ?? 0;
+    const bv = b.get(k) ?? 0;
+    const d = av - bv;
+    sumSq += d * d;
+  }
+  return Math.sqrt(sumSq);
+}
+
+export function clusterByBenchmarkDeficit(
+  profiles: StudentSkillProfile[],
+  numGroups: number,
+  seatsPerGroup: number,
+): ClusterResult {
+  if (numGroups <= 0) return { groups: [], overflow: [] };
+
+  // Deterministic input order.
+  const sorted = [...profiles].sort((a, b) =>
+    stableProfileKey(a).localeCompare(stableProfileKey(b)),
+  );
+
+  // Split: students with at least one benchmark response go into the
+  // clusterable pool; the rest fall through to the round-robin
+  // backfill pass (same treatment clusterProfilesIntoGroups gives
+  // its "unknown" bucket).
+  const withData = sorted.filter((p) => p.benchmarks.length > 0);
+  const unknown = sorted.filter((p) => p.benchmarks.length === 0);
+
+  const vectors = withData.map((p) => deficitVector(p));
+
+  // Farthest-first seeding. Seed #0 = student whose total deficit
+  // sum is highest (biggest overall weakness, anchors the densest
+  // cluster). Subsequent seeds = whichever unseeded student maximizes
+  // min distance to existing seeds. Robust against duplicates and
+  // converges quickly for the small k (≤ 8) Class Composer uses.
+  const seedIndices: number[] = [];
+  if (withData.length > 0) {
+    let maxSum = -1;
+    let maxIdx = 0;
+    for (let i = 0; i < vectors.length; i += 1) {
+      let s = 0;
+      for (const v of vectors[i].values()) s += v;
+      if (s > maxSum) {
+        maxSum = s;
+        maxIdx = i;
+      }
+    }
+    seedIndices.push(maxIdx);
+    while (seedIndices.length < numGroups && seedIndices.length < vectors.length) {
+      let bestIdx = -1;
+      let bestMinDist = -1;
+      for (let i = 0; i < vectors.length; i += 1) {
+        if (seedIndices.includes(i)) continue;
+        let minDist = Infinity;
+        for (const s of seedIndices) {
+          const d = vectorDistance(vectors[i], vectors[s]);
+          if (d < minDist) minDist = d;
+        }
+        if (minDist > bestMinDist) {
+          bestMinDist = minDist;
+          bestIdx = i;
+        }
+      }
+      if (bestIdx < 0) break;
+      seedIndices.push(bestIdx);
+    }
+  }
+
+  // Build groups around the seeds. dominantCategory is the seed
+  // student's first topGap (a hint for UI labelling; the real
+  // semantic content is focusStandards, added downstream).
+  const groups: SuggestedGroup[] = [];
+  for (let g = 0; g < numGroups; g += 1) {
+    const seedI = seedIndices[g];
+    const seed = seedI != null ? withData[seedI] : null;
+    groups.push({
+      index: g + 1,
+      dominantCategory: seed?.topGaps[0] ?? null,
+      students: [],
+      avgDominantPct: null,
+      cohesionPct: 0,
+    });
+  }
+
+  // Place each seed in its own group up front.
+  const assigned = new Set<string>();
+  for (let g = 0; g < seedIndices.length; g += 1) {
+    const seed = withData[seedIndices[g]];
+    groups[g].students.push(seed);
+    assigned.add(seed.studentId);
+  }
+
+  // Compute each remaining student's nearest centroid (by seed
+  // vector). Process in descending order of distance-to-nearest so
+  // the most clearly-clustered students get their preferred seat
+  // before the ambiguous ones spill.
+  const remaining: Array<{
+    idx: number;
+    nearestGroup: number;
+    distToNearest: number;
+    rankedGroups: number[];
+  }> = [];
+  for (let i = 0; i < withData.length; i += 1) {
+    if (assigned.has(withData[i].studentId)) continue;
+    const dists: Array<{ g: number; d: number }> = [];
+    for (let g = 0; g < seedIndices.length; g += 1) {
+      const d = vectorDistance(vectors[i], vectors[seedIndices[g]]);
+      dists.push({ g, d });
+    }
+    // Sort ascending — closest centroid first; break ties on
+    // centroid index for determinism.
+    dists.sort((a, b) => (a.d !== b.d ? a.d - b.d : a.g - b.g));
+    remaining.push({
+      idx: i,
+      nearestGroup: dists[0]?.g ?? 0,
+      distToNearest: dists[0]?.d ?? 0,
+      rankedGroups: dists.map((d) => d.g),
+    });
+  }
+  // Process well-separated students first.
+  remaining.sort((a, b) =>
+    a.distToNearest !== b.distToNearest
+      ? a.distToNearest - b.distToNearest // small distance = high confidence; place first
+      : a.idx - b.idx,
+  );
+
+  const overflow: StudentSkillProfile[] = [];
+  for (const r of remaining) {
+    let placed = false;
+    for (const g of r.rankedGroups) {
+      if (groups[g].students.length < seatsPerGroup) {
+        groups[g].students.push(withData[r.idx]);
+        assigned.add(withData[r.idx].studentId);
+        placed = true;
+        break;
+      }
+    }
+    if (!placed) overflow.push(withData[r.idx]);
+  }
+
+  // Unknown-data students: round-robin into least-filled groups,
+  // honoring the seat cap.
+  for (const p of unknown) {
+    let target: SuggestedGroup | null = null;
+    let lowest = Infinity;
+    for (const g of groups) {
+      if (g.students.length >= seatsPerGroup) continue;
+      if (g.students.length < lowest) {
+        lowest = g.students.length;
+        target = g;
+      }
+    }
+    if (target) {
+      target.students.push(p);
+    } else {
+      overflow.push(p);
+    }
+  }
+
+  // Compute avgDominantPct + cohesionPct per group. For skill-cluster
+  // the cohesion metric is "fraction of group members whose personal
+  // top-3 gaps overlap the group's seed dominantCategory" — a rough
+  // homogeneity proxy until pickFocusStandards lands.
+  for (const g of groups) {
+    if (g.students.length === 0) continue;
+    if (g.dominantCategory) {
+      let dominantSum = 0;
+      let dominantCount = 0;
+      let hits = 0;
+      for (const s of g.students) {
+        const cat = s.categories.find((c) => c.category === g.dominantCategory);
+        if (cat) {
+          dominantSum += cat.pct;
+          dominantCount += 1;
+        }
+        if (s.topGaps.includes(g.dominantCategory)) hits += 1;
+      }
+      g.avgDominantPct =
+        dominantCount > 0 ? Math.round(dominantSum / dominantCount) : null;
+      g.cohesionPct = Math.round((hits / g.students.length) * 100);
+    }
+  }
+
+  // Stable display order inside each group.
+  for (const g of groups) {
+    g.students.sort((a, b) =>
+      stableProfileKey(a).localeCompare(stableProfileKey(b)),
+    );
+  }
+
+  return { groups, overflow };
+}
+
+// =====================================================================
+// Focus standards picker — pick the N benchmarks the teacher should
+// target with this group, given the group's combined item responses.
+//
+// Rules:
+//   * Aggregate per-benchmark points-earned / points-possible across
+//     the whole group (points-weighted, so a 6-point benchmark
+//     contributes more than a 2-point one — same logic the per-
+//     student mastery uses).
+//   * Coverage = (# group members who attempted the benchmark) /
+//     (group size). The floor (default 60%) prevents picking a
+//     standard that only a handful of kids in the group actually
+//     attempted, which would over-weight noise.
+//   * Mastery floor (default ≤ 50%) prevents picking a "weak"
+//     standard the group already has working knowledge of.
+//   * Sort ascending by groupAvgPct (weakest first), break ties on
+//     higher coverage, then stable benchmarkCode lex order.
+//   * Take top N. Returns fewer than N if not enough benchmarks
+//     meet both floors.
+//
+// friendlyLabel is currently the same value as the strategy-category
+// rollup, prefixed with the benchmark code, e.g.
+//   "MA.7.AR.1.1 · Algebraic Reasoning". A later catalog table can
+// swap in the FLDOE benchmark long-text without changing callers.
+// =====================================================================
+export interface PickFocusStandardsOpts {
+  count: number;
+  masteryFloorPct?: number; // default 50
+  coverageFloor?: number; // default 0.6
+}
+
+export function pickFocusStandards(
+  groupProfiles: StudentSkillProfile[],
+  opts: PickFocusStandardsOpts,
+): SuggestedFocusStandard[] {
+  const masteryFloor = opts.masteryFloorPct ?? 50;
+  const coverageFloor = opts.coverageFloor ?? 0.6;
+  const groupSize = groupProfiles.length;
+  if (groupSize === 0 || opts.count <= 0) return [];
+
+  interface Agg {
+    earned: number;
+    possible: number;
+    studentsWithData: number;
+    category: string | null;
+  }
+  const agg = new Map<string, Agg>();
+  for (const p of groupProfiles) {
+    if (p.benchmarks.length === 0) continue;
+    for (const b of p.benchmarks) {
+      const prior = agg.get(b.benchmarkCode) ?? {
+        earned: 0,
+        possible: 0,
+        studentsWithData: 0,
+        category: b.category,
+      };
+      prior.earned += b.pointsEarned;
+      prior.possible += b.pointsPossible;
+      prior.studentsWithData += 1;
+      if (!prior.category && b.category) prior.category = b.category;
+      agg.set(b.benchmarkCode, prior);
+    }
+  }
+
+  const candidates: Array<{
+    code: string;
+    pct: number;
+    coverage: number;
+    category: string | null;
+  }> = [];
+  for (const [code, v] of agg) {
+    if (v.possible <= 0) continue;
+    const pct = Math.round((v.earned / v.possible) * 100);
+    const coverage = v.studentsWithData / groupSize;
+    if (pct > masteryFloor) continue;
+    if (coverage < coverageFloor) continue;
+    candidates.push({ code, pct, coverage, category: v.category });
+  }
+  candidates.sort((a, b) => {
+    if (a.pct !== b.pct) return a.pct - b.pct;
+    if (a.coverage !== b.coverage) return b.coverage - a.coverage;
+    return a.code.localeCompare(b.code);
+  });
+
+  return candidates.slice(0, opts.count).map((c) => ({
+    benchmarkCode: c.code,
+    friendlyLabel: c.category ? `${c.code} · ${c.category}` : c.code,
+    groupAvgPct: c.pct,
+    coverage: Math.round(c.coverage * 1000) / 1000,
+  }));
+}
+
+// Per-student improvement % a move into a different group would yield
+// — used by the PM1 check-fit drift report. Returns the *fractional*
+// reduction in distance-to-centroid the student would experience by
+// moving from their current group to the candidate group.
+//   improvementPct =
+//     (currentDist - candidateDist) / currentDist
+//
+// Returns 0 when currentDist is 0 (already perfectly matched). Caller
+// thresholds against this value (default 25%) before suggesting.
+export function deficitMoveImprovement(
+  student: StudentSkillProfile,
+  currentGroup: StudentSkillProfile[],
+  candidateGroup: StudentSkillProfile[],
+): number {
+  const sv = deficitVector(student);
+  const centroid = (members: StudentSkillProfile[]): Map<string, number> => {
+    const c = new Map<string, number>();
+    let count = 0;
+    for (const m of members) {
+      if (m.studentId === student.studentId) continue;
+      const v = deficitVector(m);
+      for (const [k, val] of v) {
+        c.set(k, (c.get(k) ?? 0) + val);
+      }
+      count += 1;
+    }
+    if (count === 0) return c;
+    for (const k of c.keys()) c.set(k, (c.get(k) ?? 0) / count);
+    return c;
+  };
+  const currentDist = vectorDistance(sv, centroid(currentGroup));
+  const candidateDist = vectorDistance(sv, centroid(candidateGroup));
+  if (currentDist === 0) return 0;
+  return Math.max(0, (currentDist - candidateDist) / currentDist);
 }
