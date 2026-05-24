@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, DragEvent, ReactNode } from "react";
+import * as XLSX from "xlsx";
 import { authFetch } from "../lib/authToken";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
 
@@ -1245,19 +1246,41 @@ export default function DataImports({
   const handleFile = async (file: File) => {
     setError("");
     setCommitResult(null);
+    const isXlsx = /\.xlsx$/i.test(file.name);
+    const isXls = /\.xls$/i.test(file.name);
+    const isCsv = /\.csv$/i.test(file.name);
     if (kind === "fast_florida") {
-      if (!/\.xlsx$/i.test(file.name)) {
-        setError("Please choose a .xlsx file exported from the Florida FAST portal.");
+      if (!isXlsx && !isXls) {
+        setError(
+          "Please choose a .xlsx or .xls file exported from the Florida FAST portal.",
+        );
         return;
       }
       if (file.size > 12 * 1024 * 1024) {
-        setError("xlsx exceeds the 12 MB limit. Split by grade and try again.");
+        setError("File exceeds the 12 MB limit. Split by grade and try again.");
         return;
       }
-      const buf = await file.arrayBuffer();
+      // Server-side parser is exceljs which only reads .xlsx (OOXML).
+      // For .xls (legacy BIFF) we convert client-side to .xlsx bytes
+      // using SheetJS before uploading. Genuine .xlsx files pass
+      // through untouched so we don't risk losing fidelity.
+      let bytes: Uint8Array;
+      if (isXlsx) {
+        bytes = new Uint8Array(await file.arrayBuffer());
+      } else {
+        try {
+          const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+          const out = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+          bytes = new Uint8Array(out as ArrayBuffer);
+        } catch (e) {
+          setError(
+            `Could not convert .xls to .xlsx: ${(e as Error).message}. Re-save the file as .xlsx from Excel and try again.`,
+          );
+          return;
+        }
+      }
       // Base64 encode in chunks to avoid blowing the call stack on big
       // arrays (btoa is per-character).
-      const bytes = new Uint8Array(buf);
       let binary = "";
       const CHUNK = 0x8000;
       for (let i = 0; i < bytes.length; i += CHUNK) {
@@ -1273,15 +1296,42 @@ export default function DataImports({
       await runPreview("", {}, { xlsxBase64: b64 });
       return;
     }
-    if (!/\.csv$/i.test(file.name)) {
-      setError("Please choose a .csv file.");
+    // Generic importers (assessments / roster / behavior / fast):
+    // accept .csv OR .xlsx/.xls. For Excel formats we parse the first
+    // sheet client-side via SheetJS and convert to CSV text so the
+    // rest of the existing preview/mapping/commit pipeline keeps
+    // working unchanged. Server stays CSV-only.
+    if (!isCsv && !isXlsx && !isXls) {
+      setError("Please choose a .csv, .xlsx, or .xls file.");
       return;
     }
     if (file.size > 10 * 1024 * 1024) {
-      setError("CSV exceeds the 10 MB limit. Split the file and try again.");
+      setError("File exceeds the 10 MB limit. Split the file and try again.");
       return;
     }
-    const text = await file.text();
+    let text: string;
+    if (isCsv) {
+      text = await file.text();
+    } else {
+      try {
+        const wb = XLSX.read(await file.arrayBuffer(), { type: "array" });
+        const firstSheetName = wb.SheetNames[0];
+        if (!firstSheetName) {
+          setError("The spreadsheet has no sheets.");
+          return;
+        }
+        const sheet = wb.Sheets[firstSheetName];
+        // FS:"," forces a comma delimiter; blankrows:false drops empty
+        // trailing rows; RS:"\n" keeps line endings predictable so the
+        // server's CSV parser doesn't trip on \r\r\n.
+        text = XLSX.utils.sheet_to_csv(sheet, { FS: ",", RS: "\n", blankrows: false });
+      } catch (e) {
+        setError(
+          `Could not read spreadsheet: ${(e as Error).message}. Try saving as CSV and uploading again.`,
+        );
+        return;
+      }
+    }
     setFilename(file.name);
     setCsvText(text);
     await runPreview(text, {});
@@ -2252,8 +2302,8 @@ export default function DataImports({
                     type="file"
                     accept={
                       kind === "fast_florida"
-                        ? ".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                        : ".csv,text/csv"
+                        ? ".xlsx,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+                        : ".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
                     }
                     style={{ display: "none" }}
                     onChange={(e) => {

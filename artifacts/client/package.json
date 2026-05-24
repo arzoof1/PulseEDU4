@@ -79,6 +79,7 @@
     "@zxing/browser": "^0.2.0",
     "@zxing/library": "^0.23.0",
     "pdfjs-dist": "^5.7.284",
-    "qrcode": "^1.5.4"
+    "qrcode": "^1.5.4",
+    "xlsx": "^0.18.5"
   }
 }
