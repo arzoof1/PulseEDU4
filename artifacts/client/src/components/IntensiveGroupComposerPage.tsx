@@ -154,6 +154,94 @@ const LEVEL_TEXT: Record<1 | 2 | 3 | 4 | 5, string> = {
   5: "#5b21b6",
 };
 
+// Recompute a group's derived metrics (level mix, cohesion %, avg %
+// in focus skill) after the client-side Rebalance moves students
+// across groups. Keeps the dominantCategory label fixed — Rebalance
+// preserves group identity and only changes membership.
+function recomputeGroupMetrics(
+  students: Profile[],
+  dominantCategory: string | null,
+): { levelMix: LevelMix; cohesionPct: number; avgDominantPct: number | null } {
+  const mix: LevelMix = { l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, unknown: 0 };
+  for (const s of students) {
+    if (s.fastLevel == null) mix.unknown += 1;
+    else mix[`l${s.fastLevel}` as "l1" | "l2" | "l3" | "l4" | "l5"] += 1;
+  }
+  let cohesionPct = 0;
+  let avgDominantPct: number | null = null;
+  if (students.length > 0) {
+    if (dominantCategory) {
+      const matching = students.filter((s) => s.topGaps[0] === dominantCategory);
+      cohesionPct = Math.round((matching.length / students.length) * 100);
+      const pcts: number[] = [];
+      for (const s of students) {
+        const c = s.categories.find((cc) => cc.category === dominantCategory);
+        if (c) pcts.push(c.pct);
+      }
+      if (pcts.length > 0) {
+        avgDominantPct = Math.round(
+          pcts.reduce((a, b) => a + b, 0) / pcts.length,
+        );
+      }
+    } else {
+      // Spread / Mixed group — cohesion is variety of top gaps.
+      const gapSet = new Set(students.map((s) => s.topGaps[0] ?? "—"));
+      cohesionPct = Math.round((gapSet.size / students.length) * 100);
+    }
+  }
+  return { levelMix: mix, cohesionPct, avgDominantPct };
+}
+
+// Redistribute students across the existing groups to equalize sizes
+// (max delta ≤ 1) while preserving each group's dominantCategory
+// label. Pass 1 places students into the group whose dominantCategory
+// matches their top gap (until that group reaches the size cap). Pass
+// 2 round-robins remaining students into whatever group is currently
+// smallest. Pure client-side: nothing hits the server until Lock.
+function rebalanceGroupsBySize(groups: Group[]): Group[] {
+  const N = groups.length;
+  if (N <= 1) return groups;
+  const all: Profile[] = groups.flatMap((g) => g.students);
+  const total = all.length;
+  if (total === 0) return groups;
+  const targetMax = Math.ceil(total / N);
+  const buckets: Profile[][] = groups.map(() => []);
+  const placed = new Set<string>();
+  // Pass 1 — match by dominant category.
+  for (const s of all) {
+    const topGap = s.topGaps[0] ?? null;
+    if (!topGap) continue;
+    for (let i = 0; i < N; i++) {
+      if (
+        groups[i].dominantCategory === topGap &&
+        buckets[i].length < targetMax
+      ) {
+        buckets[i].push(s);
+        placed.add(s.studentId);
+        break;
+      }
+    }
+  }
+  // Pass 2 — fill the smallest bucket with the remainder. Sort by
+  // overallPct ascending so weakest students are distributed first
+  // (keeps groups roughly comparable on overall mastery too).
+  const leftovers = all
+    .filter((s) => !placed.has(s.studentId))
+    .sort((a, b) => (a.overallPct ?? 100) - (b.overallPct ?? 100));
+  for (const s of leftovers) {
+    let minIdx = 0;
+    for (let i = 1; i < N; i++) {
+      if (buckets[i].length < buckets[minIdx].length) minIdx = i;
+    }
+    buckets[minIdx].push(s);
+  }
+  return groups.map((g, i) => ({
+    ...g,
+    students: buckets[i],
+    ...recomputeGroupMetrics(buckets[i], g.dominantCategory),
+  }));
+}
+
 function LevelMixChips({ mix }: { mix: LevelMix }) {
   const items: Array<[label: string, count: number, bg: string, color: string]> = [];
   ([1, 2, 3, 4, 5] as const).forEach((lvl) => {
@@ -631,6 +719,111 @@ export default function IntensiveGroupComposerPage({
     } finally {
       setPlanBusy(false);
     }
+  };
+
+  // Lock just one of the candidate groups into the active plan. Lets
+  // the admin iterate: lock the group they're happy with, then click
+  // Build groups again to recompute the remaining pool. Mirrors
+  // lockCandidates() but for a single group at a time.
+  const lockSingleGroup = async (g: Group) => {
+    if (!activePlan || !result) return;
+    if (g.students.length === 0) return;
+    const seatsTarget = result.requested.seats;
+    if (g.students.length > seatsTarget) {
+      const proceed = window.confirm(
+        `Group has ${g.students.length} students but seats / section is ${seatsTarget}. Lock anyway?`,
+      );
+      if (!proceed) return;
+    }
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      const summary = buildRecipeSummary(result);
+      const recipe: PlanGroupRecipe = {
+        mode: result.mode,
+        window: result.window,
+        arrangement: result.arrangement,
+        eligibilityMaxPct: result.eligibilityMaxPct,
+        cuspPoints: result.cusp?.cuspPoints,
+        cuspPointsBelow: result.cusp?.cuspPointsBelow,
+        cuspPointsAbove: result.cusp?.cuspPointsAbove,
+        cuspDirection: result.cusp?.cuspDirection,
+        cuspDoubleCounters: result.cusp?.cuspDoubleCounters,
+        cuspTrajectory: result.cusp?.cuspTrajectory,
+        summary,
+      };
+      const existingCount = planGroups.length;
+      const studentIds = g.students.map((s) => s.studentId);
+      const name = `Group ${existingCount + 1} — ${g.dominantCategory ?? "Mixed"}`;
+      const r = await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/groups`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            name,
+            recipe,
+            studentIds,
+            seatsPerSection: seatsTarget,
+          }),
+        },
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      await refreshActivePlan(activePlan.id);
+      await refreshPlans(subject, grade);
+      // Remove the just-locked group from the current result panel
+      // and renumber the survivors so Group N stays sequential. Also
+      // subtract the locked students from the candidate-pool summary
+      // so the header stats stay consistent with what's still on screen.
+      setResult((prev) => {
+        if (!prev) return prev;
+        const remaining = prev.groups
+          .filter((x) => x.index !== g.index)
+          .map((x, i) => ({ ...x, index: i + 1 }));
+        const lockedMix = g.levelMix;
+        const nextMix: LevelMix = {
+          l1: Math.max(0, prev.candidatePool.levelMix.l1 - lockedMix.l1),
+          l2: Math.max(0, prev.candidatePool.levelMix.l2 - lockedMix.l2),
+          l3: Math.max(0, prev.candidatePool.levelMix.l3 - lockedMix.l3),
+          l4: Math.max(0, prev.candidatePool.levelMix.l4 - lockedMix.l4),
+          l5: Math.max(0, prev.candidatePool.levelMix.l5 - lockedMix.l5),
+          unknown: Math.max(
+            0,
+            prev.candidatePool.levelMix.unknown - lockedMix.unknown,
+          ),
+        };
+        return {
+          ...prev,
+          groups: remaining,
+          candidatePool: {
+            ...prev.candidatePool,
+            eligible: Math.max(
+              0,
+              prev.candidatePool.eligible - g.students.length,
+            ),
+            levelMix: nextMix,
+          },
+        };
+      });
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  // Client-side: redistribute students across the existing groups to
+  // equalize sizes while preserving each group's focus skill. No
+  // server round-trip — just updates `result.groups`. Locked plan
+  // groups are not affected.
+  const rebalanceSizes = () => {
+    setResult((prev) => {
+      if (!prev) return prev;
+      return { ...prev, groups: rebalanceGroupsBySize(prev.groups) };
+    });
   };
 
   const unlockGroup = async (g: PlanGroupRow) => {
@@ -2052,6 +2245,22 @@ export default function IntensiveGroupComposerPage({
               >
                 Export CSV
               </button>
+              {result.groups.length > 1 && (
+                <button
+                  onClick={rebalanceSizes}
+                  disabled={planBusy}
+                  title="Redistribute students across the current groups so sizes are equal (±1). Keeps each group's focus skill. Doesn't touch locked plan groups — re-run Build groups to undo."
+                  style={{
+                    padding: "8px 14px",
+                    border: "1px solid #d1d5db",
+                    background: "white",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                  }}
+                >
+                  Rebalance sizes
+                </button>
+              )}
               {activePlan && activePlan.status === "draft" && (
                 <button
                   onClick={lockCandidates}
@@ -2067,7 +2276,7 @@ export default function IntensiveGroupComposerPage({
                     fontWeight: 600,
                   }}
                 >
-                  Lock into plan ({result.groups.length})
+                  Lock all into plan ({result.groups.length})
                 </button>
               )}
             </>
@@ -2128,6 +2337,27 @@ export default function IntensiveGroupComposerPage({
                     : ""}
                 </div>
                 <LevelMixChips mix={g.levelMix} />
+                {activePlan && activePlan.status === "draft" && (
+                  <div style={{ marginTop: 8 }}>
+                    <button
+                      onClick={() => lockSingleGroup(g)}
+                      disabled={planBusy || g.students.length === 0}
+                      title="Lock just this group into the active plan. Its students will be excluded the next time you click Build groups, so you can re-run with the remaining pool."
+                      style={{
+                        padding: "4px 10px",
+                        fontSize: 12,
+                        border: "1px solid #4338ca",
+                        background: "#eef2ff",
+                        color: "#3730a3",
+                        borderRadius: 6,
+                        cursor: "pointer",
+                        fontWeight: 600,
+                      }}
+                    >
+                      Lock this group ({g.students.length})
+                    </button>
+                  </div>
+                )}
                 <ol style={{ marginTop: 8, paddingLeft: 18, fontSize: 13 }}>
                   {g.students.map((s) => (
                     <li key={s.studentId} style={{ marginBottom: 3 }}>
