@@ -92,6 +92,26 @@ pointer here.
 
 ### Open work
 
+- **Class Composer "Master Plan" — end-to-end smoke test.**
+  Walk the full flow once with real data before the next release:
+  start new plan → generate intensive recipe → lock → generate
+  cusp recipe (verify locked students are excluded) → manual
+  student move between groups → finalize → confirm PDF cover page,
+  per-page header, plan-ID + QR footer, and combined CSV all
+  download cleanly. Verify role gate (counselor can reach,
+  teacher cannot).
+
+- **Historical FAST data + Algebra I placement review (see proposal below).**
+  Extend the existing FAST importer with a "prior school year"
+  toggle (PM3-only, score+level+grade, no strand). Surface a
+  3-year FAST history chip on student profile + teacher roster,
+  and add an "Algebra I Placement Review" admin report that
+  lists every L3+ 7th grader with their 3-year trajectory and a
+  drag-to-Regular-8th-Math override path (parent-opt-out
+  workflow). Pays off in MTSS tier moves, 3rd-grade retention
+  good-cause review, gifted referral, summer-school targeting,
+  ELL post-exit monitoring, and IEP annual reviews.
+
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
   (1) Register a "Review Consistency Check guardrails" step in
   `lib/onboardingSteps.ts` (Behavior & PBIS phase) with an
