@@ -940,8 +940,15 @@ function SubjectCells({
               priorLevel={prior?.placement?.level ?? null}
               currentLevel={block.pm3Placement?.level ?? null}
             />
-          ) : (
+          ) : prior ? (
+            // Bucket = "points to next sub-level vs. last year's PM3
+            // baseline." Without a prior-year PM3 the digit inside the
+            // pail is meaningless, so we render a plain "—" instead of
+            // a bucket. Once the historical PM3 lands, the bucket (or
+            // the green ✓ if LG was met) takes its place.
             <BucketCell bucket={block.bucket} />
+          ) : (
+            <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
           )}
         </td>
       )}
