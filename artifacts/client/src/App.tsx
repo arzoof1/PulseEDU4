@@ -8224,6 +8224,21 @@ function App() {
   // superset — that's intentional: under-permissive UI is safer than
   // over-permissive, and ESE coordinator doesn't see the hub anyway.
   const canAccessFastBenchmarksInsights = canAccessMtssHub;
+  // Algebra I Placement Review — mirror the server gate
+  // (canViewAlgebraPlacement in lib/coreTeam.ts): admin + Core Team
+  // + counselor. MTSS / Behavior Spec without Core Team membership
+  // see the Insights hub but should NOT see this tile, because the
+  // API will 403 them. Keeping the two gates in sync prevents the
+  // "tile opens but page says Not authorized" UX bug.
+  const canViewAlgebraPlacementClient =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    isAdmin ||
+    Boolean(authUser?.isBehaviorSpecialist) ||
+    Boolean(authUser?.isMtssCoordinator) ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    Boolean(authUser?.isCounselor) ||
+    Boolean(authUser?.isGuidanceCounselor);
   const canManageStaffRoles =
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
@@ -20702,7 +20717,7 @@ function App() {
         />
       )}
 
-      {activeSection === "algebraPlacement" && canAccessFastBenchmarksInsights && (
+      {activeSection === "algebraPlacement" && canViewAlgebraPlacementClient && (
         <AlgebraPlacementReview onBack={() => setActiveSection("insights")} />
       )}
 
@@ -20754,7 +20769,9 @@ function App() {
 
       {activeSection === "insights" && canAccessMtssHub && (
         <InsightsHub
-          tiles={INSIGHTS_TILES}
+          tiles={INSIGHTS_TILES.filter((t) =>
+            t.id === "algebraPlacement" ? canViewAlgebraPlacementClient : true,
+          )}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
         />
       )}
