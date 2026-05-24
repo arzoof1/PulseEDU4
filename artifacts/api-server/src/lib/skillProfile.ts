@@ -11,8 +11,35 @@ import {
   db,
   studentsTable,
   studentFastItemResponsesTable,
+  studentFastScoresTable,
 } from "@workspace/db";
 import { strategyCategoryForBenchmark } from "../routes/mtssPlans.js";
+import {
+  hasChart,
+  placeOnChart,
+  placePm3,
+  type Subject,
+} from "./fastCutScores.js";
+
+const FAST_SUBJECTS = new Set<Subject>(["ela", "math", "algebra1", "geometry"]);
+
+function deriveFastLevel(
+  score: number | null | undefined,
+  subject: string,
+  grade: number | null,
+  window: string,
+): 1 | 2 | 3 | 4 | 5 | null {
+  if (score == null) return null;
+  if (grade == null) return null;
+  if (!FAST_SUBJECTS.has(subject as Subject)) return null;
+  const s = subject as Subject;
+  if (!hasChart(s, grade)) return null;
+  const placement =
+    window === "pm3"
+      ? placePm3(score, s, grade)
+      : placeOnChart(score, s, grade);
+  return placement ? placement.level : null;
+}
 
 export interface CategoryWeakness {
   category: string;
@@ -37,6 +64,11 @@ export interface StudentSkillProfile {
   // "where is this student" indicator — used to seed the
   // eligibility filter in the composer).
   overallPct: number | null;
+  // FAST achievement level (1..5) for this (subject, schoolYear,
+  // window). Derived from student_fast_scores via fastCutScores
+  // placement. Null when no PM score exists, no chart exists for
+  // the subject/grade, or grade is unknown.
+  fastLevel: 1 | 2 | 3 | 4 | 5 | null;
 }
 
 export interface SkillProfileInput {
@@ -82,7 +114,7 @@ export async function computeSkillProfiles(
   const { schoolId, subject, schoolYear, window, studentIds } = input;
   if (studentIds.length === 0) return [];
 
-  const [students, items] = (await Promise.all([
+  const [students, items, scores] = (await Promise.all([
     db
       .select({
         studentId: studentsTable.studentId,
@@ -116,9 +148,42 @@ export async function computeSkillProfiles(
           inArray(studentFastItemResponsesTable.studentId, studentIds),
         ),
       ),
-  ])) as [StudentRow[], ItemRow[]];
+    db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        pm1: studentFastScoresTable.pm1,
+        pm2: studentFastScoresTable.pm2,
+        pm3: studentFastScoresTable.pm3,
+      })
+      .from(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.schoolId, schoolId),
+          eq(studentFastScoresTable.subject, subject),
+          eq(studentFastScoresTable.schoolYear, schoolYear),
+          inArray(studentFastScoresTable.studentId, studentIds),
+        ),
+      ),
+  ])) as [
+    StudentRow[],
+    ItemRow[],
+    Array<{
+      studentId: string;
+      pm1: number | null;
+      pm2: number | null;
+      pm3: number | null;
+    }>,
+  ];
 
   const gradeById = new Map(students.map((s) => [s.studentId, s.grade]));
+  // Pick the score column matching the requested window; level
+  // derivation happens at map-time below using the student's grade.
+  const scoreByStudent = new Map<string, number | null>();
+  for (const r of scores) {
+    const raw =
+      window === "pm1" ? r.pm1 : window === "pm2" ? r.pm2 : r.pm3;
+    scoreByStudent.set(r.studentId, raw ?? null);
+  }
 
   // Aggregate (student, benchmark) → {earned, possible, category}.
   interface BAgg {
@@ -200,6 +265,7 @@ export async function computeSkillProfiles(
         });
     }
     const o = overall.get(s.studentId);
+    const rawScore = scoreByStudent.get(s.studentId) ?? null;
     return {
       studentId: s.studentId,
       localSisId: s.localSisId,
@@ -210,8 +276,33 @@ export async function computeSkillProfiles(
       topGaps: categories.slice(0, 3).map((c) => c.category),
       overallPct:
         o && o.possible > 0 ? Math.round((o.earned / o.possible) * 100) : null,
+      fastLevel: deriveFastLevel(rawScore, subject, s.grade, window),
     };
   });
+}
+
+// Per-group level mix tally — exported so the route can compute the
+// same shape for candidatePool. Keys are "1".."5" plus "unknown".
+export type LevelMix = {
+  l1: number;
+  l2: number;
+  l3: number;
+  l4: number;
+  l5: number;
+  unknown: number;
+};
+
+export function tallyLevelMix(profiles: StudentSkillProfile[]): LevelMix {
+  const mix: LevelMix = { l1: 0, l2: 0, l3: 0, l4: 0, l5: 0, unknown: 0 };
+  for (const p of profiles) {
+    if (p.fastLevel === 1) mix.l1 += 1;
+    else if (p.fastLevel === 2) mix.l2 += 1;
+    else if (p.fastLevel === 3) mix.l3 += 1;
+    else if (p.fastLevel === 4) mix.l4 += 1;
+    else if (p.fastLevel === 5) mix.l5 += 1;
+    else mix.unknown += 1;
+  }
+  return mix;
 }
 
 // Pure helper — given a set of profiles, partition them into N groups
@@ -410,6 +501,107 @@ export function clusterProfilesIntoGroups(
       g.avgDominantPct =
         sumPctCount > 0 ? Math.round(sumPct / sumPctCount) : null;
     }
+  }
+
+  return { groups, overflow };
+}
+
+// Balanced clusterer — distributes profiles across N groups so each
+// group has a similar level mix AND a similar dominant-skill mix.
+// Used by the Regular Class Composer "Balanced" arrangement: a
+// scheduler who wants fair / heterogeneous sections rather than
+// skill-concentrated intensive groups.
+//
+// Algorithm: bucket by fastLevel (5..1 then unknown — strongest
+// first, mirrors typical roster sweeps), within each bucket sort
+// by top-gap category then stable key, then round-robin into the
+// N groups. The same level distribution per bucket guarantees each
+// group ends with floor/ceil(count/N) of each level, and the
+// in-bucket category sort spreads skill weaknesses too.
+//
+// Honors `seatsPerGroup` as a hard cap — anyone who can't fit is
+// returned in `overflow`, same contract as clusterProfilesIntoGroups.
+export function clusterProfilesBalanced(
+  profiles: StudentSkillProfile[],
+  numGroups: number,
+  seatsPerGroup: number,
+): ClusterResult {
+  if (numGroups <= 0) return { groups: [], overflow: [] };
+
+  const groups: SuggestedGroup[] = Array.from({ length: numGroups }, (_, i) => ({
+    index: i + 1,
+    // Balanced arrangement is intentionally mixed-focus — no single
+    // dominant category. UI shows "Mixed" when null.
+    dominantCategory: null,
+    students: [],
+    avgDominantPct: null,
+    cohesionPct: 0,
+  }));
+
+  // Level buckets, strongest-first so the FIRST round-robin position
+  // each group fills is its highest-level student — keeps level
+  // distribution visually obvious in the UI's first row.
+  const buckets: StudentSkillProfile[][] = [[], [], [], [], [], []];
+  // index: 0=L5, 1=L4, 2=L3, 3=L2, 4=L1, 5=unknown
+  const idxFor = (lvl: 1 | 2 | 3 | 4 | 5 | null): number => {
+    if (lvl == null) return 5;
+    return 5 - lvl;
+  };
+  for (const p of profiles) buckets[idxFor(p.fastLevel)].push(p);
+  // Within each bucket: sort by top-gap category then stable key
+  // so consecutive round-robin picks tend to land different skill
+  // weaknesses in adjacent groups.
+  for (const b of buckets) {
+    b.sort((a, c) => {
+      const ag = a.topGaps[0] ?? "";
+      const cg = c.topGaps[0] ?? "";
+      if (ag !== cg) return ag.localeCompare(cg);
+      return stableProfileKey(a).localeCompare(stableProfileKey(c));
+    });
+  }
+
+  // Round-robin across groups, with a rotating start per bucket so
+  // group 1 isn't always the first to get a high-level student.
+  const overflow: StudentSkillProfile[] = [];
+  let rotation = 0;
+  for (const bucket of buckets) {
+    for (let i = 0; i < bucket.length; i += 1) {
+      const p = bucket[i];
+      // Try N positions starting at (rotation + i) % N, skipping any
+      // group already at seat cap.
+      let placed = false;
+      for (let attempt = 0; attempt < numGroups; attempt += 1) {
+        const slot = (rotation + i + attempt) % numGroups;
+        if (groups[slot].students.length < seatsPerGroup) {
+          groups[slot].students.push(p);
+          placed = true;
+          break;
+        }
+      }
+      if (!placed) overflow.push(p);
+    }
+    // Advance rotation by bucket size so the next level starts at a
+    // different group — keeps the per-group level mix even when one
+    // bucket isn't a clean multiple of N.
+    rotation = (rotation + bucket.length) % numGroups;
+  }
+
+  // Cohesion / avgDominantPct in balanced mode: leave avgDominantPct
+  // null (no single focus), and report cohesion as the share of
+  // students whose top-1 gap matches the most-common top-1 in the
+  // group — useful as an "even spread" sanity check (lower = more
+  // varied, which is the GOAL for balanced).
+  for (const g of groups) {
+    if (g.students.length === 0) continue;
+    const tally = new Map<string, number>();
+    for (const s of g.students) {
+      const top = s.topGaps[0];
+      if (!top) continue;
+      tally.set(top, (tally.get(top) ?? 0) + 1);
+    }
+    let max = 0;
+    for (const c of tally.values()) if (c > max) max = c;
+    g.cohesionPct = Math.round((max / g.students.length) * 100);
   }
 
   return { groups, overflow };

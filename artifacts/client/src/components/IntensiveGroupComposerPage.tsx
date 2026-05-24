@@ -10,6 +10,14 @@ interface WindowOpt {
   window: string;
   label: string;
 }
+interface LevelMix {
+  l1: number;
+  l2: number;
+  l3: number;
+  l4: number;
+  l5: number;
+  unknown: number;
+}
 interface Profile {
   studentId: string;
   localSisId: string | null;
@@ -24,6 +32,7 @@ interface Profile {
   }>;
   topGaps: string[];
   overallPct: number | null;
+  fastLevel: 1 | 2 | 3 | 4 | 5 | null;
 }
 interface Group {
   index: number;
@@ -31,19 +40,25 @@ interface Group {
   students: Profile[];
   avgDominantPct: number | null;
   cohesionPct: number;
+  levelMix: LevelMix;
 }
+type Mode = "intensive" | "regular";
+type Arrangement = "homogeneous" | "balanced";
 interface SuggestResponse {
   subject: string;
   grade: number;
   schoolYear: string;
   window: string;
   available: WindowOpt[];
+  mode: Mode;
+  arrangement: Arrangement | null;
   eligibilityMaxPct: number;
   requested: { sections: number; seats: number };
   candidatePool: {
     totalAtGrade: number;
     eligible: number;
     unscored: number;
+    levelMix: LevelMix;
   };
   groups: Group[];
   overflow: Array<{
@@ -53,6 +68,7 @@ interface SuggestResponse {
     lastName: string | null;
     grade: number | null;
     overallPct: number | null;
+    fastLevel: 1 | 2 | 3 | 4 | 5 | null;
     topGaps: string[];
   }>;
   unscored: Array<{
@@ -62,6 +78,51 @@ interface SuggestResponse {
     lastName: string | null;
     grade: number | null;
   }>;
+}
+
+const LEVEL_PALETTE: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "#fee2e2", // red — L1
+  2: "#ffedd5", // orange — L2
+  3: "#dcfce7", // green — L3
+  4: "#dbeafe", // blue — L4
+  5: "#ede9fe", // purple — L5
+};
+const LEVEL_TEXT: Record<1 | 2 | 3 | 4 | 5, string> = {
+  1: "#991b1b",
+  2: "#9a3412",
+  3: "#166534",
+  4: "#1e40af",
+  5: "#5b21b6",
+};
+
+function LevelMixChips({ mix }: { mix: LevelMix }) {
+  const items: Array<[label: string, count: number, bg: string, color: string]> = [];
+  ([1, 2, 3, 4, 5] as const).forEach((lvl) => {
+    const key = `l${lvl}` as keyof LevelMix;
+    const n = mix[key];
+    if (n > 0) items.push([`L${lvl}`, n, LEVEL_PALETTE[lvl], LEVEL_TEXT[lvl]]);
+  });
+  if (mix.unknown > 0) items.push(["No PM", mix.unknown, "#f3f4f6", "#6b7280"]);
+  if (items.length === 0) return null;
+  return (
+    <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginTop: 6 }}>
+      {items.map(([label, n, bg, color]) => (
+        <span
+          key={label}
+          style={{
+            fontSize: 11,
+            padding: "1px 6px",
+            borderRadius: 10,
+            background: bg,
+            color,
+            fontWeight: 600,
+          }}
+        >
+          {label} × {n}
+        </span>
+      ))}
+    </div>
+  );
 }
 
 const SUBJECT_OPTIONS = [
@@ -98,11 +159,18 @@ export default function IntensiveGroupComposerPage({
 }: {
   onBack: () => void;
 }) {
+  const [mode, setMode] = useState<Mode>("intensive");
+  const [arrangement, setArrangement] = useState<Arrangement>("homogeneous");
   const [subject, setSubject] = useState("ela");
   const [grade, setGrade] = useState(6);
   const [sections, setSections] = useState(4);
   const [seats, setSeats] = useState(22);
   const [eligibilityMaxPct, setEligibilityMaxPct] = useState(70);
+
+  useEffect(() => {
+    setEligibilityMaxPct(mode === "intensive" ? 70 : 100);
+  }, [mode]);
+  const [showAdvanced, setShowAdvanced] = useState(false);
   const [windowOpts, setWindowOpts] = useState<WindowOpt[]>([]);
   const [selectedWindow, setSelectedWindow] = useState<string>("");
   const [result, setResult] = useState<SuggestResponse | null>(null);
@@ -141,12 +209,21 @@ export default function IntensiveGroupComposerPage({
     setResult(null);
     try {
       const params = new URLSearchParams({
+        mode,
         subject,
         grade: String(grade),
         sections: String(sections),
         seats: String(seats),
-        eligibilityMaxPct: String(eligibilityMaxPct),
       });
+      if (mode === "regular") {
+        params.set("arrangement", arrangement);
+      }
+      // Only send the % cap when the user has touched the advanced
+      // section — otherwise let the server pick the mode default
+      // (70 intensive / 100 regular).
+      if (showAdvanced) {
+        params.set("eligibilityMaxPct", String(eligibilityMaxPct));
+      }
       if (selectedWindow) {
         const [sy, w] = selectedWindow.split("|");
         params.set("schoolYear", sy);
@@ -177,6 +254,7 @@ export default function IntensiveGroupComposerPage({
         "Student",
         "Student ID",
         "Grade",
+        "FAST Level",
         "Overall %",
         "Top Gap 1",
         "Top Gap 2",
@@ -187,12 +265,13 @@ export default function IntensiveGroupComposerPage({
       for (const s of g.students) {
         rows.push([
           `Group ${g.index}`,
-          g.dominantCategory ?? "",
+          g.dominantCategory ?? "Mixed",
           String(g.cohesionPct),
           g.avgDominantPct == null ? "" : String(g.avgDominantPct),
           fullName(s),
           s.localSisId ?? "",
           s.grade == null ? "" : String(s.grade),
+          s.fastLevel == null ? "" : `L${s.fastLevel}`,
           s.overallPct == null ? "" : String(s.overallPct),
           s.topGaps[0] ?? "",
           s.topGaps[1] ?? "",
@@ -213,6 +292,7 @@ export default function IntensiveGroupComposerPage({
         "",
         "",
         "",
+        "",
       ]);
     }
     downloadCsv(
@@ -227,14 +307,26 @@ export default function IntensiveGroupComposerPage({
 
   const headerSummary = useMemo(() => {
     if (!result) return null;
+    const modeLabel =
+      result.mode === "intensive"
+        ? "Intensive (Levels 1–2)"
+        : result.arrangement === "balanced"
+          ? "Regular · Balanced (Levels 1–5)"
+          : "Regular · Homogeneous (Levels 1–5)";
     return (
       <div style={{ color: "#374151", fontSize: 13, marginTop: 6 }}>
-        Subject <strong>{result.subject.toUpperCase()}</strong> · Grade{" "}
+        <strong>{modeLabel}</strong> · Subject{" "}
+        <strong>{result.subject.toUpperCase()}</strong> · Grade{" "}
         <strong>{result.grade}</strong> · Window{" "}
         <strong>
           {result.schoolYear} {result.window.toUpperCase()}
-        </strong>{" "}
-        · Eligibility ≤ <strong>{result.eligibilityMaxPct}%</strong> overall
+        </strong>
+        {result.eligibilityMaxPct < 100 && (
+          <>
+            {" "}
+            · Mastery cap ≤ <strong>{result.eligibilityMaxPct}%</strong>
+          </>
+        )}
       </div>
     );
   }, [result]);
@@ -272,13 +364,51 @@ export default function IntensiveGroupComposerPage({
       <div className="composer-no-print">
         <HowToUseHelp title="How to use Class Composer">
           <HowToSection title="What this page is">
-            A scheduler-facing suggestion tool that groups students into
-            intensive sections by the skill area each student is weakest
-            in, using their most recent FAST item-level scores. It is
+            A scheduler-facing suggestion tool that groups students
+            into sections using their most recent FAST scores. It is
             <strong> read-only</strong> — nothing is written to Skyward,
             RosterOne, your master schedule, or your rosters. The output
             is a printable / exportable proposal you take back to the
             scheduler.
+          </HowToSection>
+
+          <HowToSection title="Class type — Intensive vs Regular">
+            <ul style={howtoListStyle}>
+              <li>
+                <strong>Intensive</strong> (default) — pool restricted to
+                students at FAST <strong>Level 1 or 2</strong> in the chosen
+                subject. Use this when you're staffing Intensive Reading
+                / Intensive Math / Reading Lab / Math 180 sections.
+              </li>
+              <li>
+                <strong>Regular</strong> — pool opens to <strong>all levels
+                1–5</strong>. Use this when you're proposing a master-schedule
+                split of an entire grade into N regular ELA / Math sections.
+              </li>
+              <li>
+                FAST level comes from the PM scale score for the chosen
+                window, placed on the official Florida cut-score chart.
+                Students with no PM score appear in <em>Unscored</em>.
+              </li>
+            </ul>
+          </HowToSection>
+
+          <HowToSection title="Arrangement (Regular only)">
+            <ul style={howtoListStyle}>
+              <li>
+                <strong>Homogeneous (skill-focused)</strong> — same
+                algorithm as Intensive: each section is concentrated
+                around one weak-skill area. Best when teachers want to
+                attack a specific gap in each class.
+              </li>
+              <li>
+                <strong>Balanced (mixed levels + skills)</strong> —
+                round-robin distribution so each section ends up with a
+                similar level mix (some L1s, some L3s, some L5s) and a
+                similar skill mix. Best for typical "fair distribution"
+                master scheduling.
+              </li>
+            </ul>
           </HowToSection>
 
           <HowToSection title="What the controls mean">
@@ -302,9 +432,9 @@ export default function IntensiveGroupComposerPage({
                 where each kid is right now.
               </li>
               <li>
-                <strong># Sections</strong> — how many intensive
-                sections you intend to staff. Composer will split the
-                eligible pool into that many tight-focus groups.
+                <strong># Sections</strong> — how many sections you
+                intend to staff. Composer will split the eligible pool
+                across that many groups.
               </li>
               <li>
                 <strong>Seats / section</strong> — target class size.
@@ -312,10 +442,11 @@ export default function IntensiveGroupComposerPage({
                 eligible pool exceeds <em>sections × seats</em>.
               </li>
               <li>
-                <strong>Eligibility ≤ %</strong> — only students whose
-                overall mastery is at or below this percent are
-                considered for intensive placement. Default 70%; raise
-                it to pull more kids in, lower it to tighten the cap.
+                <strong>Advanced → Overall mastery cap</strong> — an
+                optional second filter on top of FAST level. Defaults
+                to 70% in Intensive (the traditional "struggling"
+                floor) and 100% in Regular (no cap). Open the
+                Advanced expander to change it.
               </li>
             </ul>
           </HowToSection>
@@ -393,6 +524,65 @@ export default function IntensiveGroupComposerPage({
           background: "#f9fafb",
         }}
       >
+        {/* Class type + arrangement toggles — primary decisions, shown
+            above the rest so they frame everything else. */}
+        <div style={{ marginBottom: 10 }}>
+          <div
+            style={{
+              display: "flex",
+              flexWrap: "wrap",
+              alignItems: "center",
+              gap: 16,
+              fontSize: 13,
+            }}
+          >
+            <div>
+              <span style={{ fontWeight: 600, marginRight: 8 }}>Class type</span>
+              <label style={{ marginRight: 12 }}>
+                <input
+                  type="radio"
+                  name="composer-mode"
+                  checked={mode === "intensive"}
+                  onChange={() => setMode("intensive")}
+                />{" "}
+                Intensive (Levels 1–2)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="composer-mode"
+                  checked={mode === "regular"}
+                  onChange={() => setMode("regular")}
+                />{" "}
+                Regular (Levels 1–5)
+              </label>
+            </div>
+            {mode === "regular" && (
+              <div>
+                <span style={{ fontWeight: 600, marginRight: 8 }}>Arrangement</span>
+                <label style={{ marginRight: 12 }}>
+                  <input
+                    type="radio"
+                    name="composer-arrangement"
+                    checked={arrangement === "homogeneous"}
+                    onChange={() => setArrangement("homogeneous")}
+                  />{" "}
+                  Homogeneous (skill-focused)
+                </label>
+                <label>
+                  <input
+                    type="radio"
+                    name="composer-arrangement"
+                    checked={arrangement === "balanced"}
+                    onChange={() => setArrangement("balanced")}
+                  />{" "}
+                  Balanced (mixed levels + skills)
+                </label>
+              </div>
+            )}
+          </div>
+        </div>
+
         <div
           style={{
             display: "grid",
@@ -466,17 +656,47 @@ export default function IntensiveGroupComposerPage({
               style={{ padding: 6, marginTop: 4 }}
             />
           </label>
-          <label style={{ display: "flex", flexDirection: "column", fontSize: 13 }}>
-            Eligibility ≤ %
-            <input
-              type="number"
-              min={0}
-              max={100}
-              value={eligibilityMaxPct}
-              onChange={(e) => setEligibilityMaxPct(Number(e.target.value))}
-              style={{ padding: 6, marginTop: 4 }}
-            />
-          </label>
+        </div>
+        <div style={{ marginTop: 8, fontSize: 12 }}>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced((v) => !v)}
+            style={{
+              background: "transparent",
+              border: "none",
+              color: "#2563eb",
+              cursor: "pointer",
+              padding: 0,
+              fontSize: 12,
+            }}
+          >
+            {showAdvanced ? "▾ Hide advanced" : "▸ Advanced (overall mastery cap)"}
+          </button>
+          {showAdvanced && (
+            <label
+              style={{
+                display: "flex",
+                alignItems: "center",
+                gap: 8,
+                marginTop: 6,
+                color: "#374151",
+              }}
+            >
+              Overall mastery ≤
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={eligibilityMaxPct}
+                onChange={(e) => setEligibilityMaxPct(Number(e.target.value))}
+                style={{ padding: 4, width: 70 }}
+              />
+              %
+              <span style={{ color: "#6b7280" }}>
+                (defaults: 70% intensive, 100% regular)
+              </span>
+            </label>
+          )}
         </div>
         <div style={{ marginTop: 12, display: "flex", gap: 8 }}>
           <button
@@ -535,10 +755,10 @@ export default function IntensiveGroupComposerPage({
             {headerSummary}
             <div style={{ fontSize: 13, color: "#374151", marginTop: 4 }}>
               Candidate pool: {result.candidatePool.totalAtGrade} students in grade{" "}
-              {result.grade} · {result.candidatePool.eligible} eligible (overall ≤{" "}
-              {result.eligibilityMaxPct}%) · {result.candidatePool.unscored} without
-              data
+              {result.grade} · {result.candidatePool.eligible} eligible ·{" "}
+              {result.candidatePool.unscored} without data
             </div>
+            <LevelMixChips mix={result.candidatePool.levelMix} />
           </div>
 
           <div
@@ -570,15 +790,33 @@ export default function IntensiveGroupComposerPage({
                   <strong>{g.dominantCategory ?? "Mixed"}</strong>
                 </div>
                 <div style={{ fontSize: 12, color: "#6b7280", marginTop: 2 }}>
-                  Cohesion {g.cohesionPct}% ·{" "}
+                  {g.dominantCategory
+                    ? `Cohesion ${g.cohesionPct}%`
+                    : `Spread cohesion ${g.cohesionPct}% (lower = more varied)`}
                   {g.avgDominantPct != null
-                    ? `Avg ${g.avgDominantPct}% in focus skill`
-                    : "—"}
+                    ? ` · Avg ${g.avgDominantPct}% in focus skill`
+                    : ""}
                 </div>
+                <LevelMixChips mix={g.levelMix} />
                 <ol style={{ marginTop: 8, paddingLeft: 18, fontSize: 13 }}>
                   {g.students.map((s) => (
                     <li key={s.studentId} style={{ marginBottom: 3 }}>
                       <span>{fullName(s)}</span>
+                      {s.fastLevel != null && (
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontSize: 10,
+                            padding: "0 5px",
+                            borderRadius: 8,
+                            background: LEVEL_PALETTE[s.fastLevel],
+                            color: LEVEL_TEXT[s.fastLevel],
+                            fontWeight: 700,
+                          }}
+                        >
+                          L{s.fastLevel}
+                        </span>
+                      )}
                       <span style={{ color: "#6b7280", marginLeft: 6 }}>
                         ({s.localSisId ?? "—"}
                         {s.overallPct != null ? ` · ${s.overallPct}%` : ""})
@@ -612,7 +850,22 @@ export default function IntensiveGroupComposerPage({
               <ul style={{ paddingLeft: 18, fontSize: 13, columns: 2 }}>
                 {result.overflow.map((u) => (
                   <li key={u.studentId}>
-                    {fullName(u)}{" "}
+                    {fullName(u)}
+                    {u.fastLevel != null && (
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontSize: 10,
+                          padding: "0 5px",
+                          borderRadius: 8,
+                          background: LEVEL_PALETTE[u.fastLevel],
+                          color: LEVEL_TEXT[u.fastLevel],
+                          fontWeight: 700,
+                        }}
+                      >
+                        L{u.fastLevel}
+                      </span>
+                    )}{" "}
                     <span style={{ color: "#6b7280" }}>
                       ({u.localSisId ?? "—"}
                       {u.overallPct != null ? ` · ${u.overallPct}%` : ""})

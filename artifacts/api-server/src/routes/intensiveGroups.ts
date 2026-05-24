@@ -39,7 +39,9 @@ import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   computeSkillProfiles,
   clusterProfilesIntoGroups,
+  clusterProfilesBalanced,
   summarizeSection,
+  tallyLevelMix,
   isIntensiveCourseName,
   type StudentSkillProfile,
 } from "../lib/skillProfile.js";
@@ -340,12 +342,28 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   }
   const sections = Math.max(1, Math.min(20, Number(req.query.sections) || 4));
   const seats = Math.max(2, Math.min(35, Number(req.query.seats) || 22));
+
+  // Class type. "intensive" (default — back-compat) restricts the
+  // pool to FAST levels 1–2; "regular" opens it to all levels 1–5.
+  const mode =
+    req.query.mode === "regular" ? "regular" : "intensive";
+  // Arrangement (regular only). "homogeneous" reuses the intensive
+  // skill-cluster algorithm; "balanced" uses the round-robin
+  // clusterer that evens out level + skill across sections.
+  const arrangement =
+    req.query.arrangement === "balanced" ? "balanced" : "homogeneous";
+
+  // Eligibility default differs by mode: intensive keeps the legacy
+  // 70% mastery filter (a defensible "struggling" floor); regular
+  // defaults to 100% (no overall-mastery filter — the level filter
+  // is the primary gate).
+  const eligibilityMaxPctDefault = mode === "intensive" ? 70 : 100;
   const eligibilityMaxPct = Math.max(
     0,
     Math.min(
       100,
       req.query.eligibilityMaxPct == null
-        ? 70
+        ? eligibilityMaxPctDefault
         : Number(req.query.eligibilityMaxPct),
     ),
   );
@@ -370,16 +388,40 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     studentIds,
   });
 
-  // Eligibility filter: students at or below the threshold overall.
-  // Students with no data are excluded from the suggestion entirely
-  // (they go in the "unscored" tail so admins can place them
-  // manually).
+  // Level gate — intensive restricts to FAST 1 & 2; regular keeps
+  // all levels (1..5). Students with NO fastLevel (no PM score or
+  // no chart) are excluded from the level gate in intensive mode
+  // (they go to "unscored") and INCLUDED in regular mode (the
+  // arrangement still works off topGaps / round-robin).
+  const allowedLevels = mode === "intensive" ? new Set([1, 2]) : null;
+  const passesLevel = (p: StudentSkillProfile): boolean => {
+    if (allowedLevels == null) return true;
+    return p.fastLevel != null && allowedLevels.has(p.fastLevel);
+  };
+
+  // Eligibility filter: students at or below the threshold overall
+  // AND passing the level gate. Students with no item-response
+  // data are routed to the "unscored" tail so admins can place
+  // them manually.
   const eligible = profiles.filter(
-    (p) => p.overallPct != null && p.overallPct <= eligibilityMaxPct,
+    (p) =>
+      p.overallPct != null &&
+      p.overallPct <= eligibilityMaxPct &&
+      passesLevel(p),
   );
   const unscored = profiles.filter((p) => p.overallPct == null);
 
-  const clustered = clusterProfilesIntoGroups(eligible, sections, seats);
+  const useBalanced = mode === "regular" && arrangement === "balanced";
+  const clustered = useBalanced
+    ? clusterProfilesBalanced(eligible, sections, seats)
+    : clusterProfilesIntoGroups(eligible, sections, seats);
+
+  // Attach a level-mix tally to each group + the candidate pool so
+  // the UI can render the "Levels: 1×8 2×12 3×2" chip strip.
+  const groupsWithMix = clustered.groups.map((g) => ({
+    ...g,
+    levelMix: tallyLevelMix(g.students),
+  }));
 
   res.json({
     subject,
@@ -387,14 +429,17 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     schoolYear,
     window,
     available,
+    mode,
+    arrangement: mode === "regular" ? arrangement : null,
     eligibilityMaxPct,
     requested: { sections, seats },
     candidatePool: {
       totalAtGrade: profiles.length,
       eligible: eligible.length,
       unscored: unscored.length,
+      levelMix: tallyLevelMix(eligible),
     },
-    groups: clustered.groups,
+    groups: groupsWithMix,
     overflow: clustered.overflow.map((p) => ({
       studentId: p.studentId,
       localSisId: p.localSisId,
@@ -402,6 +447,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
       lastName: p.lastName,
       grade: p.grade,
       overallPct: p.overallPct,
+      fastLevel: p.fastLevel,
       topGaps: p.topGaps,
     })),
     unscored: unscored.map((p) => ({
