@@ -255,7 +255,7 @@ function drawSectionBand(
   // FAST palette (matches client AlgebraPlacementReview + TeacherRoster):
   // L3 green, L4 blue, L5 purple.
   const bg = level === 5 ? "#ede9fe" : level === 4 ? "#dbeafe" : "#dcfce7";
-  const fg = level === 5 ? "#4c1d95" : level === 4 ? "#1e3a8a" : "#14532d";
+  const fg = level === 5 ? "#2e1065" : level === 4 ? "#172554" : "#052e16";
   doc.save().rect(PAGE_MARGIN, y, sumCols(cols), h).fillColor(bg).fill().restore();
   doc.font("Helvetica-Bold").fontSize(11).fillColor(fg);
   doc.text(

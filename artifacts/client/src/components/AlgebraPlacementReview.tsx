@@ -330,7 +330,7 @@ export default function AlgebraPlacementReview({
                 const sectionBg =
                   lvl === 5 ? "#ede9fe" : lvl === 4 ? "#dbeafe" : "#dcfce7";
                 const sectionFg =
-                  lvl === 5 ? "#4c1d95" : lvl === 4 ? "#1e3a8a" : "#14532d";
+                  lvl === 5 ? "#2e1065" : lvl === 4 ? "#172554" : "#052e16";
                 const colSpan = data.canSaveOverride ? 8 : 7;
                 return [
                   <tr key={`hdr-${lvl}`}>
