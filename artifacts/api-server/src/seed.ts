@@ -4704,6 +4704,19 @@ export async function seedWatchlistIfEmpty(): Promise<void> {
       )
     ).rows as { c: number }[];
     if (c > 0) continue;
+    // Belt-and-suspenders: a prior boot may have inserted demo
+    // interaction_cases rows then crashed before any interactions
+    // landed. Without this second guard, the cases insert below
+    // re-fires and trips the (school_id, school_year_label,
+    // case_number) unique index, throwing and aborting every
+    // remaining schema ALTER downstream (notably
+    // class_composer_banner_dismissed_sy at line 5225).
+    const [{ cc }] = (
+      await db.execute(
+        sql`SELECT COUNT(*)::int AS cc FROM interaction_cases WHERE school_id = ${school.id}`,
+      )
+    ).rows as { cc: number }[];
+    if (cc > 0) continue;
 
     const studentRows = await db
       .select({

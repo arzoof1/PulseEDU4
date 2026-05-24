@@ -173,7 +173,16 @@ async function runSeed(): Promise<void> {
   await ensureClassComposerPlansSchema();
   // Watchlist demo data: 20% of each school's roster gets activity, with a
   // ~3%-of-20% high-concern slice anchoring 3–4 cases. Idempotent per school.
-  await seedWatchlistIfEmpty();
+  // Defense-in-depth: a crash inside the watchlist seeder would abort
+  // every remaining schema ALTER in this file. Log + continue instead.
+  try {
+    await seedWatchlistIfEmpty();
+  } catch (err) {
+    logger.error(
+      { err },
+      "[seed] seedWatchlistIfEmpty failed — continuing boot so downstream ALTERs still run",
+    );
+  }
   // Backfill: pile extra incidents on the top 3 case anchors per school
   // so the Schoolwide Behavior Network's Full School Web shows a clear
   // "these kids stand out" hierarchy instead of a wall of equal-sized
