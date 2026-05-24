@@ -2114,8 +2114,6 @@ function ProgressReportModal(props: {
           .progress-report-page {
             page-break-after: always;
             break-after: page;
-            page-break-inside: avoid;
-            break-inside: avoid;
             box-shadow: none !important;
             border: none !important;
             margin: 0 !important;
