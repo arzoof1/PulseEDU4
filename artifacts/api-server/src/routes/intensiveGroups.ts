@@ -30,6 +30,7 @@ import {
   staffTable,
   studentsTable,
   studentFastItemResponsesTable,
+  studentFastScoresTable,
   schoolSettingsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
@@ -45,6 +46,46 @@ import {
   isIntensiveCourseName,
   type StudentSkillProfile,
 } from "../lib/skillProfile.js";
+import {
+  chartGradeFor,
+  hasChart,
+  levelMin,
+  placeOnChart,
+  placePm3,
+  type Subject,
+} from "../lib/fastCutScores.js";
+
+const FAST_SUBJECTS_SET = new Set<Subject>(["ela", "math", "algebra1", "geometry"]);
+
+// "Other subject" pairing for the double-counters filter. Only the
+// FAST-tested ELA↔Math pair counts in school-grade accountability;
+// EOC subjects don't pair this way, so doubleCounters is a no-op
+// for algebra1/geometry callers.
+function otherSubjectFor(subject: string): Subject | null {
+  if (subject === "ela") return "math";
+  if (subject === "math") return "ela";
+  return null;
+}
+
+// Derive a level (1..5 | null) from a raw score for a given window
+// using the same chart selection placeOnChart/placePm3 use. Mirrors
+// the deriveFastLevel helper in skillProfile.ts so the route can do
+// per-window level placement for double-counters + trajectory checks
+// without re-fetching item responses.
+function deriveLevelForWindow(
+  score: number | null | undefined,
+  subject: string,
+  grade: number | null,
+  window: string,
+): 1 | 2 | 3 | 4 | 5 | null {
+  if (score == null || grade == null) return null;
+  if (!FAST_SUBJECTS_SET.has(subject as Subject)) return null;
+  const s = subject as Subject;
+  if (!hasChart(s, grade)) return null;
+  const placement =
+    window === "pm3" ? placePm3(score, s, grade) : placeOnChart(score, s, grade);
+  return placement ? placement.level : null;
+}
 
 const router: IRouter = Router();
 
@@ -344,19 +385,64 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   const seats = Math.max(2, Math.min(35, Number(req.query.seats) || 22));
 
   // Class type. "intensive" (default — back-compat) restricts the
-  // pool to FAST levels 1–2; "regular" opens it to all levels 1–5.
-  const mode =
-    req.query.mode === "regular" ? "regular" : "intensive";
+  // pool to FAST levels 1–2; "regular" opens it to all levels 1–5;
+  // "cusp" restricts the pool to bubble kids near a cut score (see
+  // cusp params below).
+  const rawMode = typeof req.query.mode === "string" ? req.query.mode : "";
+  const mode: "intensive" | "regular" | "cusp" =
+    rawMode === "regular" ? "regular" : rawMode === "cusp" ? "cusp" : "intensive";
   // Arrangement (regular only). "homogeneous" reuses the intensive
   // skill-cluster algorithm; "balanced" uses the round-robin
   // clusterer that evens out level + skill across sections.
   const arrangement =
     req.query.arrangement === "balanced" ? "balanced" : "homogeneous";
 
+  // Cusp params (cusp mode only; ignored otherwise). cuspPoints is
+  // the ± points-from-cut window. cuspDirection selects which side
+  // of which cut to consider. cuspDoubleCounters narrows to kids
+  // who are ALSO cusp in the other FAST subject (school-grade
+  // double-counters). cuspTrajectory narrows to kids who were
+  // L3 in an earlier window and slid to L2 in the current window
+  // (the "losing ground" cohort).
+  const cuspPoints = Math.max(
+    1,
+    Math.min(60, Number(req.query.cuspPoints) || 15),
+  );
+  const cuspDirectionRaw =
+    typeof req.query.cuspDirection === "string" ? req.query.cuspDirection : "";
+  const cuspDirection: "both" | "below" | "above" | "strand" =
+    cuspDirectionRaw === "below"
+      ? "below"
+      : cuspDirectionRaw === "above"
+        ? "above"
+        : cuspDirectionRaw === "strand"
+          ? "strand"
+          : "both";
+  const cuspDoubleCounters = req.query.cuspDoubleCounters === "true";
+  const cuspTrajectory = req.query.cuspTrajectory === "true";
+
+  // Strand-cusp + double-counters is not supportable cheaply — the
+  // strand check needs item-response categories for BOTH subjects.
+  // Reject the combination explicitly rather than silently
+  // approximating it (the UI also greys the checkbox out when
+  // direction=strand).
+  if (mode === "cusp" && cuspDirection === "strand" && cuspDoubleCounters) {
+    res.status(400).json({
+      error:
+        "Double-counters is not available with the Strand-cusp direction. Pick a different direction or turn off double-counters.",
+    });
+    return;
+  }
+
+  // calcOnly skips clustering — used by the inline cusp calculator
+  // to refresh the live "X eligible → Y sections" headcount cheaply
+  // as the admin tweaks thresholds. Returns groups: [], overflow: [].
+  const calcOnly = req.query.calcOnly === "true";
+
   // Eligibility default differs by mode: intensive keeps the legacy
   // 70% mastery filter (a defensible "struggling" floor); regular
-  // defaults to 100% (no overall-mastery filter — the level filter
-  // is the primary gate).
+  // and cusp default to 100% (no overall-mastery filter — the level
+  // / cusp gate is the primary one).
   const eligibilityMaxPctDefault = mode === "intensive" ? 70 : 100;
   const eligibilityMaxPct = Math.max(
     0,
@@ -389,32 +475,204 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   });
 
   // Level gate — intensive restricts to FAST 1 & 2; regular keeps
-  // all levels (1..5). Students with NO fastLevel (no PM score or
-  // no chart) are excluded from the level gate in intensive mode
-  // (they go to "unscored") and INCLUDED in regular mode (the
-  // arrangement still works off topGaps / round-robin).
-  const allowedLevels = mode === "intensive" ? new Set([1, 2]) : null;
+  // all levels (1..5); cusp gates by the cusp filter below instead.
+  // Students with NO fastLevel (no PM score or no chart) are excluded
+  // from the level gate in intensive/cusp modes (they go to
+  // "unscored") and INCLUDED in regular mode (the arrangement still
+  // works off topGaps / round-robin).
+  const allowedLevels =
+    mode === "intensive" ? new Set([1, 2]) : mode === "cusp" ? new Set([2, 3]) : null;
   const passesLevel = (p: StudentSkillProfile): boolean => {
     if (allowedLevels == null) return true;
     return p.fastLevel != null && allowedLevels.has(p.fastLevel);
   };
 
+  // ----- Cusp-mode auxiliary data -----
+  // doubleCounters needs the OTHER FAST subject's score in the same
+  // window so we can re-check the cusp condition on the other side.
+  // trajectory needs PM1/PM2 scores so we can flag the "was L3,
+  // dropped to L2" cohort. Only fetch when actually requested to
+  // keep the route cheap when cusp isn't in play.
+  let otherSubjectLevelById: Map<string, 1 | 2 | 3 | 4 | 5 | null> | null = null;
+  let otherSubjectScoreById: Map<string, number | null> | null = null;
+  if (mode === "cusp" && cuspDoubleCounters) {
+    const other = otherSubjectFor(subject);
+    if (other) {
+      const rows = await db
+        .select({
+          studentId: studentFastScoresTable.studentId,
+          pm1: studentFastScoresTable.pm1,
+          pm2: studentFastScoresTable.pm2,
+          pm3: studentFastScoresTable.pm3,
+        })
+        .from(studentFastScoresTable)
+        .where(
+          and(
+            eq(studentFastScoresTable.schoolId, schoolId),
+            eq(studentFastScoresTable.subject, other),
+            eq(studentFastScoresTable.schoolYear, schoolYear),
+            inArray(studentFastScoresTable.studentId, studentIds),
+          ),
+        );
+      otherSubjectLevelById = new Map();
+      otherSubjectScoreById = new Map();
+      const gradeByStudent = new Map(profiles.map((p) => [p.studentId, p.grade]));
+      for (const r of rows) {
+        const raw =
+          window === "pm1" ? r.pm1 : window === "pm2" ? r.pm2 : r.pm3;
+        otherSubjectScoreById.set(r.studentId, raw ?? null);
+        otherSubjectLevelById.set(
+          r.studentId,
+          deriveLevelForWindow(raw, other, gradeByStudent.get(r.studentId) ?? null, window),
+        );
+      }
+    }
+  }
+
+  // Trajectory only makes sense if there IS a prior window relative
+  // to the current selection. PM1 has no prior → silently no-op.
+  // PM2 → consider PM1 only. PM3 → consider PM1 or PM2.
+  const trajectoryActive =
+    mode === "cusp" && cuspTrajectory && (window === "pm2" || window === "pm3");
+  let priorPm1LevelById: Map<string, 1 | 2 | 3 | 4 | 5 | null> | null = null;
+  let priorPm2LevelById: Map<string, 1 | 2 | 3 | 4 | 5 | null> | null = null;
+  if (trajectoryActive) {
+    const rows = await db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        pm1: studentFastScoresTable.pm1,
+        pm2: studentFastScoresTable.pm2,
+      })
+      .from(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.schoolId, schoolId),
+          eq(studentFastScoresTable.subject, subject),
+          eq(studentFastScoresTable.schoolYear, schoolYear),
+          inArray(studentFastScoresTable.studentId, studentIds),
+        ),
+      );
+    priorPm1LevelById = new Map();
+    priorPm2LevelById = new Map();
+    const gradeByStudent = new Map(profiles.map((p) => [p.studentId, p.grade]));
+    for (const r of rows) {
+      const g = gradeByStudent.get(r.studentId) ?? null;
+      priorPm1LevelById.set(
+        r.studentId,
+        deriveLevelForWindow(r.pm1, subject, g, "pm1"),
+      );
+      priorPm2LevelById.set(
+        r.studentId,
+        deriveLevelForWindow(r.pm2, subject, g, "pm2"),
+      );
+    }
+  }
+
+  // ----- Cusp filter -----
+  // For each candidate compute whether they fall in the requested
+  // cusp window using the same chart the placement helpers use
+  // (current grade for PM1/PM2, prior grade for PM3, grade-agnostic
+  // for EOC). If the chart is missing we can't place them on a cut,
+  // so they're excluded from cusp mode.
+  const passesCusp = (p: StudentSkillProfile): boolean => {
+    if (mode !== "cusp") return true;
+    if (p.fastLevel == null || p.fastScore == null || p.grade == null) {
+      return false;
+    }
+    const chartGrade = chartGradeFor(subject as Subject, p.grade, window);
+    const l3Min = levelMin(subject as Subject, chartGrade, 3);
+    const l4Min = levelMin(subject as Subject, chartGrade, 4);
+    if (l3Min == null || l4Min == null) return false;
+
+    // Below-cut cusp: L2 students within cuspPoints of the L3 floor.
+    const belowCusp =
+      p.fastLevel === 2 && p.fastScore >= l3Min - cuspPoints;
+    // Above-cut cusp: L3 students within cuspPoints of the L4 floor
+    // (i.e. close to slipping up to proficient).
+    const aboveCusp =
+      p.fastLevel === 3 && p.fastScore >= l4Min - cuspPoints;
+    // Strand-cusp: L3 students with at least one Below-strand (<50%)
+    // — passing overall but hiding a weakness worth small-grouping.
+    const strandCusp = p.fastLevel === 3 && p.hasBelowStrand;
+
+    let baseHit = false;
+    if (cuspDirection === "below") baseHit = belowCusp;
+    else if (cuspDirection === "above") baseHit = aboveCusp;
+    else if (cuspDirection === "strand") baseHit = strandCusp;
+    else baseHit = belowCusp || aboveCusp; // "both"
+
+    if (!baseHit) return false;
+
+    // Double-counters filter: ALSO cusp in the other FAST subject.
+    // Apply the same direction logic against the other-subject score
+    // (using the student's grade for the other subject's chart). Any
+    // student missing the other-subject score fails the filter.
+    if (cuspDoubleCounters && otherSubjectLevelById && otherSubjectScoreById) {
+      const other = otherSubjectFor(subject);
+      if (!other) return false;
+      const oLvl = otherSubjectLevelById.get(p.studentId);
+      const oScore = otherSubjectScoreById.get(p.studentId);
+      if (oLvl == null || oScore == null) return false;
+      const oChartGrade = chartGradeFor(other, p.grade, window);
+      const oL3Min = levelMin(other, oChartGrade, 3);
+      const oL4Min = levelMin(other, oChartGrade, 4);
+      if (oL3Min == null || oL4Min == null) return false;
+      const oBelow = oLvl === 2 && oScore >= oL3Min - cuspPoints;
+      const oAbove = oLvl === 3 && oScore >= oL4Min - cuspPoints;
+      const oStrand = oLvl === 3; // strand check requires re-querying
+      // For "strand" direction we can't cheaply re-check the other
+      // subject's strand without re-computing categories; require
+      // just that they're L3 in the other subject.
+      let oHit = false;
+      if (cuspDirection === "below") oHit = oBelow;
+      else if (cuspDirection === "above") oHit = oAbove;
+      else if (cuspDirection === "strand") oHit = oStrand;
+      else oHit = oBelow || oAbove;
+      if (!oHit) return false;
+    }
+
+    // Trajectory filter: was L3 in a window PRIOR to the current
+    // selection, slid to L2 in the current window. Only meaningful
+    // for current-window L2 students. PM1 has no prior, so trajectory
+    // there is treated as "no matches" by trajectoryActive=false; if
+    // the admin still toggles it on PM1 we reject everyone.
+    if (cuspTrajectory) {
+      if (!trajectoryActive) return false;
+      if (p.fastLevel !== 2) return false;
+      const wasL3InPm1 =
+        priorPm1LevelById != null &&
+        priorPm1LevelById.get(p.studentId) === 3;
+      const wasL3InPm2 =
+        window === "pm3" &&
+        priorPm2LevelById != null &&
+        priorPm2LevelById.get(p.studentId) === 3;
+      if (!wasL3InPm1 && !wasL3InPm2) return false;
+    }
+
+    return true;
+  };
+
   // Eligibility filter: students at or below the threshold overall
-  // AND passing the level gate. Students with no item-response
-  // data are routed to the "unscored" tail so admins can place
-  // them manually.
+  // AND passing the level + cusp gates. Students with no item-
+  // response data are routed to the "unscored" tail so admins can
+  // place them manually.
   const eligible = profiles.filter(
     (p) =>
       p.overallPct != null &&
       p.overallPct <= eligibilityMaxPct &&
-      passesLevel(p),
+      passesLevel(p) &&
+      passesCusp(p),
   );
   const unscored = profiles.filter((p) => p.overallPct == null);
 
+  // calcOnly mode skips the clustering entirely — the client only
+  // wants headcount + level mix for the live calculator readout.
   const useBalanced = mode === "regular" && arrangement === "balanced";
-  const clustered = useBalanced
-    ? clusterProfilesBalanced(eligible, sections, seats)
-    : clusterProfilesIntoGroups(eligible, sections, seats);
+  const clustered = calcOnly
+    ? { groups: [], overflow: [] }
+    : useBalanced
+      ? clusterProfilesBalanced(eligible, sections, seats)
+      : clusterProfilesIntoGroups(eligible, sections, seats);
 
   // Attach a level-mix tally to each group + the candidate pool so
   // the UI can render the "Levels: 1×8 2×12 3×2" chip strip.
@@ -422,6 +680,46 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     ...g,
     levelMix: tallyLevelMix(g.students),
   }));
+
+  // Cusp summary — surfaced on cusp mode so the UI can show the
+  // L3 / L4 cut floors actually used + the sections-needed math
+  // for the live calculator readout. Null in other modes.
+  let cusp:
+    | {
+        cuspPoints: number;
+        cuspDirection: "both" | "below" | "above" | "strand";
+        cuspDoubleCounters: boolean;
+        cuspTrajectory: boolean;
+        chartGradeUsed: number | null;
+        l3Min: number | null;
+        l4Min: number | null;
+        belowCutFloor: number | null;
+        aboveCutFloor: number | null;
+        sectionsNeeded: number;
+      }
+    | null = null;
+  if (mode === "cusp") {
+    // Pick a representative chart-grade from the candidate pool so
+    // the UI can show "L3 floor = 232 (chart: G6)" etc. All students
+    // in the pool share a grade (we filter by grade above), so this
+    // is unambiguous.
+    const sampleGrade = profiles[0]?.grade ?? grade;
+    const cg = chartGradeFor(subject as Subject, sampleGrade, window);
+    const l3 = levelMin(subject as Subject, cg, 3);
+    const l4 = levelMin(subject as Subject, cg, 4);
+    cusp = {
+      cuspPoints,
+      cuspDirection,
+      cuspDoubleCounters,
+      cuspTrajectory,
+      chartGradeUsed: cg,
+      l3Min: l3,
+      l4Min: l4,
+      belowCutFloor: l3 != null ? l3 - cuspPoints : null,
+      aboveCutFloor: l4 != null ? l4 - cuspPoints : null,
+      sectionsNeeded: Math.max(1, Math.ceil(eligible.length / Math.max(1, seats))),
+    };
+  }
 
   res.json({
     subject,
@@ -431,6 +729,8 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     available,
     mode,
     arrangement: mode === "regular" ? arrangement : null,
+    cusp,
+    calcOnly,
     eligibilityMaxPct,
     requested: { sections, seats },
     candidatePool: {

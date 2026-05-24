@@ -69,6 +69,15 @@ export interface StudentSkillProfile {
   // placement. Null when no PM score exists, no chart exists for
   // the subject/grade, or grade is unknown.
   fastLevel: 1 | 2 | 3 | 4 | 5 | null;
+  // Raw FAST scale score for the requested window. Used by the Cusp
+  // Composer to compute "distance from cut" against a chart cut
+  // score. Null when no PM score exists.
+  fastScore: number | null;
+  // True iff the student has at least one instructional category at
+  // < 50% mastery — flags a "Below-strand" weakness, even for
+  // students whose overall pct is otherwise healthy. Used by the
+  // strand-cusp filter for Level-3 kids hiding a weak strand.
+  hasBelowStrand: boolean;
 }
 
 export interface SkillProfileInput {
@@ -277,6 +286,8 @@ export async function computeSkillProfiles(
       overallPct:
         o && o.possible > 0 ? Math.round((o.earned / o.possible) * 100) : null,
       fastLevel: deriveFastLevel(rawScore, subject, s.grade, window),
+      fastScore: rawScore,
+      hasBelowStrand: categories.some((c) => c.pct < 50),
     };
   });
 }

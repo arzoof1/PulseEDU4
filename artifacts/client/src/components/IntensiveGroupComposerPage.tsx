@@ -42,8 +42,21 @@ interface Group {
   cohesionPct: number;
   levelMix: LevelMix;
 }
-type Mode = "intensive" | "regular";
+type Mode = "intensive" | "regular" | "cusp";
 type Arrangement = "homogeneous" | "balanced";
+type CuspDirection = "both" | "below" | "above" | "strand";
+interface CuspSummary {
+  cuspPoints: number;
+  cuspDirection: CuspDirection;
+  cuspDoubleCounters: boolean;
+  cuspTrajectory: boolean;
+  chartGradeUsed: number | null;
+  l3Min: number | null;
+  l4Min: number | null;
+  belowCutFloor: number | null;
+  aboveCutFloor: number | null;
+  sectionsNeeded: number;
+}
 interface SuggestResponse {
   subject: string;
   grade: number;
@@ -52,6 +65,8 @@ interface SuggestResponse {
   available: WindowOpt[];
   mode: Mode;
   arrangement: Arrangement | null;
+  cusp: CuspSummary | null;
+  calcOnly: boolean;
   eligibilityMaxPct: number;
   requested: { sections: number; seats: number };
   candidatePool: {
@@ -167,7 +182,17 @@ export default function IntensiveGroupComposerPage({
   const [seats, setSeats] = useState(22);
   const [eligibilityMaxPct, setEligibilityMaxPct] = useState(70);
 
+  // Cusp-mode controls. cuspPoints is the ± points-from-cut window.
+  // Defaults: 15 points, both directions, double-counters off,
+  // trajectory off. Server enforces the same defaults if absent.
+  const [cuspPoints, setCuspPoints] = useState(15);
+  const [cuspDirection, setCuspDirection] = useState<CuspDirection>("both");
+  const [cuspDoubleCounters, setCuspDoubleCounters] = useState(false);
+  const [cuspTrajectory, setCuspTrajectory] = useState(false);
+
   useEffect(() => {
+    // Mode change resets the mastery-cap default so the Advanced
+    // expander reflects the right number when opened.
     setEligibilityMaxPct(mode === "intensive" ? 70 : 100);
   }, [mode]);
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -176,6 +201,19 @@ export default function IntensiveGroupComposerPage({
   const [result, setResult] = useState<SuggestResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Live cusp calculator — fires a debounced calcOnly request as
+  // params change so the admin sees "X eligible → Y sections" before
+  // committing to a Generate. Null when cusp mode is off, when the
+  // last call hasn't returned yet, or before the first call.
+  const [cuspCalc, setCuspCalc] = useState<{
+    eligible: number;
+    sectionsNeeded: number;
+    totalAtGrade: number;
+    levelMix: LevelMix;
+    cusp: CuspSummary | null;
+  } | null>(null);
+  const [calcLoading, setCalcLoading] = useState(false);
 
   // Load available windows when subject changes.
   useEffect(() => {
@@ -203,32 +241,46 @@ export default function IntensiveGroupComposerPage({
     };
   }, [subject]);
 
+  // Build the /suggest query string. Shared by Generate + the live
+  // cusp calculator so both stay in sync on which params get sent.
+  const buildSuggestParams = (opts: { calcOnly: boolean }): URLSearchParams => {
+    const params = new URLSearchParams({
+      mode,
+      subject,
+      grade: String(grade),
+      sections: String(sections),
+      seats: String(seats),
+    });
+    if (mode === "regular") {
+      params.set("arrangement", arrangement);
+    }
+    if (mode === "cusp") {
+      params.set("cuspPoints", String(cuspPoints));
+      params.set("cuspDirection", cuspDirection);
+      if (cuspDoubleCounters) params.set("cuspDoubleCounters", "true");
+      if (cuspTrajectory) params.set("cuspTrajectory", "true");
+    }
+    // Only send the % cap when the user has touched the advanced
+    // section — otherwise let the server pick the mode default
+    // (70 intensive / 100 regular/cusp).
+    if (showAdvanced) {
+      params.set("eligibilityMaxPct", String(eligibilityMaxPct));
+    }
+    if (selectedWindow) {
+      const [sy, w] = selectedWindow.split("|");
+      params.set("schoolYear", sy);
+      params.set("window", w);
+    }
+    if (opts.calcOnly) params.set("calcOnly", "true");
+    return params;
+  };
+
   const generate = async () => {
     setError(null);
     setLoading(true);
     setResult(null);
     try {
-      const params = new URLSearchParams({
-        mode,
-        subject,
-        grade: String(grade),
-        sections: String(sections),
-        seats: String(seats),
-      });
-      if (mode === "regular") {
-        params.set("arrangement", arrangement);
-      }
-      // Only send the % cap when the user has touched the advanced
-      // section — otherwise let the server pick the mode default
-      // (70 intensive / 100 regular).
-      if (showAdvanced) {
-        params.set("eligibilityMaxPct", String(eligibilityMaxPct));
-      }
-      if (selectedWindow) {
-        const [sy, w] = selectedWindow.split("|");
-        params.set("schoolYear", sy);
-        params.set("window", w);
-      }
+      const params = buildSuggestParams({ calcOnly: false });
       const r = await authFetch(`/api/intensive-groups/suggest?${params.toString()}`);
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
@@ -242,6 +294,60 @@ export default function IntensiveGroupComposerPage({
       setLoading(false);
     }
   };
+
+  // Live cusp calculator — fires /suggest?calcOnly=true with a 400ms
+  // debounce on every relevant input change. Stays off when not in
+  // cusp mode (avoids noise; the Generate button is the entry point
+  // for intensive/regular).
+  useEffect(() => {
+    if (mode !== "cusp") {
+      setCuspCalc(null);
+      return;
+    }
+    if (!selectedWindow) return;
+    let cancelled = false;
+    setCalcLoading(true);
+    const handle = setTimeout(async () => {
+      try {
+        const params = buildSuggestParams({ calcOnly: true });
+        const r = await authFetch(
+          `/api/intensive-groups/suggest?${params.toString()}`,
+        );
+        if (!r.ok) return;
+        const data = (await r.json()) as SuggestResponse;
+        if (cancelled) return;
+        setCuspCalc({
+          eligible: data.candidatePool.eligible,
+          sectionsNeeded:
+            data.cusp?.sectionsNeeded ??
+            Math.max(1, Math.ceil(data.candidatePool.eligible / Math.max(1, seats))),
+          totalAtGrade: data.candidatePool.totalAtGrade,
+          levelMix: data.candidatePool.levelMix,
+          cusp: data.cusp,
+        });
+      } finally {
+        if (!cancelled) setCalcLoading(false);
+      }
+    }, 400);
+    return () => {
+      cancelled = true;
+      clearTimeout(handle);
+    };
+    // Re-run whenever any input that affects the cusp filter changes.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    mode,
+    subject,
+    grade,
+    seats,
+    selectedWindow,
+    cuspPoints,
+    cuspDirection,
+    cuspDoubleCounters,
+    cuspTrajectory,
+    showAdvanced,
+    eligibilityMaxPct,
+  ]);
 
   const exportCsv = () => {
     if (!result) return;
@@ -307,12 +413,26 @@ export default function IntensiveGroupComposerPage({
 
   const headerSummary = useMemo(() => {
     if (!result) return null;
+    const cuspDirLabel = (d: CuspDirection): string =>
+      d === "below"
+        ? "Below cut"
+        : d === "above"
+          ? "Above cut"
+          : d === "strand"
+            ? "Strand cusp"
+            : "Both";
     const modeLabel =
       result.mode === "intensive"
         ? "Intensive (Levels 1–2)"
-        : result.arrangement === "balanced"
-          ? "Regular · Balanced (Levels 1–5)"
-          : "Regular · Homogeneous (Levels 1–5)";
+        : result.mode === "cusp"
+          ? `Cusp · ${cuspDirLabel(result.cusp?.cuspDirection ?? "both")} ` +
+            `(±${result.cusp?.cuspPoints ?? 15} pts` +
+            (result.cusp?.cuspDoubleCounters ? ", double-counters" : "") +
+            (result.cusp?.cuspTrajectory ? ", trajectory" : "") +
+            ")"
+          : result.arrangement === "balanced"
+            ? "Regular · Balanced (Levels 1–5)"
+            : "Regular · Homogeneous (Levels 1–5)";
     return (
       <div style={{ color: "#374151", fontSize: 13, marginTop: 6 }}>
         <strong>{modeLabel}</strong> · Subject{" "}
@@ -407,6 +527,81 @@ export default function IntensiveGroupComposerPage({
                 similar level mix (some L1s, some L3s, some L5s) and a
                 similar skill mix. Best for typical "fair distribution"
                 master scheduling.
+              </li>
+            </ul>
+          </HowToSection>
+
+          <HowToSection title="Cusp (bubble) — when to use it">
+            <ul style={howtoListStyle}>
+              <li>
+                <strong>Cusp class type</strong> targets the
+                "bubble" — kids close to a FAST cut score where a
+                small, focused push is most likely to move a level.
+                The pool is restricted to <strong>Levels 2 and 3</strong>{" "}
+                within your chosen points-from-cut window.
+              </li>
+              <li>
+                <strong>Direction</strong> — pick which edge of the
+                cut you care about:
+                <ul style={howtoListStyle}>
+                  <li>
+                    <strong>Both</strong> (default) — L2 students
+                    within range of climbing into L3, plus L3
+                    students within range of slipping out.
+                  </li>
+                  <li>
+                    <strong>Below cut (L2 climbing)</strong> — only
+                    the L2 students within ± points of the L3 cut.
+                    Highest-ROI growth cohort.
+                  </li>
+                  <li>
+                    <strong>Above cut (L3 → L4 proficient)</strong>{" "}
+                    — only the L3 students within ± points of the L4
+                    cut. The "almost proficient, give them a push"
+                    cohort.
+                  </li>
+                  <li>
+                    <strong>Strand cusp</strong> — L3 students who
+                    are passing overall but have at least one
+                    Below-strand (&lt; 50%). Use when the headline
+                    score hides a real weakness.
+                  </li>
+                </ul>
+              </li>
+              <li>
+                <strong>± Points from cut</strong> — how wide your
+                bubble is. 15 points is a good starting point on the
+                FAST scale; widen for more candidates, narrow for a
+                tighter cohort.
+              </li>
+              <li>
+                <strong>Double-counters only</strong> — narrows to
+                kids who are <em>also</em> cusp in the OTHER FAST
+                subject (ELA ↔ Math). Highest-leverage cohort for a
+                shared bell or co-taught block. Skipped for EOC
+                courses (no paired subject). Not available with the{" "}
+                <em>Strand cusp</em> direction (the strand check
+                would need item-response data for both subjects).
+              </li>
+              <li>
+                <strong>Trajectory: was L3, slid to L2</strong> —
+                narrows to current-L2 students who were L3 in a
+                prior window of the same year. On PM2 we look back
+                at PM1; on PM3 we look back at PM1 or PM2. Disabled
+                on PM1 (no prior window).
+              </li>
+              <li>
+                The <strong>live calculator</strong> at the bottom
+                of the cusp panel updates as you tweak — it shows
+                exactly how many students fit and how many sections
+                you'd need at the current seats/section. Use it to
+                size the cohort before clicking <em>Generate</em>.
+              </li>
+              <li>
+                Cusp mode is single-grade by design — the cut scores
+                are grade-specific. Run it once per grade you care
+                about. Like all Class Composer output: suggestions
+                only, nothing writes back to your roster.
               </li>
             </ul>
           </HowToSection>
@@ -547,7 +742,7 @@ export default function IntensiveGroupComposerPage({
                 />{" "}
                 Intensive (Levels 1–2)
               </label>
-              <label>
+              <label style={{ marginRight: 12 }}>
                 <input
                   type="radio"
                   name="composer-mode"
@@ -555,6 +750,15 @@ export default function IntensiveGroupComposerPage({
                   onChange={() => setMode("regular")}
                 />{" "}
                 Regular (Levels 1–5)
+              </label>
+              <label>
+                <input
+                  type="radio"
+                  name="composer-mode"
+                  checked={mode === "cusp"}
+                  onChange={() => setMode("cusp")}
+                />{" "}
+                Cusp (Levels 2–3 bubble)
               </label>
             </div>
             {mode === "regular" && (
@@ -582,6 +786,163 @@ export default function IntensiveGroupComposerPage({
             )}
           </div>
         </div>
+
+        {/* Cusp controls — only visible in cusp mode. Direction radio +
+            points-from-cut number + two narrowing checkboxes + the
+            live "X eligible → Y sections" readout. */}
+        {mode === "cusp" && (
+          <div
+            style={{
+              marginBottom: 10,
+              padding: 10,
+              border: "1px solid #fde68a",
+              background: "#fffbeb",
+              borderRadius: 6,
+              fontSize: 13,
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 16,
+                alignItems: "center",
+              }}
+            >
+              <div>
+                <span style={{ fontWeight: 600, marginRight: 8 }}>Cusp direction</span>
+                {(
+                  [
+                    ["both", "Both"],
+                    ["below", "Below cut (L2 → L3)"],
+                    ["above", "Above cut (L3 → L4 proficient)"],
+                    ["strand", "Strand cusp (L3 + weak strand)"],
+                  ] as Array<[CuspDirection, string]>
+                ).map(([v, label]) => (
+                  <label key={v} style={{ marginRight: 10 }}>
+                    <input
+                      type="radio"
+                      name="composer-cusp-direction"
+                      checked={cuspDirection === v}
+                      onChange={() => {
+                        setCuspDirection(v);
+                        // Strand + double-counters isn't supported
+                        // server-side; auto-clear the checkbox so
+                        // Generate doesn't 400.
+                        if (v === "strand") setCuspDoubleCounters(false);
+                      }}
+                    />{" "}
+                    {label}
+                  </label>
+                ))}
+              </div>
+              <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <span style={{ fontWeight: 600 }}>± Points from cut</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  value={cuspPoints}
+                  onChange={(e) =>
+                    setCuspPoints(
+                      Math.max(1, Math.min(60, Number(e.target.value) || 15)),
+                    )
+                  }
+                  style={{ padding: 4, width: 70 }}
+                />
+              </label>
+            </div>
+            <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 16 }}>
+              <label
+                style={{
+                  opacity: cuspDirection === "strand" ? 0.5 : 1,
+                  cursor: cuspDirection === "strand" ? "not-allowed" : "default",
+                }}
+                title={
+                  cuspDirection === "strand"
+                    ? "Not available with Strand-cusp direction — pick Both, Below, or Above to enable."
+                    : undefined
+                }
+              >
+                <input
+                  type="checkbox"
+                  checked={cuspDoubleCounters}
+                  disabled={cuspDirection === "strand"}
+                  onChange={(e) => setCuspDoubleCounters(e.target.checked)}
+                />{" "}
+                Double-counters only (also cusp in the other FAST subject)
+              </label>
+              {(() => {
+                // Trajectory needs a prior window. Disable on PM1.
+                const isPm1 = selectedWindow.endsWith("|pm1");
+                return (
+                  <label
+                    style={{
+                      opacity: isPm1 ? 0.5 : 1,
+                      cursor: isPm1 ? "not-allowed" : "default",
+                    }}
+                    title={
+                      isPm1
+                        ? "Trajectory needs a prior window — pick PM2 or PM3."
+                        : undefined
+                    }
+                  >
+                    <input
+                      type="checkbox"
+                      checked={cuspTrajectory && !isPm1}
+                      disabled={isPm1}
+                      onChange={(e) => setCuspTrajectory(e.target.checked)}
+                    />{" "}
+                    Trajectory: was L3, slid to L2 this window
+                  </label>
+                );
+              })()}
+            </div>
+
+            {/* Live calculator readout — updates ~400ms after the last
+                input change. Shows cuts in use + headcount + sections. */}
+            <div
+              style={{
+                marginTop: 10,
+                padding: 8,
+                borderRadius: 4,
+                background: "#fff",
+                border: "1px solid #fcd34d",
+              }}
+            >
+              <div style={{ fontSize: 12, color: "#78350f", marginBottom: 4 }}>
+                <strong>Live calculator</strong>
+                {calcLoading && " · recalculating…"}
+              </div>
+              {cuspCalc ? (
+                <div style={{ fontSize: 13, color: "#374151" }}>
+                  <strong>{cuspCalc.eligible}</strong> students fit this cusp
+                  {cuspCalc.totalAtGrade > 0 && (
+                    <> (of {cuspCalc.totalAtGrade} at grade {grade})</>
+                  )}{" "}
+                  → <strong>{cuspCalc.sectionsNeeded}</strong> section
+                  {cuspCalc.sectionsNeeded === 1 ? "" : "s"} at {seats}/section.
+                  {cuspCalc.cusp?.l3Min != null && cuspCalc.cusp?.l4Min != null && (
+                    <div style={{ fontSize: 12, color: "#6b7280", marginTop: 4 }}>
+                      L3 cut: {cuspCalc.cusp.l3Min} (below-cut floor{" "}
+                      {cuspCalc.cusp.belowCutFloor}) · L4 cut:{" "}
+                      {cuspCalc.cusp.l4Min} (above-cut floor{" "}
+                      {cuspCalc.cusp.aboveCutFloor}) · Chart grade:{" "}
+                      {cuspCalc.cusp.chartGradeUsed ?? "—"}
+                    </div>
+                  )}
+                  <div style={{ marginTop: 4 }}>
+                    <LevelMixChips mix={cuspCalc.levelMix} />
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: "#6b7280" }}>
+                  Pick a window to see the live count.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
 
         <div
           style={{

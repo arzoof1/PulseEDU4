@@ -305,6 +305,51 @@ export function hasChart(subject: Subject, grade: number): boolean {
   return chartFor(subject, grade) !== null;
 }
 
+// Public: minimum scale score for a given whole level (1..5) on the
+// chart selected by subject + chart-grade. Returns null when no chart
+// exists for that (subject, grade). Used by the Cusp Composer to
+// compute "distance from cut" against a real chart boundary.
+export function levelMin(
+  subject: Subject,
+  chartGrade: number,
+  level: 1 | 2 | 3 | 4 | 5,
+): number | null {
+  const c = chartFor(subject, chartGrade);
+  if (!c) return null;
+  switch (level) {
+    case 1:
+      return c.L1Low[0];
+    case 2:
+      return c.L2Low[0];
+    case 3:
+      return c.L3[0];
+    case 4:
+      return c.L4[0];
+    case 5:
+      return c.L5[0];
+  }
+}
+
+// Public: pick the chart-grade used for a given window.
+//   - PM1/PM2: student's current grade.
+//   - PM3:     student's prior grade (3rd graders fall back to G3).
+//   - EOC subjects: chart is grade-agnostic; return currentGrade
+//     unchanged (chartFor ignores it).
+//
+// Returns the grade that should be passed to chartFor / levelMin so
+// callers get the same chart the placement helpers already use.
+export function chartGradeFor(
+  subject: Subject,
+  currentGrade: number,
+  window: string,
+): number {
+  if (subject === "algebra1" || subject === "geometry") return currentGrade;
+  if (window !== "pm3") return currentGrade;
+  const prior = currentGrade - 1;
+  // 3rd-grade fallback: no prior chart, use current. Matches placePm3.
+  return chartFor(subject, prior) ? prior : currentGrade;
+}
+
 // Place a raw scale score on a given chart. Returns null if no chart
 // exists or if the score falls outside all bands (defensive — FAST
 // scores should always land somewhere).
