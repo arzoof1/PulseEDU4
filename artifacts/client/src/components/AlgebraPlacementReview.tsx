@@ -210,7 +210,9 @@ export default function AlgebraPlacementReview({
         {data && (
           <span style={{ color: "var(--text-subtle, #6b7280)", fontSize: 13 }}>
             · {data.schoolYear} · {data.rows.length} student
-            {data.rows.length === 1 ? "" : "s"} · {data.overrideCount} opt-out
+            {data.rows.length === 1 ? "" : "s"} (L5 {data.levelCounts.l5} · L4{" "}
+            {data.levelCounts.l4} · L3 {data.levelCounts.l3}) ·{" "}
+            {data.overrideCount} opt-out
             {data.overrideCount === 1 ? "" : "s"}
           </span>
         )}
@@ -276,86 +278,151 @@ export default function AlgebraPlacementReview({
                 <th style={{ padding: 6 }}>SIS ID</th>
                 <th style={{ padding: 6 }}>Student</th>
                 <th style={{ padding: 6 }}>Trajectory (recent → older)</th>
+                <th
+                  style={{ padding: 6 }}
+                  title="Number Sense & Operations — current-year PM3 strand mastery"
+                >
+                  NSO
+                </th>
+                <th
+                  style={{ padding: 6 }}
+                  title="Algebraic Reasoning — current-year PM3 strand mastery (sort key)"
+                >
+                  AR ↑
+                </th>
                 <th style={{ padding: 6 }}>Placement</th>
                 <th style={{ padding: 6 }}>Override</th>
                 {data.canSaveOverride && <th style={{ padding: 6 }}></th>}
               </tr>
             </thead>
             <tbody>
-              {data.rows.map((r) => (
-                <tr key={r.studentId} style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}>
-                  <td style={{ padding: 6, fontFamily: "monospace" }}>
-                    {r.localSisId ?? "—"}
-                  </td>
-                  <td style={{ padding: 6 }}>
-                    {r.lastName}, {r.firstName}
-                  </td>
-                  <td style={{ padding: 6 }}>{r.trajectory.map((p, i) => (
-                    <span key={i}>{levelChip(p)}</span>
-                  ))}</td>
-                  <td style={{ padding: 6 }}>
-                    {r.override ? (
-                      <span style={{ color: "#92400e", fontWeight: 600 }}>
-                        {r.proposedPlacement}
-                      </span>
-                    ) : (
-                      <span>{r.proposedPlacement}</span>
-                    )}
-                  </td>
-                  <td style={{ padding: 6, fontSize: 12 }}>
-                    {r.override ? (
-                      <div>
-                        <div title={r.override.justification}>
-                          {r.override.justification.length > 80
-                            ? `${r.override.justification.slice(0, 80)}…`
-                            : r.override.justification}
-                        </div>
-                        <div style={{ color: "var(--text-subtle, #6b7280)" }}>
-                          by {r.override.decidedByName ?? "—"} ·{" "}
-                          {new Date(r.override.decidedAt).toLocaleDateString()}
-                        </div>
-                      </div>
-                    ) : (
-                      <span style={{ color: "var(--text-subtle, #6b7280)" }}>—</span>
-                    )}
-                  </td>
-                  {data.canSaveOverride && (
-                    <td style={{ padding: 6, whiteSpace: "nowrap" }}>
-                      {r.override ? (
-                        <button
-                          type="button"
-                          onClick={() => deleteOverride(r.override!.id)}
-                          style={{
-                            padding: "2px 8px",
-                            fontSize: 12,
-                            borderRadius: 4,
-                            border: "1px solid var(--border, #cbd5e1)",
-                            cursor: "pointer",
-                          }}
-                        >
-                          Remove
-                        </button>
-                      ) : (
-                        <button
-                          type="button"
-                          onClick={() => setModalStudent(r)}
-                          style={{
-                            padding: "2px 8px",
-                            fontSize: 12,
-                            borderRadius: 4,
-                            border: "1px solid #b45309",
-                            background: "#fef3c7",
-                            color: "#92400e",
-                            cursor: "pointer",
-                          }}
-                        >
-                          Opt out…
-                        </button>
-                      )}
+              {([5, 4, 3] as const).flatMap((lvl) => {
+                const sectionRows = data.rows.filter(
+                  (r) => r.currentLevel === lvl,
+                );
+                if (sectionRows.length === 0) return [];
+                const sectionBg =
+                  lvl === 5 ? "#dcfce7" : lvl === 4 ? "#e0f2fe" : "#fef3c7";
+                const sectionFg =
+                  lvl === 5 ? "#166534" : lvl === 4 ? "#075985" : "#92400e";
+                const colSpan = data.canSaveOverride ? 8 : 7;
+                return [
+                  <tr key={`hdr-${lvl}`}>
+                    <td
+                      colSpan={colSpan}
+                      style={{
+                        padding: "6px 8px",
+                        background: sectionBg,
+                        color: sectionFg,
+                        fontWeight: 700,
+                        fontSize: 12,
+                        letterSpacing: 0.2,
+                      }}
+                    >
+                      Level {lvl} — {sectionRows.length} student
+                      {sectionRows.length === 1 ? "" : "s"} · sorted by AR
+                      mastery, weakest first
                     </td>
-                  )}
-                </tr>
-              ))}
+                  </tr>,
+                  ...sectionRows.map((r) => (
+                    <tr
+                      key={r.studentId}
+                      style={{ borderTop: "1px solid var(--border, #e2e8f0)" }}
+                    >
+                      <td style={{ padding: 6, fontFamily: "monospace" }}>
+                        {r.localSisId ?? "—"}
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        {r.lastName}, {r.firstName}
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        {r.trajectory.map((p, i) => (
+                          <span key={i}>{levelChip(p)}</span>
+                        ))}
+                      </td>
+                      <td style={{ padding: 6, whiteSpace: "nowrap" }}>
+                        {strandCell(r.nsoPct)}
+                      </td>
+                      <td style={{ padding: 6, whiteSpace: "nowrap" }}>
+                        {strandCell(r.arPct)}
+                      </td>
+                      <td style={{ padding: 6 }}>
+                        {r.override ? (
+                          <span style={{ color: "#92400e", fontWeight: 600 }}>
+                            {r.proposedPlacement}
+                          </span>
+                        ) : (
+                          <span>{r.proposedPlacement}</span>
+                        )}
+                      </td>
+                      <td style={{ padding: 6, fontSize: 12 }}>
+                        {r.override ? (
+                          <div>
+                            <div title={r.override.justification}>
+                              {r.override.justification.length > 80
+                                ? `${r.override.justification.slice(0, 80)}…`
+                                : r.override.justification}
+                            </div>
+                            <div
+                              style={{
+                                color: "var(--text-subtle, #6b7280)",
+                              }}
+                            >
+                              by {r.override.decidedByName ?? "—"} ·{" "}
+                              {new Date(
+                                r.override.decidedAt,
+                              ).toLocaleDateString()}
+                            </div>
+                          </div>
+                        ) : (
+                          <span
+                            style={{ color: "var(--text-subtle, #6b7280)" }}
+                          >
+                            —
+                          </span>
+                        )}
+                      </td>
+                      {data.canSaveOverride && (
+                        <td style={{ padding: 6, whiteSpace: "nowrap" }}>
+                          {r.override ? (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                deleteOverride(r.override!.id)
+                              }
+                              style={{
+                                padding: "2px 8px",
+                                fontSize: 12,
+                                borderRadius: 4,
+                                border: "1px solid var(--border, #cbd5e1)",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Remove
+                            </button>
+                          ) : (
+                            <button
+                              type="button"
+                              onClick={() => setModalStudent(r)}
+                              style={{
+                                padding: "2px 8px",
+                                fontSize: 12,
+                                borderRadius: 4,
+                                border: "1px solid #b45309",
+                                background: "#fef3c7",
+                                color: "#92400e",
+                                cursor: "pointer",
+                              }}
+                            >
+                              Opt out…
+                            </button>
+                          )}
+                        </td>
+                      )}
+                    </tr>
+                  )),
+                ];
+              })}
             </tbody>
           </table>
         </div>
