@@ -96,9 +96,17 @@ interface SubjectBlock {
   bucket: Bucket;
   priorYearScore: number | null;
   priorYearBq: boolean;
-  // Multi-year PM3 history from the FL Florida historical importer
-  // (newest-first). Empty when no prior-year rows exist. PM3-only.
-  history: Array<{ schoolYear: string; pm3: number }>;
+  // Most-recent prior-year PM3 from the FL historical importer. Rendered
+  // as the leftmost pill in the chronological story
+  // Prior → PM1 → PM2 → PM3 → LG. Null when no historical row has been
+  // uploaded for this (student, subject). Placement is computed against
+  // the prior-grade chart on the server; null for EOC subjects (Algebra
+  // 1 / Geometry) where the prior-grade chart doesn't apply.
+  priorPm3: {
+    schoolYear: string;
+    pm3: number;
+    placement: Placement | null;
+  } | null;
   noChart: boolean;
 }
 
@@ -736,6 +744,7 @@ function SubjectCells({
   block,
   subjectLabel,
   showLg,
+  showPriorPm3,
   showPm3,
   showPm1,
   showPm2,
@@ -743,6 +752,7 @@ function SubjectCells({
   block: SubjectBlock;
   subjectLabel: string;
   showLg: boolean;
+  showPriorPm3: boolean;
   showPm3: boolean;
   showPm1: boolean;
   showPm2: boolean;
@@ -750,9 +760,10 @@ function SubjectCells({
   // colspan shrinks to match the actually-rendered cells so the "n/a"
   // row still exactly fills the subject group.
   const groupCols =
-    (showPm3 ? 1 : 0) +
+    (showPriorPm3 ? 1 : 0) +
     (showPm1 ? 1 : 0) +
     (showPm2 ? 1 : 0) +
+    (showPm3 ? 1 : 0) +
     (showLg ? 1 : 0);
   if (block.noChart) {
     if (groupCols === 0) return null;
@@ -775,48 +786,44 @@ function SubjectCells({
     padding: "6px 6px",
     textAlign: "center",
   };
-  // Per product preference, PM3 is the most-recent / most important
-  // score and renders first, followed by the older PM1 and PM2, then
-  // the LG bucket. The first visible cell carries the group divider.
+  // True chronological order: Prior (last year's PM3) → PM1 (fall) →
+  // PM2 (winter) → PM3 (spring) → LG bucket. Deltas read naturally
+  // left-to-right, each one comparing against the immediately previous
+  // window so the eye can scan the trajectory across the row.
   let dividerUsed = false;
   const dividerStyle = (): React.CSSProperties => {
     if (dividerUsed) return cell;
     dividerUsed = true;
     return { ...cell, ...GROUP_DIVIDER };
   };
+  const prior = block.priorPm3;
   return (
     <>
-      {showPm3 && (
+      {showPriorPm3 && (
         <td style={dividerStyle()}>
-          <ScorePill
-            score={block.pm3}
-            placement={block.pm3Placement}
-            pmLabel={`${subjectLabel} PM3`}
-          />
-          <PmDelta from={block.pm2} to={block.pm3} fromLabel="PM2" />
-          {block.history.length > 0 && (
-            <div
-              title={block.history
-                .map((h) => `${h.schoolYear} PM3: ${h.pm3}`)
-                .join("  •  ")}
-              style={{
-                marginTop: 3,
-                fontSize: 10,
-                lineHeight: 1.2,
-                color: "#6b7280",
-                whiteSpace: "nowrap",
-              }}
-            >
-              {block.history.map((h, i) => (
-                <span key={h.schoolYear}>
-                  {i > 0 && " · "}
-                  <span style={{ color: "#9ca3af" }}>{h.schoolYear}</span>{" "}
-                  <span style={{ color: "#374151", fontWeight: 600 }}>
-                    {h.pm3}
-                  </span>
-                </span>
-              ))}
-            </div>
+          {prior ? (
+            <>
+              <ScorePill
+                score={prior.pm3}
+                placement={prior.placement}
+                pmLabel={`${subjectLabel} prior-year PM3 (${prior.schoolYear})`}
+              />
+              <div
+                title={`${prior.schoolYear} PM3 from historical import`}
+                style={{
+                  marginTop: 2,
+                  fontSize: 10,
+                  lineHeight: 1.2,
+                  color: "#9ca3af",
+                  fontWeight: 500,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {prior.schoolYear}
+              </div>
+            </>
+          ) : (
+            <span style={{ color: "#d1d5db", fontSize: 12 }}>—</span>
           )}
         </td>
       )}
@@ -827,6 +834,17 @@ function SubjectCells({
             placement={block.pm1Placement}
             pmLabel={`${subjectLabel} PM1`}
           />
+          {/* Prior-PM3 → PM1 is a cross-year comparison (different
+              chart, different grade), so we only render the delta when
+              the user has the Prior column visible — otherwise the
+              "from Prior" label has no anchor on screen. */}
+          {showPriorPm3 && (
+            <PmDelta
+              from={prior?.pm3 ?? null}
+              to={block.pm1}
+              fromLabel="Prior"
+            />
+          )}
         </td>
       )}
       {showPm2 && (
@@ -837,6 +855,16 @@ function SubjectCells({
             pmLabel={`${subjectLabel} PM2`}
           />
           <PmDelta from={block.pm1} to={block.pm2} fromLabel="PM1" />
+        </td>
+      )}
+      {showPm3 && (
+        <td style={dividerStyle()}>
+          <ScorePill
+            score={block.pm3}
+            placement={block.pm3Placement}
+            pmLabel={`${subjectLabel} PM3`}
+          />
+          <PmDelta from={block.pm2} to={block.pm3} fromLabel="PM2" />
         </td>
       )}
       {showLg && (
@@ -1214,6 +1242,7 @@ export default function TeacherRosterPage({
     lg: boolean;
     bq: boolean;
     invisible: boolean;
+    priorPm3: boolean;
     pm3: boolean;
     pm1: boolean;
     pm2: boolean;
@@ -1223,6 +1252,7 @@ export default function TeacherRosterPage({
     lg: true,
     bq: true,
     invisible: true,
+    priorPm3: true,
     pm3: true,
     pm1: true,
     pm2: true,
@@ -1242,6 +1272,7 @@ export default function TeacherRosterPage({
         lg: parsed.lg ?? true,
         bq: parsed.bq ?? true,
         invisible: parsed.invisible ?? true,
+        priorPm3: parsed.priorPm3 ?? true,
         pm3: parsed.pm3 ?? true,
         pm1: parsed.pm1 ?? true,
         pm2: parsed.pm2 ?? true,
@@ -1574,7 +1605,7 @@ export default function TeacherRosterPage({
         <HowToSection title="What the columns mean">
           <ul style={howtoListStyle}>
             <li><strong>LG / BQ</strong> — Learning Gains and Bottom Quartile flags from the latest FAST window.</li>
-            <li><strong>PM1 / PM2 / PM3</strong> — FAST Progress Monitoring scores.</li>
+            <li><strong>Prior → PM1 → PM2 → PM3</strong> — last year's spring PM3 (from the historical importer) followed by this year's three FAST Progress Monitoring windows, in chronological order. Small "+N from PMx" deltas under each pill show point-change since the previous window.</li>
             <li><strong>Programs</strong> — service flags driving accommodations.</li>
             <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects.</li>
             <li>
@@ -1731,7 +1762,7 @@ export default function TeacherRosterPage({
           color: "#374151",
         }}
       >
-        <span>Pills: PM3 / PM1 / PM2 (sub-level on current chart; PM3 on prior-grade chart)</span>
+        <span>Pills: Prior PM3 → PM1 → PM2 → PM3 (chronological; sub-level on current chart, PM3 + Prior on prior-grade chart)</span>
         <span style={{ display: "inline-flex", alignItems: "center", gap: 4, flexWrap: "wrap" }}>
           LG bucket = pts to next sub-level (Low1 → Mid1 → High1 → Low2 → High2 → L3 → L4 → L5). Color = current FAST level:
           <BucketIcon
@@ -1862,6 +1893,17 @@ export default function TeacherRosterPage({
         }}
       >
         <span style={{ fontWeight: 600 }}>Show:</span>
+        <label
+          style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
+          title="Show or hide the prior-year PM3 column (most-recent historical PM3 from the FL importer)"
+        >
+          <input
+            type="checkbox"
+            checked={visibility.priorPm3}
+            onChange={() => toggleVis("priorPm3")}
+          />
+          Prior PM3
+        </label>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the PM3 column for both ELA and Math"
@@ -2015,9 +2057,10 @@ export default function TeacherRosterPage({
                 </th>
                 {(() => {
                   const groupCols =
-                    (visibility.pm3 ? 1 : 0) +
+                    (visibility.priorPm3 ? 1 : 0) +
                     (visibility.pm1 ? 1 : 0) +
                     (visibility.pm2 ? 1 : 0) +
+                    (visibility.pm3 ? 1 : 0) +
                     (visibility.lg ? 1 : 0);
                   if (groupCols === 0) return null;
                   return (
@@ -2075,9 +2118,17 @@ export default function TeacherRosterPage({
                   };
                   return (
                     <Fragment key={group}>
-                      {visibility.pm3 && <th style={div()}>PM3</th>}
+                      {visibility.priorPm3 && (
+                        <th
+                          style={div()}
+                          title="Most-recent prior-year PM3 from the FL historical importer. Renders as a real pill (color-coded against last year's grade chart). Use it to spot summer regression at a glance."
+                        >
+                          Prior
+                        </th>
+                      )}
                       {visibility.pm1 && <th style={div()}>PM1</th>}
                       {visibility.pm2 && <th style={div()}>PM2</th>}
+                      {visibility.pm3 && <th style={div()}>PM3</th>}
                       {visibility.lg && <th style={div()}>LG</th>}
                     </Fragment>
                   );
@@ -2297,6 +2348,7 @@ export default function TeacherRosterPage({
                     block={row.ela}
                     subjectLabel="ELA"
                     showLg={visibility.lg}
+                    showPriorPm3={visibility.priorPm3}
                     showPm3={visibility.pm3}
                     showPm1={visibility.pm1}
                     showPm2={visibility.pm2}
@@ -2305,6 +2357,7 @@ export default function TeacherRosterPage({
                     block={row.math}
                     subjectLabel="Math"
                     showLg={visibility.lg}
+                    showPriorPm3={visibility.priorPm3}
                     showPm3={visibility.pm3}
                     showPm1={visibility.pm1}
                     showPm2={visibility.pm2}

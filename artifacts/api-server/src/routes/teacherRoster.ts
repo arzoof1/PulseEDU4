@@ -126,6 +126,16 @@ function subtractSchoolDays(n: number): Date {
   return d;
 }
 
+interface PriorPm3 {
+  // School-year label (e.g. "24-25") from the FL historical importer.
+  schoolYear: string;
+  pm3: number;
+  // Placement is computed against the PRIOR grade's chart (the year
+  // this PM3 was actually administered), so the color-banded pill
+  // reads as "end of last year's grade" not "end of this year's."
+  placement: PlacementWithGap | null;
+}
+
 interface SubjectBlock {
   pm1: number | null;
   pm2: number | null;
@@ -139,11 +149,14 @@ interface SubjectBlock {
   bucket: BucketInfo;
   priorYearScore: number | null;
   priorYearBq: boolean;
-  // Multi-year PM3 history (newest-first) from the FL Florida importer's
-  // historical mode. Empty array when no historical rows exist for this
-  // (student, subject). PM3-only by importer contract. Window size is
-  // bounded by school_settings.fast_history_years_visible (1..5).
-  history: FastHistoryEntry[];
+  // Most-recent prior-year PM3 from the FL Florida importer's
+  // historical mode (the row tagged is_historical=true). Rendered as
+  // a real pill in its own column on the roster — the leftmost cell
+  // in the chronological story Prior → PM1 → PM2 → PM3 → LG. Null
+  // when no historical row has been uploaded for this (student,
+  // subject) yet. Only one prior year is surfaced on the roster;
+  // multi-year history still lives on the student profile FAST card.
+  priorPm3: PriorPm3 | null;
   // True when no chart exists for this subject/grade combo (e.g. Algebra
   // 1 / Geometry / Math past G8). Client uses this to render only a
   // "—" instead of empty pills.
@@ -157,6 +170,48 @@ function buildSubjectBlock(
   history: FastHistoryEntry[],
 ): SubjectBlock {
   const noChart = !hasChart(subject, grade);
+  // Most-recent prior-year PM3, with placement computed against the
+  // chart for the grade the student was IN when they took the test
+  // (i.e. current grade − 1). We deliberately use `placeOnChart` here
+  // rather than `placePm3`: `placePm3` is a current-PM3 convenience
+  // that internally subtracts a grade (it interprets its arg as the
+  // student's *current* grade and looks up the prior-grade chart).
+  // For a historical row we already know the test-administration grade
+  // directly, so `placeOnChart(score, subject, priorGrade)` produces
+  // the correct band — no double subtraction.
+  //
+  // Caveats this implementation accepts (logged for follow-up):
+  //   * Retention/skip: we assume prior test grade = current − 1.
+  //     For a retained student that's wrong (last-year PM3 was the
+  //     same grade); for a skip it's wrong in the other direction.
+  //     The FL historical importer doesn't currently capture grade-
+  //     at-test, so there's no reliable signal to disambiguate. The
+  //     score number on the pill stays correct in all cases — only
+  //     the color band could mis-label for these edge cases.
+  //   * Grade < 1 / no chart / EOC subjects → placement: null
+  //     (pill renders score only, no color band). Safer than a
+  //     misleading band.
+  const priorPm3: PriorPm3 | null = (() => {
+    const top = history[0];
+    if (!top) return null;
+    const priorGrade = grade - 1;
+    const canPlace =
+      priorGrade >= 1 &&
+      (subject === "ela" || subject === "math") &&
+      hasChart(subject, priorGrade);
+    return {
+      schoolYear: top.schoolYear,
+      pm3: top.pm3,
+      placement: canPlace
+        ? withGap(
+            placeOnChart(top.pm3, subject, priorGrade),
+            top.pm3,
+            subject,
+            priorGrade,
+          )
+        : null,
+    };
+  })();
   if (!row) {
     return {
       pm1: null,
@@ -174,7 +229,7 @@ function buildSubjectBlock(
       },
       priorYearScore: null,
       priorYearBq: false,
-      history,
+      priorPm3,
       noChart,
     };
   }
@@ -216,7 +271,7 @@ function buildSubjectBlock(
     bucket,
     priorYearScore: row.priorYearScore,
     priorYearBq: row.priorYearBq,
-    history,
+    priorPm3,
     noChart,
   };
 }
