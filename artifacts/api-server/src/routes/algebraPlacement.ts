@@ -29,6 +29,7 @@ import { and, desc, eq, inArray } from "drizzle-orm";
 import {
   db,
   studentFastScoresTable,
+  studentFastItemResponsesTable,
   studentsTable,
   schoolsTable,
   algebraPlacementOverridesTable,
@@ -143,6 +144,33 @@ interface PlacementRow {
   // Derived: "Algebra I" by default; flipped to opt-out when override
   // is present.
   proposedPlacement: string;
+  // Current-year (PM3) strand mastery percent for Number Sense &
+  // Operations and Algebraic Reasoning. Null when item-level data
+  // is unavailable. Used for placement defensibility — a high-level
+  // student with a weak AR strand is worth a second look.
+  nsoPct: number | null;
+  arPct: number | null;
+  // Convenience: the current-year level (l3/l4/l5). Always present
+  // because cohort filter requires currentLevel >= 3.
+  currentLevel: 3 | 4 | 5;
+}
+
+// FAST strand category-name matchers. The importer uses the raw
+// FLDOE category labels (e.g. "1. Number Sense and Operations",
+// "2. Algebraic Reasoning"). 7th-grade Math PM3 has one row per
+// strand per item; we sum (earned, possible) across all items in a
+// strand and compute a mastery percent. The matchers tolerate the
+// number prefix being absent + match case-insensitively + handle the
+// two combined-strand labels FAST uses at lower grades by treating
+// them as BOTH NSO and AR (since this report is 7th-grade-only the
+// combined labels effectively never fire, but the guard is cheap).
+function categoryMatchesNSO(category: string | null): boolean {
+  if (!category) return false;
+  return /number sense and operations/i.test(category);
+}
+function categoryMatchesAR(category: string | null): boolean {
+  if (!category) return false;
+  return /algebraic reasoning/i.test(category);
 }
 
 async function buildReport(schoolId: number): Promise<{
@@ -150,6 +178,7 @@ async function buildReport(schoolId: number): Promise<{
   windowVisible: number;
   rows: PlacementRow[];
   overrideCount: number;
+  levelCounts: { l5: number; l4: number; l3: number };
 }> {
   const schoolYear = await currentSchoolYearLabelForSchool(schoolId);
 
@@ -184,7 +213,13 @@ async function buildReport(schoolId: number): Promise<{
       ),
     );
   if (seventhGraders.length === 0) {
-    return { schoolYear, windowVisible, rows: [], overrideCount: 0 };
+    return {
+      schoolYear,
+      windowVisible,
+      rows: [],
+      overrideCount: 0,
+      levelCounts: { l5: 0, l4: 0, l3: 0 },
+    };
   }
   const studentIds = seventhGraders.map((s) => s.studentId);
 
@@ -207,6 +242,58 @@ async function buildReport(schoolId: number): Promise<{
         inArray(studentFastScoresTable.studentId, studentIds),
       ),
     );
+
+  // 2b) Pull current-year Math PM3 item responses for the cohort so
+  //     we can compute per-strand mastery (NSO / AR). Item responses
+  //     only exist for current-year imports (the Phase-1 historical
+  //     importer is score-only), so we don't query prior years here.
+  const itemRows = await db
+    .select({
+      studentId: studentFastItemResponsesTable.studentId,
+      category: studentFastItemResponsesTable.category,
+      pointsEarned: studentFastItemResponsesTable.pointsEarned,
+      pointsPossible: studentFastItemResponsesTable.pointsPossible,
+    })
+    .from(studentFastItemResponsesTable)
+    .where(
+      and(
+        eq(studentFastItemResponsesTable.schoolId, schoolId),
+        eq(studentFastItemResponsesTable.subject, "math"),
+        eq(studentFastItemResponsesTable.schoolYear, schoolYear),
+        eq(studentFastItemResponsesTable.window, "pm3"),
+        inArray(studentFastItemResponsesTable.studentId, studentIds),
+      ),
+    );
+
+  // Aggregate per (student, strand). Stored as
+  // Map<studentId, { nso: {e,p}, ar: {e,p} }>.
+  type StrandTally = { earned: number; possible: number };
+  const strandByStudent = new Map<
+    string,
+    { nso: StrandTally; ar: StrandTally }
+  >();
+  for (const r of itemRows) {
+    const e = r.pointsEarned ?? 0;
+    const p = r.pointsPossible ?? 0;
+    if (p <= 0) continue;
+    let agg = strandByStudent.get(r.studentId);
+    if (!agg) {
+      agg = { nso: { earned: 0, possible: 0 }, ar: { earned: 0, possible: 0 } };
+      strandByStudent.set(r.studentId, agg);
+    }
+    if (categoryMatchesNSO(r.category)) {
+      agg.nso.earned += e;
+      agg.nso.possible += p;
+    }
+    if (categoryMatchesAR(r.category)) {
+      agg.ar.earned += e;
+      agg.ar.possible += p;
+    }
+  }
+  function pctOrNull(t: StrandTally | undefined): number | null {
+    if (!t || t.possible <= 0) return null;
+    return Math.round((t.earned / t.possible) * 100);
+  }
 
   // 3) Pull every override on file for this school+year. Map by
   //    student so we can attach in O(1) below.
@@ -276,6 +363,7 @@ async function buildReport(schoolId: number): Promise<{
     }
 
     const ov = overrideByStudent.get(s.studentId);
+    const strand = strandByStudent.get(s.studentId);
     rows.push({
       studentId: s.studentId,
       localSisId: s.localSisId,
@@ -295,19 +383,48 @@ async function buildReport(schoolId: number): Promise<{
           }
         : null,
       proposedPlacement: ov ? "Regular 8th Math (parent opt-out)" : "Algebra I",
+      nsoPct: pctOrNull(strand?.nso),
+      arPct: pctOrNull(strand?.ar),
+      currentLevel: currentLevel as 3 | 4 | 5,
     });
   }
 
-  // Sort: name A→Z to make the printout master-scheduler friendly.
-  rows.sort((a, b) =>
-    `${a.lastName} ${a.firstName}`.localeCompare(`${b.lastName} ${b.firstName}`),
-  );
+  // Sort: group by current PM3 level (L5 → L4 → L3) so the printable
+  // sections line up with the on-screen breakdown. Within each level,
+  // sort by AR strand mastery ascending (weakest first) so the
+  // most placement-defensibility-relevant kids float to the top of
+  // each section. Null AR sorts to the bottom of its level (no
+  // strand data — typically a Phase-1 historical-only student).
+  // Tie-break by last name A→Z for stable printout ordering.
+  const levelOrder: Record<3 | 4 | 5, number> = { 5: 0, 4: 1, 3: 2 };
+  rows.sort((a, b) => {
+    const lv = levelOrder[a.currentLevel] - levelOrder[b.currentLevel];
+    if (lv !== 0) return lv;
+    const aNull = a.arPct == null;
+    const bNull = b.arPct == null;
+    if (aNull && !bNull) return 1;
+    if (!aNull && bNull) return -1;
+    if (!aNull && !bNull && a.arPct !== b.arPct) {
+      return (a.arPct as number) - (b.arPct as number);
+    }
+    return `${a.lastName} ${a.firstName}`.localeCompare(
+      `${b.lastName} ${b.firstName}`,
+    );
+  });
+
+  const levelCounts = { l5: 0, l4: 0, l3: 0 };
+  for (const r of rows) {
+    if (r.currentLevel === 5) levelCounts.l5++;
+    else if (r.currentLevel === 4) levelCounts.l4++;
+    else levelCounts.l3++;
+  }
 
   return {
     schoolYear,
     windowVisible,
     rows,
     overrideCount: rows.filter((r) => r.override != null).length,
+    levelCounts,
   };
 }
 
@@ -347,6 +464,8 @@ router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
     "grade",
     "current_pm3_score",
     "current_pm3_level",
+    "nso_pct",
+    "ar_pct",
     "trajectory",
     "proposed_placement",
     "override_decision",
@@ -362,7 +481,14 @@ router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
     }
     return s;
   };
-  const lines: string[] = [header.join(",")];
+  // Preamble: cohort summary as CSV comments (lines starting with #
+  // — Excel/Sheets treat them as text rows; downstream consumers can
+  // skip lines that don't start with the header word).
+  const lines: string[] = [
+    `# Algebra I Placement Review · ${report.schoolYear}`,
+    `# Cohort: ${report.rows.length} · L5: ${report.levelCounts.l5} · L4: ${report.levelCounts.l4} · L3: ${report.levelCounts.l3} · Overrides: ${report.overrideCount}`,
+    header.join(","),
+  ];
   for (const r of report.rows) {
     const current = r.trajectory[0];
     const trajStr = r.trajectory
@@ -379,6 +505,8 @@ router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
         r.grade,
         current?.score ?? "",
         current?.level != null ? `L${current.level}` : "",
+        r.nsoPct != null ? `${r.nsoPct}%` : "",
+        r.arPct != null ? `${r.arPct}%` : "",
         trajStr,
         r.proposedPlacement,
         r.override?.decision ?? "",
@@ -421,6 +549,7 @@ router.get("/algebra-placement/pdf", async (req: Request, res: Response) => {
     reportUrl,
     generatedAt: new Date(),
     overrideCount: report.overrideCount,
+    levelCounts: report.levelCounts,
     rows: report.rows.map((r) => ({
       studentId: r.studentId,
       localSisId: r.localSisId,
@@ -433,6 +562,9 @@ router.get("/algebra-placement/pdf", async (req: Request, res: Response) => {
       justification: r.override?.justification ?? null,
       decidedByName: r.override?.decidedByName ?? null,
       decidedAt: r.override?.decidedAt ? new Date(r.override.decidedAt) : null,
+      nsoPct: r.nsoPct,
+      arPct: r.arPct,
+      currentLevel: r.currentLevel,
     })),
   });
   res.setHeader("Content-Type", "application/pdf");

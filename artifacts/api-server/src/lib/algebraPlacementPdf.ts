@@ -32,6 +32,11 @@ export interface AlgebraPlacementPdfRow {
   justification: string | null;
   decidedByName: string | null;
   decidedAt: Date | null;
+  // Current-year PM3 strand mastery percent (0..100) or null.
+  nsoPct: number | null;
+  arPct: number | null;
+  // Current-year PM3 level (3, 4, or 5) — drives section grouping.
+  currentLevel: 3 | 4 | 5;
 }
 
 export interface AlgebraPlacementPdfInput {
@@ -45,6 +50,8 @@ export interface AlgebraPlacementPdfInput {
   reportUrl: string;
   generatedAt: Date;
   overrideCount: number;
+  levelCounts: { l5: number; l4: number; l3: number };
+  // Pre-sorted: L5 → L4 → L3, AR-ascending within each level.
   rows: AlgebraPlacementPdfRow[];
 }
 
@@ -129,6 +136,7 @@ export async function renderAlgebraPlacementPdf(
         `Generated: ${fmtDate(input.generatedAt)}`,
         `Report ID: ${input.reportId}`,
         `Cohort size: ${input.rows.length} current 7th grader${input.rows.length === 1 ? "" : "s"} at FAST Math PM3 Level 3+`,
+        `By level: L5 ${input.levelCounts.l5} · L4 ${input.levelCounts.l4} · L3 ${input.levelCounts.l3}`,
         `Overrides on file: ${input.overrideCount}`,
       ]
     ) doc.text(line);
@@ -143,68 +151,127 @@ export async function renderAlgebraPlacementPdf(
         { width: 500 },
       );
 
-    // ----- Roster pages -----
+    // ----- Roster pages, split by current PM3 level -----
+    // Same table layout as before, with NSO/AR columns inserted
+    // between Trajectory and Placement. Each level (L5 → L4 → L3)
+    // gets its own section header band so the master scheduler can
+    // see counts at a glance and tear pages by level if needed.
     const cols = [
-      { w: 28, label: "#" },
-      { w: 70, label: "SIS ID" },
-      { w: 170, label: "Student" },
-      { w: 150, label: "Trajectory" },
-      { w: 140, label: "Placement" },
+      { w: 26, label: "#" },
+      { w: 62, label: "SIS ID" },
+      { w: 130, label: "Student" },
+      { w: 110, label: "Trajectory" },
+      { w: 40, label: "NSO" },
+      { w: 40, label: "AR" },
+      { w: 104, label: "Placement" },
     ];
     const rowH = 22;
+    const sectionBandH = 22;
+    const bottomLimit = doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 4;
 
     doc.addPage();
     drawHeader(doc, title, `Roster`);
     drawFooter(doc, input.reportId, qrBuffer);
-    let y = drawTableHeader(doc, cols, rowH);
+    let y = PAGE_MARGIN + HEADER_HEIGHT + 10;
 
-    const bottomLimit = doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 4;
-    for (let i = 0; i < input.rows.length; i++) {
-      if (y + rowH > bottomLimit) {
+    const levels: Array<3 | 4 | 5> = [5, 4, 3];
+    for (const lvl of levels) {
+      const sectionRows = input.rows.filter((r) => r.currentLevel === lvl);
+      if (sectionRows.length === 0) continue;
+      const countForLvl =
+        lvl === 5
+          ? input.levelCounts.l5
+          : lvl === 4
+            ? input.levelCounts.l4
+            : input.levelCounts.l3;
+
+      // Make sure the section band + table header + at least one row
+      // can fit on the current page; otherwise start a new page so a
+      // section doesn't get an orphan header.
+      if (y + sectionBandH + rowH + rowH > bottomLimit) {
         doc.addPage();
         drawHeader(doc, title, `Roster (cont.)`);
         drawFooter(doc, input.reportId, qrBuffer);
-        y = drawTableHeader(doc, cols, rowH);
+        y = PAGE_MARGIN + HEADER_HEIGHT + 10;
       }
-      const r = input.rows[i];
-      if (i % 2 === 1) {
-        doc
-          .save()
-          .rect(PAGE_MARGIN, y, sumCols(cols), rowH)
-          .fillColor("#f8fafc")
-          .fill()
-          .restore();
+      y = drawSectionBand(doc, cols, y, sectionBandH, lvl, countForLvl);
+      y = drawTableHeaderAt(doc, cols, y, rowH);
+
+      for (let i = 0; i < sectionRows.length; i++) {
+        if (y + rowH > bottomLimit) {
+          doc.addPage();
+          drawHeader(doc, title, `Roster (cont.)`);
+          drawFooter(doc, input.reportId, qrBuffer);
+          y = PAGE_MARGIN + HEADER_HEIGHT + 10;
+          y = drawSectionBand(doc, cols, y, sectionBandH, lvl, countForLvl, true);
+          y = drawTableHeaderAt(doc, cols, y, rowH);
+        }
+        const r = sectionRows[i];
+        if (i % 2 === 1) {
+          doc
+            .save()
+            .rect(PAGE_MARGIN, y, sumCols(cols), rowH)
+            .fillColor("#f8fafc")
+            .fill()
+            .restore();
+        }
+        let x = PAGE_MARGIN;
+        const cells = [
+          String(i + 1),
+          r.localSisId ?? "—",
+          `${r.lastName}, ${r.firstName}`,
+          r.trajectory.join(" ← "),
+          r.nsoPct != null ? `${r.nsoPct}%` : "—",
+          r.arPct != null ? `${r.arPct}%` : "—",
+          r.placement,
+        ];
+        doc.font("Helvetica").fontSize(10).fillColor("#0f172a");
+        for (let ci = 0; ci < cols.length; ci++) {
+          doc.text(cells[ci], x + 6, y + 5, {
+            width: cols[ci].w - 12,
+            ellipsis: true,
+          });
+          x += cols[ci].w;
+        }
+        y += rowH;
       }
-      let x = PAGE_MARGIN;
-      const cells = [
-        String(i + 1),
-        r.localSisId ?? "—",
-        `${r.lastName}, ${r.firstName}`,
-        r.trajectory.join(" ← "),
-        r.placement,
-      ];
-      doc.font("Helvetica").fontSize(10).fillColor("#0f172a");
-      for (let ci = 0; ci < cols.length; ci++) {
-        doc.text(cells[ci], x + 6, y + 5, {
-          width: cols[ci].w - 12,
-          ellipsis: true,
-        });
-        x += cols[ci].w;
-      }
-      y += rowH;
+      // Small gap between sections.
+      y += 6;
     }
 
     doc.end();
   });
 }
 
-function drawTableHeader(
+function drawSectionBand(
+  doc: PDFKit.PDFDocument,
+  cols: { w: number }[],
+  y: number,
+  h: number,
+  level: 3 | 4 | 5,
+  count: number,
+  isContinuation = false,
+): number {
+  const bg = level === 5 ? "#dcfce7" : level === 4 ? "#e0f2fe" : "#fef3c7";
+  const fg = level === 5 ? "#166534" : level === 4 ? "#075985" : "#92400e";
+  doc.save().rect(PAGE_MARGIN, y, sumCols(cols), h).fillColor(bg).fill().restore();
+  doc.font("Helvetica-Bold").fontSize(11).fillColor(fg);
+  doc.text(
+    `Level ${level} — ${count} student${count === 1 ? "" : "s"}${isContinuation ? " (cont.)" : ""}`,
+    PAGE_MARGIN + 8,
+    y + 5,
+    { width: sumCols(cols) - 16 },
+  );
+  return y + h;
+}
+
+function drawTableHeaderAt(
   doc: PDFKit.PDFDocument,
   cols: { w: number; label: string }[],
+  top: number,
   rowH: number,
 ): number {
   const left = PAGE_MARGIN;
-  const top = PAGE_MARGIN + HEADER_HEIGHT + 10;
   let x = left;
   doc.save().rect(left, top, sumCols(cols), rowH).fillColor("#e2e8f0").fill().restore();
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");

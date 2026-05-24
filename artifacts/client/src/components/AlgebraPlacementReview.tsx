@@ -37,6 +37,9 @@ interface PlacementRow {
     decidedAt: string;
   } | null;
   proposedPlacement: string;
+  nsoPct: number | null;
+  arPct: number | null;
+  currentLevel: 3 | 4 | 5;
 }
 
 interface PlacementResponse {
@@ -44,7 +47,35 @@ interface PlacementResponse {
   windowVisible: number;
   rows: PlacementRow[];
   overrideCount: number;
+  levelCounts: { l5: number; l4: number; l3: number };
   canSaveOverride: boolean;
+}
+
+function strandCell(pct: number | null): ReactElement {
+  if (pct == null) {
+    return (
+      <span style={{ color: "var(--text-subtle, #6b7280)" }}>—</span>
+    );
+  }
+  const color =
+    pct < 50 ? "#991b1b" : pct < 70 ? "#92400e" : "#166534";
+  const bg =
+    pct < 50 ? "#fee2e2" : pct < 70 ? "#fef3c7" : "#dcfce7";
+  return (
+    <span
+      style={{
+        display: "inline-block",
+        padding: "2px 6px",
+        borderRadius: 4,
+        background: bg,
+        color,
+        fontSize: 12,
+        fontWeight: 600,
+      }}
+    >
+      {pct}%
+    </span>
+  );
 }
 
 function levelChip(p: TrajectoryPoint): ReactElement {
