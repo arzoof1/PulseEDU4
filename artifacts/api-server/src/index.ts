@@ -166,6 +166,11 @@ async function runSeed(): Promise<void> {
   // alert dismissals). Idempotent — safe on every boot; cheap on already-
   // migrated DBs.
   await ensureWatchlistSchema();
+  // Class Composer "Master Plans" — saved/finalized plan tables for the
+  // scheduler-side lock-and-build workflow. Idempotent. Hoisted above the
+  // watchlist seed because that seed can crash on pre-existing demo rows
+  // (duplicate case_number) and abort the rest of the boot sequence.
+  await ensureClassComposerPlansSchema();
   // Watchlist demo data: 20% of each school's roster gets activity, with a
   // ~3%-of-20% high-concern slice anchoring 3–4 cases. Idempotent per school.
   await seedWatchlistIfEmpty();
