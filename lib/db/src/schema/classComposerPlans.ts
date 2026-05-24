@@ -76,7 +76,11 @@ export interface ClassComposerGroupRecipe {
   window: string;
   arrangement?: "homogeneous" | "balanced" | null;
   eligibilityMaxPct?: number;
+  // Legacy single window — kept for plans locked before the split.
+  // New plans store cuspPointsBelow + cuspPointsAbove explicitly.
   cuspPoints?: number;
+  cuspPointsBelow?: number;
+  cuspPointsAbove?: number;
   cuspDirection?: "both" | "below" | "above" | "strand";
   cuspDoubleCounters?: boolean;
   cuspTrajectory?: boolean;

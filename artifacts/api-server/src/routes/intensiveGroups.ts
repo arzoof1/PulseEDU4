@@ -407,16 +407,38 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   const arrangement =
     req.query.arrangement === "balanced" ? "balanced" : "homogeneous";
 
-  // Cusp params (cusp mode only; ignored otherwise). cuspPoints is
-  // the ± points-from-cut window. cuspDirection selects which side
-  // of which cut to consider. cuspDoubleCounters narrows to kids
+  // Cusp params (cusp mode only; ignored otherwise). cuspPointsBelow
+  // and cuspPointsAbove are the asymmetric ± points-from-cut windows
+  // for below-the-L3-cut and above-the-L3-cut (i.e. below-the-L4-cut)
+  // candidates respectively. Legacy callers can still pass a single
+  // `cuspPoints` value and it applies to both sides — UI was updated
+  // to send the two split values explicitly. cuspDirection selects
+  // which side(s) to consider. cuspDoubleCounters narrows to kids
   // who are ALSO cusp in the other FAST subject (school-grade
   // double-counters). cuspTrajectory narrows to kids who were
   // L3 in an earlier window and slid to L2 in the current window
   // (the "losing ground" cohort).
-  const cuspPoints = Math.max(
+  const cuspPointsLegacy = Math.max(
     1,
     Math.min(60, Number(req.query.cuspPoints) || 15),
+  );
+  const cuspPointsBelow = Math.max(
+    1,
+    Math.min(
+      60,
+      req.query.cuspPointsBelow == null
+        ? cuspPointsLegacy
+        : Number(req.query.cuspPointsBelow) || cuspPointsLegacy,
+    ),
+  );
+  const cuspPointsAbove = Math.max(
+    1,
+    Math.min(
+      60,
+      req.query.cuspPointsAbove == null
+        ? cuspPointsLegacy
+        : Number(req.query.cuspPointsAbove) || cuspPointsLegacy,
+    ),
   );
   const cuspDirectionRaw =
     typeof req.query.cuspDirection === "string" ? req.query.cuspDirection : "";
@@ -614,13 +636,13 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     const l4Min = levelMin(subject as Subject, chartGrade, 4);
     if (l3Min == null || l4Min == null) return false;
 
-    // Below-cut cusp: L2 students within cuspPoints of the L3 floor.
+    // Below-cut cusp: L2 students within cuspPointsBelow of the L3 floor.
     const belowCusp =
-      p.fastLevel === 2 && p.fastScore >= l3Min - cuspPoints;
-    // Above-cut cusp: L3 students within cuspPoints of the L4 floor
+      p.fastLevel === 2 && p.fastScore >= l3Min - cuspPointsBelow;
+    // Above-cut cusp: L3 students within cuspPointsAbove of the L4 floor
     // (i.e. close to slipping up to proficient).
     const aboveCusp =
-      p.fastLevel === 3 && p.fastScore >= l4Min - cuspPoints;
+      p.fastLevel === 3 && p.fastScore >= l4Min - cuspPointsAbove;
     // Strand-cusp: L3 students with at least one Below-strand (<50%)
     // — passing overall but hiding a weakness worth small-grouping.
     const strandCusp = p.fastLevel === 3 && p.hasBelowStrand;
@@ -647,8 +669,8 @@ router.get("/intensive-groups/suggest", async (req, res) => {
       const oL3Min = levelMin(other, oChartGrade, 3);
       const oL4Min = levelMin(other, oChartGrade, 4);
       if (oL3Min == null || oL4Min == null) return false;
-      const oBelow = oLvl === 2 && oScore >= oL3Min - cuspPoints;
-      const oAbove = oLvl === 3 && oScore >= oL4Min - cuspPoints;
+      const oBelow = oLvl === 2 && oScore >= oL3Min - cuspPointsBelow;
+      const oAbove = oLvl === 3 && oScore >= oL4Min - cuspPointsAbove;
       const oStrand = oLvl === 3; // strand check requires re-querying
       // For "strand" direction we can't cheaply re-check the other
       // subject's strand without re-computing categories; require
@@ -716,7 +738,12 @@ router.get("/intensive-groups/suggest", async (req, res) => {
   // for the live calculator readout. Null in other modes.
   let cusp:
     | {
+        // Legacy single value kept on the response so older clients keep
+        // working; equals the max of below/above as a "widest window"
+        // proxy. New clients should read cuspPointsBelow/cuspPointsAbove.
         cuspPoints: number;
+        cuspPointsBelow: number;
+        cuspPointsAbove: number;
         cuspDirection: "both" | "below" | "above" | "strand";
         cuspDoubleCounters: boolean;
         cuspTrajectory: boolean;
@@ -738,15 +765,17 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     const l3 = levelMin(subject as Subject, cg, 3);
     const l4 = levelMin(subject as Subject, cg, 4);
     cusp = {
-      cuspPoints,
+      cuspPoints: Math.max(cuspPointsBelow, cuspPointsAbove),
+      cuspPointsBelow,
+      cuspPointsAbove,
       cuspDirection,
       cuspDoubleCounters,
       cuspTrajectory,
       chartGradeUsed: cg,
       l3Min: l3,
       l4Min: l4,
-      belowCutFloor: l3 != null ? l3 - cuspPoints : null,
-      aboveCutFloor: l4 != null ? l4 - cuspPoints : null,
+      belowCutFloor: l3 != null ? l3 - cuspPointsBelow : null,
+      aboveCutFloor: l4 != null ? l4 - cuspPointsAbove : null,
       sectionsNeeded: Math.max(1, Math.ceil(eligible.length / Math.max(1, seats))),
     };
   }

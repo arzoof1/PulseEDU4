@@ -47,6 +47,8 @@ type Arrangement = "homogeneous" | "balanced";
 type CuspDirection = "both" | "below" | "above" | "strand";
 interface CuspSummary {
   cuspPoints: number;
+  cuspPointsBelow?: number;
+  cuspPointsAbove?: number;
   cuspDirection: CuspDirection;
   cuspDoubleCounters: boolean;
   cuspTrajectory: boolean;
@@ -80,6 +82,8 @@ interface PlanGroupRecipe {
   arrangement?: Arrangement | null;
   eligibilityMaxPct?: number;
   cuspPoints?: number;
+  cuspPointsBelow?: number;
+  cuspPointsAbove?: number;
   cuspDirection?: CuspDirection;
   cuspDoubleCounters?: boolean;
   cuspTrajectory?: boolean;
@@ -222,10 +226,14 @@ export default function IntensiveGroupComposerPage({
   const [seats, setSeats] = useState(22);
   const [eligibilityMaxPct, setEligibilityMaxPct] = useState(70);
 
-  // Cusp-mode controls. cuspPoints is the ± points-from-cut window.
-  // Defaults: 15 points, both directions, double-counters off,
-  // trajectory off. Server enforces the same defaults if absent.
-  const [cuspPoints, setCuspPoints] = useState(15);
+  // Cusp-mode controls. Below + above point windows are independent
+  // so an admin can cast a wider net on the at-risk side (e.g. 15 pts
+  // below the L3 cut) than on the proficient-but-fragile side
+  // (e.g. 5 pts above). Defaults: 15/15, both directions, double-
+  // counters off, trajectory off. Server enforces the same defaults
+  // if absent.
+  const [cuspPointsBelow, setCuspPointsBelow] = useState(15);
+  const [cuspPointsAbove, setCuspPointsAbove] = useState(15);
   const [cuspDirection, setCuspDirection] = useState<CuspDirection>("both");
   const [cuspDoubleCounters, setCuspDoubleCounters] = useState(false);
   const [cuspTrajectory, setCuspTrajectory] = useState(false);
@@ -311,7 +319,8 @@ export default function IntensiveGroupComposerPage({
       params.set("arrangement", arrangement);
     }
     if (mode === "cusp") {
-      params.set("cuspPoints", String(cuspPoints));
+      params.set("cuspPointsBelow", String(cuspPointsBelow));
+      params.set("cuspPointsAbove", String(cuspPointsAbove));
       params.set("cuspDirection", cuspDirection);
       if (cuspDoubleCounters) params.set("cuspDoubleCounters", "true");
       if (cuspTrajectory) params.set("cuspTrajectory", "true");
@@ -400,7 +409,8 @@ export default function IntensiveGroupComposerPage({
     grade,
     seats,
     selectedWindow,
-    cuspPoints,
+    cuspPointsBelow,
+    cuspPointsAbove,
     cuspDirection,
     cuspDoubleCounters,
     cuspTrajectory,
@@ -465,7 +475,14 @@ export default function IntensiveGroupComposerPage({
           : c?.cuspDirection === "strand"
             ? "Strand cusp"
             : "Both";
-    return `Cusp · ${dirLabel} · ±${c?.cuspPoints ?? 15} pts · ${winLabel}`;
+    const pBelow = c?.cuspPointsBelow ?? c?.cuspPoints ?? 15;
+    const pAbove = c?.cuspPointsAbove ?? c?.cuspPoints ?? 15;
+    let pts: string;
+    if (c?.cuspDirection === "below") pts = `±${pBelow} pts below cut`;
+    else if (c?.cuspDirection === "above") pts = `±${pAbove} pts above cut`;
+    else if (c?.cuspDirection === "strand") pts = "strand-based";
+    else pts = pBelow === pAbove ? `±${pBelow} pts` : `−${pBelow} / +${pAbove} pts`;
+    return `Cusp · ${dirLabel} · ${pts} · ${winLabel}`;
   };
 
   const createPlan = async () => {
@@ -564,6 +581,8 @@ export default function IntensiveGroupComposerPage({
         arrangement: result.arrangement,
         eligibilityMaxPct: result.eligibilityMaxPct,
         cuspPoints: result.cusp?.cuspPoints,
+        cuspPointsBelow: result.cusp?.cuspPointsBelow,
+        cuspPointsAbove: result.cusp?.cuspPointsAbove,
         cuspDirection: result.cusp?.cuspDirection,
         cuspDoubleCounters: result.cusp?.cuspDoubleCounters,
         cuspTrajectory: result.cusp?.cuspTrajectory,
@@ -831,11 +850,24 @@ export default function IntensiveGroupComposerPage({
       result.mode === "intensive"
         ? "Intensive (Levels 1–2)"
         : result.mode === "cusp"
-          ? `Cusp · ${cuspDirLabel(result.cusp?.cuspDirection ?? "both")} ` +
-            `(±${result.cusp?.cuspPoints ?? 15} pts` +
-            (result.cusp?.cuspDoubleCounters ? ", double-counters" : "") +
-            (result.cusp?.cuspTrajectory ? ", trajectory" : "") +
-            ")"
+          ? (() => {
+              const c = result.cusp;
+              const dir = c?.cuspDirection ?? "both";
+              const pBelow = c?.cuspPointsBelow ?? c?.cuspPoints ?? 15;
+              const pAbove = c?.cuspPointsAbove ?? c?.cuspPoints ?? 15;
+              let pts: string;
+              if (dir === "below") pts = `±${pBelow} pts`;
+              else if (dir === "above") pts = `±${pAbove} pts`;
+              else if (dir === "strand") pts = "strand-based";
+              else pts =
+                pBelow === pAbove ? `±${pBelow} pts` : `−${pBelow}/+${pAbove} pts`;
+              return (
+                `Cusp · ${cuspDirLabel(dir)} (${pts}` +
+                (c?.cuspDoubleCounters ? ", double-counters" : "") +
+                (c?.cuspTrajectory ? ", trajectory" : "") +
+                ")"
+              );
+            })()
           : result.arrangement === "balanced"
             ? "Regular · Balanced (Levels 1–5)"
             : "Regular · Homogeneous (Levels 1–5)";
@@ -1637,15 +1669,70 @@ export default function IntensiveGroupComposerPage({
                   </label>
                 ))}
               </div>
-              <label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <span style={{ fontWeight: 600 }}>± Points from cut</span>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  opacity:
+                    cuspDirection === "strand" || cuspDirection === "above"
+                      ? 0.5
+                      : 1,
+                }}
+                title={
+                  cuspDirection === "above"
+                    ? "Below-cut window doesn't apply when only Above-cut is selected."
+                    : cuspDirection === "strand"
+                      ? "Point windows don't apply to Strand cusp."
+                      : "Points below the L3 cut to include (L2 students close to passing)."
+                }
+              >
+                <span style={{ fontWeight: 600 }}>± Pts below cut</span>
                 <input
                   type="number"
                   min={1}
                   max={60}
-                  value={cuspPoints}
+                  disabled={
+                    cuspDirection === "strand" || cuspDirection === "above"
+                  }
+                  value={cuspPointsBelow}
                   onChange={(e) =>
-                    setCuspPoints(
+                    setCuspPointsBelow(
+                      Math.max(1, Math.min(60, Number(e.target.value) || 15)),
+                    )
+                  }
+                  style={{ padding: 4, width: 70 }}
+                />
+              </label>
+              <label
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  gap: 6,
+                  opacity:
+                    cuspDirection === "strand" || cuspDirection === "below"
+                      ? 0.5
+                      : 1,
+                }}
+                title={
+                  cuspDirection === "below"
+                    ? "Above-cut window doesn't apply when only Below-cut is selected."
+                    : cuspDirection === "strand"
+                      ? "Point windows don't apply to Strand cusp."
+                      : "Points below the L4 cut to include (L3 students close to proficient)."
+                }
+              >
+                <span style={{ fontWeight: 600 }}>± Pts above cut</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={60}
+                  disabled={
+                    cuspDirection === "strand" || cuspDirection === "below"
+                  }
+                  value={cuspPointsAbove}
+                  onChange={(e) =>
+                    setCuspPointsAbove(
                       Math.max(1, Math.min(60, Number(e.target.value) || 15)),
                     )
                   }
