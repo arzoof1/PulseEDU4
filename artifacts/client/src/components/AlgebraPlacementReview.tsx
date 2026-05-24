@@ -296,7 +296,12 @@ export default function AlgebraPlacementReview({
               <tr style={{ textAlign: "left", background: "var(--surface-2, #f1f5f9)" }}>
                 <th style={{ padding: 6 }}>SIS ID</th>
                 <th style={{ padding: 6 }}>Student</th>
-                <th style={{ padding: 6 }}>Trajectory (oldest → newest)</th>
+                <th
+                  style={{ padding: 6 }}
+                  title="Each chip is the student's FAST Math PM3 score for that school year. Color = FAST level (L1 red · L2 orange · L3 green · L4 blue · L5 purple)."
+                >
+                  PM3 scores (oldest → newest)
+                </th>
                 <th
                   style={{ padding: 6 }}
                   title="Number Sense & Operations — current-year PM3 strand mastery"
