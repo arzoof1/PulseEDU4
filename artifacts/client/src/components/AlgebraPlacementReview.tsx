@@ -364,23 +364,30 @@ function OverrideModal({
   const uploadFile = async (file: File) => {
     setErr(null);
     try {
-      const presign = await authFetch("/api/storage/upload-url", {
+      // Storage contract is two-step (see routes/storage.ts):
+      //   POST /api/storage/uploads/request-url → { uploadURL, objectPath }
+      //   PUT  <uploadURL> ← file bytes (GCS-signed)
+      //   persist objectPath as the canonical key; server later binds
+      //   it to this school via bindObjectToSchool.
+      const presign = await authFetch("/api/storage/uploads/request-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ filename: file.name, contentType: file.type }),
       });
-      if (!presign.ok) throw new Error(`upload-url HTTP ${presign.status}`);
+      if (!presign.ok) {
+        throw new Error(`request-url HTTP ${presign.status}`);
+      }
       const j = (await presign.json()) as {
-        uploadUrl: string;
-        objectKey: string;
+        uploadURL: string;
+        objectPath: string;
       };
-      const put = await fetch(j.uploadUrl, {
+      const put = await fetch(j.uploadURL, {
         method: "PUT",
         headers: { "Content-Type": file.type },
         body: file,
       });
       if (!put.ok) throw new Error(`PUT HTTP ${put.status}`);
-      setOptOutFileObjectKey(j.objectKey);
+      setOptOutFileObjectKey(j.objectPath);
     } catch (e) {
       setErr(`Upload failed: ${(e as Error).message}`);
     }
