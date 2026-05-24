@@ -3,6 +3,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { HowToUseHelp, HowToSection, howtoListStyle } from "./HowToUseHelp";
 
 interface WindowOpt {
   schoolYear: string;
@@ -264,6 +265,120 @@ export default function IntensiveGroupComposerPage({
         Suggest intensive-group sections from the latest FAST results. Read-only —
         Skyward / RosterOne stays the source of truth.
       </p>
+
+      <div className="composer-no-print">
+        <HowToUseHelp title="How to use Class Composer">
+          <HowToSection title="What this page is">
+            A scheduler-facing suggestion tool that groups students into
+            intensive sections by the skill area each student is weakest
+            in, using their most recent FAST item-level scores. It is
+            <strong> read-only</strong> — nothing is written to Skyward,
+            RosterOne, your master schedule, or your rosters. The output
+            is a printable / exportable proposal you take back to the
+            scheduler.
+          </HowToSection>
+
+          <HowToSection title="What the controls mean">
+            <ul style={howtoListStyle}>
+              <li>
+                <strong>Subject</strong> — which FAST assessment to read
+                (ELA, Math, Algebra 1, Geometry).
+              </li>
+              <li>
+                <strong>Grade</strong> — only students currently enrolled
+                in this grade at your school are considered.
+              </li>
+              <li>
+                <strong>Window</strong> — which FAST progress-monitoring
+                snapshot to use. Each window (PM1 / PM2 / PM3) is a
+                two-week testing snapshot, not a date range — Florida's
+                official term. The dropdown defaults to the most recent
+                window your school has uploaded and lists earlier
+                windows below it so you can compare. PM3 is typically
+                the most actionable because it's the latest read on
+                where each kid is right now.
+              </li>
+              <li>
+                <strong># Sections</strong> — how many intensive
+                sections you intend to staff. Composer will split the
+                eligible pool into that many tight-focus groups.
+              </li>
+              <li>
+                <strong>Seats / section</strong> — target class size.
+                The tool will warn (via overflow list) when the
+                eligible pool exceeds <em>sections × seats</em>.
+              </li>
+              <li>
+                <strong>Eligibility ≤ %</strong> — only students whose
+                overall mastery is at or below this percent are
+                considered for intensive placement. Default 70%; raise
+                it to pull more kids in, lower it to tighten the cap.
+              </li>
+            </ul>
+          </HowToSection>
+
+          <HowToSection title="How to use it day-to-day">
+            <ul style={howtoListStyle}>
+              <li>
+                Pick subject + grade, confirm the window shows the
+                latest PM, set sections/seats to what you can actually
+                staff, then click <strong>Build groups</strong>.
+              </li>
+              <li>
+                Each group card shows its dominant skill focus, average
+                mastery on that focus, a cohesion % (how alike the
+                students in the group are), and the roster.
+              </li>
+              <li>
+                <strong>Overflow</strong> lists eligible kids who
+                didn't fit in <em>sections × seats</em> — use it to
+                decide whether to add a section or raise seat count.
+                <strong> Unscored</strong> lists eligible-by-grade
+                students who don't have FAST results for the chosen
+                window yet (e.g. transfers, absent for testing) —
+                the scheduler still has to place them by hand.
+              </li>
+              <li>
+                Use <strong>Print</strong> for a meeting handout or
+                <strong> Export CSV</strong> to drop into Skyward
+                import templates.
+              </li>
+            </ul>
+          </HowToSection>
+
+          <HowToSection title="Re-running after new data">
+            Build groups reads live from FAST item responses every
+            time you click it — nothing is cached. If a makeup score
+            (or any new data) gets uploaded after you've already
+            built groups, just click <strong>Build groups</strong>
+            again and the suggestions will include the new score.
+            Switching window / subject / grade also forces a fresh
+            read.
+          </HowToSection>
+
+          <HowToSection title="Important caveats">
+            <ul style={howtoListStyle}>
+              <li>
+                These are <strong>suggestions, not assignments</strong>.
+                Nothing is written back to your rosters or master
+                schedule — you'll still recreate the sections in
+                Skyward / RosterOne.
+              </li>
+              <li>
+                The tool can only group what it can see — students
+                without a FAST score for the chosen window won't be
+                placed (they'll appear in <em>Unscored</em>).
+              </li>
+              <li>
+                Group cohesion drops when the eligible pool is small
+                or skill-diverse. Treat low-cohesion groups as a
+                signal to widen the eligibility cap or merge two
+                sections into one mixed-focus section.
+              </li>
+            </ul>
+          </HowToSection>
+        </HowToUseHelp>
+      </div>
 
       <section
         className="composer-no-print"
