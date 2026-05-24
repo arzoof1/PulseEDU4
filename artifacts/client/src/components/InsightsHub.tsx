@@ -29,7 +29,8 @@ export type InsightsTileId =
   | "earlyWarning"
   | "separations"
   | "fastBenchmarks"
-  | "instructionalCoverage";
+  | "instructionalCoverage"
+  | "classComposer";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 

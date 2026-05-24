@@ -92,6 +92,7 @@ import compRouter from "./comp";
 import featureLicensingRouter from "./featureLicensing";
 import fastCoverageRouter from "./fastCoverage";
 import districtOverviewRouter from "./districtOverview";
+import intensiveGroupsRouter from "./intensiveGroups";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -246,5 +247,6 @@ router.use(compRouter);
 router.use(featureLicensingRouter);
 router.use(fastCoverageRouter);
 router.use(districtOverviewRouter);
+router.use(intensiveGroupsRouter);
 
 export default router;

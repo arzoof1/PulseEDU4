@@ -101,6 +101,7 @@ import BellScheduleSection from "./components/BellScheduleSection";
 import Displays from "./components/Displays";
 import DisplayShow, { HallPassDisplay } from "./components/DisplayShow";
 import InsightsHub, { type InsightsTile } from "./components/InsightsHub";
+import IntensiveGroupComposerPage from "./components/IntensiveGroupComposerPage";
 import InsightsWatchlist from "./components/InsightsWatchlist";
 import MyWatchList from "./components/MyWatchList";
 import EngagementDashboard from "./components/EngagementDashboard";
@@ -3897,6 +3898,16 @@ const DISTRICT_ADMIN_CARDS: LandingCard[] = [
 // real or coming?".
 const INSIGHTS_TILES: InsightsTile[] = [
   {
+    id: "classComposer",
+    icon: "🧩",
+    title: "Class Composer",
+    subtitle:
+      "Propose intensive-group sections from FAST item-level weakness. Read-only — Skyward stays the source of truth.",
+    phase: "Today",
+    group: "actions",
+    targetSection: "classComposer",
+  },
+  {
     id: "academics",
     icon: "📘",
     title: "Academics",
@@ -4037,7 +4048,7 @@ const INSIGHTS_TILES: InsightsTile[] = [
 // nav items render. Keep this in sync with the sidebar JSX below.
 const NAV_GROUP_OWNERSHIP: Record<string, readonly string[]> = {
   administration: ["superUserHome", "featureLicensing", "districtAdmin"],
-  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile"],
+  insights: ["insights", "insightsWatchlist", "myWatchList", "studentProfile", "classComposer"],
   recognition: [
     "pbis",
     "schoolStore",
@@ -4543,6 +4554,7 @@ function App() {
     | "compAdmin"
     | "compInsights"
     | "pickupTags"
+    | "classComposer"
     | "tileHome"
   >("hallPasses");
   // Tile Home is a full-screen launcher that takes over the viewport.
@@ -8331,6 +8343,10 @@ function App() {
     // already governs the legacy MTSS pages. Once district CSV imports
     // ship in Phase 3 we'll broaden this to anyone who should see the
     // domain dashboards.
+    if (!canAccessMtssHub && activeSection === "classComposer") {
+      setActiveSection("hallPasses");
+      return;
+    }
     if (!canAccessMtssHub && activeSection === "insights") {
       setActiveSection("insightsWatchlist");
     }
@@ -20719,6 +20735,12 @@ function App() {
         <InsightsHub
           tiles={INSIGHTS_TILES}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
+        />
+      )}
+
+      {activeSection === "classComposer" && canAccessMtssHub && (
+        <IntensiveGroupComposerPage
+          onBack={() => setActiveSection("insights")}
         />
       )}
 
