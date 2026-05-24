@@ -34,6 +34,7 @@ interface StudentRow {
 interface Benchmark {
   code: string;
   category: string | null;
+  label?: string | null;
 }
 
 interface BottomEntry {
@@ -91,12 +92,19 @@ interface ReportStudent {
   };
 }
 
+interface ClassMedian {
+  pm1: number | null;
+  pm2: number | null;
+  pm3: number | null;
+}
+
 interface ProgressReportResponse {
   teacher: { id: number; displayName: string | null };
   subject: string;
   schoolYear: string;
   thresholdPct: number;
   benchmarks: Benchmark[];
+  classMedians?: Record<string, ClassMedian>;
   students: ReportStudent[];
 }
 
@@ -1937,6 +1945,87 @@ export default function TeacherBenchmarksTab({
 }
 
 // ---------------------------------------------------------------------------
+// Sparkline — tiny inline SVG (3 points across PM1·PM2·PM3) used both
+// in the per-row "Trend" column and the per-category header. Missing
+// windows are skipped; if fewer than 2 real points exist we draw a
+// dotted baseline placeholder so the cell isn't blank.
+function Sparkline(props: {
+  values: Array<number | null>;
+  width?: number;
+  height?: number;
+  stroke?: string;
+  threshold?: number;
+}) {
+  const w = props.width ?? 56;
+  const h = props.height ?? 18;
+  const stroke = props.stroke ?? "#1e3a8a";
+  const pad = 2;
+  const innerW = w - pad * 2;
+  const innerH = h - pad * 2;
+  const pts: Array<{ x: number; y: number; v: number }> = [];
+  const n = props.values.length;
+  for (let i = 0; i < n; i++) {
+    const v = props.values[i];
+    if (v == null) continue;
+    const x = pad + (n === 1 ? innerW / 2 : (i * innerW) / (n - 1));
+    const y = pad + innerH - (Math.max(0, Math.min(100, v)) / 100) * innerH;
+    pts.push({ x, y, v });
+  }
+  const path = pts.map((p, i) => `${i === 0 ? "M" : "L"}${p.x},${p.y}`).join(" ");
+  const thrY =
+    props.threshold != null
+      ? pad + innerH - (props.threshold / 100) * innerH
+      : null;
+  return (
+    <svg
+      width={w}
+      height={h}
+      viewBox={`0 0 ${w} ${h}`}
+      style={{ display: "inline-block", verticalAlign: "middle" }}
+    >
+      {thrY != null && (
+        <line
+          x1={pad}
+          y1={thrY}
+          x2={w - pad}
+          y2={thrY}
+          stroke="#9ca3af"
+          strokeWidth={0.5}
+          strokeDasharray="2,2"
+        />
+      )}
+      {pts.length >= 2 ? (
+        <path d={path} stroke={stroke} strokeWidth={1.5} fill="none" />
+      ) : (
+        <line
+          x1={pad}
+          y1={h / 2}
+          x2={w - pad}
+          y2={h / 2}
+          stroke="#d1d5db"
+          strokeWidth={0.75}
+          strokeDasharray="2,2"
+        />
+      )}
+      {pts.map((p, i) => (
+        <circle
+          key={i}
+          cx={p.x}
+          cy={p.y}
+          r={1.6}
+          fill={
+            p.v >= (props.threshold ?? 80)
+              ? "#14532d"
+              : p.v >= 50
+              ? "#78350f"
+              : "#7f1d1d"
+          }
+        />
+      ))}
+    </svg>
+  );
+}
+
 // Benchmark Progress Report — printable per-student item-analysis sheet.
 // One page per student (landscape). Rows = benchmarks (grouped by category),
 // columns = PM1 · PM2 · PM3, cells = per-item chips (red ✗ / green ✓) plus a
@@ -1953,6 +2042,10 @@ function ProgressReportModal(props: {
 }) {
   const { loading, report, filter, onFilterChange, onClose, deliveryCounts } =
     props;
+  // Default ON — the standard description is the single biggest aid
+  // for parents and students reading the printed sheet. Teachers who
+  // prefer a denser printout can toggle it off before printing.
+  const [showDescriptions, setShowDescriptions] = useState(true);
 
   const subjectLabel = (s: string | undefined) => {
     if (!s) return "";
@@ -2041,6 +2134,34 @@ function ProgressReportModal(props: {
             padding: 2px 4px !important;
           }
           .item-chip { font-size: 7.5px !important; padding: 0 3px !important; }
+        }
+        .progress-report-print.no-descriptions .benchmark-description {
+          display: none !important;
+        }
+        .progress-report-page .pill {
+          display: inline-block;
+          padding: 1px 6px;
+          border-radius: 999px;
+          font-size: 9px;
+          font-weight: 700;
+          white-space: nowrap;
+        }
+        .progress-report-page .pill-mastered { background: #bbf7d0; color: #14532d; }
+        .progress-report-page .pill-approach { background: #fef3c7; color: #78350f; }
+        .progress-report-page .pill-needs { background: #fecaca; color: #7f1d1d; }
+        .progress-report-page .pill-na { background: #e5e7eb; color: #6b7280; }
+        .benchmark-description {
+          font-size: 8.5px;
+          color: #4b5563;
+          line-height: 1.25;
+          margin-top: 3px;
+          font-style: italic;
+        }
+        .cls-median {
+          font-size: 7.5px;
+          color: #6b7280;
+          font-weight: 500;
+          margin-top: 1px;
         }
         .progress-report-page {
           background: white;
@@ -2132,6 +2253,23 @@ function ProgressReportModal(props: {
               ))}
             </select>
           </label>
+          <label
+            style={{
+              fontSize: 12,
+              color: "#374151",
+              display: "flex",
+              alignItems: "center",
+              gap: 4,
+            }}
+            title="Show one-line standard descriptions under each benchmark code"
+          >
+            <input
+              type="checkbox"
+              checked={showDescriptions}
+              onChange={(e) => setShowDescriptions(e.target.checked)}
+            />
+            Descriptions
+          </label>
           <button
             onClick={() => window.print()}
             disabled={!report || report.students.length === 0}
@@ -2144,7 +2282,11 @@ function ProgressReportModal(props: {
           </button>
         </div>
 
-        <div className="progress-report-print">
+        <div
+          className={`progress-report-print${
+            showDescriptions ? "" : " no-descriptions"
+          }`}
+        >
           {loading && (
             <div
               style={{
@@ -2590,20 +2732,38 @@ function ProgressReportModal(props: {
                   <table>
                     <thead>
                       <tr>
-                        <th style={{ width: "28%" }}>Benchmark</th>
+                        <th style={{ width: "24%" }}>Benchmark</th>
                         {WINDOWS.map((w) => (
-                          <th key={w} style={{ width: "24%" }}>
+                          <th key={w} style={{ width: "16%" }}>
                             {winLabel[w]}
                           </th>
                         ))}
+                        <th style={{ width: "14%" }}>Trend</th>
+                        <th style={{ width: "14%" }}>Status</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {grouped.map((g) => (
+                      {grouped.map((g) => {
+                        // Per-category sparkline for THIS student: average
+                        // of available benchmark pcts in the category per
+                        // window, so the header bar tells the same growth
+                        // story as the rows beneath it.
+                        const catSeries = WINDOWS.map((w) => {
+                          const vals: number[] = [];
+                          for (const b of g.codes) {
+                            const cc = s.windows[w][b.code];
+                            if (cc) vals.push(cc.pct);
+                          }
+                          if (vals.length === 0) return null;
+                          return Math.round(
+                            vals.reduce((a, v) => a + v, 0) / vals.length,
+                          );
+                        });
+                        return (
                         <React.Fragment key={g.category}>
                           <tr>
                             <td
-                              colSpan={4}
+                              colSpan={6}
                               style={{
                                 background: "#dbeafe",
                                 fontWeight: 700,
@@ -2611,10 +2771,68 @@ function ProgressReportModal(props: {
                                 color: "#1e3a8a",
                               }}
                             >
-                              {g.category}
+                              <div
+                                style={{
+                                  display: "flex",
+                                  justifyContent: "space-between",
+                                  alignItems: "center",
+                                  gap: 8,
+                                }}
+                              >
+                                <span>{g.category}</span>
+                                <span
+                                  style={{
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: 6,
+                                    color: "#1e3a8a",
+                                    fontWeight: 600,
+                                    fontSize: 9,
+                                  }}
+                                  title="Average across this category, PM1 → PM3"
+                                >
+                                  <span style={{ opacity: 0.7 }}>
+                                    cat avg
+                                  </span>
+                                  <Sparkline
+                                    values={catSeries}
+                                    threshold={report.thresholdPct}
+                                    width={72}
+                                    height={20}
+                                    stroke="#1e3a8a"
+                                  />
+                                </span>
+                              </div>
                             </td>
                           </tr>
-                          {g.codes.map((b) => (
+                          {g.codes.map((b) => {
+                            const rowSeries = WINDOWS.map((w) => {
+                              const cc = s.windows[w][b.code];
+                              return cc ? cc.pct : null;
+                            });
+                            const lastIdx = (() => {
+                              for (let i = rowSeries.length - 1; i >= 0; i--) {
+                                if (rowSeries[i] != null) return i;
+                              }
+                              return -1;
+                            })();
+                            const latestPct =
+                              lastIdx >= 0 ? rowSeries[lastIdx] : null;
+                            let pillCls = "pill-na";
+                            let pillTxt = "—";
+                            if (latestPct != null) {
+                              if (latestPct >= report.thresholdPct) {
+                                pillCls = "pill-mastered";
+                                pillTxt = "Mastered";
+                              } else if (latestPct >= 50) {
+                                pillCls = "pill-approach";
+                                pillTxt = "Approaching";
+                              } else {
+                                pillCls = "pill-needs";
+                                pillTxt = "Needs support";
+                              }
+                            }
+                            return (
                             <tr key={b.code}>
                               <td style={{ fontSize: 10, verticalAlign: "top" }}>
                                 <div
@@ -2644,6 +2862,11 @@ function ProgressReportModal(props: {
                                     {b.code}
                                   </span>
                                 </div>
+                                {b.label && (
+                                  <div className="benchmark-description">
+                                    {b.label}
+                                  </div>
+                                )}
                                 <div
                                   style={{
                                     display: "grid",
@@ -2652,11 +2875,15 @@ function ProgressReportModal(props: {
                                     borderRadius: 3,
                                     overflow: "hidden",
                                     fontSize: 9,
+                                    marginTop: 4,
                                   }}
                                 >
                                   {WINDOWS.map((w, wi) => {
                                     const cc = s.windows[w][b.code];
                                     const pct = cc ? cc.pct : null;
+                                    const cmed =
+                                      report.classMedians?.[b.code]?.[w] ??
+                                      null;
                                     let bg = "#f3f4f6";
                                     let fg = "#6b7280";
                                     if (pct != null) {
@@ -2696,6 +2923,11 @@ function ProgressReportModal(props: {
                                           {winLabel[w]}
                                         </div>
                                         <div>{pct == null ? "—" : `${pct}%`}</div>
+                                        {cmed != null && (
+                                          <div className="cls-median">
+                                            cls {cmed}%
+                                          </div>
+                                        )}
                                       </div>
                                     );
                                   })}
@@ -2756,10 +2988,35 @@ function ProgressReportModal(props: {
                                   </td>
                                 );
                               })}
+                              <td
+                                style={{
+                                  textAlign: "center",
+                                  verticalAlign: "middle",
+                                }}
+                              >
+                                <Sparkline
+                                  values={rowSeries}
+                                  threshold={report.thresholdPct}
+                                  width={64}
+                                  height={22}
+                                />
+                              </td>
+                              <td
+                                style={{
+                                  textAlign: "center",
+                                  verticalAlign: "middle",
+                                }}
+                              >
+                                <span className={`pill ${pillCls}`}>
+                                  {pillTxt}
+                                </span>
+                              </td>
                             </tr>
-                          ))}
+                            );
+                          })}
                         </React.Fragment>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}

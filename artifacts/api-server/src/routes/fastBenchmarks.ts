@@ -45,6 +45,7 @@ import {
   schoolsTable,
   studentTrustedAdultsTable,
   studentMtssPlansTable,
+  schoolBenchmarksTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
@@ -681,7 +682,8 @@ router.get(
       return;
     }
 
-    const [students, itemsRaw, periodRows, scaleRows] = await Promise.all([
+    const [students, itemsRaw, periodRows, scaleRows, labelRows] =
+      await Promise.all([
       db
         .select({
           studentId: studentsTable.studentId,
@@ -754,7 +756,22 @@ router.get(
             inArray(studentFastScoresTable.studentId, ctx.studentIds),
           ),
         ),
+      db
+        .select({
+          code: schoolBenchmarksTable.code,
+          label: schoolBenchmarksTable.label,
+        })
+        .from(schoolBenchmarksTable)
+        .where(
+          and(
+            eq(schoolBenchmarksTable.schoolId, ctx.schoolId),
+            eq(schoolBenchmarksTable.subject, ctx.subject),
+          ),
+        ),
     ]);
+    const labelByCode = new Map<string, string | null>(
+      labelRows.map((r) => [r.code, r.label]),
+    );
 
     // Drop cross-grade rows + "N/A" codes — see helper comment.
     const studentGradeById = new Map(
@@ -796,7 +813,11 @@ router.get(
       }
     }
     const benchmarks = Array.from(benchmarkMeta.entries())
-      .map(([code, meta]) => ({ code, category: meta.category }))
+      .map(([code, meta]) => ({
+        code,
+        category: meta.category,
+        label: labelByCode.get(code) ?? null,
+      }))
       .sort((a, b) => {
         const ca = a.category ?? "";
         const cb = b.category ?? "";
@@ -928,6 +949,41 @@ router.get(
         return (a.firstName ?? "").localeCompare(b.firstName ?? "");
       });
 
+    // Class median percent per (benchmark code, window) across the
+    // teacher's roster — gives each student page a reference point
+    // ("class typically scores X% on this standard") so parents and
+    // students can read their own row in context.
+    const classMedians: Record<
+      string,
+      { pm1: number | null; pm2: number | null; pm3: number | null }
+    > = {};
+    function median(nums: number[]): number | null {
+      if (nums.length === 0) return null;
+      const sorted = nums.slice().sort((a, b) => a - b);
+      const mid = Math.floor(sorted.length / 2);
+      return sorted.length % 2 === 0
+        ? Math.round((sorted[mid - 1] + sorted[mid]) / 2)
+        : sorted[mid];
+    }
+    for (const b of benchmarks) {
+      const buckets: Record<"pm1" | "pm2" | "pm3", number[]> = {
+        pm1: [],
+        pm2: [],
+        pm3: [],
+      };
+      for (const s of studentOut) {
+        for (const w of WINDOWS) {
+          const cc = s.windows[w][b.code];
+          if (cc) buckets[w].push(cc.pct);
+        }
+      }
+      classMedians[b.code] = {
+        pm1: median(buckets.pm1),
+        pm2: median(buckets.pm2),
+        pm3: median(buckets.pm3),
+      };
+    }
+
     res.json({
       teacher: {
         id: ctx.targetTeacher.id,
@@ -937,6 +993,7 @@ router.get(
       schoolYear,
       thresholdPct: ctx.thresholdPct,
       benchmarks,
+      classMedians,
       students: studentOut,
     });
   },
