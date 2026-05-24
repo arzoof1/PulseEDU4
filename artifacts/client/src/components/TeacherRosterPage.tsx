@@ -1168,10 +1168,21 @@ export default function TeacherRosterPage({
       })
       .then((j: { teachers: TeacherOpt[] }) => {
         if (cancelled) return;
-        setTeachers(j.teachers);
+        // Sort alphabetically by display name (case-insensitive,
+        // locale-aware) so Core Team can scan the dropdown quickly.
+        // Staff without a display name sink to the bottom.
+        const sorted = [...j.teachers].sort((a, b) => {
+          const an = a.displayName ?? "";
+          const bn = b.displayName ?? "";
+          if (!an && !bn) return 0;
+          if (!an) return 1;
+          if (!bn) return -1;
+          return an.localeCompare(bn, undefined, { sensitivity: "base" });
+        });
+        setTeachers(sorted);
         // Pre-select the user's own row if no default came in.
-        if (teacherId == null && j.teachers.length > 0) {
-          setTeacherId(j.teachers[0].id);
+        if (teacherId == null && sorted.length > 0) {
+          setTeacherId(sorted[0].id);
         }
       })
       .catch(() => {
