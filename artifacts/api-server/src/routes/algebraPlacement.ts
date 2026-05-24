@@ -391,11 +391,11 @@ async function buildReport(schoolId: number): Promise<{
 
   // Sort: group by current PM3 level (L5 → L4 → L3) so the printable
   // sections line up with the on-screen breakdown. Within each level,
-  // sort by AR strand mastery ascending (weakest first) so the
-  // most placement-defensibility-relevant kids float to the top of
-  // each section. Null AR sorts to the bottom of its level (no
-  // strand data — typically a Phase-1 historical-only student).
-  // Tie-break by last name A→Z for stable printout ordering.
+  // sort by AR strand mastery descending (strongest first) so the
+  // best-prepared kids anchor the top of each section. Null AR sorts
+  // to the bottom of its level (no strand data — typically a Phase-1
+  // historical-only student). Tie-break by last name A→Z for stable
+  // printout ordering.
   const levelOrder: Record<3 | 4 | 5, number> = { 5: 0, 4: 1, 3: 2 };
   rows.sort((a, b) => {
     const lv = levelOrder[a.currentLevel] - levelOrder[b.currentLevel];
@@ -405,7 +405,7 @@ async function buildReport(schoolId: number): Promise<{
     if (aNull && !bNull) return 1;
     if (!aNull && bNull) return -1;
     if (!aNull && !bNull && a.arPct !== b.arPct) {
-      return (a.arPct as number) - (b.arPct as number);
+      return (b.arPct as number) - (a.arPct as number);
     }
     return `${a.lastName} ${a.firstName}`.localeCompare(
       `${b.lastName} ${b.firstName}`,

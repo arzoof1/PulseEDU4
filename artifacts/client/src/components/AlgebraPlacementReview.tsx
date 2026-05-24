@@ -307,7 +307,7 @@ export default function AlgebraPlacementReview({
                   style={{ padding: 6 }}
                   title="Algebraic Reasoning — current-year PM3 strand mastery (sort key)"
                 >
-                  AR ↑
+                  AR ↓
                 </th>
                 <th style={{ padding: 6 }}>Placement</th>
                 <th style={{ padding: 6 }}>Override</th>
@@ -342,7 +342,7 @@ export default function AlgebraPlacementReview({
                     >
                       Level {lvl} — {sectionRows.length} student
                       {sectionRows.length === 1 ? "" : "s"} · sorted by AR
-                      mastery, weakest first
+                      mastery, strongest first
                     </td>
                   </tr>,
                   ...sectionRows.map((r) => (
