@@ -1652,7 +1652,7 @@ export default function IntensiveGroupComposerPage({
                 alignItems: "center",
               }}
             >
-              <div>
+              <div style={{ flex: "1 1 100%" }}>
                 <span style={{ fontWeight: 600, marginRight: 8 }}>Cusp direction</span>
                 {(
                   [
@@ -1679,76 +1679,90 @@ export default function IntensiveGroupComposerPage({
                   </label>
                 ))}
               </div>
-              <label
+              <div
                 style={{
+                  flex: "1 1 100%",
                   display: "flex",
-                  alignItems: "center",
+                  flexDirection: "column",
+                  alignItems: "flex-start",
                   gap: 6,
-                  opacity:
-                    cuspDirection === "strand" || cuspDirection === "above"
-                      ? 0.5
-                      : 1,
                 }}
-                title={
-                  cuspDirection === "above"
-                    ? "Below-cut window doesn't apply when only Above-cut is selected."
-                    : cuspDirection === "strand"
-                      ? "Point windows don't apply to Strand cusp."
-                      : "Points below the L3 cut to include (L2 students close to passing)."
-                }
               >
-                <span style={{ fontWeight: 600 }}>± Pts below cut</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  disabled={
-                    cuspDirection === "strand" || cuspDirection === "above"
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    opacity:
+                      cuspDirection === "strand" || cuspDirection === "below"
+                        ? 0.5
+                        : 1,
+                  }}
+                  title={
+                    cuspDirection === "below"
+                      ? "Above-cut window doesn't apply when only Below-cut is selected."
+                      : cuspDirection === "strand"
+                        ? "Point windows don't apply to Strand cusp."
+                        : "Points below the L4 cut to include (L3 students close to proficient)."
                   }
-                  value={cuspPointsBelow}
-                  onChange={(e) =>
-                    setCuspPointsBelow(
-                      Math.max(1, Math.min(60, Number(e.target.value) || 15)),
-                    )
+                >
+                  <span style={{ fontWeight: 600, minWidth: 130 }}>
+                    ± Pts above cut
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    disabled={
+                      cuspDirection === "strand" || cuspDirection === "below"
+                    }
+                    value={cuspPointsAbove}
+                    onChange={(e) =>
+                      setCuspPointsAbove(
+                        Math.max(1, Math.min(60, Number(e.target.value) || 15)),
+                      )
+                    }
+                    style={{ padding: 4, width: 70 }}
+                  />
+                </label>
+                <label
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 6,
+                    opacity:
+                      cuspDirection === "strand" || cuspDirection === "above"
+                        ? 0.5
+                        : 1,
+                  }}
+                  title={
+                    cuspDirection === "above"
+                      ? "Below-cut window doesn't apply when only Above-cut is selected."
+                      : cuspDirection === "strand"
+                        ? "Point windows don't apply to Strand cusp."
+                        : "Points below the L3 cut to include (L2 students close to passing)."
                   }
-                  style={{ padding: 4, width: 70 }}
-                />
-              </label>
-              <label
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 6,
-                  opacity:
-                    cuspDirection === "strand" || cuspDirection === "below"
-                      ? 0.5
-                      : 1,
-                }}
-                title={
-                  cuspDirection === "below"
-                    ? "Above-cut window doesn't apply when only Below-cut is selected."
-                    : cuspDirection === "strand"
-                      ? "Point windows don't apply to Strand cusp."
-                      : "Points below the L4 cut to include (L3 students close to proficient)."
-                }
-              >
-                <span style={{ fontWeight: 600 }}>± Pts above cut</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={60}
-                  disabled={
-                    cuspDirection === "strand" || cuspDirection === "below"
-                  }
-                  value={cuspPointsAbove}
-                  onChange={(e) =>
-                    setCuspPointsAbove(
-                      Math.max(1, Math.min(60, Number(e.target.value) || 15)),
-                    )
-                  }
-                  style={{ padding: 4, width: 70 }}
-                />
-              </label>
+                >
+                  <span style={{ fontWeight: 600, minWidth: 130 }}>
+                    ± Pts below cut
+                  </span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    disabled={
+                      cuspDirection === "strand" || cuspDirection === "above"
+                    }
+                    value={cuspPointsBelow}
+                    onChange={(e) =>
+                      setCuspPointsBelow(
+                        Math.max(1, Math.min(60, Number(e.target.value) || 15)),
+                      )
+                    }
+                    style={{ padding: 4, width: 70 }}
+                  />
+                </label>
+              </div>
             </div>
             <div style={{ marginTop: 8, display: "flex", flexWrap: "wrap", gap: 16 }}>
               <label
