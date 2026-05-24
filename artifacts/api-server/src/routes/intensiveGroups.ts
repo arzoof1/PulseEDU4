@@ -184,11 +184,13 @@ router.get("/intensive-groups/sections", async (req, res) => {
         eq(classSectionsTable.isPlanning, false),
       ),
     );
-  const filtered = rows.filter(
-    (r) =>
-      isIntensiveCourseName(r.courseName) &&
-      (canManageGroups(staff) || r.teacherStaffId === staff.id),
-  );
+  // Group Insights works for any section (regular or intensive) —
+  // the engine just needs FAST scores for enrolled students. We
+  // still tag `isIntensive` in the response so the UI can badge
+  // intensive sections, but we no longer filter them out here.
+  const filtered = rows
+    .filter((r) => canManageGroups(staff) || r.teacherStaffId === staff.id)
+    .map((r) => ({ ...r, isIntensive: isIntensiveCourseName(r.courseName) }));
   filtered.sort((a, b) => {
     const t = (a.teacherName ?? "").localeCompare(b.teacherName ?? "");
     if (t !== 0) return t;

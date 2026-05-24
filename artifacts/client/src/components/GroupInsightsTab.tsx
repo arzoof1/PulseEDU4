@@ -1,6 +1,7 @@
-// Group Insights — Phase B teacher-facing tab on TeacherRosterPage.
-// Visible only for the teacher's intensive-flagged sections (or to
-// Core Team for any teacher's intensive sections).
+// Group Insights — teacher-facing deep view on TeacherRosterPage.
+// Works for any section (regular or intensive) — the engine just
+// needs FAST scores for enrolled students. Intensive-flagged
+// sections get a badge but aren't required.
 
 import { useEffect, useState } from "react";
 
@@ -58,12 +59,13 @@ interface InsightsResponse {
   beforeAfter: { current: number; ifReclustered: number } | null;
   profiles: Profile[];
 }
-interface IntensiveSection {
+interface SectionRow {
   id: number;
   period: number;
   courseName: string;
   teacherStaffId: number;
   teacherName: string;
+  isIntensive?: boolean;
 }
 
 const fullName = (s: {
@@ -76,14 +78,14 @@ export default function GroupInsightsTab({
 }: {
   teacherId: number;
 }) {
-  const [sections, setSections] = useState<IntensiveSection[]>([]);
+  const [sections, setSections] = useState<SectionRow[]>([]);
   const [selectedSectionId, setSelectedSectionId] = useState<number | null>(null);
   const [selectedWindow, setSelectedWindow] = useState<string>("");
   const [data, setData] = useState<InsightsResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // Load intensive sections for this teacher.
+  // Load this teacher's sections.
   useEffect(() => {
     let cancelled = false;
     fetch("/api/intensive-groups/sections")
@@ -91,7 +93,7 @@ export default function GroupInsightsTab({
         if (!r.ok) throw new Error("Failed to load sections");
         return r.json();
       })
-      .then((d: { sections: IntensiveSection[] }) => {
+      .then((d: { sections: SectionRow[] }) => {
         if (cancelled) return;
         const mine = d.sections.filter((s) => s.teacherStaffId === teacherId);
         setSections(mine);
@@ -156,9 +158,9 @@ export default function GroupInsightsTab({
           fontSize: 13,
         }}
       >
-        No intensive-flagged sections were found for this teacher. The Group
-        Insights tab activates for sections whose course name includes
-        "Intensive", "Lab", "Tier 2/3", "Read 180", "Math 180", or "Saxon".
+        No sections were found for this teacher. Group Insights activates
+        once the teacher has at least one enrolled section with FAST scores
+        for the selected window.
       </div>
     );
   }
@@ -189,6 +191,7 @@ export default function GroupInsightsTab({
             {sections.map((s) => (
               <option key={s.id} value={s.id}>
                 Per {s.period} · {s.courseName}
+                {s.isIntensive ? " · Intensive" : ""}
               </option>
             ))}
           </select>
