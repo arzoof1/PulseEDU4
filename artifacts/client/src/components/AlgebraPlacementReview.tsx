@@ -82,23 +82,33 @@ function strandCell(pct: number | null): ReactElement {
 }
 
 function levelChip(p: TrajectoryPoint): ReactElement {
+  // Matches the app-wide FAST palette (see TeacherRosterPage LEVEL_BG/
+  // BUCKET_FILL): L1 red, L2 orange, L3 green, L4 blue, L5 purple.
   const lvl = p.level;
   const bg =
     lvl == null
       ? "#f3f4f6"
-      : lvl <= 2
+      : lvl === 1
         ? "#fee2e2"
-        : lvl === 3
+        : lvl === 2
           ? "#fef3c7"
-          : "#dcfce7";
+          : lvl === 3
+            ? "#dcfce7"
+            : lvl === 4
+              ? "#dbeafe"
+              : "#ede9fe";
   const fg =
     lvl == null
       ? "#6b7280"
-      : lvl <= 2
-        ? "#991b1b"
-        : lvl === 3
-          ? "#92400e"
-          : "#166534";
+      : lvl === 1
+        ? "#7f1d1d"
+        : lvl === 2
+          ? "#78350f"
+          : lvl === 3
+            ? "#14532d"
+            : lvl === 4
+              ? "#1e3a8a"
+              : "#4c1d95";
   return (
     <span
       title={
@@ -286,7 +296,7 @@ export default function AlgebraPlacementReview({
               <tr style={{ textAlign: "left", background: "var(--surface-2, #f1f5f9)" }}>
                 <th style={{ padding: 6 }}>SIS ID</th>
                 <th style={{ padding: 6 }}>Student</th>
-                <th style={{ padding: 6 }}>Trajectory (recent → older)</th>
+                <th style={{ padding: 6 }}>Trajectory (oldest → newest)</th>
                 <th
                   style={{ padding: 6 }}
                   title="Number Sense & Operations — current-year PM3 strand mastery"
@@ -310,10 +320,12 @@ export default function AlgebraPlacementReview({
                   (r) => r.currentLevel === lvl,
                 );
                 if (sectionRows.length === 0) return [];
+                // FAST palette: L3 green, L4 blue, L5 purple
+                // (matches TeacherRosterPage LEVEL_BG / BUCKET_FILL).
                 const sectionBg =
-                  lvl === 5 ? "#dcfce7" : lvl === 4 ? "#e0f2fe" : "#fef3c7";
+                  lvl === 5 ? "#ede9fe" : lvl === 4 ? "#dbeafe" : "#dcfce7";
                 const sectionFg =
-                  lvl === 5 ? "#166534" : lvl === 4 ? "#075985" : "#92400e";
+                  lvl === 5 ? "#4c1d95" : lvl === 4 ? "#1e3a8a" : "#14532d";
                 const colSpan = data.canSaveOverride ? 8 : 7;
                 return [
                   <tr key={`hdr-${lvl}`}>
@@ -345,7 +357,7 @@ export default function AlgebraPlacementReview({
                         {r.lastName}, {r.firstName}
                       </td>
                       <td style={{ padding: 6 }}>
-                        {r.trajectory.map((p, i) => (
+                        {[...r.trajectory].reverse().map((p, i) => (
                           <span key={i}>{levelChip(p)}</span>
                         ))}
                       </td>

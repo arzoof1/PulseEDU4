@@ -252,8 +252,10 @@ function drawSectionBand(
   count: number,
   isContinuation = false,
 ): number {
-  const bg = level === 5 ? "#dcfce7" : level === 4 ? "#e0f2fe" : "#fef3c7";
-  const fg = level === 5 ? "#166534" : level === 4 ? "#075985" : "#92400e";
+  // FAST palette (matches client AlgebraPlacementReview + TeacherRoster):
+  // L3 green, L4 blue, L5 purple.
+  const bg = level === 5 ? "#ede9fe" : level === 4 ? "#dbeafe" : "#dcfce7";
+  const fg = level === 5 ? "#4c1d95" : level === 4 ? "#1e3a8a" : "#14532d";
   doc.save().rect(PAGE_MARGIN, y, sumCols(cols), h).fillColor(bg).fill().restore();
   doc.font("Helvetica-Bold").fontSize(11).fillColor(fg);
   doc.text(
