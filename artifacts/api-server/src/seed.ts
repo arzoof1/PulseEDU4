@@ -6833,3 +6833,52 @@ export async function rebalanceFlagsAtParrottOnce(): Promise<void> {
     "[seed] Parrott flags rebalanced to target distribution",
   );
 }
+
+// -----------------------------------------------------------------------------
+// Class Composer "Master Plans" schema. Idempotent CREATE TABLE IF NOT EXISTS
+// at boot per the project gotchas note (drizzle-kit push can't apply this
+// non-interactively in this repo).
+// -----------------------------------------------------------------------------
+export async function ensureClassComposerPlansSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_composer_plans (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      subject TEXT NOT NULL,
+      grade INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'draft',
+      public_id TEXT NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      finalized_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plans_school_idx ON class_composer_plans (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plans_school_subject_grade_idx ON class_composer_plans (school_id, subject, grade, school_year)`,
+  );
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS class_composer_plan_groups (
+      id SERIAL PRIMARY KEY,
+      plan_id INTEGER NOT NULL,
+      school_id INTEGER NOT NULL,
+      group_index INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      recipe JSONB NOT NULL,
+      student_ids TEXT[] NOT NULL DEFAULT '{}',
+      seats_per_section INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plan_groups_plan_idx ON class_composer_plan_groups (plan_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS class_composer_plan_groups_school_idx ON class_composer_plan_groups (school_id)`,
+  );
+}

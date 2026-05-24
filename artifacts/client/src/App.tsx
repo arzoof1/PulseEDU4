@@ -8343,7 +8343,7 @@ function App() {
     // already governs the legacy MTSS pages. Once district CSV imports
     // ship in Phase 3 we'll broaden this to anyone who should see the
     // domain dashboards.
-    if (!canAccessMtssHub && activeSection === "classComposer") {
+    if (!canEditSafetyPlanClient && activeSection === "classComposer") {
       setActiveSection("hallPasses");
       return;
     }
@@ -20743,7 +20743,7 @@ function App() {
         />
       )}
 
-      {activeSection === "classComposer" && canAccessMtssHub && (
+      {activeSection === "classComposer" && canEditSafetyPlanClient && (
         <IntensiveGroupComposerPage
           onBack={() => setActiveSection("insights")}
         />

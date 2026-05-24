@@ -32,10 +32,20 @@ import {
   studentFastItemResponsesTable,
   studentFastScoresTable,
   schoolSettingsTable,
+  schoolsTable,
+  classComposerPlansTable,
+  classComposerPlanGroupsTable,
+  type ClassComposerGroupRecipe,
+  type ClassComposerPlanRow,
+  type ClassComposerPlanGroupRow,
 } from "@workspace/db";
-import { and, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
-import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
+import {
+  isCoreTeam as isCoreTeamShared,
+  canEditSafetyPlan,
+} from "../lib/coreTeam.js";
+import { renderComposerPlanPdf } from "../lib/composerPlanPdf.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
   computeSkillProfiles,
@@ -461,7 +471,27 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     .where(
       and(eq(studentsTable.schoolId, schoolId), eq(studentsTable.grade, grade)),
     );
-  const studentIds = studentsAtGrade.map((s) => s.studentId);
+  let studentIds = studentsAtGrade.map((s) => s.studentId);
+
+  // Master Plan workflow: when a plan is open the client passes the
+  // union of already-locked student_ids as excludeStudentIds so the
+  // candidate pool + clustering only consider students who are still
+  // available. Comma-separated list; unknown ids are silently dropped.
+  const excludeParam =
+    typeof req.query.excludeStudentIds === "string"
+      ? req.query.excludeStudentIds
+      : "";
+  if (excludeParam.length > 0) {
+    const excludeSet = new Set(
+      excludeParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter((s) => s.length > 0),
+    );
+    if (excludeSet.size > 0) {
+      studentIds = studentIds.filter((id) => !excludeSet.has(id));
+    }
+  }
 
   const available = await listAvailableWindows(schoolId, subject, studentIds);
   const { schoolYear, window } = pickWindow(req, available);
@@ -985,6 +1015,820 @@ router.get("/intensive-groups/insights", async (req, res) => {
       overallPct: p.overallPct,
     })),
   });
+});
+
+// =====================================================================
+// Class Composer "Master Plans" — saved plans the master scheduler uses
+// to lock candidate groups, exclude already-placed students from
+// subsequent /suggest calls, and produce printable artifacts (CSV +
+// PDF). Nothing here writes to section_roster or class_sections — the
+// plan is paper-only.
+//
+// Routes (all gated to admin + Core Team + Guidance Counselor via
+// canEditSafetyPlan — MTSS is already Core Team):
+//
+//   GET    /api/intensive-groups/plans?subject=&grade=&schoolYear=
+//   POST   /api/intensive-groups/plans
+//   GET    /api/intensive-groups/plans/:id
+//   PATCH  /api/intensive-groups/plans/:id              (rename)
+//   DELETE /api/intensive-groups/plans/:id
+//   POST   /api/intensive-groups/plans/:id/finalize
+//   POST   /api/intensive-groups/plans/:id/unfinalize
+//   POST   /api/intensive-groups/plans/:id/groups       (lock a group)
+//   PATCH  /api/intensive-groups/plans/:id/groups/:gid  (rename / move student)
+//   DELETE /api/intensive-groups/plans/:id/groups/:gid  (unlock)
+//   GET    /api/intensive-groups/plans/:id/csv
+//   GET    /api/intensive-groups/plans/:id/pdf
+// =====================================================================
+
+// publicId — 8 chars, alphanumeric uppercase, no I/O/0/1 (visual
+// confusion). Generated client-side here because the table doesn't
+// have a unique constraint (collisions are astronomically unlikely
+// at 32^8 ≈ 1e12 keyspace + per-school dataset sizes).
+const PUBLIC_ID_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+function generatePlanPublicId(): string {
+  let out = "";
+  for (let i = 0; i < 8; i++) {
+    out += PUBLIC_ID_ALPHABET[Math.floor(Math.random() * PUBLIC_ID_ALPHABET.length)];
+  }
+  return out;
+}
+
+function canManagePlans(s: StaffRow): boolean {
+  return Boolean(s.isAdmin) || canEditSafetyPlan(s);
+}
+
+async function loadPlanOr404(
+  req: Request,
+  res: Response,
+  schoolId: number,
+): Promise<ClassComposerPlanRow | null> {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) {
+    res.status(400).json({ error: "Invalid plan id" });
+    return null;
+  }
+  const [plan] = await db
+    .select()
+    .from(classComposerPlansTable)
+    .where(
+      and(
+        eq(classComposerPlansTable.id, id),
+        eq(classComposerPlansTable.schoolId, schoolId),
+      ),
+    );
+  if (!plan) {
+    res.status(404).json({ error: "Plan not found" });
+    return null;
+  }
+  return plan;
+}
+
+async function loadPlanGroups(
+  planId: number,
+  schoolId: number,
+): Promise<ClassComposerPlanGroupRow[]> {
+  // Always include schoolId in the filter as belt-and-suspenders even
+  // though the planId already implies a school via loadPlanOr404 — keeps
+  // a stray bug from leaking data across tenants.
+  return db
+    .select()
+    .from(classComposerPlanGroupsTable)
+    .where(
+      and(
+        eq(classComposerPlanGroupsTable.planId, planId),
+        eq(classComposerPlanGroupsTable.schoolId, schoolId),
+      ),
+    )
+    .orderBy(asc(classComposerPlanGroupsTable.groupIndex));
+}
+
+function requireDraft(plan: ClassComposerPlanRow, res: Response): boolean {
+  if (plan.status !== "draft") {
+    res
+      .status(409)
+      .json({ error: "Plan is finalized. Unfinalize first to edit." });
+    return false;
+  }
+  return true;
+}
+
+// ---------- GET /plans (list) ----------
+router.get("/intensive-groups/plans", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const conds = [eq(classComposerPlansTable.schoolId, schoolId)];
+  if (typeof req.query.subject === "string" && req.query.subject.length > 0) {
+    conds.push(eq(classComposerPlansTable.subject, req.query.subject));
+  }
+  if (req.query.grade != null) {
+    const g = Number(req.query.grade);
+    if (Number.isInteger(g)) conds.push(eq(classComposerPlansTable.grade, g));
+  }
+  if (
+    typeof req.query.schoolYear === "string" &&
+    req.query.schoolYear.length > 0
+  ) {
+    conds.push(eq(classComposerPlansTable.schoolYear, req.query.schoolYear));
+  }
+
+  const plans = await db
+    .select()
+    .from(classComposerPlansTable)
+    .where(and(...conds))
+    .orderBy(desc(classComposerPlansTable.updatedAt));
+
+  // Per-plan group + student counts in one round trip.
+  const planIds = plans.map((p) => p.id);
+  let countsByPlan = new Map<number, { groups: number; students: number }>();
+  if (planIds.length > 0) {
+    const rows = await db
+      .select({
+        planId: classComposerPlanGroupsTable.planId,
+        groupCount: sql<number>`count(*)::int`,
+        studentCount: sql<number>`COALESCE(SUM(array_length(${classComposerPlanGroupsTable.studentIds}, 1)), 0)::int`,
+      })
+      .from(classComposerPlanGroupsTable)
+      .where(inArray(classComposerPlanGroupsTable.planId, planIds))
+      .groupBy(classComposerPlanGroupsTable.planId);
+    countsByPlan = new Map(
+      rows.map((r) => [r.planId, { groups: r.groupCount, students: r.studentCount }]),
+    );
+  }
+
+  res.json({
+    plans: plans.map((p) => ({
+      id: p.id,
+      name: p.name,
+      subject: p.subject,
+      grade: p.grade,
+      schoolYear: p.schoolYear,
+      status: p.status,
+      publicId: p.publicId,
+      createdByStaffId: p.createdByStaffId,
+      createdAt: p.createdAt,
+      updatedAt: p.updatedAt,
+      finalizedAt: p.finalizedAt,
+      groupCount: countsByPlan.get(p.id)?.groups ?? 0,
+      studentCount: countsByPlan.get(p.id)?.students ?? 0,
+    })),
+  });
+});
+
+// ---------- POST /plans (create) ----------
+router.post("/intensive-groups/plans", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+
+  const body = (req.body ?? {}) as {
+    name?: string;
+    subject?: string;
+    grade?: number;
+    schoolYear?: string;
+  };
+  const name = (body.name ?? "").trim();
+  const subject = (body.subject ?? "").trim();
+  const grade = Number(body.grade);
+  const schoolYear =
+    typeof body.schoolYear === "string" && body.schoolYear.length > 0
+      ? body.schoolYear
+      : schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  if (name.length === 0 || name.length > 120) {
+    res.status(400).json({ error: "Name is required (1–120 chars)" });
+    return;
+  }
+  if (!VALID_SUBJECTS.has(subject)) {
+    res.status(400).json({ error: "Invalid subject" });
+    return;
+  }
+  if (!Number.isInteger(grade) || grade < 0 || grade > 12) {
+    res.status(400).json({ error: "Invalid grade" });
+    return;
+  }
+
+  const [created] = await db
+    .insert(classComposerPlansTable)
+    .values({
+      schoolId,
+      schoolYear,
+      subject,
+      grade,
+      name,
+      status: "draft",
+      publicId: generatePlanPublicId(),
+      createdByStaffId: staff.id,
+    })
+    .returning();
+  res.status(201).json({ plan: created });
+});
+
+// ---------- GET /plans/:id ----------
+router.get("/intensive-groups/plans/:id", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  const groups = await loadPlanGroups(plan.id, schoolId);
+  res.json({ plan, groups });
+});
+
+// ---------- PATCH /plans/:id (rename) ----------
+router.patch("/intensive-groups/plans/:id", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+
+  const body = (req.body ?? {}) as { name?: string };
+  const name = (body.name ?? "").trim();
+  if (name.length === 0 || name.length > 120) {
+    res.status(400).json({ error: "Name is required (1–120 chars)" });
+    return;
+  }
+  const [updated] = await db
+    .update(classComposerPlansTable)
+    .set({ name, updatedAt: new Date() })
+    .where(eq(classComposerPlansTable.id, plan.id))
+    .returning();
+  res.json({ plan: updated });
+});
+
+// ---------- DELETE /plans/:id ----------
+router.delete("/intensive-groups/plans/:id", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  await db
+    .delete(classComposerPlanGroupsTable)
+    .where(eq(classComposerPlanGroupsTable.planId, plan.id));
+  await db
+    .delete(classComposerPlansTable)
+    .where(eq(classComposerPlansTable.id, plan.id));
+  res.json({ ok: true });
+});
+
+// ---------- POST /plans/:id/finalize ----------
+router.post("/intensive-groups/plans/:id/finalize", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  const [updated] = await db
+    .update(classComposerPlansTable)
+    .set({ status: "final", finalizedAt: new Date(), updatedAt: new Date() })
+    .where(eq(classComposerPlansTable.id, plan.id))
+    .returning();
+  res.json({ plan: updated });
+});
+
+// ---------- POST /plans/:id/unfinalize ----------
+router.post("/intensive-groups/plans/:id/unfinalize", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  const [updated] = await db
+    .update(classComposerPlansTable)
+    .set({ status: "draft", finalizedAt: null, updatedAt: new Date() })
+    .where(eq(classComposerPlansTable.id, plan.id))
+    .returning();
+  res.json({ plan: updated });
+});
+
+// ---------- POST /plans/:id/groups (lock a group) ----------
+router.post("/intensive-groups/plans/:id/groups", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  if (!requireDraft(plan, res)) return;
+
+  const body = (req.body ?? {}) as {
+    name?: string;
+    recipe?: ClassComposerGroupRecipe;
+    studentIds?: string[];
+    seatsPerSection?: number;
+  };
+  const name = (body.name ?? "").trim();
+  if (name.length === 0 || name.length > 120) {
+    res.status(400).json({ error: "Group name required (1–120 chars)" });
+    return;
+  }
+  if (!body.recipe || typeof body.recipe !== "object") {
+    res.status(400).json({ error: "Recipe required" });
+    return;
+  }
+  const studentIds = Array.isArray(body.studentIds)
+    ? body.studentIds.filter((s) => typeof s === "string" && s.length > 0)
+    : [];
+  const seats = Math.max(
+    1,
+    Math.min(35, Number(body.seatsPerSection) || studentIds.length || 22),
+  );
+
+  // Exclude students already locked in another group of this plan.
+  const existingGroups = await loadPlanGroups(plan.id, schoolId);
+  const alreadyLocked = new Set<string>();
+  for (const g of existingGroups) {
+    for (const sid of g.studentIds) alreadyLocked.add(sid);
+  }
+  const duplicates = studentIds.filter((s) => alreadyLocked.has(s));
+  if (duplicates.length > 0) {
+    res.status(409).json({
+      error: "Some students are already locked in another group of this plan.",
+      duplicates,
+    });
+    return;
+  }
+
+  const nextIndex =
+    existingGroups.length === 0
+      ? 1
+      : Math.max(...existingGroups.map((g) => g.groupIndex)) + 1;
+
+  const [created] = await db
+    .insert(classComposerPlanGroupsTable)
+    .values({
+      planId: plan.id,
+      schoolId,
+      groupIndex: nextIndex,
+      name,
+      recipe: body.recipe,
+      studentIds,
+      seatsPerSection: seats,
+    })
+    .returning();
+  await db
+    .update(classComposerPlansTable)
+    .set({ updatedAt: new Date() })
+    .where(eq(classComposerPlansTable.id, plan.id));
+  res.status(201).json({ group: created });
+});
+
+// ---------- PATCH /plans/:id/groups/:gid (rename / move students) ----------
+router.patch("/intensive-groups/plans/:id/groups/:gid", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  if (!requireDraft(plan, res)) return;
+
+  const gid = Number(req.params.gid);
+  if (!Number.isInteger(gid) || gid <= 0) {
+    res.status(400).json({ error: "Invalid group id" });
+    return;
+  }
+  const allGroups = await loadPlanGroups(plan.id, schoolId);
+  const target = allGroups.find((g) => g.id === gid);
+  if (!target) {
+    res.status(404).json({ error: "Group not found" });
+    return;
+  }
+
+  const body = (req.body ?? {}) as {
+    name?: string;
+    studentIds?: string[];
+    seatsPerSection?: number;
+  };
+
+  const updates: Partial<ClassComposerPlanGroupRow> = {};
+  if (typeof body.name === "string") {
+    const n = body.name.trim();
+    if (n.length === 0 || n.length > 120) {
+      res.status(400).json({ error: "Group name 1–120 chars" });
+      return;
+    }
+    updates.name = n;
+  }
+  if (Array.isArray(body.studentIds)) {
+    const newIds = body.studentIds.filter(
+      (s) => typeof s === "string" && s.length > 0,
+    );
+    // No student may appear in two groups of the same plan.
+    const lockedElsewhere = new Set<string>();
+    for (const g of allGroups) {
+      if (g.id === gid) continue;
+      for (const sid of g.studentIds) lockedElsewhere.add(sid);
+    }
+    const conflicts = newIds.filter((s) => lockedElsewhere.has(s));
+    if (conflicts.length > 0) {
+      res.status(409).json({
+        error:
+          "Some students are already locked in another group of this plan.",
+        duplicates: conflicts,
+      });
+      return;
+    }
+    updates.studentIds = newIds;
+  }
+  if (body.seatsPerSection != null) {
+    const s = Math.max(1, Math.min(35, Number(body.seatsPerSection)));
+    updates.seatsPerSection = s;
+  }
+
+  if (Object.keys(updates).length === 0) {
+    res.json({ group: target });
+    return;
+  }
+  const [updated] = await db
+    .update(classComposerPlanGroupsTable)
+    .set(updates)
+    .where(eq(classComposerPlanGroupsTable.id, gid))
+    .returning();
+  await db
+    .update(classComposerPlansTable)
+    .set({ updatedAt: new Date() })
+    .where(eq(classComposerPlansTable.id, plan.id));
+  res.json({ group: updated });
+});
+
+// ---------- POST /plans/:id/move-student (atomic move) ----------
+// Atomic equivalent of two PATCH /groups calls. Wrap the read +
+// two writes in a single transaction so a half-applied move cannot
+// drop a student from both groups if the second write fails.
+router.post("/intensive-groups/plans/:id/move-student", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  if (!requireDraft(plan, res)) return;
+
+  const body = (req.body ?? {}) as {
+    studentId?: string;
+    fromGroupId?: number;
+    toGroupId?: number | null; // null = remove (no destination)
+  };
+  const sid = (body.studentId ?? "").trim();
+  const fromId = Number(body.fromGroupId);
+  const toId =
+    body.toGroupId == null
+      ? null
+      : Number.isInteger(Number(body.toGroupId))
+        ? Number(body.toGroupId)
+        : NaN;
+  if (sid.length === 0) {
+    res.status(400).json({ error: "studentId required" });
+    return;
+  }
+  if (!Number.isInteger(fromId) || fromId <= 0) {
+    res.status(400).json({ error: "fromGroupId required" });
+    return;
+  }
+  if (toId !== null && (!Number.isInteger(toId) || toId <= 0)) {
+    res.status(400).json({ error: "toGroupId invalid" });
+    return;
+  }
+  if (toId !== null && toId === fromId) {
+    res.status(400).json({ error: "Source and destination must differ" });
+    return;
+  }
+
+  try {
+    await db.transaction(async (tx) => {
+      // Lock both groups for update so a concurrent move can't
+      // also try to take the same student.
+      const rows = await tx
+        .select()
+        .from(classComposerPlanGroupsTable)
+        .where(
+          and(
+            eq(classComposerPlanGroupsTable.planId, plan.id),
+            eq(classComposerPlanGroupsTable.schoolId, schoolId),
+          ),
+        )
+        .for("update");
+      const from = rows.find((g) => g.id === fromId);
+      if (!from) throw new Error("Source group not found in plan");
+      const to = toId !== null ? rows.find((g) => g.id === toId) : null;
+      if (toId !== null && !to) throw new Error("Destination group not found");
+      if (!from.studentIds.includes(sid)) {
+        throw new Error("Student not in source group");
+      }
+      if (to && to.studentIds.includes(sid)) {
+        throw new Error("Student is already in destination group");
+      }
+      await tx
+        .update(classComposerPlanGroupsTable)
+        .set({ studentIds: from.studentIds.filter((id) => id !== sid) })
+        .where(eq(classComposerPlanGroupsTable.id, from.id));
+      if (to) {
+        await tx
+          .update(classComposerPlanGroupsTable)
+          .set({ studentIds: [...to.studentIds, sid] })
+          .where(eq(classComposerPlanGroupsTable.id, to.id));
+      }
+      await tx
+        .update(classComposerPlansTable)
+        .set({ updatedAt: new Date() })
+        .where(eq(classComposerPlansTable.id, plan.id));
+    });
+  } catch (e) {
+    res.status(409).json({ error: (e as Error).message });
+    return;
+  }
+  const groups = await loadPlanGroups(plan.id, schoolId);
+  res.json({ groups });
+});
+
+// ---------- DELETE /plans/:id/groups/:gid (unlock) ----------
+router.delete("/intensive-groups/plans/:id/groups/:gid", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  if (!requireDraft(plan, res)) return;
+  const gid = Number(req.params.gid);
+  if (!Number.isInteger(gid) || gid <= 0) {
+    res.status(400).json({ error: "Invalid group id" });
+    return;
+  }
+  await db
+    .delete(classComposerPlanGroupsTable)
+    .where(
+      and(
+        eq(classComposerPlanGroupsTable.id, gid),
+        eq(classComposerPlanGroupsTable.planId, plan.id),
+      ),
+    );
+  await db
+    .update(classComposerPlansTable)
+    .set({ updatedAt: new Date() })
+    .where(eq(classComposerPlansTable.id, plan.id));
+  res.json({ ok: true });
+});
+
+// Shared helper: gather PDF/CSV student rows for a plan's groups by
+// hydrating each group's stored student_ids with current FAST profiles.
+async function hydratePlanStudents(
+  schoolId: number,
+  plan: ClassComposerPlanRow,
+  groups: ClassComposerPlanGroupRow[],
+): Promise<
+  Array<{
+    group: ClassComposerPlanGroupRow;
+    students: Array<{
+      studentId: string;
+      localSisId: string | null;
+      firstName: string;
+      lastName: string;
+      grade: number | null;
+      fastLevel: number | null;
+      overallPct: number | null;
+    }>;
+  }>
+> {
+  const allIds = Array.from(new Set(groups.flatMap((g) => g.studentIds)));
+  if (allIds.length === 0) {
+    return groups.map((g) => ({ group: g, students: [] }));
+  }
+  // We compute the profile in the same window as the *most recently*
+  // selected pool. We don't store the window on the plan, so use the
+  // newest available window for the plan's subject — gives the PDF
+  // current-state numbers even after a re-shuffle. Acceptable because
+  // the recipe summary on each group already pins the window used at
+  // lock time.
+  const available = await listAvailableWindows(
+    schoolId,
+    plan.subject,
+    allIds,
+  );
+  const profile = await computeSkillProfiles({
+    schoolId,
+    subject: plan.subject,
+    schoolYear: available[0]?.schoolYear ?? plan.schoolYear,
+    window: available[0]?.window ?? "pm3",
+    studentIds: allIds,
+  });
+  const profById = new Map(profile.map((p) => [p.studentId, p]));
+
+  // Fall back to a plain students table read for kids with no profile
+  // (unscored) so we still print their names.
+  const studentRows = await db
+    .select({
+      studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
+      firstName: studentsTable.firstName,
+      lastName: studentsTable.lastName,
+      grade: studentsTable.grade,
+    })
+    .from(studentsTable)
+    .where(
+      and(
+        eq(studentsTable.schoolId, schoolId),
+        inArray(studentsTable.studentId, allIds),
+      ),
+    );
+  const baseById = new Map(studentRows.map((s) => [s.studentId, s]));
+
+  return groups.map((g) => ({
+    group: g,
+    students: g.studentIds.map((sid: string) => {
+      const p = profById.get(sid);
+      const b = baseById.get(sid);
+      return {
+        studentId: sid,
+        localSisId: p?.localSisId ?? b?.localSisId ?? null,
+        firstName: p?.firstName ?? b?.firstName ?? "(unknown)",
+        lastName: p?.lastName ?? b?.lastName ?? "",
+        grade: p?.grade ?? b?.grade ?? null,
+        fastLevel: p?.fastLevel ?? null,
+        overallPct: p?.overallPct ?? null,
+      };
+    }),
+  }));
+}
+
+// ---------- GET /plans/:id/csv ----------
+router.get("/intensive-groups/plans/:id/csv", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  const groups = await loadPlanGroups(plan.id, schoolId);
+  const hydrated = await hydratePlanStudents(schoolId, plan, groups);
+
+  const esc = (v: string | number | null | undefined): string => {
+    if (v == null) return "";
+    const s = String(v);
+    return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+  const lines: string[] = [
+    [
+      "plan_id",
+      "plan_name",
+      "subject",
+      "grade",
+      "school_year",
+      "group_index",
+      "group_name",
+      "student_id",
+      "local_sis_id",
+      "last_name",
+      "first_name",
+      "student_grade",
+      "fast_level",
+      "overall_pct",
+    ]
+      .map(esc)
+      .join(","),
+  ];
+  for (const { group, students } of hydrated) {
+    for (const s of students) {
+      lines.push(
+        [
+          plan.publicId,
+          plan.name,
+          plan.subject,
+          plan.grade,
+          plan.schoolYear,
+          group.groupIndex,
+          group.name,
+          s.studentId,
+          s.localSisId,
+          s.lastName,
+          s.firstName,
+          s.grade,
+          s.fastLevel != null ? `L${s.fastLevel}` : null,
+          s.overallPct != null ? Math.round(s.overallPct) : null,
+        ]
+          .map(esc)
+          .join(","),
+      );
+    }
+  }
+  const slug = plan.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+  res.setHeader("Content-Type", "text/csv; charset=utf-8");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${slug || "composer-plan"}.csv"`,
+  );
+  res.send(lines.join("\n") + "\n");
+});
+
+// ---------- GET /plans/:id/pdf ----------
+router.get("/intensive-groups/plans/:id/pdf", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManagePlans(staff)) {
+    res.status(403).json({ error: "Admin, Core Team, or Counselor required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const plan = await loadPlanOr404(req, res, schoolId);
+  if (!plan) return;
+  const groups = await loadPlanGroups(plan.id, schoolId);
+  const hydrated = await hydratePlanStudents(schoolId, plan, groups);
+
+  const [school] = await db
+    .select({ name: schoolsTable.name })
+    .from(schoolsTable)
+    .where(eq(schoolsTable.id, schoolId));
+  const [savedBy] = await db
+    .select({ displayName: staffTable.displayName })
+    .from(staffTable)
+    .where(eq(staffTable.id, plan.createdByStaffId));
+
+  const buf = await renderComposerPlanPdf({
+    schoolName: school?.name ?? "School",
+    planName: plan.name,
+    publicId: plan.publicId,
+    subject: plan.subject,
+    grade: plan.grade,
+    schoolYear: plan.schoolYear,
+    status: plan.status === "final" ? "final" : "draft",
+    createdAt: plan.createdAt,
+    finalizedAt: plan.finalizedAt,
+    savedByName: savedBy?.displayName ?? "Unknown",
+    groups: hydrated.map(({ group, students }) => ({
+      groupIndex: group.groupIndex,
+      name: group.name,
+      recipeSummary: group.recipe?.summary ?? "",
+      seatsPerSection: group.seatsPerSection,
+      students,
+    })),
+  });
+  const slug = plan.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+  res.setHeader("Content-Type", "application/pdf");
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="${slug || "composer-plan"}.pdf"`,
+  );
+  res.send(buf);
 });
 
 export default router;

@@ -44,6 +44,7 @@ import {
   rebalanceFlagsAtParrottOnce,
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
+  ensureClassComposerPlansSchema,
 } from "./seed";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
@@ -199,6 +200,9 @@ async function runSeed(): Promise<void> {
   await ensureKioskWelcomeSchema();
   // Phase 4 — Badge print event audit ledger. Idempotent.
   await ensureBadgePrintEventsSchema();
+  // Class Composer "Master Plans" — saved/finalized plan tables for the
+  // scheduler-side lock-and-build workflow. Idempotent.
+  await ensureClassComposerPlansSchema();
   // FAST Phase 1 — per-item benchmark response storage for the Florida
   // xlsx parser. Idempotent.
   await ensureFastItemResponsesSchema();

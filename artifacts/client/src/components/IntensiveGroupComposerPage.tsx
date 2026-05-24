@@ -57,6 +57,46 @@ interface CuspSummary {
   aboveCutFloor: number | null;
   sectionsNeeded: number;
 }
+// Master Plan workflow types. Plans + their locked groups are stored
+// server-side; the page exchanges them via /api/intensive-groups/plans/*.
+interface PlanRow {
+  id: number;
+  name: string;
+  subject: string;
+  grade: number;
+  schoolYear: string;
+  status: "draft" | "final";
+  publicId: string;
+  createdByStaffId: number;
+  createdAt: string;
+  updatedAt: string;
+  finalizedAt: string | null;
+  groupCount: number;
+  studentCount: number;
+}
+interface PlanGroupRecipe {
+  mode: Mode;
+  window: string;
+  arrangement?: Arrangement | null;
+  eligibilityMaxPct?: number;
+  cuspPoints?: number;
+  cuspDirection?: CuspDirection;
+  cuspDoubleCounters?: boolean;
+  cuspTrajectory?: boolean;
+  summary: string;
+}
+interface PlanGroupRow {
+  id: number;
+  planId: number;
+  schoolId: number;
+  groupIndex: number;
+  name: string;
+  recipe: PlanGroupRecipe;
+  studentIds: string[];
+  seatsPerSection: number;
+  createdAt: string;
+}
+
 interface SuggestResponse {
   subject: string;
   grade: number;
@@ -202,6 +242,22 @@ export default function IntensiveGroupComposerPage({
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Master Plan workflow state. plans = saved plans for the current
+  // (subject, grade); activePlan + planGroups = the open plan being
+  // built. lockedIds is the union of all student_ids across the open
+  // plan's groups — fed to /suggest as excludeStudentIds so the
+  // candidate pool only considers students who aren't yet placed.
+  const [plans, setPlans] = useState<PlanRow[]>([]);
+  const [activePlan, setActivePlan] = useState<PlanRow | null>(null);
+  const [planGroups, setPlanGroups] = useState<PlanGroupRow[]>([]);
+  const [planBusy, setPlanBusy] = useState(false);
+  const [planError, setPlanError] = useState<string | null>(null);
+  const lockedIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const g of planGroups) for (const sid of g.studentIds) s.add(sid);
+    return s;
+  }, [planGroups]);
+
   // Live cusp calculator — fires a debounced calcOnly request as
   // params change so the admin sees "X eligible → Y sections" before
   // committing to a Generate. Null when cusp mode is off, when the
@@ -272,6 +328,9 @@ export default function IntensiveGroupComposerPage({
       params.set("window", w);
     }
     if (opts.calcOnly) params.set("calcOnly", "true");
+    if (lockedIds.size > 0) {
+      params.set("excludeStudentIds", Array.from(lockedIds).join(","));
+    }
     return params;
   };
 
@@ -348,6 +407,353 @@ export default function IntensiveGroupComposerPage({
     showAdvanced,
     eligibilityMaxPct,
   ]);
+
+  // ---------- Master Plan: load + mutate ----------
+  const refreshPlans = async (
+    nextSubject: string,
+    nextGrade: number,
+  ): Promise<PlanRow[]> => {
+    const params = new URLSearchParams({
+      subject: nextSubject,
+      grade: String(nextGrade),
+    });
+    const r = await authFetch(`/api/intensive-groups/plans?${params}`);
+    if (!r.ok) return [];
+    const d = (await r.json()) as { plans: PlanRow[] };
+    setPlans(d.plans);
+    return d.plans;
+  };
+
+  const refreshActivePlan = async (planId: number): Promise<void> => {
+    const r = await authFetch(`/api/intensive-groups/plans/${planId}`);
+    if (!r.ok) return;
+    const d = (await r.json()) as {
+      plan: PlanRow;
+      groups: PlanGroupRow[];
+    };
+    setActivePlan(d.plan);
+    setPlanGroups(d.groups);
+  };
+
+  // Reload plans list whenever subject or grade changes, and clear the
+  // open plan since plans are scoped to a single (subject, grade).
+  useEffect(() => {
+    setActivePlan(null);
+    setPlanGroups([]);
+    setPlanError(null);
+    refreshPlans(subject, grade).catch(() => {
+      // Read-only failure — surface in panel but don't block the page.
+    });
+  }, [subject, grade]);
+
+  // Build a human-readable one-liner for the recipe summary stored
+  // with each locked group. Used for the PDF cover + locked-groups
+  // stack chips.
+  const buildRecipeSummary = (r: SuggestResponse): string => {
+    const winLabel = `${r.schoolYear} ${r.window.toUpperCase()}`;
+    if (r.mode === "intensive") return `Intensive · Levels 1–2 · ${winLabel}`;
+    if (r.mode === "regular") {
+      const a = r.arrangement === "balanced" ? "Balanced" : "Homogeneous";
+      return `Regular · ${a} · Levels 1–5 · ${winLabel}`;
+    }
+    const c = r.cusp;
+    const dirLabel =
+      c?.cuspDirection === "below"
+        ? "Below cut"
+        : c?.cuspDirection === "above"
+          ? "Above cut"
+          : c?.cuspDirection === "strand"
+            ? "Strand cusp"
+            : "Both";
+    return `Cusp · ${dirLabel} · ±${c?.cuspPoints ?? 15} pts · ${winLabel}`;
+  };
+
+  const createPlan = async () => {
+    const name = window.prompt(
+      "Name this plan (e.g. 'Grade 7 ELA — Spring intensive blocks')",
+      `Grade ${grade} ${subject.toUpperCase()} plan`,
+    );
+    if (!name) return;
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      const r = await authFetch("/api/intensive-groups/plans", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          subject,
+          grade,
+        }),
+      });
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      const { plan } = (await r.json()) as { plan: PlanRow };
+      await refreshPlans(subject, grade);
+      await refreshActivePlan(plan.id);
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const openPlan = async (id: number) => {
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      await refreshActivePlan(id);
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const closePlan = () => {
+    setActivePlan(null);
+    setPlanGroups([]);
+  };
+
+  const deletePlan = async (p: PlanRow) => {
+    if (
+      !window.confirm(
+        `Delete plan "${p.name}"? This removes ${p.groupCount} locked group(s). The paper PDF is not affected.`,
+      )
+    ) {
+      return;
+    }
+    setPlanBusy(true);
+    try {
+      await authFetch(`/api/intensive-groups/plans/${p.id}`, {
+        method: "DELETE",
+      });
+      if (activePlan?.id === p.id) closePlan();
+      await refreshPlans(subject, grade);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const lockCandidates = async () => {
+    if (!activePlan || !result) return;
+    if (result.groups.length === 0) {
+      setPlanError("Nothing to lock — generate groups first.");
+      return;
+    }
+    const overflowCount = result.overflow.length;
+    const seatsTarget = result.requested.seats;
+    const anyOverCap = result.groups.some((g) => g.students.length > seatsTarget);
+    if (overflowCount > 0 || anyOverCap) {
+      const proceed = window.confirm(
+        `Capacity warning: ${overflowCount} student(s) in overflow and ${
+          anyOverCap ? "one or more groups exceed seats/section" : "no group exceeds seats"
+        }. Lock all candidate groups anyway? Overflow students will NOT be locked — handle them in a follow-up recipe or by manual move.`,
+      );
+      if (!proceed) return;
+    }
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      const summary = buildRecipeSummary(result);
+      const recipe: PlanGroupRecipe = {
+        mode: result.mode,
+        window: result.window,
+        arrangement: result.arrangement,
+        eligibilityMaxPct: result.eligibilityMaxPct,
+        cuspPoints: result.cusp?.cuspPoints,
+        cuspDirection: result.cusp?.cuspDirection,
+        cuspDoubleCounters: result.cusp?.cuspDoubleCounters,
+        cuspTrajectory: result.cusp?.cuspTrajectory,
+        summary,
+      };
+      const existingCount = planGroups.length;
+      for (let i = 0; i < result.groups.length; i++) {
+        const g = result.groups[i];
+        const studentIds = g.students.map((s) => s.studentId);
+        const name = `Group ${existingCount + i + 1} — ${g.dominantCategory ?? "Mixed"}`;
+        const r = await authFetch(
+          `/api/intensive-groups/plans/${activePlan.id}/groups`,
+          {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              name,
+              recipe,
+              studentIds,
+              seatsPerSection: seatsTarget,
+            }),
+          },
+        );
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          throw new Error(j.error || `HTTP ${r.status}`);
+        }
+      }
+      await refreshActivePlan(activePlan.id);
+      await refreshPlans(subject, grade);
+      // Clear the current candidate result — re-running /suggest will
+      // now skip the just-locked students automatically.
+      setResult(null);
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const unlockGroup = async (g: PlanGroupRow) => {
+    if (!activePlan) return;
+    if (
+      !window.confirm(
+        `Unlock "${g.name}" (${g.studentIds.length} students)? They'll return to the candidate pool.`,
+      )
+    ) {
+      return;
+    }
+    setPlanBusy(true);
+    try {
+      await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/groups/${g.id}`,
+        { method: "DELETE" },
+      );
+      await refreshActivePlan(activePlan.id);
+      await refreshPlans(subject, grade);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const removeStudentFromGroup = async (g: PlanGroupRow, sid: string) => {
+    if (!activePlan) return;
+    const next = g.studentIds.filter((id) => id !== sid);
+    setPlanBusy(true);
+    try {
+      await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/groups/${g.id}`,
+        {
+          method: "PATCH",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ studentIds: next }),
+        },
+      );
+      await refreshActivePlan(activePlan.id);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const moveStudentToGroup = async (
+    fromGroup: PlanGroupRow,
+    toGroupId: number,
+    sid: string,
+  ) => {
+    if (!activePlan) return;
+    const toGroup = planGroups.find((g) => g.id === toGroupId);
+    if (!toGroup) return;
+    setPlanBusy(true);
+    setPlanError(null);
+    try {
+      // Single transactional server endpoint so a failed second write
+      // cannot drop the student from both groups.
+      const r = await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/move-student`,
+        {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            studentId: sid,
+            fromGroupId: fromGroup.id,
+            toGroupId: toGroup.id,
+          }),
+        },
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      await refreshActivePlan(activePlan.id);
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const finalizePlan = async () => {
+    if (!activePlan) return;
+    if (
+      !window.confirm(
+        `Finalize "${activePlan.name}"? Edits will be locked until you unfinalize. The PDF + CSV will download automatically after.`,
+      )
+    ) {
+      return;
+    }
+    setPlanBusy(true);
+    try {
+      const r = await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/finalize`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const j = await r.json().catch(() => ({}));
+        throw new Error(j.error || `HTTP ${r.status}`);
+      }
+      await refreshActivePlan(activePlan.id);
+      await refreshPlans(subject, grade);
+      downloadPlanFile("pdf");
+      downloadPlanFile("csv");
+    } catch (e) {
+      setPlanError((e as Error).message);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  const unfinalizePlan = async () => {
+    if (!activePlan) return;
+    if (!window.confirm("Unfinalize this plan? Edits will be re-enabled."))
+      return;
+    setPlanBusy(true);
+    try {
+      await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/unfinalize`,
+        { method: "POST" },
+      );
+      await refreshActivePlan(activePlan.id);
+      await refreshPlans(subject, grade);
+    } finally {
+      setPlanBusy(false);
+    }
+  };
+
+  // PDF + CSV downloads — use authFetch to honor bearer auth (the
+  // preview iframe blocks session cookies, so a plain <a href> won't
+  // carry the token).
+  const downloadPlanFile = async (kind: "pdf" | "csv") => {
+    if (!activePlan) return;
+    try {
+      const r = await authFetch(
+        `/api/intensive-groups/plans/${activePlan.id}/${kind}`,
+      );
+      if (!r.ok) {
+        setPlanError(`Download failed (HTTP ${r.status})`);
+        return;
+      }
+      const blob = await r.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      const slug = activePlan.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
+      a.download = `${slug || "composer-plan"}.${kind}`;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setPlanError((e as Error).message);
+    }
+  };
 
   const exportCsv = () => {
     if (!result) return;
@@ -480,6 +886,401 @@ export default function IntensiveGroupComposerPage({
         Suggest intensive-group sections from the latest FAST results. Read-only —
         Skyward / RosterOne stays the source of truth.
       </p>
+
+      {/* ===== Master Plan workflow ===== */}
+      <section
+        className="composer-no-print"
+        style={{
+          border: "1px solid #c7d2fe",
+          background: "#eef2ff",
+          borderRadius: 8,
+          padding: 12,
+          marginBottom: 14,
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "flex-start",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <div>
+            <h2 style={{ margin: 0, fontSize: 16, color: "#1e3a8a" }}>
+              Master Plans · {subject.toUpperCase()} · Grade {grade}
+            </h2>
+            <div style={{ fontSize: 12, color: "#475569", marginTop: 2 }}>
+              Lock candidate groups into a saved plan. Locked students are
+              excluded from the next pool. Finalize to get a printable PDF
+              and CSV. Paper artifact only — nothing writes to Skyward.
+            </div>
+          </div>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {activePlan ? (
+              <button
+                onClick={closePlan}
+                disabled={planBusy}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #6366f1",
+                  background: "white",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                }}
+              >
+                Close plan
+              </button>
+            ) : (
+              <button
+                onClick={createPlan}
+                disabled={planBusy}
+                style={{
+                  padding: "6px 12px",
+                  border: "1px solid #4338ca",
+                  background: "#4338ca",
+                  color: "white",
+                  borderRadius: 6,
+                  cursor: "pointer",
+                  fontWeight: 600,
+                }}
+              >
+                + Start new plan
+              </button>
+            )}
+          </div>
+        </div>
+
+        {planError && (
+          <div
+            style={{
+              marginTop: 8,
+              padding: 6,
+              background: "#fee2e2",
+              color: "#7f1d1d",
+              borderRadius: 4,
+              fontSize: 12,
+            }}
+          >
+            {planError}
+          </div>
+        )}
+
+        {/* Active plan panel */}
+        {activePlan && (
+          <div
+            style={{
+              marginTop: 10,
+              padding: 10,
+              background: "white",
+              borderRadius: 6,
+              border: "1px solid #c7d2fe",
+            }}
+          >
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                flexWrap: "wrap",
+                gap: 8,
+              }}
+            >
+              <div>
+                <strong>{activePlan.name}</strong>{" "}
+                <span
+                  style={{
+                    marginLeft: 6,
+                    fontSize: 11,
+                    padding: "2px 6px",
+                    background:
+                      activePlan.status === "final" ? "#dcfce7" : "#fef3c7",
+                    color:
+                      activePlan.status === "final" ? "#166534" : "#92400e",
+                    borderRadius: 4,
+                    fontWeight: 600,
+                  }}
+                >
+                  {activePlan.status === "final" ? "Finalized" : "Draft"}
+                </span>
+                <span
+                  style={{ marginLeft: 8, fontSize: 12, color: "#6b7280" }}
+                >
+                  Plan ID <code>{activePlan.publicId}</code> ·{" "}
+                  {planGroups.length} locked group(s) · {lockedIds.size} locked
+                  student(s)
+                </span>
+              </div>
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                <button
+                  onClick={() => downloadPlanFile("pdf")}
+                  disabled={planBusy || planGroups.length === 0}
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid #d1d5db",
+                    background: "white",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  Download PDF
+                </button>
+                <button
+                  onClick={() => downloadPlanFile("csv")}
+                  disabled={planBusy || planGroups.length === 0}
+                  style={{
+                    padding: "6px 10px",
+                    border: "1px solid #d1d5db",
+                    background: "white",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontSize: 13,
+                  }}
+                >
+                  Download CSV
+                </button>
+                {activePlan.status === "draft" ? (
+                  <button
+                    onClick={finalizePlan}
+                    disabled={planBusy || planGroups.length === 0}
+                    style={{
+                      padding: "6px 12px",
+                      border: "1px solid #047857",
+                      background: "#047857",
+                      color: "white",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      fontSize: 13,
+                      fontWeight: 600,
+                    }}
+                  >
+                    Finalize → PDF + CSV
+                  </button>
+                ) : (
+                  <button
+                    onClick={unfinalizePlan}
+                    disabled={planBusy}
+                    style={{
+                      padding: "6px 10px",
+                      border: "1px solid #d1d5db",
+                      background: "white",
+                      borderRadius: 6,
+                      cursor: "pointer",
+                      fontSize: 13,
+                    }}
+                  >
+                    Unfinalize (edit)
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {planGroups.length === 0 ? (
+              <div
+                style={{
+                  marginTop: 10,
+                  padding: 10,
+                  background: "#f8fafc",
+                  borderRadius: 4,
+                  fontSize: 13,
+                  color: "#475569",
+                }}
+              >
+                No groups locked yet. Generate candidate groups below, then
+                hit <strong>Lock into plan</strong> on the results panel.
+              </div>
+            ) : (
+              <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                {planGroups.map((g) => {
+                  const overCap = g.studentIds.length > g.seatsPerSection;
+                  return (
+                    <div
+                      key={g.id}
+                      style={{
+                        border: overCap
+                          ? "1px solid #fca5a5"
+                          : "1px solid #e5e7eb",
+                        background: overCap ? "#fef2f2" : "#f9fafb",
+                        borderRadius: 6,
+                        padding: 8,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 8,
+                          flexWrap: "wrap",
+                        }}
+                      >
+                        <div>
+                          <strong>{g.name}</strong>{" "}
+                          <span style={{ fontSize: 12, color: "#6b7280" }}>
+                            · {g.studentIds.length}/{g.seatsPerSection} seats
+                            {overCap && " · OVER CAP"}
+                          </span>
+                          <div style={{ fontSize: 11, color: "#64748b", marginTop: 2 }}>
+                            {g.recipe?.summary ?? ""}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => unlockGroup(g)}
+                          disabled={planBusy || activePlan.status === "final"}
+                          style={{
+                            padding: "4px 8px",
+                            border: "1px solid #d1d5db",
+                            background: "white",
+                            borderRadius: 4,
+                            cursor: "pointer",
+                            fontSize: 12,
+                          }}
+                        >
+                          Unlock group
+                        </button>
+                      </div>
+                      {activePlan.status === "draft" && (
+                        <div
+                          style={{
+                            marginTop: 6,
+                            display: "flex",
+                            flexWrap: "wrap",
+                            gap: 6,
+                          }}
+                        >
+                          {g.studentIds.map((sid) => (
+                            <span
+                              key={sid}
+                              style={{
+                                fontSize: 11,
+                                padding: "2px 4px",
+                                background: "white",
+                                border: "1px solid #e5e7eb",
+                                borderRadius: 4,
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
+                              }}
+                            >
+                              <code>{sid}</code>
+                              <select
+                                value=""
+                                disabled={planBusy}
+                                onChange={(e) => {
+                                  const v = e.target.value;
+                                  if (v === "") return;
+                                  if (v === "remove") {
+                                    removeStudentFromGroup(g, sid);
+                                  } else {
+                                    moveStudentToGroup(g, Number(v), sid);
+                                  }
+                                  e.target.value = "";
+                                }}
+                                style={{ fontSize: 11, padding: 0 }}
+                                title="Move or remove"
+                              >
+                                <option value="">⋯</option>
+                                {planGroups
+                                  .filter((og) => og.id !== g.id)
+                                  .map((og) => (
+                                    <option key={og.id} value={og.id}>
+                                      → {og.name}
+                                    </option>
+                                  ))}
+                                <option value="remove">✕ Remove</option>
+                              </select>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* Saved plans list (when no plan is open) */}
+        {!activePlan && plans.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ fontSize: 12, color: "#475569", marginBottom: 4 }}>
+              Saved plans:
+            </div>
+            <div style={{ display: "grid", gap: 4 }}>
+              {plans.map((p) => (
+                <div
+                  key={p.id}
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 8,
+                    padding: 6,
+                    background: "white",
+                    borderRadius: 4,
+                    border: "1px solid #e5e7eb",
+                  }}
+                >
+                  <div style={{ fontSize: 13 }}>
+                    <strong>{p.name}</strong>{" "}
+                    <span
+                      style={{
+                        marginLeft: 6,
+                        fontSize: 11,
+                        padding: "1px 5px",
+                        background:
+                          p.status === "final" ? "#dcfce7" : "#fef3c7",
+                        color: p.status === "final" ? "#166534" : "#92400e",
+                        borderRadius: 4,
+                      }}
+                    >
+                      {p.status === "final" ? "Final" : "Draft"}
+                    </span>
+                    <span style={{ marginLeft: 8, color: "#6b7280", fontSize: 12 }}>
+                      {p.groupCount} group(s) · {p.studentCount} students ·{" "}
+                      <code>{p.publicId}</code>
+                    </span>
+                  </div>
+                  <div style={{ display: "flex", gap: 6 }}>
+                    <button
+                      onClick={() => openPlan(p.id)}
+                      disabled={planBusy}
+                      style={{
+                        padding: "4px 10px",
+                        border: "1px solid #4338ca",
+                        background: "white",
+                        color: "#4338ca",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        fontSize: 12,
+                      }}
+                    >
+                      Open
+                    </button>
+                    <button
+                      onClick={() => deletePlan(p)}
+                      disabled={planBusy}
+                      style={{
+                        padding: "4px 10px",
+                        border: "1px solid #d1d5db",
+                        background: "white",
+                        borderRadius: 4,
+                        cursor: "pointer",
+                        fontSize: 12,
+                        color: "#b91c1c",
+                      }}
+                    >
+                      Delete
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
 
       <div className="composer-no-print">
         <HowToUseHelp title="How to use Class Composer">
@@ -1101,6 +1902,24 @@ export default function IntensiveGroupComposerPage({
               >
                 Export CSV
               </button>
+              {activePlan && activePlan.status === "draft" && (
+                <button
+                  onClick={lockCandidates}
+                  disabled={planBusy || result.groups.length === 0}
+                  title="Lock all generated groups into the active plan. Locked students are excluded from the next pool."
+                  style={{
+                    padding: "8px 14px",
+                    border: "1px solid #4338ca",
+                    background: "#4338ca",
+                    color: "white",
+                    borderRadius: 6,
+                    cursor: "pointer",
+                    fontWeight: 600,
+                  }}
+                >
+                  Lock into plan ({result.groups.length})
+                </button>
+              )}
             </>
           )}
         </div>

@@ -106,3 +106,4 @@ export * from "./studentHouseChanges";
 export * from "./studentHouseSortJobs";
 export * from "./schoolBenchmarks";
 export * from "./benchmarkDeliveries";
+export * from "./classComposerPlans";
