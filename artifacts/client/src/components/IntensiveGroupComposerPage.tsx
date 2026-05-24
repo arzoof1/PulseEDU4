@@ -375,6 +375,9 @@ export default function IntensiveGroupComposerPage({
   const [plans, setPlans] = useState<PlanRow[]>([]);
   const [activePlan, setActivePlan] = useState<PlanRow | null>(null);
   const [planGroups, setPlanGroups] = useState<PlanGroupRow[]>([]);
+  const [studentLookup, setStudentLookup] = useState<
+    Record<string, { localSisId: string | null }>
+  >({});
   const [planBusy, setPlanBusy] = useState(false);
   const [planError, setPlanError] = useState<string | null>(null);
   const lockedIds = useMemo(() => {
@@ -561,9 +564,11 @@ export default function IntensiveGroupComposerPage({
     const d = (await r.json()) as {
       plan: PlanRow;
       groups: PlanGroupRow[];
+      studentLookup?: Record<string, { localSisId: string | null }>;
     };
     setActivePlan(d.plan);
     setPlanGroups(d.groups);
+    setStudentLookup(d.studentLookup ?? {});
   };
 
   // Reload plans list whenever subject or grade changes, and clear the
@@ -571,6 +576,7 @@ export default function IntensiveGroupComposerPage({
   useEffect(() => {
     setActivePlan(null);
     setPlanGroups([]);
+    setStudentLookup({});
     setPlanError(null);
     refreshPlans(subject, grade).catch(() => {
       // Read-only failure — surface in panel but don't block the page.
@@ -1599,7 +1605,7 @@ export default function IntensiveGroupComposerPage({
                                 gap: 4,
                               }}
                             >
-                              <code>{sid}</code>
+                              <code>{studentLookup[sid]?.localSisId ?? sid}</code>
                               <select
                                 value=""
                                 disabled={planBusy}

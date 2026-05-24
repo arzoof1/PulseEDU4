@@ -1546,7 +1546,28 @@ router.get("/intensive-groups/plans/:id", async (req, res) => {
   const plan = await loadPlanOr404(req, res, schoolId);
   if (!plan) return;
   const groups = await loadPlanGroups(plan.id, schoolId);
-  res.json({ plan, groups });
+  // Build studentId → localSisId lookup so the client can render
+  // school-friendly IDs on locked-group chips. Tenant-scoped query.
+  const allIds = Array.from(new Set(groups.flatMap((g) => g.studentIds)));
+  const studentLookup: Record<string, { localSisId: string | null }> = {};
+  if (allIds.length > 0) {
+    const rows = await db
+      .select({
+        studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
+      })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.schoolId, schoolId),
+          inArray(studentsTable.studentId, allIds),
+        ),
+      );
+    for (const r of rows) {
+      studentLookup[r.studentId] = { localSisId: r.localSisId };
+    }
+  }
+  res.json({ plan, groups, studentLookup });
 });
 
 // ---------- PATCH /plans/:id (rename) ----------
