@@ -845,6 +845,12 @@ function SubjectCells({
   const cell: React.CSSProperties = {
     padding: "6px 6px",
     textAlign: "center",
+    // Top-align so every pill sits on the same baseline across Prior /
+    // PM1 / PM2 / PM3. Without this, cells whose caption stack is
+    // taller (e.g. PM2 with a "+12 from PM1" delta line, or Prior with
+    // its year sub-label) middle-align and push their pill up relative
+    // to neighbors that only render the pill + reserved caption slot.
+    verticalAlign: "top",
   };
   // True chronological order: Prior (last year's PM3) → PM1 (fall) →
   // PM2 (winter) → PM3 (spring) → LG bucket. Deltas read naturally
