@@ -700,14 +700,25 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
 
   // Core team: every staff in this school who teaches at least one
   // non-planning section. (We surface only people who actually have a
-  // roster — surfacing every staff would clutter the dropdown.)
-  const teachersWithSections = await db
-    .selectDistinct({
+  // roster — surfacing every staff would clutter the dropdown.) We
+  // also pull course names so we can infer each teacher's department
+  // for grouping in the picker — no DB column needed today.
+  const sections = await db
+    .select({
       teacherStaffId: classSectionsTable.teacherStaffId,
+      courseName: classSectionsTable.courseName,
+      isPlanning: classSectionsTable.isPlanning,
     })
     .from(classSectionsTable)
     .where(eq(classSectionsTable.schoolId, schoolId));
-  const teacherIds = teachersWithSections.map((t) => t.teacherStaffId);
+  const coursesByTeacher = new Map<number, string[]>();
+  for (const s of sections) {
+    if (s.isPlanning) continue;
+    const list = coursesByTeacher.get(s.teacherStaffId) ?? [];
+    list.push(s.courseName);
+    coursesByTeacher.set(s.teacherStaffId, list);
+  }
+  const teacherIds = [...coursesByTeacher.keys()];
   if (teacherIds.length === 0) {
     res.json({ teachers: [] });
     return;
@@ -723,12 +734,61 @@ router.get("/teacher-roster/teachers", async (req: Request, res: Response) => {
     );
   const out = teachers
     .filter((t) => t.active)
-    .map((t) => ({ id: t.id, displayName: t.displayName }))
+    .map((t) => ({
+      id: t.id,
+      displayName: t.displayName,
+      department: inferDepartment(coursesByTeacher.get(t.id) ?? []),
+    }))
     .sort((a, b) =>
       (a.displayName ?? "").localeCompare(b.displayName ?? ""),
     );
   res.json({ teachers: out });
 });
+
+// Map a teacher's course names to a coarse department label for the
+// picker. Keyword-based — anything unmatched lands in "Other" and an
+// admin can clean up a course name (or we add keywords) to reclassify.
+// Order matters: more specific tokens (Algebra, Geometry) check before
+// the generic Math match.
+function inferDepartment(courseNames: string[]): string {
+  if (courseNames.length === 0) return "Other";
+  const tally = new Map<string, number>();
+  for (const raw of courseNames) {
+    const name = raw.toLowerCase();
+    let dept = "Other";
+    if (/(algebra|geometry|\bmath|pre-?calc|calculus|statistics)/.test(name)) {
+      dept = "Math";
+    } else if (/(\bela\b|english|language arts|reading|literature|writing)/.test(name)) {
+      dept = "ELA";
+    } else if (/(science|biology|chemistry|physics|earth|environmental)/.test(name)) {
+      dept = "Science";
+    } else if (/(social studies|history|civics|geography|economics|government|us history|world history)/.test(name)) {
+      dept = "Social Studies";
+    } else if (/(spanish|french|german|chinese|latin|world language)/.test(name)) {
+      dept = "World Languages";
+    } else if (/(\bpe\b|physical education|health|wellness)/.test(name)) {
+      dept = "PE / Health";
+    } else if (/(art|music|band|chorus|drama|theater|theatre|dance|media|tv|journalism|yearbook)/.test(name)) {
+      dept = "Electives";
+    } else if (/(ese|esol|ell|intensive|resource|support|skills)/.test(name)) {
+      dept = "Support";
+    } else if (/(technology|computer|coding|stem|engineering|robotics)/.test(name)) {
+      dept = "CTE / STEM";
+    }
+    tally.set(dept, (tally.get(dept) ?? 0) + 1);
+  }
+  // Pick the department this teacher teaches most often; ties broken
+  // by the keyword check order above via insertion order.
+  let bestDept = "Other";
+  let bestCount = -1;
+  for (const [dept, count] of tally) {
+    if (count > bestCount) {
+      bestCount = count;
+      bestDept = dept;
+    }
+  }
+  return bestDept;
+}
 
 // Teacher acknowledgement of an ISS-day soft reminder. The teacher clicks
 // "Posted in Canvas" or "Sent hard copy" on the roster banner. We record
