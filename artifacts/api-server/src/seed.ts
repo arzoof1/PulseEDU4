@@ -5174,6 +5174,11 @@ export async function ensureDataImporterRollbackSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS strict_house_name_match BOOLEAN NOT NULL DEFAULT FALSE`,
   );
+  // Class Composer post-PM banner dismissal token ("<sy>|<window>"),
+  // nullable. See schoolSettings.ts comment for semantics.
+  await db.execute(
+    sql`ALTER TABLE school_settings ADD COLUMN IF NOT EXISTS class_composer_banner_dismissed_sy TEXT`,
+  );
 }
 
 // -----------------------------------------------------------------------------

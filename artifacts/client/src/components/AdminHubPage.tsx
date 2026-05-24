@@ -198,9 +198,92 @@ function ReconciliationTile({ data }: { data: ReconciliationResp | null }) {
   );
 }
 
+interface PmReadinessResp {
+  schoolYear: string;
+  window: string;
+  ready: boolean;
+  subjects: { ela: boolean; math: boolean };
+  dismissed: boolean;
+}
+
+// Post-PM nudge banner. Visible only when (a) the school has loaded
+// ELA + Math PM3 for the current SY, AND (b) the admin hasn't already
+// dismissed this window. Dismissal is per SY+window so the banner
+// reappears automatically when a new PM cycle arrives. Wording is
+// deliberately soft — "suggestions" — because Class Composer never
+// writes to the roster; the school chooses whether to act.
+function ClassComposerBanner({
+  data,
+  onLaunch,
+  onDismiss,
+}: {
+  data: PmReadinessResp;
+  onLaunch?: () => void;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      style={{
+        ...card,
+        borderColor: "#a7f3d0",
+        background: "#ecfdf5",
+        display: "flex",
+        flexDirection: "column",
+        gap: "0.6rem",
+      }}
+    >
+      <div style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
+        <h3 style={{ margin: 0 }}>📊 PM3 data complete — group suggestions ready</h3>
+        <span style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+          {data.schoolYear} · ELA + Math
+        </span>
+      </div>
+      <p style={{ margin: 0, fontSize: 14 }}>
+        Class Composer can propose intensive groupings for next quarter from
+        your latest FAST data. This is a <strong>read-only suggestion</strong>{" "}
+        — nothing is written to your roster. You decide whether to reshuffle
+        sections.
+      </p>
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button
+          type="button"
+          onClick={() => onLaunch?.()}
+          disabled={!onLaunch}
+          style={{
+            padding: "0.5rem 0.9rem",
+            borderRadius: 8,
+            border: "1px solid #059669",
+            background: "#059669",
+            color: "white",
+            fontWeight: 600,
+            cursor: onLaunch ? "pointer" : "not-allowed",
+          }}
+        >
+          View suggested groupings
+        </button>
+        <button
+          type="button"
+          onClick={onDismiss}
+          style={{
+            padding: "0.5rem 0.9rem",
+            borderRadius: 8,
+            border: "1px solid var(--border, #cbd5e1)",
+            background: "white",
+            color: "var(--text, #334155)",
+            cursor: "pointer",
+          }}
+        >
+          Dismiss for this PM cycle
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export default function AdminHubPage({
   onOpenAstQueue,
   onOpenCompQueue,
+  onOpenClassComposer,
 }: {
   // Optional deep-link to the AST admin queue. When provided, the AST
   // pending-count tile becomes clickable. Wired by App.tsx.
@@ -209,11 +292,16 @@ export default function AdminHubPage({
   // AST — the tile is silent for non-approvers and shows the pending
   // count for approvers.
   onOpenCompQueue?: () => void;
+  // Optional deep-link to Insights → Class Composer. When provided,
+  // the post-PM nudge banner's "View suggested groupings" button
+  // navigates there.
+  onOpenClassComposer?: () => void;
 } = {}) {
   const [recent, setRecent] = useState<RecentRow[] | null>(null);
   const [ack, setAck] = useState<AckResp | null>(null);
   const [reconciliation, setReconciliation] =
     useState<ReconciliationResp | null>(null);
+  const [pmReadiness, setPmReadiness] = useState<PmReadinessResp | null>(null);
   const [astPending, setAstPending] = useState<number | null>(null);
   const [compPending, setCompPending] = useState<number | null>(null);
   const [showModal, setShowModal] = useState<null | "iss" | "oss">(null);
@@ -225,12 +313,13 @@ export default function AdminHubPage({
 
   const reload = useCallback(async () => {
     try {
-      const [r1, r2, r3, r4, r5] = await Promise.all([
+      const [r1, r2, r3, r4, r5, r6] = await Promise.all([
         authFetch("/api/admin-hub/recent?limit=20"),
         authFetch("/api/admin-hub/acknowledgements"),
         authFetch("/api/pickup/reconciliation"),
         authFetch("/api/ast/admin-pending-count"),
         authFetch("/api/comp/admin-pending-count"),
+        authFetch("/api/intensive-groups/pm-readiness"),
       ]);
       if (!r1.ok) throw new Error(await r1.text());
       if (!r2.ok) throw new Error(await r2.text());
@@ -262,6 +351,14 @@ export default function AdminHubPage({
         setReconciliation((await r3.json()) as ReconciliationResp);
       } else {
         setReconciliation(null);
+      }
+      // PM readiness is admin/Core-Team gated server-side; 403 just
+      // means the signed-in staff can't manage groupings, so the
+      // banner stays hidden for them. Any other error: silent.
+      if (r6.ok) {
+        setPmReadiness((await r6.json()) as PmReadinessResp);
+      } else {
+        setPmReadiness(null);
       }
       setError(null);
     } catch (e) {
@@ -427,6 +524,21 @@ export default function AdminHubPage({
             </table>
           </div>
         </div>
+      )}
+
+      {pmReadiness && pmReadiness.ready && !pmReadiness.dismissed && (
+        <ClassComposerBanner
+          data={pmReadiness}
+          onLaunch={onOpenClassComposer}
+          onDismiss={async () => {
+            // Optimistic dismiss — hide immediately; if the POST
+            // fails the next 30s poll will restore the banner.
+            setPmReadiness({ ...pmReadiness, dismissed: true });
+            await authFetch("/api/intensive-groups/pm-readiness/dismiss", {
+              method: "POST",
+            });
+          }}
+        />
       )}
 
       <ReconciliationTile data={reconciliation} />

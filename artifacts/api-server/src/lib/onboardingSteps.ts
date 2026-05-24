@@ -423,6 +423,48 @@ export const ONBOARDING_STEPS: OnboardingStepDef[] = [
     autoCheck: async () => "empty", // No standalone table here; admins tick manually.
   },
   {
+    // Class Composer post-PM nudge. Completes automatically once the
+    // school has loaded PM3 FAST data for BOTH ELA and Math in the
+    // current school year (same probe powers the Admin Hub banner).
+    // Admins can also tick it manually to acknowledge "we saw the
+    // suggestions, school chose not to reshuffle" — the step is
+    // informational, never a hard prerequisite.
+    key: "class-composer-after-pm",
+    phase: "Interventions & MTSS",
+    role: "admin",
+    label: "Run Class Composer after PM3 upload (suggestions only)",
+    hint: "After PM3 FAST data is loaded for both ELA and Math, open Insights → Class Composer to see suggested intensive groupings for next quarter. The tool is read-only — it never writes to your roster, so you can ignore the suggestions if your school doesn't reshuffle mid-year. The Admin Hub banner that nudges you to run it is dismissible per PM cycle.",
+    route: { kind: "section", target: "classComposer" },
+    autoCheck: async (db, schoolId) => {
+      // Mirrors probePmReadiness in routes/intensiveGroups.ts: ELA +
+      // Math PM3 for the current school year. Kept here as inline SQL
+      // (rather than importing from the route) so the onboarding lib
+      // stays decoupled from route handlers — same pattern as the
+      // other autoChecks in this file.
+      const { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } = await import(
+        "./schoolYear.js"
+      );
+      const sy = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+      const r = await db.execute(
+        sql`SELECT subject, COUNT(*)::int AS c
+              FROM student_fast_item_responses
+             WHERE school_id = ${schoolId}
+               AND school_year = ${sy}
+               AND window = 'pm3'
+               AND subject IN ('ela','math')
+             GROUP BY subject`,
+      );
+      const subjects = new Set(
+        (r.rows as Array<{ subject: string; c: number }>)
+          .filter((row) => Number(row.c ?? 0) > 0)
+          .map((row) => row.subject),
+      );
+      if (subjects.has("ela") && subjects.has("math")) return "complete";
+      if (subjects.size > 0) return "partial";
+      return "empty";
+    },
+  },
+  {
     key: "separation-tags",
     phase: "Interventions & MTSS",
     role: "admin",

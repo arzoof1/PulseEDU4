@@ -32,7 +32,7 @@ import {
   studentFastItemResponsesTable,
   schoolSettingsTable,
 } from "@workspace/db";
-import { and, eq, inArray } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { isCoreTeam as isCoreTeamShared } from "../lib/coreTeam.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
@@ -48,6 +48,76 @@ const router: IRouter = Router();
 
 const VALID_SUBJECTS = new Set(["ela", "math", "algebra1", "geometry"]);
 const VALID_WINDOWS = new Set(["pm1", "pm2", "pm3"]);
+
+// -----------------------------------------------------------------------------
+// PM-readiness probe — shared by the Admin Hub banner and the
+// "Run Class Composer after PM upload" onboarding step.
+//
+// "Ready" = the school has PM3 FAST item responses for BOTH ELA and
+// Math in the current school year. We pick PM3 deliberately: PM1 is
+// baseline, PM2 is mid-year, PM3 is the most actionable window for
+// proposing next-quarter intensive groupings.
+//
+// Returns { schoolYear, window, ready, subjects: ['ela','math'],
+//           dismissed: boolean }. The dismissal token compares
+// "<sy>|<window>" so the banner re-appears when a NEW window arrives
+// even if the admin dismissed the previous one.
+// -----------------------------------------------------------------------------
+async function probePmReadiness(schoolId: number): Promise<{
+  schoolYear: string;
+  window: "pm3";
+  ready: boolean;
+  subjects: { ela: boolean; math: boolean };
+  dismissed: boolean;
+  dismissedToken: string | null;
+}> {
+  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  // Single round-trip grouped by subject. The composite index on
+  // fast_item_results covers (school_id, subject, school_year, window).
+  const r = await db.execute(sql`
+    SELECT subject, COUNT(*)::int AS c
+      FROM student_fast_item_responses
+     WHERE school_id = ${schoolId}
+       AND school_year = ${schoolYear}
+       AND window = 'pm3'
+       AND subject IN ('ela','math')
+     GROUP BY subject
+  `);
+  const counts = new Map<string, number>();
+  for (const row of r.rows as Array<{ subject: string; c: number }>) {
+    counts.set(row.subject, Number(row.c ?? 0));
+  }
+  const ela = (counts.get("ela") ?? 0) > 0;
+  const math = (counts.get("math") ?? 0) > 0;
+  const ready = ela && math;
+
+  const [settings] = await db
+    .select({
+      dismissed: schoolSettingsTable.classComposerBannerDismissedSy,
+    })
+    .from(schoolSettingsTable)
+    .where(eq(schoolSettingsTable.schoolId, schoolId))
+    .limit(1);
+  const dismissedToken = settings?.dismissed ?? null;
+  const currentToken = `${schoolYear}|pm3`;
+  const dismissed = dismissedToken === currentToken;
+
+  return {
+    schoolYear,
+    window: "pm3",
+    ready,
+    subjects: { ela, math },
+    dismissed,
+    dismissedToken,
+  };
+}
+
+// Exposed for the onboarding step's autoCheck so it doesn't duplicate
+// the readiness probe logic.
+export async function isPmReadinessComplete(schoolId: number): Promise<boolean> {
+  const p = await probePmReadiness(schoolId);
+  return p.ready;
+}
 
 type StaffRow = typeof staffTable.$inferSelect;
 
@@ -133,6 +203,51 @@ async function listAvailableWindows(
     label: `${r.schoolYear} ${r.window.toUpperCase()}`,
   }));
 }
+
+// ---------------------------------------------------------------------
+// GET /pm-readiness — Admin Hub banner + onboarding-step probe.
+// Returns whether ELA + Math PM3 are both loaded for the current SY,
+// plus the per-school dismissal state. Admin/Core-Team gated.
+// ---------------------------------------------------------------------
+router.get("/intensive-groups/pm-readiness", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!canManageGroups(staff)) {
+    res.status(403).json({ error: "Admin or Core Team required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const probe = await probePmReadiness(schoolId);
+  res.json(probe);
+});
+
+// ---------------------------------------------------------------------
+// POST /pm-readiness/dismiss — record dismissal for current SY+window.
+// Body: {} (idempotent — token is derived server-side). Admin only.
+// The banner re-appears automatically when a new window arrives.
+// ---------------------------------------------------------------------
+router.post("/intensive-groups/pm-readiness/dismiss", async (req, res) => {
+  const staff = await loadStaff(req, res);
+  if (!staff) return;
+  if (!Boolean(staff.isAdmin) && !isCoreTeamShared(staff)) {
+    res.status(403).json({ error: "Admin or Core Team required" });
+    return;
+  }
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const schoolYear = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+  const token = `${schoolYear}|pm3`;
+  await db
+    .update(schoolSettingsTable)
+    .set({ classComposerBannerDismissedSy: token })
+    .where(eq(schoolSettingsTable.schoolId, schoolId));
+  req.log?.info(
+    { schoolId, token, by: staff.id },
+    "[intensive-groups] PM banner dismissed",
+  );
+  res.json({ ok: true, dismissedToken: token });
+});
 
 // ---------------------------------------------------------------------
 // GET /windows

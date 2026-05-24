@@ -3,6 +3,17 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Class Composer post-PM nudge — dismissible Admin Hub banner +
+  matching onboarding step "Run Class Composer after PM3 upload
+  (suggestions only)" under Interventions & MTSS. Auto-detects when
+  ELA + Math PM3 are loaded for the current school year via new
+  `GET /api/intensive-groups/pm-readiness`; per-school dismissal
+  recorded as `<schoolYear>|pm3` token in new column
+  `school_settings.class_composer_banner_dismissed_sy` so the banner
+  re-appears each new PM cycle without nagging schools that don't
+  reshuffle mid-year. Banner copy emphasizes "read-only suggestion —
+  nothing is written to your roster." Admin/Core-Team gated; wired
+  through `App.tsx onOpenClassComposer` → `activeSection="classComposer"`.
 - Student House Placement — admin bulk-sort UI (preview + commit with
   per-house current/proposed/Δ counts, 24-hour undo) on the "House
   Rankings" page above the public signage; balanced largest-group-first

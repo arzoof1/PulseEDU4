@@ -20060,6 +20060,11 @@ function App() {
           onOpenAstQueue={
             canApproveAst ? () => setActiveSection("astAdmin") : undefined
           }
+          onOpenClassComposer={
+            canAccessMtssHub
+              ? () => setActiveSection("classComposer")
+              : undefined
+          }
         />
       )}
 

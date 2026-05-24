@@ -267,6 +267,15 @@ export const schoolSettingsTable = pgTable(
     .$type<Record<string, string>>()
     .notNull()
     .default({}),
+  // Class Composer post-PM banner — per-school dismissal token. Stores
+  // a "<schoolYear>|<window>" string (e.g. "25-26|pm3") that the admin
+  // last dismissed. The Admin Hub banner re-appears automatically when
+  // a NEW window arrives (dismissed token no longer matches current
+  // readiness). NULL = never dismissed. The banner is informational
+  // ("here are suggested groupings — no roster changes") so schools
+  // that don't reshuffle mid-year can hide it without losing the
+  // ability to run Class Composer manually from Insights.
+  classComposerBannerDismissedSy: text("class_composer_banner_dismissed_sy"),
   schoolWideExpectationLetters: jsonb("school_wide_expectation_letters")
     .$type<Array<{ letter: string; word: string }>>()
     .notNull()
