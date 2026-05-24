@@ -3,6 +3,21 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- **LG green-check on Teacher Roster (Phase 1).** The LG column now
+  swaps the bucket bubble for a green check ✓ when the student met
+  the FAST Learning Gain rule, computed server-side in
+  `buildSubjectBlock` (`artifacts/api-server/src/routes/teacherRoster.ts`)
+  using the prior-year PM3 already loaded by `lib/fastHistory.ts`.
+  Rule: moved up a performance level → MET; maintained L5 → MET;
+  maintained L3 or L4 with this year's PM3 ≥ last year's PM3 + 1 →
+  MET; everything else (flat L3/L4, L1/L2 maintain, dropped level) →
+  bucket stays. Missing prior or current PM3 → bucket stays (no
+  false signal). Client renders the check via `LgCheck` in
+  `components/TeacherRosterPage.tsx` with a tooltip explaining
+  the trigger (e.g. "Moved L3 → L4 — FAST Learning Gain met").
+  Help copy + Open-work note updated; L1/L2 within-level point
+  threshold tracked in `replit.md` for Phase 2.
+
 - Multi-year FAST history chip — surfaces prior-year PM3 rows written
   by the FL Florida importer's "Import as historical (prior school
   year)" toggle, without re-importing. New helper

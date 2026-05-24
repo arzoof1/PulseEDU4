@@ -107,6 +107,14 @@ interface SubjectBlock {
     pm3: number;
     placement: Placement | null;
   } | null;
+  // FAST Learning Gain (server-computed). When true the LG column
+  // renders a green check instead of the bucket icon — the student
+  // either moved up a performance level vs. prior-year PM3 or
+  // maintained L3/L4/L5. false = decided "no LG" (bucket stays).
+  // null = cannot decide (missing prior or current PM3, no chart,
+  // no placement). See server-side `buildSubjectBlock` for the full
+  // rule + Phase 1 caveats.
+  learningGain: boolean | null;
   noChart: boolean;
 }
 
@@ -690,6 +698,58 @@ function BucketCell({ bucket }: { bucket: Bucket }) {
   return <BucketIcon bucket={bucket} />;
 }
 
+// Green check shown in the LG column when the student demonstrated a
+// FAST Learning Gain (moved up a performance level OR maintained L3+).
+// Replaces the bucket icon entirely — the bucket is "points to next
+// sub-level" guidance and is moot once LG is already realized.
+// Tooltip explains the rule so a teacher hovering over the check
+// understands what triggered it.
+function LgCheck({
+  priorLevel,
+  currentLevel,
+}: {
+  priorLevel: number | null;
+  currentLevel: number | null;
+}) {
+  const reason =
+    priorLevel != null && currentLevel != null
+      ? currentLevel > priorLevel
+        ? `Moved L${priorLevel} → L${currentLevel}`
+        : `Maintained L${currentLevel}`
+      : "Learning Gain met";
+  return (
+    <span
+      title={`${reason} — FAST Learning Gain met`}
+      aria-label={`Learning Gain met: ${reason}`}
+      style={{
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        width: 32,
+        height: 32,
+        borderRadius: "50%",
+        background: "#dcfce7",
+        border: "1.5px solid #16a34a",
+        color: "#15803d",
+      }}
+    >
+      <svg
+        width="18"
+        height="18"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <polyline points="5 12 10 17 19 8" />
+      </svg>
+    </span>
+  );
+}
+
 // Renders four <td>s (PM1 / PM2 / PM3 / LG) so the per-pill column
 // headers in the table header line up cleanly above each pill. When the
 // subject has no chart for the student's grade (e.g. Math for a 9th
@@ -869,7 +929,14 @@ function SubjectCells({
       )}
       {showLg && (
         <td style={dividerStyle()}>
-          <BucketCell bucket={block.bucket} />
+          {block.learningGain === true ? (
+            <LgCheck
+              priorLevel={prior?.placement?.level ?? null}
+              currentLevel={block.pm3Placement?.level ?? null}
+            />
+          ) : (
+            <BucketCell bucket={block.bucket} />
+          )}
         </td>
       )}
     </>
@@ -1604,10 +1671,11 @@ export default function TeacherRosterPage({
         </HowToSection>
         <HowToSection title="What the columns mean">
           <ul style={howtoListStyle}>
-            <li><strong>LG / BQ</strong> — Learning Gains and Bottom Quartile flags from the latest FAST window.</li>
+            <li><strong>LG column</strong> — a green check ✓ appears when the student met the FAST Learning Gain (moved up a performance level vs. last year's PM3, OR maintained L3/L4/L5). Otherwise the LG column shows the bucket icon (points to next sub-level). Empty when there's no prior-year PM3 to compare to, or no current PM3 yet.</li>
+            <li><strong>BQ</strong> — Bottom Quartile flag from last year's PM3.</li>
             <li><strong>Prior → PM1 → PM2 → PM3</strong> — last year's spring PM3 (from the historical importer) followed by this year's three FAST Progress Monitoring windows, in chronological order. Small "+N from PMx" deltas under each pill show point-change since the previous window.</li>
             <li><strong>Programs</strong> — service flags driving accommodations.</li>
-            <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects.</li>
+            <li><strong>Bucket gap</strong> — points to next FAST level on this grade. Suppressed for grade 3 and untracked subjects. Replaced by a green check ✓ when LG is met.</li>
             <li>
               <strong>🔗 chain</strong> next to a name — opens the
               "Suggest separation" dialog so you can flag students who

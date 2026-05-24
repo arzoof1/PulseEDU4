@@ -93,21 +93,18 @@ pointer here.
 
 ### Open work
 
-- **LG green-check on Teacher Roster (replaces bucket bubble).**
-  Pair with the multi-year FAST history chip already shipped — LG
-  ("Learning Gains") needs prior-year PM3 level + current-year PM3
-  level to compute, and `lib/fastHistory.ts` already supplies the
-  prior-year side. Swap the bucket-bubble cell for a small green
-  check when the student met LG (state rule: move up a level OR
-  stay at L3+/maintain L4+ OR within-level point growth threshold).
-  Open decisions: (1) transfer-in students with no prior-year PM3
-  → render dash, not check, and surface a tooltip explaining
-  "no prior PM3 on file"; (2) subject-band promotions
-  (e.g. Algebra I → 8th-grade math) — treat as L1 baseline per
-  FLDOE rule or skip from LG entirely; confirm with district.
-  Helper extension: add `pm3Level` alongside `pm3` to
-  `FastHistoryEntry` (currently score-only) so the LG cell
-  doesn't need a second query.
+- **LG within-level threshold for L1/L2 (Phase 2).** Phase 1 of
+  the LG green-check shipped (Teacher Roster LG column swaps the
+  bucket bubble for a green check ✓ when the student moved up a
+  level, maintained L5, or maintained L3/L4 with ≥ +1 scale-score
+  point growth). L1/L2 maintain cases currently read "no check"
+  because FLDOE's within-level point thresholds vary by grade and
+  the district hasn't confirmed values. Once confirmed, extend
+  the `learningGain` branch in `buildSubjectBlock`
+  (`routes/teacherRoster.ts`) with a per-grade lookup table.
+  Subject-band promotions (Algebra I etc.) also remain
+  uncredited — out of scope until the FL importer captures
+  prior course code.
 
 - **Class Composer "Master Plan" — end-to-end smoke test.**
   Walk the full flow once with real data before the next release:

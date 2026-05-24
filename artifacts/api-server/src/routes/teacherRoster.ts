@@ -157,6 +157,30 @@ interface SubjectBlock {
   // subject) yet. Only one prior year is surfaced on the roster;
   // multi-year history still lives on the student profile FAST card.
   priorPm3: PriorPm3 | null;
+  // FAST Learning Gain (FLDOE rule, Phase 1 subset).
+  //   true  — student demonstrated a learning gain this year. Either
+  //           moved up a performance level vs. prior-year PM3, or
+  //           maintained L3 / L4 / L5. The roster swaps the LG-column
+  //           bucket icon for a green check when this is true.
+  //   false — prior + current PM3 are both known but the student did
+  //           NOT meet the move-up / maintain-L3+ test. Bucket icon
+  //           still renders, unchanged.
+  //   null  — not enough data to decide (missing prior-year PM3,
+  //           missing current-year PM3, no chart, or grade band has
+  //           no placement). Bucket icon renders, unchanged.
+  // Phase 1 caveats (documented in replit.md "Open work"):
+  //   * Within-level point growth for students stuck at L1/L2 is NOT
+  //     credited yet — that rule needs per-grade thresholds the
+  //     district has not confirmed. Those students will read `false`
+  //     (no check) even when FLDOE would credit them. Conservative
+  //     default; never falsely awards a check.
+  //   * Subject-band promotions (e.g. 7th grader on Algebra I) are
+  //     not credited — we compare against prior-year MATH PM3 by
+  //     default. Out-of-scope for Phase 1; the FL importer would
+  //     need to capture the prior course code.
+  //   * Retention/skip uses (currentGrade − 1) for the prior chart;
+  //     same caveat already documented on `priorPm3.placement`.
+  learningGain: boolean | null;
   // True when no chart exists for this subject/grade combo (e.g. Algebra
   // 1 / Geometry / Math past G8). Client uses this to render only a
   // "—" instead of empty pills.
@@ -230,6 +254,7 @@ function buildSubjectBlock(
       priorYearScore: null,
       priorYearBq: false,
       priorPm3,
+      learningGain: null,
       noChart,
     };
   }
@@ -261,6 +286,41 @@ function buildSubjectBlock(
           currentSubLevel: null,
           nextStopLabel: null,
         };
+  // Learning Gain decision. We need BOTH a prior-year PM3 level and a
+  // current-year PM3 level on charts. PM3 placement uses the prior-grade
+  // chart by FAST convention (placePm3 internally subtracts a grade), so
+  // pm3Placement.level reads as "what level did they hit at end of last
+  // year's grade band" — exactly what FLDOE compares to.
+  // Note: priorPm3.placement uses the *test administration* grade chart
+  // (computed above with `placeOnChart(..., grade-1)`); that's the same
+  // chart pm3Placement uses, so the two levels are directly comparable.
+  //
+  // Rule (per district guidance):
+  //   - Moved up a performance level → MET
+  //   - Stayed at L5 → MET (top of scale; growth not measurable)
+  //   - Stayed at L3 or L4 → MET only when this year's PM3 is at least
+  //     last year's PM3 + 1 (i.e. some scale-score growth, not flat).
+  //     "Maintaining proficiency" requires evidence of forward motion;
+  //     a flat or declining score within the same band does not count.
+  //   - Stayed at L1 or L2 → NOT MET (within-level point thresholds
+  //     deferred; see Phase 1 caveats above).
+  //   - Dropped a level → NOT MET.
+  const learningGain: boolean | null = (() => {
+    const priorLevel = priorPm3?.placement?.level ?? null;
+    const currentLevel = pm3Placement?.level ?? null;
+    if (priorLevel == null || currentLevel == null) return null;
+    if (currentLevel > priorLevel) return true;
+    if (currentLevel === priorLevel) {
+      if (currentLevel === 5) return true;
+      if (currentLevel === 3 || currentLevel === 4) {
+        const priorScore = priorPm3?.pm3 ?? null;
+        const currentScore = row.pm3 ?? null;
+        if (priorScore == null || currentScore == null) return null;
+        return currentScore >= priorScore + 1;
+      }
+    }
+    return false;
+  })();
   return {
     pm1: row.pm1,
     pm2: row.pm2,
@@ -272,6 +332,7 @@ function buildSubjectBlock(
     priorYearScore: row.priorYearScore,
     priorYearBq: row.priorYearBq,
     priorPm3,
+    learningGain,
     noChart,
   };
 }
@@ -604,19 +665,6 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     studentIds,
     subjects: ["ela", "math"],
   });
-  // TEMP DEBUG: confirm helper returns data end-to-end
-  const _sampleId = studentIds.find((s) => s === "FL000011574961") ?? studentIds[0];
-  req.log.info(
-    {
-      schoolId,
-      studentIdCount: studentIds.length,
-      historyMapSize: historyMap.size,
-      sampleId: _sampleId,
-      sampleMath: pickHistory(historyMap, _sampleId, "math"),
-      sampleEla: pickHistory(historyMap, _sampleId, "ela"),
-    },
-    "[DEBUG priorPm3] historyMap stats",
-  );
 
   const retentionsByStudent = new Map<string, number[]>();
   for (const r of retentions) {
