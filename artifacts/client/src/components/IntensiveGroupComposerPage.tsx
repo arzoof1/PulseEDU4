@@ -12,6 +12,7 @@ interface WindowOpt {
 }
 interface Profile {
   studentId: string;
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   grade: number | null;
@@ -47,6 +48,7 @@ interface SuggestResponse {
   groups: Group[];
   overflow: Array<{
     studentId: string;
+    localSisId: string | null;
     firstName: string | null;
     lastName: string | null;
     grade: number | null;
@@ -55,6 +57,7 @@ interface SuggestResponse {
   }>;
   unscored: Array<{
     studentId: string;
+    localSisId: string | null;
     firstName: string | null;
     lastName: string | null;
     grade: number | null;
@@ -188,7 +191,7 @@ export default function IntensiveGroupComposerPage({
           String(g.cohesionPct),
           g.avgDominantPct == null ? "" : String(g.avgDominantPct),
           fullName(s),
-          s.studentId,
+          s.localSisId ?? "",
           s.grade == null ? "" : String(s.grade),
           s.overallPct == null ? "" : String(s.overallPct),
           s.topGaps[0] ?? "",
@@ -204,7 +207,7 @@ export default function IntensiveGroupComposerPage({
         "",
         "",
         fullName(u),
-        u.studentId,
+        u.localSisId ?? "",
         u.grade == null ? "" : String(u.grade),
         "",
         "",
@@ -577,7 +580,7 @@ export default function IntensiveGroupComposerPage({
                     <li key={s.studentId} style={{ marginBottom: 3 }}>
                       <span>{fullName(s)}</span>
                       <span style={{ color: "#6b7280", marginLeft: 6 }}>
-                        ({s.studentId}
+                        ({s.localSisId ?? "—"}
                         {s.overallPct != null ? ` · ${s.overallPct}%` : ""})
                       </span>
                     </li>
@@ -611,7 +614,7 @@ export default function IntensiveGroupComposerPage({
                   <li key={u.studentId}>
                     {fullName(u)}{" "}
                     <span style={{ color: "#6b7280" }}>
-                      ({u.studentId}
+                      ({u.localSisId ?? "—"}
                       {u.overallPct != null ? ` · ${u.overallPct}%` : ""})
                     </span>
                   </li>
@@ -641,7 +644,9 @@ export default function IntensiveGroupComposerPage({
                 {result.unscored.map((u) => (
                   <li key={u.studentId}>
                     {fullName(u)}{" "}
-                    <span style={{ color: "#6b7280" }}>({u.studentId})</span>
+                    <span style={{ color: "#6b7280" }}>
+                      ({u.localSisId ?? "—"})
+                    </span>
                   </li>
                 ))}
               </ul>

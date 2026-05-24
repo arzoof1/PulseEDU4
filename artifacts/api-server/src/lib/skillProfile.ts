@@ -23,6 +23,7 @@ export interface CategoryWeakness {
 
 export interface StudentSkillProfile {
   studentId: string;
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   grade: number | null;
@@ -56,6 +57,7 @@ interface ItemRow {
 
 interface StudentRow {
   studentId: string;
+  localSisId: string | null;
   firstName: string | null;
   lastName: string | null;
   grade: number | null;
@@ -84,6 +86,7 @@ export async function computeSkillProfiles(
     db
       .select({
         studentId: studentsTable.studentId,
+        localSisId: studentsTable.localSisId,
         firstName: studentsTable.firstName,
         lastName: studentsTable.lastName,
         grade: studentsTable.grade,
@@ -199,6 +202,7 @@ export async function computeSkillProfiles(
     const o = overall.get(s.studentId);
     return {
       studentId: s.studentId,
+      localSisId: s.localSisId,
       firstName: s.firstName,
       lastName: s.lastName,
       grade: s.grade,

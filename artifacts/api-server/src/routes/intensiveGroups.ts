@@ -397,6 +397,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     groups: clustered.groups,
     overflow: clustered.overflow.map((p) => ({
       studentId: p.studentId,
+      localSisId: p.localSisId,
       firstName: p.firstName,
       lastName: p.lastName,
       grade: p.grade,
@@ -405,6 +406,7 @@ router.get("/intensive-groups/suggest", async (req, res) => {
     })),
     unscored: unscored.map((p) => ({
       studentId: p.studentId,
+      localSisId: p.localSisId,
       firstName: p.firstName,
       lastName: p.lastName,
       grade: p.grade,
