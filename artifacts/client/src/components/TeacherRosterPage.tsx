@@ -693,6 +693,45 @@ const GROUP_DIVIDER: React.CSSProperties = {
   borderLeft: "1px solid #e5e7eb",
 };
 
+// Small "+12 from PM2" / "−8 from PM1" indicator under a PM pill, so
+// teachers don't have to do the subtraction in their head while scanning
+// the roster. Green for growth, red for decline, neutral gray for flat.
+// Renders nothing when either side is missing (most common case: a
+// student who didn't sit one of the windows) — better empty than wrong.
+function PmDelta({
+  from,
+  to,
+  fromLabel,
+}: {
+  from: number | null;
+  to: number | null;
+  fromLabel: string;
+}) {
+  if (from == null || to == null) return null;
+  const delta = to - from;
+  const sign = delta > 0 ? "+" : delta < 0 ? "−" : "±";
+  const color = delta > 0 ? "#15803d" : delta < 0 ? "#b91c1c" : "#6b7280";
+  return (
+    <div
+      title={`${sign}${Math.abs(delta)} scale-score points vs ${fromLabel}`}
+      style={{
+        marginTop: 2,
+        fontSize: 10,
+        lineHeight: 1.2,
+        color,
+        fontWeight: 600,
+        whiteSpace: "nowrap",
+      }}
+    >
+      {sign}
+      {Math.abs(delta)}{" "}
+      <span style={{ color: "#9ca3af", fontWeight: 400 }}>
+        from {fromLabel}
+      </span>
+    </div>
+  );
+}
+
 function SubjectCells({
   block,
   subjectLabel,
@@ -754,6 +793,7 @@ function SubjectCells({
             placement={block.pm3Placement}
             pmLabel={`${subjectLabel} PM3`}
           />
+          <PmDelta from={block.pm2} to={block.pm3} fromLabel="PM2" />
           {block.history.length > 0 && (
             <div
               title={block.history
@@ -796,6 +836,7 @@ function SubjectCells({
             placement={block.pm2Placement}
             pmLabel={`${subjectLabel} PM2`}
           />
+          <PmDelta from={block.pm1} to={block.pm2} fromLabel="PM1" />
         </td>
       )}
       {showLg && (
