@@ -101,16 +101,40 @@ pointer here.
   download cleanly. Verify role gate (counselor can reach,
   teacher cannot).
 
-- **Historical FAST data + Algebra I placement review (see proposal below).**
-  Extend the existing FAST importer with a "prior school year"
-  toggle (PM3-only, score+level+grade, no strand). Surface a
-  3-year FAST history chip on student profile + teacher roster,
-  and add an "Algebra I Placement Review" admin report that
-  lists every L3+ 7th grader with their 3-year trajectory and a
-  drag-to-Regular-8th-Math override path (parent-opt-out
-  workflow). Pays off in MTSS tier moves, 3rd-grade retention
-  good-cause review, gifted referral, summer-school targeting,
-  ELL post-exit monitoring, and IEP annual reviews.
+- **Historical FAST data + Algebra I placement review.**
+  Phase 1 (~1.5 wk): extend the existing FAST importer with a
+  "prior school year" toggle (PM3-only, score + level + grade,
+  no strand). Add `fast_results.is_historical` + new
+  `algebra_placement_overrides` table. Per-school
+  `fast_history_years_visible` setting (default 3, min 2,
+  max 5 — 5 cap because FAST only launched in FL 22-23; older
+  data would be FSA on a different scale). Imports older than
+  the visible window stay dormant, never deleted. Surface a
+  multi-year FAST history chip on student profile + teacher
+  roster + MTSS plan editor. Add "Algebra I Placement Review"
+  admin report (admin + Core Team + Counselor view; admin +
+  Counselor override) listing every current L3+ 7th-grader with
+  their multi-year PM3 trajectory + a "Move to Regular 8th
+  Math" override modal requiring justification + parent-opt-out
+  checkbox + optional opt-out PDF upload (reuses object
+  storage). All overrides audit-logged. Report exports as CSV +
+  printable PDF (reuses Class Composer PDF infra). Class
+  Composer gets a `trajectoryFilter` param so cusp recipes can
+  optionally fold in first-time L3s.
+  Phase 2 (later, after schools have 2–3 yrs of data
+  accumulating naturally): longitudinal teacher / school
+  dashboards — year-over-year cohort growth per teacher, cohort-
+  following views, multi-year subgroup equity trends. Surface as
+  a "Multi-year" toggle on existing Insights pages, not new
+  pages. Teacher-level rollups admin-only by default, framed as
+  "growth context" not evaluation, never exposed to parent
+  portal or teacher-facing views without explicit admin enable.
+  Gracefully tag rollups attributed to deleted/transferred staff
+  as "former staff member" rather than dropping the data.
+  Pays off in: Algebra placement defensibility, MTSS tier exit
+  decisions, 3rd-grade retention good-cause portfolios, gifted
+  referral flags, summer-school seat targeting, ELL post-exit
+  monitoring, IEP annual review prep.
 
 - **AI Consistency Check — onboarding step + admin telemetry tile.**
   (1) Register a "Review Consistency Check guardrails" step in
