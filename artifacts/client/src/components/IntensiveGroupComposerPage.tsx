@@ -2,6 +2,7 @@
 // Admin / Core Team only. Read-only on top of FAST item responses.
 
 import { useEffect, useMemo, useState } from "react";
+import { authFetch } from "../lib/authToken";
 
 interface WindowOpt {
   schoolYear: string;
@@ -108,7 +109,7 @@ export default function IntensiveGroupComposerPage({
   useEffect(() => {
     let cancelled = false;
     setError(null);
-    fetch(`/api/intensive-groups/windows?subject=${subject}`)
+    authFetch(`/api/intensive-groups/windows?subject=${subject}`)
       .then((r) => {
         if (!r.ok) throw new Error("Failed to load windows");
         return r.json();
@@ -147,7 +148,7 @@ export default function IntensiveGroupComposerPage({
         params.set("schoolYear", sy);
         params.set("window", w);
       }
-      const r = await fetch(`/api/intensive-groups/suggest?${params.toString()}`);
+      const r = await authFetch(`/api/intensive-groups/suggest?${params.toString()}`);
       if (!r.ok) {
         const j = await r.json().catch(() => ({}));
         throw new Error(j.error || `HTTP ${r.status}`);

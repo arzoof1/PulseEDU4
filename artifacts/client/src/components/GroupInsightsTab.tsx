@@ -4,6 +4,23 @@
 // sections get a badge but aren't required.
 
 import { useEffect, useState } from "react";
+import { authFetch } from "../lib/authToken";
+
+function csvEscape(v: string | number | null | undefined): string {
+  if (v === null || v === undefined) return "";
+  const s = String(v);
+  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+}
+function downloadCsv(filename: string, rows: string[][]): void {
+  const csv = rows.map((r) => r.map(csvEscape).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
 
 interface WindowOpt {
   schoolYear: string;
@@ -56,7 +73,6 @@ interface InsightsResponse {
     outgrew: Array<{ studentId: string; name: string | null }>;
     wouldNowFit: Array<{ studentId: string; name: string | null }>;
   } | null;
-  beforeAfter: { current: number; ifReclustered: number } | null;
   profiles: Profile[];
 }
 interface SectionRow {
@@ -88,7 +104,7 @@ export default function GroupInsightsTab({
   // Load this teacher's sections.
   useEffect(() => {
     let cancelled = false;
-    fetch("/api/intensive-groups/sections")
+    authFetch("/api/intensive-groups/sections")
       .then((r) => {
         if (!r.ok) throw new Error("Failed to load sections");
         return r.json();
@@ -119,7 +135,7 @@ export default function GroupInsightsTab({
       params.set("schoolYear", sy);
       params.set("window", w);
     }
-    fetch(`/api/intensive-groups/insights?${params.toString()}`)
+    authFetch(`/api/intensive-groups/insights?${params.toString()}`)
       .then((r) => {
         if (!r.ok) {
           return r.json().then((j: { error?: string }) => {
@@ -165,10 +181,56 @@ export default function GroupInsightsTab({
     );
   }
 
+  const printReport = () => window.print();
+  const exportSubgroupsCsv = () => {
+    if (!data) return;
+    const rows: string[][] = [
+      [
+        "Sub-group",
+        "Focus",
+        "Cohesion %",
+        "Avg dominant %",
+        "Student ID",
+        "Last name",
+        "First name",
+        "Grade",
+        "Overall %",
+        "Top gaps",
+      ],
+    ];
+    for (const g of data.subgroups) {
+      for (const s of g.students) {
+        rows.push([
+          String(g.index),
+          g.dominantCategory ?? "Mixed",
+          String(g.cohesionPct),
+          g.avgDominantPct != null ? String(g.avgDominantPct) : "",
+          s.studentId,
+          s.lastName ?? "",
+          s.firstName ?? "",
+          s.grade != null ? String(s.grade) : "",
+          s.overallPct != null ? String(s.overallPct) : "",
+          s.topGaps.join("; "),
+        ]);
+      }
+    }
+    const sec = data.section;
+    downloadCsv(
+      `group-insights-per${sec.period}-${sec.courseName.replace(/[^a-z0-9]+/gi, "_")}-${data.subject}-${data.schoolYear}-${data.window}.csv`,
+      rows,
+    );
+  };
+
   return (
     <div style={{ padding: 4 }}>
+      <style>{`
+        @media print {
+          .gi-no-print { display: none !important; }
+        }
+      `}</style>
       {/* Section + window picker row */}
       <div
+        className="gi-no-print"
         style={{
           display: "flex",
           gap: 12,
@@ -222,6 +284,39 @@ export default function GroupInsightsTab({
             <strong>{data.subject.toUpperCase()}</strong>
           </span>
         )}
+        {data && (
+          <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              onClick={printReport}
+              style={{
+                fontSize: 12,
+                padding: "4px 10px",
+                border: "1px solid #d1d5db",
+                background: "white",
+                borderRadius: 4,
+                cursor: "pointer",
+              }}
+            >
+              Print
+            </button>
+            <button
+              type="button"
+              onClick={exportSubgroupsCsv}
+              disabled={data.subgroups.length === 0}
+              style={{
+                fontSize: 12,
+                padding: "4px 10px",
+                border: "1px solid #d1d5db",
+                background: data.subgroups.length === 0 ? "#f3f4f6" : "white",
+                borderRadius: 4,
+                cursor: data.subgroups.length === 0 ? "not-allowed" : "pointer",
+              }}
+            >
+              Export sub-groups CSV
+            </button>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -246,11 +341,6 @@ export default function GroupInsightsTab({
             <div style={{ fontSize: 13, color: "#374151", marginTop: 6 }}>
               Homogeneity score:{" "}
               <strong>{data.sectionProfile.homogeneityPct}%</strong>
-              {data.beforeAfter && (
-                <span style={{ marginLeft: 8, color: "#6b7280" }}>
-                  (re-clustered ceiling: {data.beforeAfter.ifReclustered}%)
-                </span>
-              )}
             </div>
             <div style={{ marginTop: 10 }}>
               <table style={{ fontSize: 13, borderCollapse: "collapse" }}>

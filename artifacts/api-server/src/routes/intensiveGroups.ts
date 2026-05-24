@@ -603,20 +603,14 @@ router.get("/intensive-groups/insights", async (req, res) => {
     };
   }
 
-  // Before/after concentration — admin-only. "Before" = current
-  // homogeneity of the actual section. "After" = simulated
-  // homogeneity if the same kids were re-clustered tightly (k=1).
-  let beforeAfter: { current: number; ifReclustered: number } | null = null;
-  if (canManageGroups(staff) && profiles.length > 0) {
-    const reclustered = clusterProfilesIntoGroups(profiles, 1, profiles.length);
-    const reSummary = summarizeSection(
-      reclustered.groups[0]?.students ?? [],
-    );
-    beforeAfter = {
-      current: sectionProfile.homogeneityPct,
-      ifReclustered: reSummary.homogeneityPct,
-    };
-  }
+  // NOTE: an earlier draft tried to surface a "ceiling" comparison by
+  // re-clustering the same roster into one group, but clustering a
+  // fixed set into k=1 just returns that same set — the comparison
+  // was meaningless. A real counterfactual would require pulling a
+  // grade-wide candidate pool and recruiting a fresh section of the
+  // same seat count; that belongs in the Composer, not on a teacher's
+  // read-only roster tab. Field intentionally omitted from the
+  // response until that work lands.
 
   res.json({
     section: {
@@ -634,7 +628,6 @@ router.get("/intensive-groups/insights", async (req, res) => {
     sectionProfile,
     subgroups,
     drift,
-    beforeAfter,
     profiles: profiles.map((p) => ({
       studentId: p.studentId,
       firstName: p.firstName,
