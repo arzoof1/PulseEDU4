@@ -3,6 +3,24 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Multi-year FAST history chip — surfaces prior-year PM3 rows written
+  by the FL Florida importer's "Import as historical (prior school
+  year)" toggle, without re-importing. New helper
+  `artifacts/api-server/src/lib/fastHistory.ts` (`loadFastHistory`,
+  `pickHistory`, `loadFastHistoryYearsVisible`,
+  `priorSchoolYearLabels`): PM3-only, schoolId-scoped, strictly older
+  than current SY, gated to `is_historical=true` rows only, window
+  capped at 5 / default 3 via `school_settings.fast_history_years_visible`.
+  Wired into three surfaces with batched single-query loads (no N+1):
+  Teacher Roster API attaches `history` to each ELA/Math `SubjectBlock`
+  (rendered as a subtle line under the PM3 ScorePill on
+  `TeacherRosterPage.tsx`); Student Profile `/api/insights/students/:id/profile`
+  attaches `history` per subject (rendered as a "History PM3:" sub-row
+  under each subject row in `StudentProfile.tsx`); and the MTSS
+  `/api/mtss-plans/fast-suggestions` route attaches `priorYearPm3`
+  per suggestion (rendered as a small line under the student name in
+  `MtssPlansAdmin.tsx`). Source of truth: `student_fast_scores` rows
+  keyed `(student, subject, school_year)` with `is_historical=true`.
 - Class Composer post-PM nudge — dismissible Admin Hub banner +
   matching onboarding step "Run Class Composer after PM3 upload
   (suggestions only)" under Interventions & MTSS. Auto-detects when

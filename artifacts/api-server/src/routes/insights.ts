@@ -50,6 +50,7 @@ import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 import {
   parseInsightsFilters,
   applyInsightsFilters,
@@ -318,6 +319,13 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
         ),
       ),
     );
+  // Multi-year prior-year PM3 history (FL Florida historical importer).
+  // Loaded for this single student so the FAST PM card can show prior
+  // years alongside current PM1/PM2/PM3. Empty when no historical rows.
+  const fastHistoryMap = await loadFastHistory({
+    schoolId,
+    studentIds: [studentId],
+  });
   const assessments = await db
     .select({
       name: assessmentsTable.assessmentName,
@@ -1055,6 +1063,9 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           pm3: s.pm3,
           priorYearScore: s.priorYearScore,
           priorYearBq: s.priorYearBq,
+          // Multi-year PM3 history from the FL Florida historical
+          // importer. Newest-first; empty when no historical rows.
+          history: pickHistory(fastHistoryMap, studentId, s.subject),
         })),
         // Structured iReady AP1/AP2/AP3 grouped by subject. We group from
         // the in-memory `assessments` list (already fetched, ordered desc)

@@ -6,7 +6,7 @@
 // enforces visibility (roster ∪ trusted-adult ∪ core team) and returns
 // 403 if the caller can't see this student. We surface that gracefully.
 
-import { useEffect, useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import StudentPhoto from "./StudentPhoto";
 import StudentBenchmarksPanel from "./StudentBenchmarksPanel";
 import { HowToUseHelp, HowToSection, RoleSection, howtoListStyle } from "./HowToUseHelp";
@@ -68,6 +68,9 @@ interface ProfilePayload {
         pm3: number | null;
         priorYearScore: number | null;
         priorYearBq: boolean;
+        // Multi-year PM3 history from the FL Florida historical
+        // importer. Newest-first; empty when no historical rows.
+        history: Array<{ schoolYear: string; pm3: number }>;
       }>;
       ireadyScores: Array<{
         subject: "Reading" | "Math";
@@ -2897,18 +2900,49 @@ export default function StudentProfile({
                 </thead>
                 <tbody>
                   {pillars.academics.fastScores.map((s) => (
-                    <tr key={s.subject}>
-                      <td style={{ textTransform: "uppercase" }}>{s.subject}</td>
-                      <td style={{ textAlign: "right" }}>{s.pm1 ?? "—"}</td>
-                      <td style={{ textAlign: "right" }}>{s.pm2 ?? "—"}</td>
-                      <td style={{ textAlign: "right" }}>{s.pm3 ?? "—"}</td>
-                      <td style={{ textAlign: "right" }}>
-                        {s.priorYearScore ?? "—"}
-                        {s.priorYearBq && (
-                          <span style={{ color: "#991b1b", marginLeft: 4 }}>(BQ)</span>
-                        )}
-                      </td>
-                    </tr>
+                    <React.Fragment key={s.subject}>
+                      <tr>
+                        <td style={{ textTransform: "uppercase" }}>{s.subject}</td>
+                        <td style={{ textAlign: "right" }}>{s.pm1 ?? "—"}</td>
+                        <td style={{ textAlign: "right" }}>{s.pm2 ?? "—"}</td>
+                        <td style={{ textAlign: "right" }}>{s.pm3 ?? "—"}</td>
+                        <td style={{ textAlign: "right" }}>
+                          {s.priorYearScore ?? "—"}
+                          {s.priorYearBq && (
+                            <span style={{ color: "#991b1b", marginLeft: 4 }}>(BQ)</span>
+                          )}
+                        </td>
+                      </tr>
+                      {s.history.length > 0 && (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            style={{
+                              paddingLeft: 16,
+                              paddingTop: 0,
+                              paddingBottom: 6,
+                              fontSize: "0.75rem",
+                              color: "#6b7280",
+                            }}
+                          >
+                            <span style={{ marginRight: 8 }}>History PM3:</span>
+                            {s.history.map((h, i) => (
+                              <span key={h.schoolYear} style={{ marginRight: 10 }}>
+                                {i > 0 && (
+                                  <span style={{ color: "#d1d5db", marginRight: 10 }}>
+                                    ·
+                                  </span>
+                                )}
+                                <span style={{ color: "#9ca3af" }}>{h.schoolYear}</span>{" "}
+                                <span style={{ color: "#374151", fontWeight: 600 }}>
+                                  {h.pm3}
+                                </span>
+                              </span>
+                            ))}
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   ))}
                 </tbody>
               </table>

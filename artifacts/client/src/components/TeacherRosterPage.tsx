@@ -96,6 +96,9 @@ interface SubjectBlock {
   bucket: Bucket;
   priorYearScore: number | null;
   priorYearBq: boolean;
+  // Multi-year PM3 history from the FL Florida historical importer
+  // (newest-first). Empty when no prior-year rows exist. PM3-only.
+  history: Array<{ schoolYear: string; pm3: number }>;
   noChart: boolean;
 }
 
@@ -751,6 +754,30 @@ function SubjectCells({
             placement={block.pm3Placement}
             pmLabel={`${subjectLabel} PM3`}
           />
+          {block.history.length > 0 && (
+            <div
+              title={block.history
+                .map((h) => `${h.schoolYear} PM3: ${h.pm3}`)
+                .join("  •  ")}
+              style={{
+                marginTop: 3,
+                fontSize: 10,
+                lineHeight: 1.2,
+                color: "#6b7280",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {block.history.map((h, i) => (
+                <span key={h.schoolYear}>
+                  {i > 0 && " · "}
+                  <span style={{ color: "#9ca3af" }}>{h.schoolYear}</span>{" "}
+                  <span style={{ color: "#374151", fontWeight: 600 }}>
+                    {h.pm3}
+                  </span>
+                </span>
+              ))}
+            </div>
+          )}
         </td>
       )}
       {showPm1 && (

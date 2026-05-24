@@ -36,6 +36,7 @@ import {
   parseCsvIds,
 } from "../lib/effectiveTeachers.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
+import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 
 const router: IRouter = Router();
 
@@ -977,6 +978,9 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     suggestedGoal: string;
     windows: WindowPct[];
     belowCount: number;
+    // Most-recent prior-year PM3 for this student+subject (from the
+    // FL Florida historical importer). Null when no historical row.
+    priorYearPm3: { schoolYear: string; pm3: number } | null;
   };
 
   const studentIdsNeeded = new Set<string>();
@@ -1053,6 +1057,7 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
         `instruction and weekly progress monitoring.`,
       windows,
       belowCount,
+      priorYearPm3: null,
     });
     studentIdsNeeded.add(agg.studentId);
   }
@@ -1089,6 +1094,25 @@ router.get("/mtss-plans/fast-suggestions", async (req, res) => {
     if (meta) {
       s.studentName = meta.name;
       s.studentGrade = meta.grade;
+    }
+  }
+
+  // Attach most-recent prior-year PM3 per (student, subject) from the
+  // FL Florida historical importer. Single batched load keyed by every
+  // suggested student. Empty map when no historical data.
+  if (provisional.length > 0) {
+    const historyMap = await loadFastHistory({
+      schoolId,
+      studentIds: Array.from(studentIdsNeeded),
+    });
+    for (const s of provisional) {
+      const hist = pickHistory(historyMap, s.studentId, s.subject);
+      if (hist.length > 0) {
+        s.priorYearPm3 = {
+          schoolYear: hist[0].schoolYear,
+          pm3: hist[0].pm3,
+        };
+      }
     }
   }
 

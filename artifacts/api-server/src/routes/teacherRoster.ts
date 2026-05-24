@@ -41,6 +41,12 @@ import { and, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import {
+  loadFastHistory,
+  pickHistory,
+  type FastHistoryEntry,
+  type FastHistoryMap,
+} from "../lib/fastHistory.js";
+import {
   bucketFor,
   bucketTarget,
   hasChart,
@@ -133,6 +139,11 @@ interface SubjectBlock {
   bucket: BucketInfo;
   priorYearScore: number | null;
   priorYearBq: boolean;
+  // Multi-year PM3 history (newest-first) from the FL Florida importer's
+  // historical mode. Empty array when no historical rows exist for this
+  // (student, subject). PM3-only by importer contract. Window size is
+  // bounded by school_settings.fast_history_years_visible (1..5).
+  history: FastHistoryEntry[];
   // True when no chart exists for this subject/grade combo (e.g. Algebra
   // 1 / Geometry / Math past G8). Client uses this to render only a
   // "—" instead of empty pills.
@@ -143,6 +154,7 @@ function buildSubjectBlock(
   row: typeof studentFastScoresTable.$inferSelect | undefined,
   subject: Subject,
   grade: number,
+  history: FastHistoryEntry[],
 ): SubjectBlock {
   const noChart = !hasChart(subject, grade);
   if (!row) {
@@ -162,6 +174,7 @@ function buildSubjectBlock(
       },
       priorYearScore: null,
       priorYearBq: false,
+      history,
       noChart,
     };
   }
@@ -203,6 +216,7 @@ function buildSubjectBlock(
     bucket,
     priorYearScore: row.priorYearScore,
     priorYearBq: row.priorYearBq,
+    history,
     noChart,
   };
 }
@@ -524,6 +538,18 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       ),
   ]);
 
+  // Multi-year FAST history (PM3-only, prior years within the school's
+  // configured visible window). Loaded outside the parent Promise.all
+  // because it needs a second round-trip for the
+  // fast_history_years_visible setting; keeping it here avoids
+  // serializing the much heavier roster joins above. ELA + Math only —
+  // EOC subjects render no history chip on the roster.
+  const historyMap: FastHistoryMap = await loadFastHistory({
+    schoolId,
+    studentIds,
+    subjects: ["ela", "math"],
+  });
+
   const retentionsByStudent = new Map<string, number[]>();
   for (const r of retentions) {
     const list = retentionsByStudent.get(r.studentId) ?? [];
@@ -616,8 +642,18 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
       // memorize their names.
       photoObjectKey: stu.photoObjectKey,
       photoConsent: stu.photoConsent,
-      ela: buildSubjectBlock(elaRow, "ela", grade),
-      math: buildSubjectBlock(mathRow, "math", grade),
+      ela: buildSubjectBlock(
+        elaRow,
+        "ela",
+        grade,
+        pickHistory(historyMap, stu.studentId, "ela"),
+      ),
+      math: buildSubjectBlock(
+        mathRow,
+        "math",
+        grade,
+        pickHistory(historyMap, stu.studentId, "math"),
+      ),
       // Invisibility = no non-voided PBIS entry in the school's
       // invisibleDays window. Tier is the highest active MTSS plan
       // tier (or null when the student has no open plan).

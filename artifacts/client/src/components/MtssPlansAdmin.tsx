@@ -146,6 +146,9 @@ interface FastSuggestion {
   suggestedGoal: string;
   windows: FastSuggestionWindow[];
   belowCount: number;
+  // Most-recent prior-year PM3 (from the FL Florida historical
+  // importer). Null when no historical data on file.
+  priorYearPm3: { schoolYear: string; pm3: number } | null;
 }
 
 interface FastSuggestionsResp {
@@ -594,6 +597,28 @@ export default function MtssPlansAdmin({
                                   ? ` • Gr ${s.studentGrade}`
                                   : ""}
                               </div>
+                              {s.priorYearPm3 && (
+                                <div
+                                  title={`Prior-year FAST PM3 (${s.priorYearPm3.schoolYear})`}
+                                  style={{
+                                    marginTop: 2,
+                                    fontSize: "0.7rem",
+                                    color: "#6b7280",
+                                  }}
+                                >
+                                  <span style={{ color: "#9ca3af" }}>
+                                    {s.priorYearPm3.schoolYear} PM3
+                                  </span>{" "}
+                                  <span
+                                    style={{
+                                      color: "#374151",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    {s.priorYearPm3.pm3}
+                                  </span>
+                                </div>
+                              )}
                             </td>
                             <td
                               style={{

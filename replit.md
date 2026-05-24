@@ -75,6 +75,7 @@ _Populate as you build_
 Archived to `docs/shipped.md` to keep this file focused on active
 work. Most recent entries:
 
+- Multi-year FAST history chip (Teacher Roster + Student Profile + MTSS Tier-2 suggestions) — surfaces FL Florida historical-importer rows.
 - Bulk feature picker + admin "reset to temp password".
 - Two-tier feature flag AND fix (loadEffectiveFeatures).
 - Per-school plan editor + plan picker on onboarding.
@@ -91,6 +92,22 @@ When you ship something new, add a bullet to the top of
 pointer here.
 
 ### Open work
+
+- **LG green-check on Teacher Roster (replaces bucket bubble).**
+  Pair with the multi-year FAST history chip already shipped — LG
+  ("Learning Gains") needs prior-year PM3 level + current-year PM3
+  level to compute, and `lib/fastHistory.ts` already supplies the
+  prior-year side. Swap the bucket-bubble cell for a small green
+  check when the student met LG (state rule: move up a level OR
+  stay at L3+/maintain L4+ OR within-level point growth threshold).
+  Open decisions: (1) transfer-in students with no prior-year PM3
+  → render dash, not check, and surface a tooltip explaining
+  "no prior PM3 on file"; (2) subject-band promotions
+  (e.g. Algebra I → 8th-grade math) — treat as L1 baseline per
+  FLDOE rule or skip from LG entirely; confirm with district.
+  Helper extension: add `pm3Level` alongside `pm3` to
+  `FastHistoryEntry` (currently score-only) so the LG cell
+  doesn't need a second query.
 
 - **Class Composer "Master Plan" — end-to-end smoke test.**
   Walk the full flow once with real data before the next release:
@@ -109,9 +126,10 @@ pointer here.
   `fast_history_years_visible` setting (default 3, min 2,
   max 5 — 5 cap because FAST only launched in FL 22-23; older
   data would be FSA on a different scale). Imports older than
-  the visible window stay dormant, never deleted. Surface a
-  multi-year FAST history chip on student profile + teacher
-  roster + MTSS plan editor. Add "Algebra I Placement Review"
+  the visible window stay dormant, never deleted. (Multi-year
+  FAST history chip on student profile + teacher roster + MTSS
+  plan editor — SHIPPED, see `lib/fastHistory.ts`.) Add
+  "Algebra I Placement Review"
   admin report (admin + Core Team + Counselor view; admin +
   Counselor override) listing every current L3+ 7th-grader with
   their multi-year PM3 trajectory + a "Move to Regular 8th
