@@ -604,6 +604,19 @@ router.get("/teacher-roster", async (req: Request, res: Response) => {
     studentIds,
     subjects: ["ela", "math"],
   });
+  // TEMP DEBUG: confirm helper returns data end-to-end
+  const _sampleId = studentIds.find((s) => s === "FL000011574961") ?? studentIds[0];
+  req.log.info(
+    {
+      schoolId,
+      studentIdCount: studentIds.length,
+      historyMapSize: historyMap.size,
+      sampleId: _sampleId,
+      sampleMath: pickHistory(historyMap, _sampleId, "math"),
+      sampleEla: pickHistory(historyMap, _sampleId, "ela"),
+    },
+    "[DEBUG priorPm3] historyMap stats",
+  );
 
   const retentionsByStudent = new Map<string, number[]>();
   for (const r of retentions) {
