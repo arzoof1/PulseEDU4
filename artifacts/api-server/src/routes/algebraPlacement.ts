@@ -53,6 +53,17 @@ import { renderAlgebraPlacementPdf } from "../lib/algebraPlacementPdf";
 
 const router: Router = Router();
 
+// Load the acting staff row for an authenticated request. The global
+// session middleware only sets `req.staffId` (a number); routes that
+// need role flags must hydrate the row themselves. This mirrors the
+// `loadStaff` pattern used by digest.ts, parentEmail.ts, customRoles.ts.
+async function loadActingStaff(req: Request) {
+  const id = (req as Request & { staffId?: number | null }).staffId;
+  if (!id) return null;
+  const [s] = await db.select().from(staffTable).where(eq(staffTable.id, id));
+  return s && s.active ? s : null;
+}
+
 // FAST Math PM3 → level mapping uses the same per-grade bands as the
 // Class Composer (`deriveLevelForWindow` in intensiveGroups.ts). For
 // the Placement Review report we only need the LEVEL (not the strand
@@ -303,7 +314,7 @@ async function buildReport(schoolId: number): Promise<{
 router.get("/algebra-placement", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const staff = (req as Request & { staff?: Parameters<typeof canViewAlgebraPlacement>[0] }).staff;
+  const staff = await loadActingStaff(req);
   if (!staff || !canViewAlgebraPlacement(staff)) {
     res.status(403).json({ error: "Not authorized" });
     return;
@@ -321,7 +332,7 @@ router.get("/algebra-placement", async (req: Request, res: Response) => {
 router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const staff = (req as Request & { staff?: Parameters<typeof canViewAlgebraPlacement>[0] }).staff;
+  const staff = await loadActingStaff(req);
   if (!staff || !canViewAlgebraPlacement(staff)) {
     res.status(403).json({ error: "Not authorized" });
     return;
@@ -390,7 +401,7 @@ router.get("/algebra-placement/csv", async (req: Request, res: Response) => {
 router.get("/algebra-placement/pdf", async (req: Request, res: Response) => {
   const schoolId = requireSchool(req, res);
   if (!schoolId) return;
-  const staff = (req as Request & { staff?: Parameters<typeof canViewAlgebraPlacement>[0] }).staff;
+  const staff = await loadActingStaff(req);
   if (!staff || !canViewAlgebraPlacement(staff)) {
     res.status(403).json({ error: "Not authorized" });
     return;
@@ -437,13 +448,7 @@ router.post(
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const staff = (
-      req as Request & {
-        staff?: Parameters<typeof canSaveAlgebraPlacementOverride>[0] & {
-          id: number;
-        };
-      }
-    ).staff;
+    const staff = await loadActingStaff(req);
     if (!staff || !canSaveAlgebraPlacementOverride(staff)) {
       res.status(403).json({ error: "Not authorized" });
       return;
@@ -493,7 +498,7 @@ router.post(
       boundObjectKey = optOutFileObjectKey.trim();
     }
     const schoolYear = await currentSchoolYearLabelForSchool(schoolId);
-    const staffId = (staff as unknown as { id: number }).id;
+    const staffId = staff.id;
     // Verify the student really is a current 7th grader at this
     // school — prevents an admin from saving placements for someone
     // else's tenant or for a student in the wrong grade.
@@ -564,11 +569,7 @@ router.delete(
   async (req: Request, res: Response) => {
     const schoolId = requireSchool(req, res);
     if (!schoolId) return;
-    const staff = (
-      req as Request & {
-        staff?: Parameters<typeof canSaveAlgebraPlacementOverride>[0];
-      }
-    ).staff;
+    const staff = await loadActingStaff(req);
     if (!staff || !canSaveAlgebraPlacementOverride(staff)) {
       res.status(403).json({ error: "Not authorized" });
       return;
