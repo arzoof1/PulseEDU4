@@ -666,30 +666,6 @@ export default function TeacherBenchmarksTab({
             </select>
           </label>
         )}
-        {/* Period filter — seeded from the Teacher Roster page's chip
-            row so the heatmap + Print PDF respect the prior selection.
-            "All" = union across periods (legacy behavior). */}
-        {rosterAvailablePeriods.length > 0 && (
-          <label
-            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
-            title="Filter the heatmap + Print PDF to one class period. Defaults to whatever was selected on the Teacher Roster page."
-          >
-            Period:
-            <select
-              value={periodFilter == null ? "" : String(periodFilter)}
-              onChange={(e) =>
-                setPeriodFilter(e.target.value === "" ? null : Number(e.target.value))
-              }
-            >
-              <option value="">All</option>
-              {rosterAvailablePeriods.map((p) => (
-                <option key={p} value={p}>
-                  {p}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
         {/* Growth toggle — disabled until at least 2 windows exist. */}
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
@@ -775,13 +751,49 @@ export default function TeacherBenchmarksTab({
           </span>
         )}
         <span style={{ flex: 1 }} />
+        {/* Print-PDF scope picker. Lives right next to the button so
+            there's zero ambiguity about which period the PDF will
+            cover. Defaults to whatever was selected on the Teacher
+            Roster page; teacher can override here. The button label
+            mirrors the scope so it's visible without hovering. */}
+        {rosterAvailablePeriods.length > 0 && (
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 12,
+              color: "#374151",
+            }}
+            title="Scope for the Print PDF — All periods or a single period."
+          >
+            Print scope:
+            <select
+              value={periodFilter == null ? "" : String(periodFilter)}
+              onChange={(e) =>
+                setPeriodFilter(
+                  e.target.value === "" ? null : Number(e.target.value),
+                )
+              }
+              style={{ fontSize: 12 }}
+            >
+              <option value="">All periods</option>
+              {rosterAvailablePeriods.map((p) => (
+                <option key={p} value={p}>
+                  Period {p}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           onClick={openPdf}
           disabled={!data || data.benchmarks.length === 0}
-          style={{ padding: "4px 10px" }}
+          style={{ padding: "4px 10px", fontWeight: 600 }}
           title="Open printable PDF of this heatmap"
         >
-          Print PDF
+          Print PDF{" "}
+          {periodFilter == null ? "(All periods)" : `(Period ${periodFilter})`}
         </button>
         <button
           onClick={openReport}
