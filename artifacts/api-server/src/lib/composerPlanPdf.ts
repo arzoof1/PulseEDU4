@@ -258,7 +258,7 @@ export async function renderComposerPlanPdf(
         i + 2,
         totalPages,
       );
-      drawFooter(doc, input.publicId, qrBuffer);
+      drawFooter(doc, input.publicId, qrBuffer, true);
       drawGroupBody(doc, g, {
         planName: input.planName,
         totalGroups: input.groups.length,
@@ -309,6 +309,7 @@ function drawFooter(
   doc: PDFKit.PDFDocument,
   publicId: string,
   qrBuffer: Buffer,
+  showSignature: boolean = false,
 ) {
   const left = PAGE_MARGIN;
   const right = doc.page.width - PAGE_MARGIN;
@@ -334,26 +335,30 @@ function drawFooter(
   });
   // "Confirmed by" / "Date" signature lines — Florida districts want
   // a paper trail showing who reviewed the benchmark-based grouping
-  // before it went to the master scheduler.
-  doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-  doc.text("Confirmed by:", left, top + 14);
-  doc
-    .save()
-    .moveTo(left + 70, top + 24)
-    .lineTo(left + 270, top + 24)
-    .lineWidth(0.5)
-    .strokeColor("#475569")
-    .stroke()
-    .restore();
-  doc.text("Date:", left, top + 38);
-  doc
-    .save()
-    .moveTo(left + 70, top + 48)
-    .lineTo(left + 200, top + 48)
-    .lineWidth(0.5)
-    .strokeColor("#475569")
-    .stroke()
-    .restore();
+  // before it went to the master scheduler. Only printed on the first
+  // page of each group; cover and continuation pages skip it so the
+  // reviewer isn't asked to sign 7+ lines for a 6-group plan.
+  if (showSignature) {
+    doc.font("Helvetica").fontSize(9).fillColor("#64748b");
+    doc.text("Confirmed by:", left, top + 14);
+    doc
+      .save()
+      .moveTo(left + 70, top + 24)
+      .lineTo(left + 270, top + 24)
+      .lineWidth(0.5)
+      .strokeColor("#475569")
+      .stroke()
+      .restore();
+    doc.text("Date:", left, top + 38);
+    doc
+      .save()
+      .moveTo(left + 70, top + 48)
+      .lineTo(left + 200, top + 48)
+      .lineWidth(0.5)
+      .strokeColor("#475569")
+      .stroke()
+      .restore();
+  }
   doc
     .font("Helvetica")
     .fontSize(8)
@@ -642,7 +647,17 @@ function drawGroupBody(
   }
 
   // ----- Per-student weakest strands mini-table -----
-  if (g.students.some((s) => s.strands.length > 0)) {
+  // Suppress when every student has at most one strand — in that case
+  // the column just restates the overall % already shown in the roster
+  // (typical for Cusp plans grouped on a single instructional category).
+  const maxStrandsAcrossGroup = g.students.reduce(
+    (m, s) => Math.max(m, s.strands.length),
+    0,
+  );
+  if (
+    maxStrandsAcrossGroup >= 2 &&
+    g.students.some((s) => s.strands.length > 0)
+  ) {
     if (y + 60 > bottomLimit) {
       doc.addPage({ size: "LETTER", layout: "landscape" });
       drawHeader(
