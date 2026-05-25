@@ -21,6 +21,24 @@ interface Cell {
   pct: number;
   earned: number;
   possible: number;
+  reteachCount?: number;
+}
+
+interface ReteachLog {
+  id: number;
+  studentId: string;
+  benchmarkCode: string;
+  teacherStaffId: number;
+  teacherName: string | null;
+  format: "one_on_one" | "small_group";
+  groupSessionId: string | null;
+  strategy: string | null;
+  minutes: number | null;
+  note: string | null;
+  schoolYear: string;
+  pmWindowAtLog: string | null;
+  createdAt: string;
+  canEdit: boolean;
 }
 
 interface StudentRow {
@@ -291,6 +309,20 @@ export default function TeacherBenchmarksTab({
   // "Suggest small group" modal — lists the ~8 lowest scorers on the
   // focus benchmark with a "Send to Class Composer" handoff.
   const [suggestOpen, setSuggestOpen] = useState(false);
+  // Reteach log mini-modal — opens when a teacher clicks the 🔁 badge
+  // on a cell, or "Log 1:1" / "Log small group" from the drill /
+  // suggest modals. Keyed by { studentId, benchmarkCode } so the
+  // modal can list existing logs for that cell and append new ones.
+  // studentIds (plural) is set when bulk-logging a small group.
+  const [reteachModal, setReteachModal] = useState<{
+    studentId: string | null;
+    studentIds: string[] | null;
+    benchmarkCode: string;
+    defaultFormat: "one_on_one" | "small_group";
+  } | null>(null);
+  const [reteachLogs, setReteachLogs] = useState<ReteachLog[]>([]);
+  const [reteachLoading, setReteachLoading] = useState(false);
+  const [reteachBump, setReteachBump] = useState(0);
 
   // Reconcile focus/drill/suggest state when the underlying data changes
   // (subject/window/teacher switch reloads `data`). If the previously
@@ -406,7 +438,7 @@ export default function TeacherBenchmarksTab({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teacherId, subject, windowKey, periodFilter]);
+  }, [teacherId, subject, windowKey, periodFilter, reteachBump]);
 
   // Per-teacher instruction delivery counts for the current school year.
   // Drives the BenchmarkStar badge on column headers + Progress Report
@@ -2183,10 +2215,20 @@ export default function TeacherBenchmarksTab({
                           );
                         }
                         const c = cellColor(cell.pct, data.thresholdPct);
+                        const rc = cell.reteachCount ?? 0;
                         return (
                           <td
                             key={b.code}
+                            onClick={() =>
+                              setReteachModal({
+                                studentId: s.studentId,
+                                studentIds: null,
+                                benchmarkCode: b.code,
+                                defaultFormat: "one_on_one",
+                              })
+                            }
                             style={{
+                              position: "relative",
                               padding: "6px 2px",
                               textAlign: "center",
                               background: c.bg,
@@ -2201,11 +2243,29 @@ export default function TeacherBenchmarksTab({
                                 i === g.codes.length - 1
                                   ? "4px solid #1e3a8a"
                                   : undefined,
-                              cursor: "help",
+                              cursor: "pointer",
                             }}
-                            title={`${s.lastName}, ${s.firstName} · ${b.code}: ${cell.earned}/${cell.possible} (${cell.pct}%)`}
+                            title={`${s.lastName}, ${s.firstName} · ${b.code}: ${cell.earned}/${cell.possible} (${cell.pct}%)${rc > 0 ? ` · ${rc} reteach${rc === 1 ? "" : "es"} logged` : " · click to log a reteach"}`}
                           >
                             {cell.pct}
+                            {rc > 0 && (
+                              <span
+                                style={{
+                                  position: "absolute",
+                                  top: 1,
+                                  right: 2,
+                                  fontSize: 9,
+                                  fontWeight: 700,
+                                  background: "#1e3a8a",
+                                  color: "#fff",
+                                  borderRadius: 8,
+                                  padding: "1px 4px",
+                                  lineHeight: 1.1,
+                                }}
+                              >
+                                🔁{rc}
+                              </span>
+                            )}
                           </td>
                         );
                       });
@@ -2491,11 +2551,14 @@ export default function TeacherBenchmarksTab({
                       <th style={{ padding: "6px 8px" }}>Benchmark</th>
                       <th style={{ padding: "6px 8px" }}>Category</th>
                       <th style={{ padding: "6px 8px", textAlign: "right" }}>%</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}></th>
                     </tr>
                   </thead>
                   <tbody>
                     {scored.map((r) => {
                       const c = cellColor(r.pct, data.thresholdPct);
+                      const rc =
+                        s.cells[r.code]?.reteachCount ?? 0;
                       return (
                         <tr
                           key={r.code}
@@ -2530,6 +2593,37 @@ export default function TeacherBenchmarksTab({
                             }}
                           >
                             {r.pct}%
+                          </td>
+                          <td
+                            style={{
+                              padding: "4px 6px",
+                              textAlign: "right",
+                              whiteSpace: "nowrap",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setStudentDrillId(null);
+                                setReteachModal({
+                                  studentId: s.studentId,
+                                  studentIds: null,
+                                  benchmarkCode: r.code,
+                                  defaultFormat: "one_on_one",
+                                });
+                              }}
+                              style={{
+                                padding: "2px 6px",
+                                fontSize: 11,
+                                background: "white",
+                                border: "1px solid #d1d5db",
+                                borderRadius: 4,
+                                cursor: "pointer",
+                              }}
+                              title="Log a 1:1 reteach for this benchmark"
+                            >
+                              Log 1:1{rc > 0 ? ` · 🔁${rc}` : ""}
+                            </button>
                           </td>
                         </tr>
                       );
@@ -2687,6 +2781,33 @@ export default function TeacherBenchmarksTab({
               >
                 <button
                   type="button"
+                  onClick={() => {
+                    if (scored.length === 0) return;
+                    setSuggestOpen(false);
+                    setReteachModal({
+                      studentId: null,
+                      studentIds: scored.map((s) => s.studentId),
+                      benchmarkCode: focusCode,
+                      defaultFormat: "small_group",
+                    });
+                  }}
+                  disabled={scored.length === 0}
+                  style={{
+                    padding: "6px 12px",
+                    fontSize: 12,
+                    fontWeight: 600,
+                    background: "white",
+                    border: "1px solid #1e3a8a",
+                    color: "#1e3a8a",
+                    borderRadius: 4,
+                    cursor: scored.length === 0 ? "not-allowed" : "pointer",
+                  }}
+                  title="Log a small-group reteach for these students on this benchmark"
+                >
+                  Log small group
+                </button>
+                <button
+                  type="button"
                   onClick={copyList}
                   disabled={scored.length === 0}
                   style={{
@@ -2739,6 +2860,562 @@ export default function TeacherBenchmarksTab({
           </div>
         );
       })()}
+
+      {/* Reteach log mini-modal — list of existing logs + add form.
+          Opens from a cell click (1:1 default), the per-benchmark
+          "Log 1:1" button in the student-drill modal, or the
+          "Log small group" button in the suggest modal (bulk). */}
+      {reteachModal && (
+        <ReteachLogModal
+          modal={reteachModal}
+          logs={reteachLogs}
+          loading={reteachLoading}
+          students={data?.students ?? []}
+          schoolYear={data?.schoolYear ?? null}
+          pmWindow={data?.window ?? null}
+          onClose={() => {
+            setReteachModal(null);
+            setReteachLogs([]);
+          }}
+          onChanged={() => {
+            // Force the heatmap matrix to re-fetch so the 🔁 badge
+            // counts pick up the new / edited / deleted log.
+            setReteachBump((n) => n + 1);
+          }}
+          reloadCellLogs={async () => {
+            if (!reteachModal?.studentId) return;
+            setReteachLoading(true);
+            try {
+              const r = await authFetch(
+                `/api/reteach-log/cell?studentId=${encodeURIComponent(reteachModal.studentId)}&benchmarkCode=${encodeURIComponent(reteachModal.benchmarkCode)}`,
+              );
+              if (r.ok) {
+                const j = (await r.json()) as { logs: ReteachLog[] };
+                setReteachLogs(j.logs);
+              }
+            } finally {
+              setReteachLoading(false);
+            }
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Reteach log modal — list + add form. Single-student modes show
+// existing logs and allow inline edit/delete (24h teacher window or
+// admin/Core Team). Bulk small-group mode skips the list (it's a
+// brand-new session for N students) and only shows the add form.
+function ReteachLogModal(props: {
+  modal: {
+    studentId: string | null;
+    studentIds: string[] | null;
+    benchmarkCode: string;
+    defaultFormat: "one_on_one" | "small_group";
+  };
+  logs: ReteachLog[];
+  loading: boolean;
+  students: StudentRow[];
+  schoolYear: string | null;
+  pmWindow: string | null;
+  onClose: () => void;
+  onChanged: () => void;
+  reloadCellLogs: () => Promise<void>;
+}) {
+  const { modal, logs, loading, students, schoolYear, pmWindow } = props;
+  const isBulk = modal.studentIds != null && modal.studentIds.length > 0;
+  const single = !isBulk && modal.studentId
+    ? students.find((s) => s.studentId === modal.studentId) ?? null
+    : null;
+  const bulkRoster = isBulk
+    ? students.filter((s) => modal.studentIds!.includes(s.studentId))
+    : [];
+  const [format, setFormat] = useState<"one_on_one" | "small_group">(
+    modal.defaultFormat,
+  );
+  const [strategy, setStrategy] = useState("");
+  const [minutes, setMinutes] = useState("");
+  const [note, setNote] = useState("");
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editNote, setEditNote] = useState("");
+  const [editMinutes, setEditMinutes] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState("");
+
+  useEffect(() => {
+    if (!isBulk) void props.reloadCellLogs();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [modal.studentId, modal.benchmarkCode]);
+
+  const friendly = modal.benchmarkCode.split(".").slice(-2).join(".");
+
+  const submit = async () => {
+    setErr("");
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = {
+        benchmarkCode: modal.benchmarkCode,
+        format,
+        strategy: strategy.trim() || null,
+        minutes: minutes === "" ? null : Number(minutes),
+        note: note.trim() || null,
+        schoolYear,
+        pmWindowAtLog: pmWindow,
+      };
+      let url = "/api/reteach-log";
+      if (isBulk) {
+        url = "/api/reteach-log/bulk";
+        body.studentIds = modal.studentIds;
+      } else {
+        body.studentId = modal.studentId;
+      }
+      const r = await authFetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      setStrategy("");
+      setMinutes("");
+      setNote("");
+      props.onChanged();
+      if (isBulk) {
+        props.onClose();
+      } else {
+        await props.reloadCellLogs();
+      }
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const saveEdit = async (id: number) => {
+    setErr("");
+    try {
+      const r = await authFetch(`/api/reteach-log/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          note: editNote.trim() || null,
+          minutes: editMinutes === "" ? null : Number(editMinutes),
+        }),
+      });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      setEditingId(null);
+      props.onChanged();
+      await props.reloadCellLogs();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  const remove = async (id: number) => {
+    if (!confirm("Delete this reteach log?")) return;
+    setErr("");
+    try {
+      const r = await authFetch(`/api/reteach-log/${id}`, { method: "DELETE" });
+      if (!r.ok) {
+        const j = (await r.json().catch(() => ({}))) as { error?: string };
+        throw new Error(j.error ?? `HTTP ${r.status}`);
+      }
+      props.onChanged();
+      await props.reloadCellLogs();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  };
+
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      onClick={props.onClose}
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.4)",
+        zIndex: 60,
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+      }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        style={{
+          background: "white",
+          borderRadius: 8,
+          padding: 18,
+          maxWidth: 560,
+          width: "94%",
+          maxHeight: "88vh",
+          overflowY: "auto",
+          boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+        }}
+      >
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            marginBottom: 6,
+          }}
+        >
+          <h3 style={{ margin: 0, fontSize: 16 }}>
+            🔁 Reteach log — {friendly}
+          </h3>
+          <button onClick={props.onClose}>Close</button>
+        </div>
+        <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 10 }}>
+          <span style={{ fontFamily: "monospace" }}>{modal.benchmarkCode}</span>
+          {single && (
+            <>
+              {" · "}
+              {single.lastName}, {single.firstName} (G{single.grade})
+            </>
+          )}
+          {isBulk && (
+            <>
+              {" · small group · "}
+              <strong>{bulkRoster.length || modal.studentIds!.length}</strong>{" "}
+              student{(modal.studentIds!.length) === 1 ? "" : "s"}
+            </>
+          )}
+        </div>
+
+        {isBulk && bulkRoster.length > 0 && (
+          <div
+            style={{
+              fontSize: 12,
+              color: "#374151",
+              background: "#f9fafb",
+              border: "1px solid #e5e7eb",
+              borderRadius: 4,
+              padding: "6px 8px",
+              marginBottom: 10,
+              maxHeight: 110,
+              overflowY: "auto",
+            }}
+          >
+            {bulkRoster
+              .map((s) => `${s.lastName}, ${s.firstName}`)
+              .join(" · ")}
+          </div>
+        )}
+
+        {!isBulk && (
+          <div style={{ marginBottom: 12 }}>
+            <div
+              style={{
+                fontSize: 12,
+                fontWeight: 600,
+                color: "#374151",
+                marginBottom: 4,
+              }}
+            >
+              Previous logs ({logs.length})
+            </div>
+            {loading ? (
+              <div style={{ color: "#9ca3af", fontSize: 12 }}>Loading…</div>
+            ) : logs.length === 0 ? (
+              <div style={{ color: "#9ca3af", fontSize: 12 }}>
+                None yet.
+              </div>
+            ) : (
+              <ul
+                style={{
+                  listStyle: "none",
+                  padding: 0,
+                  margin: 0,
+                  maxHeight: 200,
+                  overflowY: "auto",
+                  border: "1px solid #e5e7eb",
+                  borderRadius: 4,
+                }}
+              >
+                {logs.map((l) => {
+                  const isEdit = editingId === l.id;
+                  return (
+                    <li
+                      key={l.id}
+                      style={{
+                        padding: "6px 8px",
+                        borderBottom: "1px solid #f3f4f6",
+                        fontSize: 12,
+                      }}
+                    >
+                      <div
+                        style={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 6,
+                        }}
+                      >
+                        <div>
+                          <strong>
+                            {l.format === "one_on_one"
+                              ? "1:1"
+                              : "Small group"}
+                          </strong>
+                          {" · "}
+                          {new Date(l.createdAt).toLocaleDateString()}
+                          {" · "}
+                          <span style={{ color: "#6b7280" }}>
+                            {l.teacherName ?? `Staff #${l.teacherStaffId}`}
+                          </span>
+                          {l.minutes != null && (
+                            <span style={{ color: "#6b7280" }}>
+                              {" · "}
+                              {l.minutes} min
+                            </span>
+                          )}
+                        </div>
+                        {l.canEdit && !isEdit && (
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingId(l.id);
+                                setEditNote(l.note ?? "");
+                                setEditMinutes(
+                                  l.minutes != null ? String(l.minutes) : "",
+                                );
+                              }}
+                              style={{
+                                fontSize: 10,
+                                padding: "1px 6px",
+                                background: "white",
+                                border: "1px solid #d1d5db",
+                                borderRadius: 3,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => void remove(l.id)}
+                              style={{
+                                fontSize: 10,
+                                padding: "1px 6px",
+                                background: "white",
+                                border: "1px solid #fca5a5",
+                                color: "#991b1b",
+                                borderRadius: 3,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Delete
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {isEdit ? (
+                        <div style={{ marginTop: 4, display: "grid", gap: 4 }}>
+                          <input
+                            type="number"
+                            placeholder="minutes"
+                            value={editMinutes}
+                            onChange={(e) => setEditMinutes(e.target.value)}
+                            style={{
+                              fontSize: 12,
+                              padding: "2px 4px",
+                              border: "1px solid #d1d5db",
+                              borderRadius: 3,
+                              width: 90,
+                            }}
+                          />
+                          <textarea
+                            value={editNote}
+                            onChange={(e) => setEditNote(e.target.value)}
+                            rows={2}
+                            style={{
+                              fontSize: 12,
+                              padding: "2px 4px",
+                              border: "1px solid #d1d5db",
+                              borderRadius: 3,
+                              fontFamily: "inherit",
+                            }}
+                          />
+                          <div style={{ display: "flex", gap: 4 }}>
+                            <button
+                              type="button"
+                              onClick={() => void saveEdit(l.id)}
+                              style={{
+                                fontSize: 11,
+                                padding: "2px 8px",
+                                background: "#1e3a8a",
+                                color: "white",
+                                border: "none",
+                                borderRadius: 3,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Save
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingId(null)}
+                              style={{
+                                fontSize: 11,
+                                padding: "2px 8px",
+                                background: "white",
+                                border: "1px solid #d1d5db",
+                                borderRadius: 3,
+                                cursor: "pointer",
+                              }}
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        l.note && (
+                          <div style={{ color: "#374151", marginTop: 2 }}>
+                            {l.note}
+                          </div>
+                        )
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+        )}
+
+        <div
+          style={{
+            borderTop: "1px solid #e5e7eb",
+            paddingTop: 10,
+          }}
+        >
+          <div
+            style={{
+              fontSize: 12,
+              fontWeight: 600,
+              color: "#374151",
+              marginBottom: 6,
+            }}
+          >
+            Add reteach log
+          </div>
+          {!isBulk && (
+            <div style={{ display: "flex", gap: 10, marginBottom: 6 }}>
+              <label style={{ fontSize: 12 }}>
+                <input
+                  type="radio"
+                  checked={format === "one_on_one"}
+                  onChange={() => setFormat("one_on_one")}
+                />{" "}
+                1:1
+              </label>
+              <label style={{ fontSize: 12 }}>
+                <input
+                  type="radio"
+                  checked={format === "small_group"}
+                  onChange={() => setFormat("small_group")}
+                />{" "}
+                Small group
+              </label>
+            </div>
+          )}
+          <div style={{ display: "grid", gap: 6 }}>
+            <input
+              type="text"
+              placeholder="Strategy (optional, e.g. number talk, modeling)"
+              value={strategy}
+              onChange={(e) => setStrategy(e.target.value)}
+              maxLength={120}
+              style={{
+                fontSize: 12,
+                padding: "4px 6px",
+                border: "1px solid #d1d5db",
+                borderRadius: 4,
+              }}
+            />
+            <input
+              type="number"
+              min={0}
+              max={600}
+              placeholder="Minutes (optional)"
+              value={minutes}
+              onChange={(e) => setMinutes(e.target.value)}
+              style={{
+                fontSize: 12,
+                padding: "4px 6px",
+                border: "1px solid #d1d5db",
+                borderRadius: 4,
+                width: 140,
+              }}
+            />
+            <textarea
+              placeholder="Note (optional)"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              rows={2}
+              maxLength={500}
+              style={{
+                fontSize: 12,
+                padding: "4px 6px",
+                border: "1px solid #d1d5db",
+                borderRadius: 4,
+                fontFamily: "inherit",
+              }}
+            />
+          </div>
+          {err && (
+            <div
+              style={{
+                color: "#991b1b",
+                fontSize: 12,
+                marginTop: 6,
+              }}
+            >
+              {err}
+            </div>
+          )}
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "flex-end",
+              marginTop: 8,
+            }}
+          >
+            <button
+              type="button"
+              onClick={() => void submit()}
+              disabled={saving}
+              style={{
+                padding: "6px 14px",
+                fontSize: 12,
+                fontWeight: 600,
+                background: saving ? "#9ca3af" : "#1e3a8a",
+                color: "white",
+                border: "none",
+                borderRadius: 4,
+                cursor: saving ? "not-allowed" : "pointer",
+              }}
+            >
+              {saving
+                ? "Saving…"
+                : isBulk
+                  ? `Log for ${bulkRoster.length || modal.studentIds!.length} students`
+                  : "Add log"}
+            </button>
+          </div>
+        </div>
+      </div>
     </div>
   );
 }

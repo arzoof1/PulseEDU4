@@ -63,6 +63,14 @@ export const studentsTable = pgTable("students", {
   // and parent letters reference. Not unique (different districts can
   // reuse numbers); not indexed unless a future search surface needs it.
   localSisId: text("local_sis_id"),
+  // When TRUE, this student's benchmark_reteach_log entries are
+  // exposed (read-only) to the linked parent portal account. Default
+  // FALSE because reteach logs are teacher working data — admins
+  // opt-in per student. Schema-level toggle; parent portal
+  // rendering surfaces it in a later phase.
+  reteachLogsParentVisible: boolean("reteach_logs_parent_visible")
+    .notNull()
+    .default(false),
 });
 
 export type StudentRow = typeof studentsTable.$inferSelect;

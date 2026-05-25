@@ -46,6 +46,7 @@ import {
   studentTrustedAdultsTable,
   studentMtssPlansTable,
   schoolBenchmarksTable,
+  benchmarkReteachLogTable,
 } from "@workspace/db";
 import { and, eq, inArray, isNull, isNotNull, sql } from "drizzle-orm";
 import PDFDocument from "pdfkit";
@@ -440,6 +441,34 @@ router.get(
         return compareBenchmarkCodes(a.code, b.code);
       });
 
+    // Reteach-log counts per (student, benchmark) for the current
+    // school year — drives the 🔁 N badge on every cell. Year-scoped
+    // (not window-scoped) so a PM1 reteach is still visible when the
+    // teacher pivots to PM2/PM3.
+    const reteachRows = await db
+      .select({
+        studentId: benchmarkReteachLogTable.studentId,
+        benchmarkCode: benchmarkReteachLogTable.benchmarkCode,
+        count: sql<number>`COUNT(*)::int`,
+      })
+      .from(benchmarkReteachLogTable)
+      .where(
+        and(
+          eq(benchmarkReteachLogTable.schoolId, ctx.schoolId),
+          eq(benchmarkReteachLogTable.schoolYear, schoolYear),
+          inArray(benchmarkReteachLogTable.studentId, ctx.studentIds),
+          isNull(benchmarkReteachLogTable.deletedAt),
+        ),
+      )
+      .groupBy(
+        benchmarkReteachLogTable.studentId,
+        benchmarkReteachLogTable.benchmarkCode,
+      );
+    const reteachByCell = new Map<string, number>();
+    for (const r of reteachRows) {
+      reteachByCell.set(`${r.studentId}|${r.benchmarkCode}`, r.count);
+    }
+
     // Per-student row data. Cells are keyed by benchmark code; nulls
     // for benchmarks the student has no data on (rare but possible
     // — student absent or row dropped at import).
@@ -447,6 +476,7 @@ router.get(
       pct: number;
       earned: number;
       possible: number;
+      reteachCount: number;
     }
     const studentOut = students
       .map((s) => {
@@ -460,6 +490,7 @@ router.get(
               pct: Math.round((agg.earned / agg.possible) * 100),
               earned: agg.earned,
               possible: agg.possible,
+              reteachCount: reteachByCell.get(`${s.studentId}|${b.code}`) ?? 0,
             };
           }
         }

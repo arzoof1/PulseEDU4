@@ -94,6 +94,17 @@ pointer here.
 
 ### Open work
 
+- **Reteach log — parent-portal surfacing.** Schema-only stub
+  shipped: `students.reteach_logs_parent_visible BOOL DEFAULT false`
+  is in place but never read. When the portal-side rendering is
+  built, add a per-student toggle to the existing parent-visibility
+  settings UI (alongside PBIS / hall pass / tardy section toggles)
+  and an aggregated "Reteach support this year" tile on the parent
+  HeartBEAT view that respects the per-student flag AND the
+  school-wide section-visibility setting. Keep teacher-private notes
+  out of the parent payload — surface counts + benchmark codes only
+  by default; full notes require a separate "share note" opt-in.
+
 - **LG subject-band promotions (Algebra I etc.).** Phase 1 +
   Phase 2 of the LG green-check are SHIPPED. Phase 2 extended
   the `learningGain` branch in `buildSubjectBlock`

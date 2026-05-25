@@ -2342,8 +2342,51 @@ function clamp(n: number, lo: number, hi: number): number {
   return Math.max(lo, Math.min(hi, n));
 }
 
+// benchmark_reteach_log — per-student × per-benchmark reteach moments
+// captured from the Teacher Roster → Benchmarks heatmap. Idempotent
+// CREATE TABLE IF NOT EXISTS + ALTER for the per-student parent-
+// visibility opt-in column on students.
+export async function ensureBenchmarkReteachLogSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS benchmark_reteach_log (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      student_id TEXT NOT NULL,
+      benchmark_code TEXT NOT NULL,
+      teacher_staff_id INTEGER NOT NULL,
+      format TEXT NOT NULL,
+      group_session_id TEXT,
+      strategy TEXT,
+      minutes INTEGER,
+      note TEXT,
+      school_year TEXT NOT NULL,
+      pm_window_at_log TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deleted_at TIMESTAMPTZ,
+      deleted_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_school_idx ON benchmark_reteach_log (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_cell_idx ON benchmark_reteach_log (school_id, student_id, benchmark_code)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_teacher_idx ON benchmark_reteach_log (school_id, teacher_staff_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS benchmark_reteach_log_session_idx ON benchmark_reteach_log (group_session_id)`,
+  );
+  await db.execute(
+    sql`ALTER TABLE students ADD COLUMN IF NOT EXISTS reteach_logs_parent_visible BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
+  await ensureBenchmarkReteachLogSchema();
   await ensureSchoolSettingsFeatureFlagsSchema();
   await ensureAdminHubSchema();
   await ensureTierPresetsSchema();
