@@ -48,7 +48,14 @@ import {
 } from "@workspace/db";
 import { and, eq, inArray, isNull, gte, lte, sql, desc, or } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
-import { placePm3, placeOnChart, hasChart } from "../lib/fastCutScores.js";
+import {
+  placePm3,
+  placeOnChart,
+  hasChart,
+  bucketTarget,
+  SUB_LEVEL_LABEL,
+  type Subject,
+} from "../lib/fastCutScores.js";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "../lib/schoolYear.js";
 import { loadFastHistory, pickHistory } from "../lib/fastHistory.js";
 import {
@@ -229,6 +236,85 @@ function topRisk(flags: RiskFlag[]): RiskFlag | null {
 // ---------------------------------------------------------------------------
 // GET /api/insights/students/:studentId/profile
 // ---------------------------------------------------------------------------
+
+// Per-subject LG bucket "moving target" trajectory.
+//
+// Per FL LG rules: prior-year PM3 placed on the PRIOR-grade chart sets
+// the baseline sub-level; the target is the next sub-level's minimum
+// scale score on the CURRENT-grade chart. The target is fixed all year;
+// what moves is how far the student sits from it after each PM window.
+//
+// Returns null when there is no prior-year PM3, no current-grade chart
+// (EOC subjects without grade-keyed charts), or the student is already
+// at L5 (no next stop on the climb path).
+type BucketWindow = "prior" | "pm1" | "pm2" | "pm3";
+interface BucketTrajectoryPoint {
+  window: BucketWindow;
+  score: number | null;
+  gap: number | null; // target − score; positive = still need to climb
+  delta: number | null; // previous gap − current gap; positive = closing
+}
+interface BucketTrajectory {
+  targetScore: number;
+  targetSubLevelLabel: string;
+  baselineSubLevel: string;
+  baselineScore: number;
+  latestWindow: BucketWindow;
+  lgMet: boolean;
+  trajectory: BucketTrajectoryPoint[];
+}
+function buildBucketTrajectory(
+  subject: Subject,
+  grade: number,
+  priorYearScore: number | null,
+  pm1: number | null,
+  pm2: number | null,
+  pm3: number | null,
+): BucketTrajectory | null {
+  if (priorYearScore == null) return null;
+  const baselinePlacement = placePm3(priorYearScore, subject, grade);
+  if (!baselinePlacement) return null;
+  const target = bucketTarget(subject, grade, baselinePlacement.subLevel);
+  if (!target) return null;
+
+  const windows: Array<{ window: BucketWindow; score: number | null }> = [
+    { window: "prior", score: priorYearScore },
+    { window: "pm1", score: pm1 },
+    { window: "pm2", score: pm2 },
+    { window: "pm3", score: pm3 },
+  ];
+
+  let lastGap: number | null = null;
+  let latestWindow: BucketWindow = "prior";
+  const trajectory: BucketTrajectoryPoint[] = windows.map((w) => {
+    if (w.score == null) {
+      return { window: w.window, score: null, gap: null, delta: null };
+    }
+    const gap = target.score - w.score;
+    const delta = lastGap == null ? null : lastGap - gap;
+    lastGap = gap;
+    latestWindow = w.window;
+    return { window: w.window, score: w.score, gap, delta };
+  });
+
+  // LG considered met when the most recent PM (pm3 preferred, else pm2,
+  // else pm1) lands at or above the target on the current-grade chart.
+  // Phase 2 within-level sub-tier moves are handled by the teacher
+  // roster route; for the profile bucket strip the simpler "cleared
+  // the target" check is what the trajectory pill needs.
+  const latestScore = pm3 ?? pm2 ?? pm1 ?? null;
+  const lgMet = latestScore != null && latestScore >= target.score;
+
+  return {
+    targetScore: target.score,
+    targetSubLevelLabel: SUB_LEVEL_LABEL[target.nextStop],
+    baselineSubLevel: SUB_LEVEL_LABEL[baselinePlacement.subLevel],
+    baselineScore: priorYearScore,
+    latestWindow,
+    lgMet,
+    trajectory,
+  };
+}
 
 // (retention indicator data is loaded per request below — not at module scope.)
 router.get("/insights/students/:studentId/profile", async (req, res) => {
@@ -1066,6 +1152,21 @@ router.get("/insights/students/:studentId/profile", async (req, res) => {
           // Multi-year PM3 history from the FL Florida historical
           // importer. Newest-first; empty when no historical rows.
           history: pickHistory(fastHistoryMap, studentId, s.subject),
+          // LG "moving target" trajectory. Baseline sub-level comes
+          // from prior-year PM3 placed on the PRIOR-grade chart
+          // (via placePm3). Target is the next-sublevel min on the
+          // CURRENT-grade chart. For each PM window we expose the
+          // raw score, the live gap (target − score), and the delta
+          // vs the previous populated window (positive = closing,
+          // negative = widening). null when no chart / no prior PM3.
+          bucket: buildBucketTrajectory(
+            s.subject as Subject,
+            student.grade,
+            s.priorYearScore,
+            s.pm1,
+            s.pm2,
+            s.pm3,
+          ),
         })),
         // Structured iReady AP1/AP2/AP3 grouped by subject. We group from
         // the in-memory `assessments` list (already fetched, ordered desc)

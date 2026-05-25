@@ -71,6 +71,22 @@ interface ProfilePayload {
         // Multi-year PM3 history from the FL Florida historical
         // importer. Newest-first; empty when no historical rows.
         history: Array<{ schoolYear: string; pm3: number }>;
+        // LG "moving target" trajectory — null when no prior PM3,
+        // no current-grade chart, or already at L5.
+        bucket: {
+          targetScore: number;
+          targetSubLevelLabel: string;
+          baselineSubLevel: string;
+          baselineScore: number;
+          latestWindow: "prior" | "pm1" | "pm2" | "pm3";
+          lgMet: boolean;
+          trajectory: Array<{
+            window: "prior" | "pm1" | "pm2" | "pm3";
+            score: number | null;
+            gap: number | null;
+            delta: number | null;
+          }>;
+        } | null;
       }>;
       ireadyScores: Array<{
         subject: "Reading" | "Math";
@@ -518,6 +534,138 @@ function scoreColor(score: number): string {
   if (score >= 75) return "#16a34a"; // green
   if (score >= 50) return "#ca8a04"; // amber
   return "#dc2626"; // red
+}
+
+// LG "moving target" trajectory strip. Renders one line per subject
+// directly underneath the FAST PM table row. Shows:
+//   - target scale score + next-stop sub-level label (e.g.
+//     "→ 220 (Low 2)") on the left
+//   - the prior → pm1 → pm2 → pm3 score path with arrows
+//   - a "now +N" chip showing the live gap from the latest PM window
+//   - a ↓/↑ delta chip showing change vs the previous populated PM
+//     (green ↓ = closing the gap, red ↑ = widening)
+//   - a ✓ "LG met" pill when the latest score has already cleared the
+//     target on the current-grade chart
+//
+// Target is fixed for the year (computed server-side via placePm3 on
+// the prior-grade chart + bucketTarget on the current-grade chart).
+// The number teachers care about — "how far now" — moves with every
+// PM. See buildBucketTrajectory in routes/insights.ts.
+function BucketTrajectoryStrip({
+  bucket,
+}: {
+  bucket: {
+    targetScore: number;
+    targetSubLevelLabel: string;
+    baselineSubLevel: string;
+    baselineScore: number;
+    latestWindow: "prior" | "pm1" | "pm2" | "pm3";
+    lgMet: boolean;
+    trajectory: Array<{
+      window: "prior" | "pm1" | "pm2" | "pm3";
+      score: number | null;
+      gap: number | null;
+      delta: number | null;
+    }>;
+  };
+}) {
+  const latest = bucket.trajectory.find((p) => p.window === bucket.latestWindow);
+  const liveGap = latest?.gap ?? null;
+  const delta = latest?.delta ?? null;
+  const labelFor = (w: "prior" | "pm1" | "pm2" | "pm3") =>
+    w === "prior" ? "Prior" : w.toUpperCase();
+
+  return (
+    <div
+      style={{
+        display: "flex",
+        flexWrap: "wrap",
+        alignItems: "center",
+        gap: "0.5rem",
+        rowGap: "0.25rem",
+      }}
+      title={
+        `Baseline: Prior PM3 ${bucket.baselineScore} (${bucket.baselineSubLevel}) ` +
+        `on the prior-grade chart → target ${bucket.targetScore} (${bucket.targetSubLevelLabel}) ` +
+        `on the current-grade chart for an LG.`
+      }
+    >
+      <span style={{ color: "#6b7280" }}>LG target:</span>
+      <span style={{ fontWeight: 700, color: "#1e3a8a" }}>
+        {bucket.targetScore}
+      </span>
+      <span style={{ color: "#6b7280" }}>({bucket.targetSubLevelLabel})</span>
+      <span style={{ color: "#d1d5db" }}>·</span>
+      <span
+        style={{
+          display: "inline-flex",
+          alignItems: "center",
+          gap: 4,
+          color: "#374151",
+        }}
+      >
+        {bucket.trajectory.map((p, i) => (
+          <React.Fragment key={p.window}>
+            {i > 0 && <span style={{ color: "#d1d5db" }}>→</span>}
+            <span
+              style={{
+                color: p.score == null ? "#d1d5db" : "#374151",
+                fontWeight: p.window === bucket.latestWindow ? 700 : 400,
+              }}
+            >
+              <span style={{ color: "#9ca3af", marginRight: 2, fontSize: "0.7rem" }}>
+                {labelFor(p.window)}
+              </span>
+              {p.score ?? "—"}
+            </span>
+          </React.Fragment>
+        ))}
+      </span>
+      {bucket.lgMet ? (
+        <span
+          style={{
+            background: "#dcfce7",
+            color: "#166534",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontWeight: 700,
+          }}
+        >
+          ✓ LG met
+        </span>
+      ) : liveGap != null ? (
+        <span
+          style={{
+            background: liveGap <= 0 ? "#dcfce7" : "#fef3c7",
+            color: liveGap <= 0 ? "#166534" : "#92400e",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontWeight: 700,
+          }}
+        >
+          {liveGap <= 0 ? "✓ on target" : `now +${liveGap} to LG`}
+        </span>
+      ) : null}
+      {delta != null && delta !== 0 && (
+        <span
+          style={{
+            background: delta > 0 ? "#dcfce7" : "#fee2e2",
+            color: delta > 0 ? "#166534" : "#991b1b",
+            padding: "2px 8px",
+            borderRadius: 999,
+            fontWeight: 600,
+          }}
+          title={
+            delta > 0
+              ? `Closed the gap by ${delta} points since the previous PM window.`
+              : `Widened the gap by ${-delta} points since the previous PM window.`
+          }
+        >
+          {delta > 0 ? `↓ ${delta} closing` : `↑ ${-delta} widening`}
+        </span>
+      )}
+    </div>
+  );
 }
 
 // Inline SVG sparkline. Renders a small trend line for daily data.
@@ -2903,9 +3051,36 @@ export default function StudentProfile({
                     <React.Fragment key={s.subject}>
                       <tr>
                         <td style={{ textTransform: "uppercase" }}>{s.subject}</td>
-                        <td style={{ textAlign: "right" }}>{s.pm1 ?? "—"}</td>
-                        <td style={{ textAlign: "right" }}>{s.pm2 ?? "—"}</td>
-                        <td style={{ textAlign: "right" }}>{s.pm3 ?? "—"}</td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            ...(s.bucket?.latestWindow === "pm1"
+                              ? { fontWeight: 700 }
+                              : {}),
+                          }}
+                        >
+                          {s.pm1 ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            ...(s.bucket?.latestWindow === "pm2"
+                              ? { fontWeight: 700 }
+                              : {}),
+                          }}
+                        >
+                          {s.pm2 ?? "—"}
+                        </td>
+                        <td
+                          style={{
+                            textAlign: "right",
+                            ...(s.bucket?.latestWindow === "pm3"
+                              ? { fontWeight: 700 }
+                              : {}),
+                          }}
+                        >
+                          {s.pm3 ?? "—"}
+                        </td>
                         <td style={{ textAlign: "right" }}>
                           {s.priorYearScore ?? "—"}
                           {s.priorYearBq && (
@@ -2913,6 +3088,22 @@ export default function StudentProfile({
                           )}
                         </td>
                       </tr>
+                      {s.bucket && (
+                        <tr>
+                          <td
+                            colSpan={5}
+                            style={{
+                              paddingLeft: 16,
+                              paddingTop: 0,
+                              paddingBottom: 6,
+                              fontSize: "0.75rem",
+                              color: "#374151",
+                            }}
+                          >
+                            <BucketTrajectoryStrip bucket={s.bucket} />
+                          </td>
+                        </tr>
+                      )}
                       {s.history.length > 0 && (
                         <tr>
                           <td
