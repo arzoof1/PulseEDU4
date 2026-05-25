@@ -1301,6 +1301,23 @@ export default function TeacherRosterPage({
   const [teacherId, setTeacherId] = useState<number | null>(
     defaultTeacherId,
   );
+  // Track whether the user has manually picked a teacher in this
+  // session. Initial "the user just landed and we filled in their own
+  // id from the prop" does NOT count — so when `defaultTeacherId`
+  // arrives late (auth still hydrating at mount time), we still get
+  // to honor it. After any explicit pick from the dropdown, we stop
+  // overriding their choice.
+  const userPickedTeacherRef = useRef(false);
+  // If `defaultTeacherId` was null at mount (auth still loading) and
+  // then arrives a tick later, sync local state — otherwise the page
+  // sits on whatever `sorted[0]` the teachers-load effect picked,
+  // which is rarely what the user wanted.
+  useEffect(() => {
+    if (userPickedTeacherRef.current) return;
+    if (defaultTeacherId != null && defaultTeacherId !== teacherId) {
+      setTeacherId(defaultTeacherId);
+    }
+  }, [defaultTeacherId, teacherId]);
   // Bubble every teacher change up to the host so it can remember the
   // picked teacher across unmounts (spider round-trip, etc).
   useEffect(() => {
@@ -1395,8 +1412,15 @@ export default function TeacherRosterPage({
           return an.localeCompare(bn, undefined, { sensitivity: "base" });
         });
         setTeachers(sorted);
-        // Pre-select the user's own row if no default came in.
-        if (teacherId == null && sorted.length > 0) {
+        // Only fall back to the alphabetically-first teacher if we
+        // truly have no default (e.g. unauthenticated preview). If
+        // `defaultTeacherId` arrives a tick later, the sync effect
+        // above will catch up.
+        if (
+          teacherId == null &&
+          defaultTeacherId == null &&
+          sorted.length > 0
+        ) {
           setTeacherId(sorted[0].id);
         }
       })
@@ -1644,6 +1668,7 @@ export default function TeacherRosterPage({
                     value={teacherId ?? ""}
                     onChange={(e) => {
                       const v = e.target.value;
+                      userPickedTeacherRef.current = true;
                       setTeacherId(v ? Number(v) : null);
                       setPeriod(null);
                     }}
