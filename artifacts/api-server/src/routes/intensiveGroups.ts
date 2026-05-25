@@ -36,13 +36,18 @@ import {
   classComposerPlansTable,
   classComposerPlanGroupsTable,
   classComposerPlanGroupRefreshesTable,
+  studentMtssPlansTable,
+  safetyPlansTable,
+  studentRetentionsTable,
+  ossLogsTable,
+  issAdminLogsTable,
   type ClassComposerFocusStandard,
   type ClassComposerRefreshDriftSummary,
   type ClassComposerGroupRecipe,
   type ClassComposerPlanRow,
   type ClassComposerPlanGroupRow,
 } from "@workspace/db";
-import { and, asc, desc, eq, inArray, sql } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNull, sql } from "drizzle-orm";
 import { requireSchool } from "../lib/scope.js";
 import {
   isCoreTeam as isCoreTeamShared,
@@ -2332,23 +2337,50 @@ export interface HydratedPlanStudent {
     period: number;
     teacherName: string | null;
   } | null;
+  // PM1 / PM2 / PM3 FAST achievement levels for the plan's subject +
+  // school year, derived from student_fast_scores scale scores via
+  // fastCutScores. Surfaced as a trajectory chip on the PDF so the
+  // teacher can see "is this kid trending up, flat, down?" without
+  // a separate report.
+  pmLevels: {
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+  };
+  // Context flags pulled from the school's other modules — used to
+  // tell the teacher what they're walking into (e.g. "this group
+  // has 4 kids on active safety plans, 2 ever retained, 5 with
+  // discipline events in the last 30 days").
+  hasActiveMtss: boolean;
+  hasActiveSafetyPlan: boolean;
+  everRetained: boolean;
+  disciplineDays30: number;
 }
 
 // Shared helper: gather PDF/CSV student rows for a plan's groups by
 // hydrating each group's stored student_ids with current FAST profiles.
+interface HydratedPlanResult {
+  groups: Array<{
+    group: ClassComposerPlanGroupRow;
+    students: HydratedPlanStudent[];
+  }>;
+  // Kept around so the PDF route can re-run clusterByBenchmarkDeficit
+  // on a per-group basis for the "Suggested sub-pods" block without
+  // re-querying item responses.
+  profilesByStudent: Map<string, StudentSkillProfile>;
+}
+
 async function hydratePlanStudents(
   schoolId: number,
   plan: ClassComposerPlanRow,
   groups: ClassComposerPlanGroupRow[],
-): Promise<
-  Array<{
-    group: ClassComposerPlanGroupRow;
-    students: HydratedPlanStudent[];
-  }>
-> {
+): Promise<HydratedPlanResult> {
   const allIds = Array.from(new Set(groups.flatMap((g) => g.studentIds)));
   if (allIds.length === 0) {
-    return groups.map((g) => ({ group: g, students: [] }));
+    return {
+      groups: groups.map((g) => ({ group: g, students: [] })),
+      profilesByStudent: new Map(),
+    };
   }
   // We compute the profile in the same window as the *most recently*
   // selected pool. We don't store the window on the plan, so use the
@@ -2361,11 +2393,21 @@ async function hydratePlanStudents(
     plan.subject,
     allIds,
   );
+  // IMPORTANT: anchor skill profiles to the plan's own school year so
+  // the per-group weakest-benchmarks table and within-class sub-pods
+  // in the exported PDF stay consistent with the plan's PM trajectory
+  // and context columns (which are already scoped to plan.schoolYear).
+  // Picking `available[0]` here would silently pull a newer SY's FAST
+  // data for historical plans and produce internally inconsistent
+  // exports.
+  const planYearWindows = available.filter(
+    (w) => w.schoolYear === plan.schoolYear,
+  );
   const profile = await computeSkillProfiles({
     schoolId,
     subject: plan.subject,
-    schoolYear: available[0]?.schoolYear ?? plan.schoolYear,
-    window: available[0]?.window ?? "pm3",
+    schoolYear: plan.schoolYear,
+    window: planYearWindows[0]?.window ?? "pm3",
     studentIds: allIds,
   });
   const profById = new Map(profile.map((p) => [p.studentId, p]));
@@ -2438,7 +2480,113 @@ async function hydratePlanStudents(
     }
   }
 
-  return groups.map((g) => ({
+  // ----- PM trajectory + context flags -----
+  // PM scale scores for the plan's subject + current school year.
+  // Converted to whole levels via fastCutScores.placeOnChart using
+  // the plan.grade as chart-grade (all plan students are same grade
+  // by construction). PM3 uses prior-grade chart per FL convention.
+  // ossLogs + issAdminLogs combined gives a 30-day discipline-event
+  // count; ledger duplication between modules is rare in practice.
+  const since30 = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+  const [
+    pmScoreRows,
+    mtssRows,
+    safetyRows,
+    retentionRows,
+    ossRows,
+    issRows,
+  ] = await Promise.all([
+    db
+      .select({
+        studentId: studentFastScoresTable.studentId,
+        pm1: studentFastScoresTable.pm1,
+        pm2: studentFastScoresTable.pm2,
+        pm3: studentFastScoresTable.pm3,
+      })
+      .from(studentFastScoresTable)
+      .where(
+        and(
+          eq(studentFastScoresTable.schoolId, schoolId),
+          eq(studentFastScoresTable.subject, plan.subject),
+          eq(studentFastScoresTable.schoolYear, plan.schoolYear),
+          eq(studentFastScoresTable.isHistorical, false),
+          inArray(studentFastScoresTable.studentId, allIds),
+        ),
+      ),
+    db
+      .select({ studentId: studentMtssPlansTable.studentId })
+      .from(studentMtssPlansTable)
+      .where(
+        and(
+          eq(studentMtssPlansTable.schoolId, schoolId),
+          isNull(studentMtssPlansTable.closedAt),
+          inArray(studentMtssPlansTable.studentId, allIds),
+        ),
+      ),
+    db
+      .select({ studentId: safetyPlansTable.studentId })
+      .from(safetyPlansTable)
+      .where(
+        and(
+          eq(safetyPlansTable.schoolId, schoolId),
+          eq(safetyPlansTable.status, "active"),
+          inArray(safetyPlansTable.studentId, allIds),
+        ),
+      ),
+    db
+      .select({ studentId: studentRetentionsTable.studentId })
+      .from(studentRetentionsTable)
+      .where(
+        and(
+          eq(studentRetentionsTable.schoolId, schoolId),
+          inArray(studentRetentionsTable.studentId, allIds),
+        ),
+      ),
+    db
+      .select({ studentId: ossLogsTable.studentId })
+      .from(ossLogsTable)
+      .where(
+        and(
+          eq(ossLogsTable.schoolId, schoolId),
+          isNull(ossLogsTable.cancelledAt),
+          gte(ossLogsTable.createdAt, since30),
+          inArray(ossLogsTable.studentId, allIds),
+        ),
+      ),
+    db
+      .select({ studentId: issAdminLogsTable.studentId })
+      .from(issAdminLogsTable)
+      .where(
+        and(
+          eq(issAdminLogsTable.schoolId, schoolId),
+          isNull(issAdminLogsTable.cancelledAt),
+          gte(issAdminLogsTable.createdAt, since30),
+          inArray(issAdminLogsTable.studentId, allIds),
+        ),
+      ),
+  ]);
+  const pmById = new Map(pmScoreRows.map((r) => [r.studentId, r]));
+  const activeMtssSet = new Set(mtssRows.map((r) => r.studentId));
+  const activeSafetySet = new Set(safetyRows.map((r) => r.studentId));
+  const retainedSet = new Set(retentionRows.map((r) => r.studentId));
+  const discCountById = new Map<string, number>();
+  for (const r of [...ossRows, ...issRows]) {
+    discCountById.set(r.studentId, (discCountById.get(r.studentId) ?? 0) + 1);
+  }
+
+  const planSubject = plan.subject as Subject;
+  const subjectHasChart = FAST_SUBJECTS_SET.has(planSubject);
+  function levelFromScale(
+    scale: number | null,
+    window: "pm1" | "pm2" | "pm3",
+  ): number | null {
+    if (scale == null || !subjectHasChart) return null;
+    const chartGrade = chartGradeFor(planSubject, plan.grade, window);
+    const placement = placeOnChart(scale, planSubject, chartGrade);
+    return placement ? placement.level : null;
+  }
+
+  const result = groups.map((g) => ({
     group: g,
     students: g.studentIds.map((sid: string): HydratedPlanStudent => {
       const p = profById.get(sid);
@@ -2461,6 +2609,7 @@ async function hydratePlanStudents(
             .slice(0, 3)
             .map((c) => ({ category: c.category, pct: Math.round(c.pct) }))
         : [];
+      const pm = pmById.get(sid);
       return {
         studentId: sid,
         localSisId: p?.localSisId ?? b?.localSisId ?? null,
@@ -2476,9 +2625,20 @@ async function hydratePlanStudents(
         bottomBenchmarkCodes: bottomCodes,
         strands,
         currentSection: sectionByStudent.get(sid) ?? null,
+        pmLevels: {
+          pm1: levelFromScale(pm?.pm1 ?? null, "pm1"),
+          pm2: levelFromScale(pm?.pm2 ?? null, "pm2"),
+          pm3: levelFromScale(pm?.pm3 ?? null, "pm3"),
+        },
+        hasActiveMtss: activeMtssSet.has(sid),
+        hasActiveSafetyPlan: activeSafetySet.has(sid),
+        everRetained: retainedSet.has(sid),
+        disciplineDays30: discCountById.get(sid) ?? 0,
       };
     }),
   }));
+
+  return { groups: result, profilesByStudent: profById };
 }
 
 // ---------- GET /plans/:id/csv ----------
@@ -2506,7 +2666,7 @@ router.get("/intensive-groups/plans/:id/csv", async (req, res) => {
   // …) so the school can pivot the CSV in Excel. We widen the header
   // to fit the busiest group; groups with fewer focus standards just
   // leave the trailing columns blank.
-  const maxFocus = hydrated.reduce(
+  const maxFocus = hydrated.groups.reduce(
     (m, { group }) => Math.max(m, group.focusStandards?.length ?? 0),
     0,
   );
@@ -2535,7 +2695,7 @@ router.get("/intensive-groups/plans/:id/csv", async (req, res) => {
       .map(esc)
       .join(","),
   ];
-  for (const { group, students } of hydrated) {
+  for (const { group, students } of hydrated.groups) {
     const fs = group.focusStandards ?? [];
     const focusCells: Array<string | number | null> = [];
     for (let i = 0; i < maxFocus; i++) {
@@ -2600,6 +2760,86 @@ router.get("/intensive-groups/plans/:id/pdf", async (req, res) => {
     .from(staffTable)
     .where(eq(staffTable.id, plan.createdByStaffId));
 
+  // Per-group derived data — kept here (route layer) so the PDF
+  // renderer stays a pure formatter. weakestBenchmarks aggregates
+  // every student's mastery-by-code into a 5-deep "what does this
+  // whole group most need to work on?" table. subPods runs the
+  // skill-cluster engine recursively inside the group to suggest
+  // 2 or 3 within-class small-groups (only when the section is
+  // large enough — under 8 students, sub-pods aren't useful).
+  // context is the simple count of active MTSS / safety / ever
+  // retained / 30-day discipline events the teacher walks into.
+  const pdfGroups = hydrated.groups.map(({ group, students }) => {
+    // Aggregate benchmark mastery across the group, then take the
+    // 5 lowest-avg codes with at least 50% of the group having any
+    // response for that code.
+    const aggMap = new Map<string, { sum: number; n: number }>();
+    for (const s of students) {
+      for (const [code, pct] of Object.entries(s.benchmarkPctByCode)) {
+        const cur = aggMap.get(code) ?? { sum: 0, n: 0 };
+        cur.sum += pct;
+        cur.n += 1;
+        aggMap.set(code, cur);
+      }
+    }
+    const minCoverage = Math.max(1, Math.ceil(students.length * 0.5));
+    const weakestBenchmarks = Array.from(aggMap.entries())
+      .filter(([, v]) => v.n >= minCoverage)
+      .map(([code, v]) => ({
+        benchmarkCode: code,
+        avgPct: Math.round(v.sum / v.n),
+        coveragePct: Math.round((v.n / Math.max(1, students.length)) * 100),
+      }))
+      .sort((a, b) => a.avgPct - b.avgPct)
+      .slice(0, 5);
+
+    // Sub-pods: only meaningful for ≥8-student groups. numPods scales
+    // 8→2, 12→3, capped at 3 (more than 3 sub-pods inside one classroom
+    // is operational overkill).
+    let subPods: Array<{
+      podIndex: number;
+      dominantCategory: string | null;
+      memberNames: string[];
+    }> = [];
+    if (students.length >= 8) {
+      const profiles = students
+        .map((s) => hydrated.profilesByStudent.get(s.studentId))
+        .filter((p): p is StudentSkillProfile => !!p);
+      if (profiles.length >= 6) {
+        const numPods = Math.min(3, Math.max(2, Math.ceil(profiles.length / 5)));
+        const seats = Math.ceil(profiles.length / numPods);
+        const cluster = clusterByBenchmarkDeficit(profiles, numPods, seats);
+        subPods = cluster.groups.map((p, idx) => ({
+          podIndex: idx + 1,
+          dominantCategory: p.dominantCategory,
+          memberNames: p.students.map(
+            (sp) => `${sp.firstName ?? ""} ${sp.lastName ?? ""}`.trim(),
+          ),
+        }));
+      }
+    }
+
+    return {
+      groupIndex: group.groupIndex,
+      name: group.name,
+      recipeSummary: group.recipe?.summary ?? "",
+      seatsPerSection: group.seatsPerSection,
+      students,
+      focusStandards: group.focusStandards ?? null,
+      weakestBenchmarks,
+      subPods,
+      context: {
+        activeMtss: students.filter((s) => s.hasActiveMtss).length,
+        activeSafetyPlan: students.filter((s) => s.hasActiveSafetyPlan).length,
+        everRetained: students.filter((s) => s.everRetained).length,
+        disciplineEvents30: students.reduce(
+          (a, s) => a + s.disciplineDays30,
+          0,
+        ),
+      },
+    };
+  });
+
   const buf = await renderComposerPlanPdf({
     schoolName: school?.name ?? "School",
     planName: plan.name,
@@ -2611,14 +2851,7 @@ router.get("/intensive-groups/plans/:id/pdf", async (req, res) => {
     createdAt: plan.createdAt,
     finalizedAt: plan.finalizedAt,
     savedByName: savedBy?.displayName ?? "Unknown",
-    groups: hydrated.map(({ group, students }) => ({
-      groupIndex: group.groupIndex,
-      name: group.name,
-      recipeSummary: group.recipe?.summary ?? "",
-      seatsPerSection: group.seatsPerSection,
-      students,
-      focusStandards: group.focusStandards ?? null,
-    })),
+    groups: pdfGroups,
   });
   const slug = plan.name.replace(/[^A-Za-z0-9._-]+/g, "_").slice(0, 60);
   res.setHeader("Content-Type", "application/pdf");

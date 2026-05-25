@@ -57,6 +57,20 @@ export interface ComposerPlanPdfStudent {
     period: number;
     teacherName: string | null;
   } | null;
+  // PM1/PM2/PM3 FAST achievement levels (1..5 | null) — surfaced as
+  // a trajectory chip in the roster table so the teacher can see
+  // movement at a glance without paging into the student profile.
+  pmLevels?: {
+    pm1: number | null;
+    pm2: number | null;
+    pm3: number | null;
+  };
+  // Cross-module context flags. All optional so older callers that
+  // don't supply them still render the same roster.
+  hasActiveMtss?: boolean;
+  hasActiveSafetyPlan?: boolean;
+  everRetained?: boolean;
+  disciplineDays30?: number;
 }
 
 export interface ComposerPlanPdfFocusStandard {
@@ -73,6 +87,29 @@ export interface ComposerPlanPdfGroup {
   seatsPerSection: number;
   students: ComposerPlanPdfStudent[];
   focusStandards?: ComposerPlanPdfFocusStandard[] | null;
+  // Group-level "what does this whole class most need to work on?"
+  // — the 5 lowest-average benchmarks across the roster (each
+  // surfaced only when at least half the group has responses).
+  weakestBenchmarks?: Array<{
+    benchmarkCode: string;
+    avgPct: number;
+    coveragePct: number;
+  }>;
+  // Within-class small-group suggestions. Only populated by the
+  // route layer when the group has ≥8 students with FAST profiles.
+  subPods?: Array<{
+    podIndex: number;
+    dominantCategory: string | null;
+    memberNames: string[];
+  }>;
+  // Quick cross-module context counts — printed under the group
+  // summary so the teacher knows what they're walking into.
+  context?: {
+    activeMtss: number;
+    activeSafetyPlan: number;
+    everRetained: number;
+    disciplineEvents30: number;
+  };
 }
 
 export interface ComposerPlanPdfInput {
@@ -264,6 +301,7 @@ export async function renderComposerPlanPdf(
         totalGroups: input.groups.length,
         publicId: input.publicId,
         qrBuffer,
+        isLastGroup: i === input.groups.length - 1,
       });
     }
 
@@ -376,6 +414,7 @@ interface GroupPageCtx {
   totalGroups: number;
   publicId: string;
   qrBuffer: Buffer;
+  isLastGroup: boolean;
 }
 
 function drawGroupBody(
@@ -433,6 +472,26 @@ function drawGroupBody(
   summaryParts.push(`ELL ${ellCt}`);
   doc.text(summaryParts.join("  ·  "));
 
+  // Second summary line — cross-module context counts. Only render
+  // when there's anything to show (otherwise the empty "·" line is
+  // visual noise on plans whose students happen to have no MTSS /
+  // safety / retention / discipline footprint at all).
+  if (g.context) {
+    const ctxParts: string[] = [];
+    if (g.context.activeMtss > 0)
+      ctxParts.push(`Active MTSS ${g.context.activeMtss}`);
+    if (g.context.activeSafetyPlan > 0)
+      ctxParts.push(`Safety plan ${g.context.activeSafetyPlan}`);
+    if (g.context.everRetained > 0)
+      ctxParts.push(`Ever retained ${g.context.everRetained}`);
+    if (g.context.disciplineEvents30 > 0)
+      ctxParts.push(`ISS+OSS last 30d ${g.context.disciplineEvents30}`);
+    if (ctxParts.length > 0) {
+      doc.font("Helvetica").fontSize(9).fillColor("#475569");
+      doc.text(ctxParts.join("  ·  "));
+    }
+  }
+
   if (g.focusStandards && g.focusStandards.length > 0) {
     doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
@@ -450,6 +509,14 @@ function drawGroupBody(
 
   // ----- Roster table -----
   // Widths sum ≤ landscape-letter content width (792 - 80 = 712).
+  // PM trajectory col is always present (renders "—" when there's
+  // no score). Focus-fit col is dropped when the plan isn't a
+  // skill-cluster plan — that column is meaningless without focus
+  // standards, and shedding it gives Section / Teacher room to
+  // breathe on Cusp plans (where most rows wrap otherwise).
+  const hasFocus = !!(g.focusStandards && g.focusStandards.length > 0);
+  // Common cols: 24+70+150+28+38+38+50+72 = 470. Remaining 242pt for
+  // Section (and optional Focus-fit).
   const rosterCols: Array<{ w: number; label: string }> = [
     { w: 24, label: "#" },
     { w: 70, label: "SIS ID" },
@@ -458,8 +525,9 @@ function drawGroupBody(
     { w: 38, label: "FAST" },
     { w: 38, label: "%" },
     { w: 50, label: "Flags" },
-    { w: 260, label: "Section / Teacher" },
-    { w: 50, label: "Focus fit" },
+    { w: 72, label: "PM1/2/3" },
+    { w: hasFocus ? 192 : 242, label: "Section / Teacher" },
+    ...(hasFocus ? [{ w: 50, label: "Focus fit" }] : []),
   ];
   const rowH = 18;
   let y = doc.y;
@@ -517,6 +585,26 @@ function drawGroupBody(
       ? `P${section.period} · ${section.courseName}${section.teacherName ? " — " + section.teacherName : ""}`
       : "—";
 
+    // PM trajectory chip: "L#/L#/L# ▲" (or ▼ / – / no glyph if only
+    // one window has data). Glyph compares the latest two windows
+    // that both have a score — purely directional, no magnitude.
+    const pm = s.pmLevels;
+    const pmCell = (() => {
+      if (!pm) return "—";
+      const fmt = (v: number | null) => (v == null ? "—" : `L${v}`);
+      const parts = [fmt(pm.pm1), fmt(pm.pm2), fmt(pm.pm3)].join("/");
+      // Pick the most-recent two non-null levels for the glyph.
+      const seq: number[] = [];
+      if (pm.pm1 != null) seq.push(pm.pm1);
+      if (pm.pm2 != null) seq.push(pm.pm2);
+      if (pm.pm3 != null) seq.push(pm.pm3);
+      if (seq.length < 2) return parts;
+      const last = seq[seq.length - 1];
+      const prev = seq[seq.length - 2];
+      const glyph = last > prev ? "▲" : last < prev ? "▼" : "–";
+      return `${parts} ${glyph}`;
+    })();
+
     x = left;
     const cells = [
       String(i + 1),
@@ -526,8 +614,9 @@ function drawGroupBody(
       s.fastLevel != null ? `L${s.fastLevel}` : "—",
       s.overallPct != null ? `${Math.round(s.overallPct)}%` : "—",
       programFlagsLabel(s) || "—",
+      pmCell,
       sectionText,
-      fitText,
+      ...(hasFocus ? [fitText] : []),
     ];
     doc.fillColor("#0f172a");
     for (let ci = 0; ci < rosterCols.length; ci++) {
@@ -538,6 +627,71 @@ function drawGroupBody(
       x += rosterCols[ci].w;
     }
     y += rowH;
+  }
+
+  // ----- Group weakest benchmarks (A) -----
+  // Always render when we have aggregate data — gives Cusp plans
+  // a "where to focus instruction" handle (they have no focus
+  // standards) and gives skill-cluster plans a sanity check (the
+  // recipe's focus codes should overlap heavily with this list).
+  if (g.weakestBenchmarks && g.weakestBenchmarks.length > 0) {
+    if (y + 60 + g.weakestBenchmarks.length * rowH > bottomLimit) {
+      doc.addPage({ size: "LETTER", layout: "landscape" });
+      drawHeader(
+        doc,
+        ctx.planName,
+        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+        0,
+        0,
+      );
+      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+    } else {
+      y += 12;
+    }
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.text("Group's 5 weakest benchmarks (whole-class focus)", left, y);
+    y += 14;
+    const wbCols: Array<{ w: number; label: string }> = [
+      { w: 24, label: "#" },
+      { w: 180, label: "Benchmark" },
+      { w: 80, label: "Group avg" },
+      { w: 100, label: "Coverage" },
+      { w: width - 24 - 180 - 80 - 100, label: "" },
+    ];
+    drawRow(doc, left, y, rowH, wbCols, "header");
+    x = left;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+    for (const c of wbCols) {
+      doc.text(c.label, x + 4, y + 5, { width: c.w - 8 });
+      x += c.w;
+    }
+    y += rowH;
+    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+    for (let i = 0; i < g.weakestBenchmarks.length; i++) {
+      const wb = g.weakestBenchmarks[i];
+      if (i % 2 === 1) drawRow(doc, left, y, rowH, wbCols, "alt");
+      const fill = heatFill(wb.avgPct);
+      if (fill) {
+        doc.save().rect(left + 24 + 180, y, 80, rowH).fillColor(fill).fill().restore();
+      }
+      x = left;
+      doc.fillColor("#0f172a");
+      doc.text(String(i + 1), x + 4, y + 5, { width: 24 - 8 });
+      x += 24;
+      doc.text(wb.benchmarkCode, x + 4, y + 5, {
+        width: 180 - 8,
+        ellipsis: true,
+        lineBreak: false,
+      });
+      x += 180;
+      doc.text(`${wb.avgPct}%`, x + 4, y + 5, { width: 80 - 8, align: "center" });
+      x += 80;
+      doc.text(`${wb.coveragePct}% of group`, x + 4, y + 5, {
+        width: 100 - 8,
+      });
+      y += rowH;
+    }
   }
 
   // ----- Focus-standards matrix (skill-cluster mode only) -----
@@ -745,6 +899,159 @@ function drawGroupBody(
       });
       y += rowH;
     }
+  }
+
+  // ----- Suggested within-class sub-pods (E) -----
+  // Only when the route layer found enough students with FAST
+  // profiles to be worth pod-ing (≥6 profiles, capped at 3 pods).
+  if (g.subPods && g.subPods.length > 0) {
+    const podBlockH = 30 + g.subPods.length * 32;
+    if (y + podBlockH > bottomLimit) {
+      doc.addPage({ size: "LETTER", layout: "landscape" });
+      drawHeader(
+        doc,
+        ctx.planName,
+        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+        0,
+        0,
+      );
+      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+    } else {
+      y += 12;
+    }
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.text(
+      `Suggested within-class sub-pods (${g.subPods.length})`,
+      left,
+      y,
+    );
+    y += 4;
+    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#64748b");
+    doc.text(
+      "Auto-generated from benchmark deficit clustering. Adjust as needed.",
+      left,
+      y + 8,
+    );
+    y += 20;
+    const podW = Math.floor(width / g.subPods.length);
+    const podY = y;
+    let maxPodH = 0;
+    for (let pi = 0; pi < g.subPods.length; pi++) {
+      const pod = g.subPods[pi];
+      const px = left + pi * podW;
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      const header = pod.dominantCategory
+        ? `Pod ${pod.podIndex} · ${pod.dominantCategory}`
+        : `Pod ${pod.podIndex}`;
+      doc.text(header, px + 4, podY, { width: podW - 8, ellipsis: true });
+      doc.font("Helvetica").fontSize(8).fillColor("#334155");
+      const memberText = pod.memberNames.join(", ") || "—";
+      doc.text(memberText, px + 4, podY + 12, { width: podW - 8 });
+      const podH = doc.y - podY;
+      if (podH > maxPodH) maxPodH = podH;
+    }
+    y = podY + maxPodH + 8;
+  }
+
+  // ----- Pre-printed M-F × 3-rotation grid (D) -----
+  // Only render on the last group page so the deck ends with one
+  // ready-to-write grid the teacher can fill in by hand. Three
+  // rotations per day is the small-group standard for K-8 reading
+  // and math blocks (teacher-led / independent / partner).
+  if (ctx.isLastGroup) {
+    const gridTitleH = 18;
+    const gridRows = 3;
+    const gridHeaderH = 18;
+    const gridCellH = 42;
+    const gridBlockH = gridTitleH + gridHeaderH + gridRows * gridCellH + 8;
+    if (y + gridBlockH > bottomLimit) {
+      doc.addPage({ size: "LETTER", layout: "landscape" });
+      drawHeader(
+        doc,
+        ctx.planName,
+        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+        0,
+        0,
+      );
+      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+    } else {
+      y += 16;
+    }
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.text("Weekly rotation grid (fill in by hand)", left, y);
+    y += gridTitleH;
+    const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+    const labelW = 80;
+    const dayW = Math.floor((width - labelW) / days.length);
+    // Header row.
+    doc
+      .save()
+      .rect(left, y, labelW + dayW * days.length, gridHeaderH)
+      .fillColor("#e2e8f0")
+      .fill()
+      .restore();
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+    doc.text("", left + 4, y + 5, { width: labelW - 8 });
+    for (let di = 0; di < days.length; di++) {
+      doc.text(days[di], left + labelW + di * dayW + 4, y + 5, {
+        width: dayW - 8,
+        align: "center",
+      });
+    }
+    // Outline header bottom border.
+    doc
+      .save()
+      .moveTo(left, y + gridHeaderH)
+      .lineTo(left + labelW + dayW * days.length, y + gridHeaderH)
+      .lineWidth(0.5)
+      .strokeColor("#94a3b8")
+      .stroke()
+      .restore();
+    y += gridHeaderH;
+    // Three rotation rows.
+    const rotationLabels = ["Rotation A", "Rotation B", "Rotation C"];
+    for (let ri = 0; ri < gridRows; ri++) {
+      // Label cell.
+      doc
+        .save()
+        .rect(left, y, labelW, gridCellH)
+        .fillColor("#f8fafc")
+        .fill()
+        .restore();
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      doc.text(rotationLabels[ri], left + 4, y + 6, { width: labelW - 8 });
+      // Day cells — empty bordered boxes.
+      for (let di = 0; di < days.length; di++) {
+        const cx = left + labelW + di * dayW;
+        doc
+          .save()
+          .rect(cx, y, dayW, gridCellH)
+          .lineWidth(0.5)
+          .strokeColor("#cbd5e1")
+          .stroke()
+          .restore();
+      }
+      // Vertical separator after label.
+      doc
+        .save()
+        .moveTo(left + labelW, y)
+        .lineTo(left + labelW, y + gridCellH)
+        .lineWidth(0.5)
+        .strokeColor("#94a3b8")
+        .stroke()
+        .restore();
+      y += gridCellH;
+    }
+    // Outer border.
+    doc
+      .save()
+      .rect(left, y - gridRows * gridCellH - gridHeaderH, labelW + dayW * days.length, gridRows * gridCellH + gridHeaderH)
+      .lineWidth(0.7)
+      .strokeColor("#475569")
+      .stroke()
+      .restore();
   }
 }
 
