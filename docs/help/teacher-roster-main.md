@@ -33,13 +33,20 @@ counters, and safety-plan indicators.
 - **HP / Tardy counters**: rolling 30-day totals. Click the number to
   see the detail log.
 
-## Quick actions per row
+## To act on a student
 
-- **+ Pass**: send a hall pass for that student without leaving the
-  page.
-- **+ PBIS**: award points / give a recognition.
-- **Note**: add a quick staff note (private to staff).
-- **Edit**: opens the student profile in a side drawer for fast edits.
+Click the student's name to open their full profile in a side
+drawer. From there you can view details and jump to other modules.
+
+The Teacher Roster itself is read-only — it does **not** have
+inline buttons to create a hall pass, award PBIS points, or write
+a note. For those actions, open the matching module from the left
+sidebar:
+
+- **Hall Passes** → create a pass (see "How a teacher creates a
+  hall pass").
+- **PBIS Points** → award points (see "How to use PBIS Points").
+- Staff notes live on the student profile.
 
 ## Sorting & exports
 

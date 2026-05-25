@@ -12,10 +12,15 @@ keywords: ["hall pass", "pass", "bathroom", "restroom", "nurse", "office", "kios
    picks a destination, and the pass starts automatically. This is the
    normal day-to-day flow. See "Setting up your kiosk" if your kiosk
    isn't running yet.
-2. **From the teacher screen** — useful if a student is already at your
-   desk or the kiosk is offline. Open the **Hall Passes** tab in the
-   sidebar, click the **+ Create Pass** button, search the student, pick
-   a destination, then **Start**.
+2. **From the Hall Passes page** — useful if a student is already at
+   your desk or the kiosk is offline. The **+ Create Pass** button
+   lives **only** on the Hall Passes page. To get there:
+   1. Open **Hall Passes** in the left sidebar (under Quick Access).
+      It is *not* on Teacher Roster, Tardy Pass, or any other tab.
+   2. Click **+ Create Pass** at the top of the Hall Passes page.
+   3. Search for the student by name.
+   4. Pick a destination.
+   5. Click **Start**.
 
 ## What the student sees on the kiosk
 
