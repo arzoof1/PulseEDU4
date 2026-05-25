@@ -214,13 +214,31 @@ function deltaColor(delta: number): { bg: string; fg: string } {
 export default function TeacherBenchmarksTab({
   teacherId,
   isOwnRoster,
+  rosterSelectedPeriod = null,
+  rosterAvailablePeriods = [],
 }: {
   teacherId: number | null;
   // Reserved for future role-aware UI; currently the server enforces
   // every gate, but kept on the prop for parity with the parent.
   isOwnRoster: boolean;
+  // Period filter inherited from the Teacher Roster page's chip row.
+  // Used as the initial value for the tab-local "Period" picker so the
+  // heatmap + Print PDF respect whatever the teacher selected on the
+  // previous tab. `null` = all periods.
+  rosterSelectedPeriod?: number | null;
+  rosterAvailablePeriods?: number[];
 }) {
   void isOwnRoster;
+
+  // Tab-local period filter — seeded from the roster page's selection
+  // so opening Benchmarks immediately scopes to the same group of
+  // students. Users can override here to "All" or any other period.
+  const [periodFilter, setPeriodFilter] = useState<number | null>(
+    rosterSelectedPeriod,
+  );
+  useEffect(() => {
+    setPeriodFilter(rosterSelectedPeriod);
+  }, [rosterSelectedPeriod]);
 
   const [subject, setSubject] = useState<string>("ela");
   const [deliveryCounts, setDeliveryCounts] = useState<DeliveryCounts>({});
@@ -308,6 +326,7 @@ export default function TeacherBenchmarksTab({
       params.set("schoolYear", sy);
       params.set("window", w);
     }
+    if (periodFilter != null) params.set("period", String(periodFilter));
     authFetch(`/api/teacher-roster/benchmarks?${params.toString()}`)
       .then(async (r) => {
         if (!r.ok) {
@@ -336,7 +355,7 @@ export default function TeacherBenchmarksTab({
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [teacherId, subject, windowKey]);
+  }, [teacherId, subject, windowKey, periodFilter]);
 
   // Per-teacher instruction delivery counts for the current school year.
   // Drives the BenchmarkStar badge on column headers + Progress Report
@@ -545,7 +564,8 @@ export default function TeacherBenchmarksTab({
     ? `/api/teacher-roster/benchmarks/pdf?teacherId=${teacherId}` +
       `&subject=${subject}` +
       `&schoolYear=${encodeURIComponent(data.schoolYear)}` +
-      `&window=${data.window}`
+      `&window=${data.window}` +
+      (periodFilter != null ? `&period=${periodFilter}` : "")
     : null;
 
   const openPdf = () => {
@@ -643,6 +663,30 @@ export default function TeacherBenchmarksTab({
                     {w.label}
                   </option>
                 ))}
+            </select>
+          </label>
+        )}
+        {/* Period filter — seeded from the Teacher Roster page's chip
+            row so the heatmap + Print PDF respect the prior selection.
+            "All" = union across periods (legacy behavior). */}
+        {rosterAvailablePeriods.length > 0 && (
+          <label
+            style={{ display: "inline-flex", alignItems: "center", gap: 6 }}
+            title="Filter the heatmap + Print PDF to one class period. Defaults to whatever was selected on the Teacher Roster page."
+          >
+            Period:
+            <select
+              value={periodFilter == null ? "" : String(periodFilter)}
+              onChange={(e) =>
+                setPeriodFilter(e.target.value === "" ? null : Number(e.target.value))
+              }
+            >
+              <option value="">All</option>
+              {rosterAvailablePeriods.map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
             </select>
           </label>
         )}

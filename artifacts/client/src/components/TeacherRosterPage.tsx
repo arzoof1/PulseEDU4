@@ -1808,6 +1808,8 @@ export default function TeacherRosterPage({
         <TeacherBenchmarksTab
           teacherId={teacherId}
           isOwnRoster={isOwnRoster}
+          rosterSelectedPeriod={data?.selectedPeriod ?? null}
+          rosterAvailablePeriods={data?.availablePeriods ?? []}
         />
       )}
 

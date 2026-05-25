@@ -133,6 +133,11 @@ interface ResolvedContext {
   studentIds: string[];
   thresholdPct: number;
   subject: string;
+  // When a `period` query param is supplied, the studentIds list is
+  // narrowed to that period's section roster and `period` is the
+  // numeric period filter that was applied. Null = no filter (union
+  // across all periods, the legacy default).
+  period: number | null;
 }
 
 // Shared front-half of every endpoint here: parse + validate
@@ -189,17 +194,37 @@ async function resolveContext(
     return null;
   }
 
-  // Roster (union of periods) — same source-of-truth as /teacher-roster
-  // but without the period filter, since the heatmap is class-wide.
-  const sections = await db
+  // Optional period filter — when present, narrow the roster to the
+  // section(s) for that period. Mirrors the Teacher Roster page's
+  // period selector so the Benchmarks heatmap + Print PDF respect
+  // whatever the teacher had selected.
+  const rawPeriod = req.query.period;
+  let period: number | null = null;
+  if (typeof rawPeriod === "string" && rawPeriod.length > 0) {
+    const parsed = Number(rawPeriod);
+    if (Number.isInteger(parsed) && parsed > 0) {
+      period = parsed;
+    }
+  }
+
+  // Roster (default: union of periods). When `period` is supplied,
+  // narrow to that period's section roster only.
+  const sectionsQuery = db
     .select({ id: classSectionsTable.id })
     .from(classSectionsTable)
     .where(
-      and(
-        eq(classSectionsTable.schoolId, schoolId),
-        eq(classSectionsTable.teacherStaffId, targetTeacherId),
-      ),
+      period == null
+        ? and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.teacherStaffId, targetTeacherId),
+          )
+        : and(
+            eq(classSectionsTable.schoolId, schoolId),
+            eq(classSectionsTable.teacherStaffId, targetTeacherId),
+            eq(classSectionsTable.period, period),
+          ),
     );
+  const sections = await sectionsQuery;
   const sectionIds = sections.map((s) => s.id);
 
   let studentIds: string[] = [];
@@ -229,6 +254,7 @@ async function resolveContext(
     studentIds,
     thresholdPct,
     subject,
+    period,
   };
 }
 
@@ -1164,7 +1190,9 @@ router.get(
       .fillColor("#666")
       .text(
         `${ctx.subject.toUpperCase()} · ${schoolYear} ${window.toUpperCase()} · ` +
-          `All class periods (union of roster) · ` +
+          (ctx.period == null
+            ? `All class periods (union of roster) · `
+            : `Period ${ctx.period} only · `) +
           `Mastery threshold ${ctx.thresholdPct}% · ` +
           `Generated ${new Date().toLocaleString()}`,
       )
@@ -1300,8 +1328,16 @@ router.get(
       }
 
       // Column header row — rotate -45° so long benchmark codes fit
-      // without overflowing the column width.
-      const headerHeight = 90;
+      // without overflowing the column width. headerHeight needs to
+      // be tall enough that the rotated text (~80pt wide at 7pt,
+      // ~57pt vertical extent after rotation) fully clears the top
+      // of the band; previously 90pt and the tops of codes like
+      // "2.1.1" / "2.1.2" got clipped on the printed page.
+      const headerHeight = 120;
+      // Push the band down a touch so the rotated text never bleeds
+      // into the bottom-3 tile above on chunk 0, or into the previous
+      // row of cells on subsequent chunks.
+      doc.y = doc.y + 10;
       const headerY = doc.y;
       doc
         .font("Helvetica-Bold")
