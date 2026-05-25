@@ -94,6 +94,7 @@ import fastCoverageRouter from "./fastCoverage";
 import districtOverviewRouter from "./districtOverview";
 import intensiveGroupsRouter from "./intensiveGroups";
 import algebraPlacementRouter from "./algebraPlacement";
+import helpAssistantRouter from "./helpAssistant";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -250,5 +251,6 @@ router.use(fastCoverageRouter);
 router.use(districtOverviewRouter);
 router.use(intensiveGroupsRouter);
 router.use(algebraPlacementRouter);
+router.use(helpAssistantRouter);
 
 export default router;

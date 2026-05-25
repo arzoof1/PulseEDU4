@@ -10,6 +10,7 @@ import {
   HelpToggleButton,
 } from "./components/HowToUseHelp";
 import AdminHubPage from "./components/AdminHubPage";
+import HelpAssistant from "./components/HelpAssistant";
 import { TileHome, type Tile as TileHomeTile } from "./pages/TileHome";
 import StaffAstPage from "./components/ast/StaffAstPage";
 import AdminAstQueuePage from "./components/ast/AdminAstQueuePage";
@@ -22329,6 +22330,7 @@ function App() {
         }}
       />
       </main>
+      <HelpAssistant />
     </div>
     </RoleProvider>
   );
