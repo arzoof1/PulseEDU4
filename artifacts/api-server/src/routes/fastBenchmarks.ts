@@ -739,7 +739,7 @@ router.get(
       return;
     }
 
-    const [students, itemsRaw, periodRows, scaleRows, labelRows] =
+    const [students, itemsRaw, periodRows, scaleRows, labelRows, reteachRows] =
       await Promise.all([
       db
         .select({
@@ -825,10 +825,52 @@ router.get(
             eq(schoolBenchmarksTable.subject, ctx.subject),
           ),
         ),
+      // Reteach sessions per (student, code, window, format) for this
+      // school year. Split 1:1 vs small-group so the printable report
+      // can show "🔁2 · 👥3" in the relevant PM column — tells the
+      // before/after story (60% PM2 → 3 reteaches → 85% PM3). Logs with
+      // a null pm_window_at_log are dropped (only legacy pre-field
+      // rows; rare and unattributable to a window).
+      db
+        .select({
+          studentId: benchmarkReteachLogTable.studentId,
+          benchmarkCode: benchmarkReteachLogTable.benchmarkCode,
+          window: benchmarkReteachLogTable.pmWindowAtLog,
+          format: benchmarkReteachLogTable.format,
+          count: sql<number>`COUNT(*)::int`,
+        })
+        .from(benchmarkReteachLogTable)
+        .where(
+          and(
+            eq(benchmarkReteachLogTable.schoolId, ctx.schoolId),
+            eq(benchmarkReteachLogTable.schoolYear, schoolYear),
+            inArray(benchmarkReteachLogTable.studentId, ctx.studentIds),
+            isNull(benchmarkReteachLogTable.deletedAt),
+          ),
+        )
+        .groupBy(
+          benchmarkReteachLogTable.studentId,
+          benchmarkReteachLogTable.benchmarkCode,
+          benchmarkReteachLogTable.pmWindowAtLog,
+          benchmarkReteachLogTable.format,
+        ),
     ]);
     const labelByCode = new Map<string, string | null>(
       labelRows.map((r) => [r.code, r.label]),
     );
+    // Index: `${studentId}|${code}|${window}` → { oneOnOne, smallGroup }
+    const reteachByCellWin = new Map<
+      string,
+      { oneOnOne: number; smallGroup: number }
+    >();
+    for (const r of reteachRows) {
+      if (!r.window) continue; // drop legacy null-window logs
+      const key = `${r.studentId}|${r.benchmarkCode}|${r.window}`;
+      const cur = reteachByCellWin.get(key) ?? { oneOnOne: 0, smallGroup: 0 };
+      if (r.format === "one_on_one") cur.oneOnOne += r.count;
+      else if (r.format === "small_group") cur.smallGroup += r.count;
+      reteachByCellWin.set(key, cur);
+    }
 
     // Drop cross-grade rows + "N/A" codes — see helper comment.
     const studentGradeById = new Map(
@@ -918,6 +960,8 @@ router.get(
       earned: number;
       possible: number;
       pct: number;
+      reteachOneOnOne: number;
+      reteachSmallGroup: number;
     }
     interface ScaleCell {
       score: number;
@@ -960,8 +1004,27 @@ router.get(
           const row: Record<string, OutCell | null> = {};
           for (const b of benchmarks) {
             const arr = byCode?.get(b.code);
+            const rt = reteachByCellWin.get(
+              `${s.studentId}|${b.code}|${w}`,
+            ) ?? { oneOnOne: 0, smallGroup: 0 };
             if (!arr || arr.length === 0) {
-              row[b.code] = null;
+              // If there's no item-level data but the teacher logged
+              // a reteach for this benchmark in this window, surface
+              // an empty-data cell carrying just the reteach counts so
+              // the print column still shows "🔁N · 👥N" — otherwise
+              // PM1 reteaches done before any item upload would vanish.
+              if (rt.oneOnOne === 0 && rt.smallGroup === 0) {
+                row[b.code] = null;
+              } else {
+                row[b.code] = {
+                  items: [],
+                  earned: 0,
+                  possible: 0,
+                  pct: 0,
+                  reteachOneOnOne: rt.oneOnOne,
+                  reteachSmallGroup: rt.smallGroup,
+                };
+              }
               continue;
             }
             let earned = 0;
@@ -979,6 +1042,8 @@ router.get(
                 possible === 0
                   ? 0
                   : Math.round((earned / possible) * 100),
+              reteachOneOnOne: rt.oneOnOne,
+              reteachSmallGroup: rt.smallGroup,
             };
           }
           windows[w] = row;

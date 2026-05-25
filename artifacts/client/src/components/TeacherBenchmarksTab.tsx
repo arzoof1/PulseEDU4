@@ -80,6 +80,8 @@ interface ReportCell {
   earned: number;
   possible: number;
   pct: number;
+  reteachOneOnOne?: number;
+  reteachSmallGroup?: number;
 }
 
 interface ReportScale {
@@ -4635,42 +4637,84 @@ function ProgressReportModal(props: {
                                     </td>
                                   );
                                 }
+                                const rt1 = cell.reteachOneOnOne ?? 0;
+                                const rtG = cell.reteachSmallGroup ?? 0;
+                                const hasItems = cell.items.length > 0;
                                 return (
                                   <td key={w}>
-                                    <div>
-                                      {cell.items.map((it, idx) => {
-                                        const earned = it.pointsEarned ?? 0;
-                                        const possible = it.pointsPossible ?? 0;
-                                        let cls = "wrong";
-                                        if (possible > 0 && earned === possible) {
-                                          cls = "correct";
-                                        } else if (possible > 0 && earned > 0) {
-                                          cls = "partial";
-                                        }
-                                        return (
-                                          <span
-                                            key={it.itemSeq}
-                                            className={`item-chip ${cls}`}
-                                          >
-                                            #{it.itemSeq + 1}: {earned}/
-                                            {possible}
-                                          </span>
-                                        );
-                                      })}
-                                    </div>
-                                    <div
-                                      style={{
-                                        marginTop: 3,
-                                        fontSize: 10,
-                                        fontWeight: 700,
-                                        color:
-                                          cell.pct >= report.thresholdPct
-                                            ? "#14532d"
-                                            : "#7f1d1d",
-                                      }}
-                                    >
-                                      {cell.earned}/{cell.possible} · {cell.pct}%
-                                    </div>
+                                    {hasItems ? (
+                                      <>
+                                        <div>
+                                          {cell.items.map((it) => {
+                                            const earned = it.pointsEarned ?? 0;
+                                            const possible =
+                                              it.pointsPossible ?? 0;
+                                            let cls = "wrong";
+                                            if (
+                                              possible > 0 &&
+                                              earned === possible
+                                            ) {
+                                              cls = "correct";
+                                            } else if (
+                                              possible > 0 &&
+                                              earned > 0
+                                            ) {
+                                              cls = "partial";
+                                            }
+                                            return (
+                                              <span
+                                                key={it.itemSeq}
+                                                className={`item-chip ${cls}`}
+                                              >
+                                                #{it.itemSeq + 1}: {earned}/
+                                                {possible}
+                                              </span>
+                                            );
+                                          })}
+                                        </div>
+                                        <div
+                                          style={{
+                                            marginTop: 3,
+                                            fontSize: 10,
+                                            fontWeight: 700,
+                                            color:
+                                              cell.pct >= report.thresholdPct
+                                                ? "#14532d"
+                                                : "#7f1d1d",
+                                          }}
+                                        >
+                                          {cell.earned}/{cell.possible} ·{" "}
+                                          {cell.pct}%
+                                        </div>
+                                      </>
+                                    ) : (
+                                      <div
+                                        style={{
+                                          fontSize: 9,
+                                          color: "#9ca3af",
+                                          fontStyle: "italic",
+                                        }}
+                                      >
+                                        no item data
+                                      </div>
+                                    )}
+                                    {(rt1 > 0 || rtG > 0) && (
+                                      <div
+                                        style={{
+                                          marginTop: 3,
+                                          fontSize: 9,
+                                          fontWeight: 600,
+                                          color: "#3730a3",
+                                          display: "flex",
+                                          gap: 6,
+                                          flexWrap: "wrap",
+                                        }}
+                                        title={`Reteach sessions logged in ${winLabel[w]}: ${rt1} 1:1, ${rtG} small-group`}
+                                      >
+                                        {rt1 > 0 && <span>🔁{rt1}</span>}
+                                        {rtG > 0 && <span>👥{rtG}</span>}
+                                      </div>
+                                    )}
                                   </td>
                                 );
                               })}
