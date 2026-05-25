@@ -514,6 +514,12 @@ function Card({
         border: "1px solid #e5e7eb",
         borderRadius: 8,
         padding: "1rem",
+        // minWidth:0 lets the card actually shrink inside its
+        // 1fr grid track (default min-content width otherwise
+        // forces children like tables to push past the card's
+        // right edge into the neighboring column).
+        minWidth: 0,
+        overflow: "hidden",
       }}
     >
       <h3 style={{ marginTop: 0, marginBottom: "0.5rem", fontSize: "1rem" }}>
