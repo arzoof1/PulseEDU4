@@ -1335,6 +1335,7 @@ export default function TeacherRosterPage({
   // Per-user view toggles. Each maps to one optional column. Defaults
   // to all-on; persisted to localStorage so the teacher's preference
   // survives reloads. Bumped key to v2 since we added pm-level toggles.
+  type SubjectFilter = "both" | "ela" | "math";
   type Visibility = {
     lg: boolean;
     bq: boolean;
@@ -1344,6 +1345,7 @@ export default function TeacherRosterPage({
     pm1: boolean;
     pm2: boolean;
     programs: boolean;
+    subject: SubjectFilter;
   };
   const VIS_DEFAULT: Visibility = {
     lg: true,
@@ -1354,10 +1356,12 @@ export default function TeacherRosterPage({
     pm1: true,
     pm2: true,
     programs: true,
+    subject: "both",
   };
   // Bumped to v3 because the Programs (ESE / 504 / ELL) toggle was
   // added; previous keys are missing the field but the `??` fallbacks
   // below default it to true, so old saved prefs upgrade cleanly.
+  // (The subject filter, added later, also falls back to "both".)
   const VIS_KEY = "teacherRoster.visibility.v3";
   const [visibility, setVisibility] = useState<Visibility>(() => {
     if (typeof window === "undefined") return VIS_DEFAULT;
@@ -1365,6 +1369,10 @@ export default function TeacherRosterPage({
       const raw = window.localStorage.getItem(VIS_KEY);
       if (!raw) return VIS_DEFAULT;
       const parsed = JSON.parse(raw) as Partial<Visibility>;
+      const subject: SubjectFilter =
+        parsed.subject === "ela" || parsed.subject === "math"
+          ? parsed.subject
+          : "both";
       return {
         lg: parsed.lg ?? true,
         bq: parsed.bq ?? true,
@@ -1374,6 +1382,7 @@ export default function TeacherRosterPage({
         pm1: parsed.pm1 ?? true,
         pm2: parsed.pm2 ?? true,
         programs: parsed.programs ?? true,
+        subject,
       };
     } catch {
       return VIS_DEFAULT;
@@ -1386,8 +1395,10 @@ export default function TeacherRosterPage({
       /* ignore quota / privacy-mode errors */
     }
   }, [visibility]);
-  const toggleVis = (key: keyof Visibility) =>
+  const toggleVis = (key: Exclude<keyof Visibility, "subject">) =>
     setVisibility((v) => ({ ...v, [key]: !v[key] }));
+  const showEla = visibility.subject !== "math";
+  const showMath = visibility.subject !== "ela";
 
   // Load teacher options on mount (the API decides what to return based
   // on the caller's role — plain teachers get a single-entry list).
@@ -1999,6 +2010,44 @@ export default function TeacherRosterPage({
         }}
       >
         <span style={{ fontWeight: 600 }}>Show:</span>
+        <span
+          role="group"
+          aria-label="Subject filter"
+          title="Show only ELA columns, only Math columns, or both"
+          style={{
+            display: "inline-flex",
+            border: "1px solid #cbd5e1",
+            borderRadius: 6,
+            overflow: "hidden",
+          }}
+        >
+          {(["both", "ela", "math"] as const).map((opt) => {
+            const active = visibility.subject === opt;
+            const label = opt === "both" ? "Both" : opt === "ela" ? "ELA" : "Math";
+            return (
+              <button
+                key={opt}
+                type="button"
+                onClick={() =>
+                  setVisibility((v) => ({ ...v, subject: opt }))
+                }
+                aria-pressed={active}
+                style={{
+                  padding: "3px 10px",
+                  border: "none",
+                  borderLeft: opt === "both" ? "none" : "1px solid #cbd5e1",
+                  background: active ? "#1d4ed8" : "white",
+                  color: active ? "white" : "#374151",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {label}
+              </button>
+            );
+          })}
+        </span>
         <label
           style={{ display: "inline-flex", alignItems: "center", gap: 6, cursor: "pointer" }}
           title="Show or hide the prior-year PM3 column (most-recent historical PM3 from the FL importer)"
@@ -2171,26 +2220,30 @@ export default function TeacherRosterPage({
                   if (groupCols === 0) return null;
                   return (
                     <>
-                      <th
-                        colSpan={groupCols}
-                        style={{
-                          padding: "8px 10px",
-                          textAlign: "center",
-                          ...GROUP_DIVIDER,
-                        }}
-                      >
-                        ELA
-                      </th>
-                      <th
-                        colSpan={groupCols}
-                        style={{
-                          padding: "8px 10px",
-                          textAlign: "center",
-                          ...GROUP_DIVIDER,
-                        }}
-                      >
-                        Math
-                      </th>
+                      {showEla && (
+                        <th
+                          colSpan={groupCols}
+                          style={{
+                            padding: "8px 10px",
+                            textAlign: "center",
+                            ...GROUP_DIVIDER,
+                          }}
+                        >
+                          ELA
+                        </th>
+                      )}
+                      {showMath && (
+                        <th
+                          colSpan={groupCols}
+                          style={{
+                            padding: "8px 10px",
+                            textAlign: "center",
+                            ...GROUP_DIVIDER,
+                          }}
+                        >
+                          Math
+                        </th>
+                      )}
                     </>
                   );
                 })()}
@@ -2210,7 +2263,9 @@ export default function TeacherRosterPage({
                   letterSpacing: 0.4,
                 }}
               >
-                {(["ELA", "Math"] as const).map((group) => {
+                {(["ELA", "Math"] as const)
+                  .filter((g) => (g === "ELA" ? showEla : showMath))
+                  .map((group) => {
                   // First visible cell in each group carries the divider.
                   let divUsed = false;
                   const div = (): React.CSSProperties => {
@@ -2450,24 +2505,28 @@ export default function TeacherRosterPage({
                     </td>
                   )}
                   <td style={{ padding: "6px 10px" }}>{row.grade}</td>
-                  <SubjectCells
-                    block={row.ela}
-                    subjectLabel="ELA"
-                    showLg={visibility.lg}
-                    showPriorPm3={visibility.priorPm3}
-                    showPm3={visibility.pm3}
-                    showPm1={visibility.pm1}
-                    showPm2={visibility.pm2}
-                  />
-                  <SubjectCells
-                    block={row.math}
-                    subjectLabel="Math"
-                    showLg={visibility.lg}
-                    showPriorPm3={visibility.priorPm3}
-                    showPm3={visibility.pm3}
-                    showPm1={visibility.pm1}
-                    showPm2={visibility.pm2}
-                  />
+                  {showEla && (
+                    <SubjectCells
+                      block={row.ela}
+                      subjectLabel="ELA"
+                      showLg={visibility.lg}
+                      showPriorPm3={visibility.priorPm3}
+                      showPm3={visibility.pm3}
+                      showPm1={visibility.pm1}
+                      showPm2={visibility.pm2}
+                    />
+                  )}
+                  {showMath && (
+                    <SubjectCells
+                      block={row.math}
+                      subjectLabel="Math"
+                      showLg={visibility.lg}
+                      showPriorPm3={visibility.priorPm3}
+                      showPm3={visibility.pm3}
+                      showPm1={visibility.pm1}
+                      showPm2={visibility.pm2}
+                    />
+                  )}
                   {visibility.bq && (
                     <td style={{ padding: "6px 10px" }}>
                       <BqPills row={row} />
