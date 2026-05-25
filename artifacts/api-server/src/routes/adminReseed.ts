@@ -9,6 +9,10 @@ import {
   interactionCasesTable,
   interactionCasePlayerImpactTable,
   interactionCaseNotesTable,
+  supportNotesTable,
+  ossLogsTable,
+  issAdminLogsTable,
+  studentEmergencyContactsTable,
 } from "@workspace/db";
 import { and, eq, inArray, sql } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
@@ -1579,6 +1583,738 @@ router.post("/seed-demo-cases", async (req, res) => {
     res.status(500).json({
       error: "seed_demo_cases_failed",
       message: (err as Error).message,
+    });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// One-click demo seed for School 1. Idempotent end-to-end — safe to re-click.
+// Covers what /seed-demo-cases does NOT: parent contact info, emergency
+// contacts, support notes, OSS/ISS logs, plus 4 cases with deliberate
+// student overlap (2 students in 2-3 cases) and 3 students with larger
+// network spheres via side interactions.
+// SuperUser only. Hardcoded to school 1 (Parrott) — no body, no params.
+// ---------------------------------------------------------------------------
+router.post("/seed-demo-school-1", async (req, res) => {
+  const staff = await loadStaff(req);
+  if (!staff) {
+    res.status(401).json({ error: "unauthorized" });
+    return;
+  }
+  if (!staff.isSuperUser) {
+    res.status(403).json({ error: "superuser_required" });
+    return;
+  }
+
+  const SCHOOL_ID = 1;
+  const LEAD_EMAIL = "chris.clifford@hcsb.k12.fl.us";
+
+  try {
+    const out: {
+      parentEmails: number;
+      parentPhones: number;
+      emergencyContacts: number;
+      cases: Array<{
+        title: string;
+        status: "created" | "skipped";
+        caseId?: number;
+        caseNumber?: number;
+        playerCount?: number;
+        statementCount?: number;
+      }>;
+      sideInteractions: number;
+      supportNotes: number;
+      ossLogs: number;
+      issAdminLogs: number;
+      sphereTop: Array<{ name: string; coParticipants: number; cases: number }>;
+    } = {
+      parentEmails: 0,
+      parentPhones: 0,
+      emergencyContacts: 0,
+      cases: [],
+      sideInteractions: 0,
+      supportNotes: 0,
+      ossLogs: 0,
+      issAdminLogs: 0,
+      sphereTop: [],
+    };
+
+    // --- 1. Parent emails (~80% of empties) -------------------------------
+    {
+      const r = await db.execute(sql`
+        UPDATE students
+           SET parent_email = 'parent.' || student_id || '@example.com'
+         WHERE school_id = ${SCHOOL_ID}
+           AND (parent_email IS NULL OR parent_email = '')
+           AND random() < 0.80
+      `);
+      out.parentEmails = r.rowCount ?? 0;
+    }
+
+    // --- 2. Parent phones (~68% of empties; ~15% fewer than emails) -------
+    {
+      const r = await db.execute(sql`
+        UPDATE students
+           SET parent_phone = '(555) '
+                         || lpad((floor(random()*900+100))::int::text, 3, '0')
+                         || '-'
+                         || lpad((floor(random()*9000+1000))::int::text, 4, '0')
+         WHERE school_id = ${SCHOOL_ID}
+           AND (parent_phone IS NULL OR parent_phone = '')
+           AND random() < 0.68
+      `);
+      out.parentPhones = r.rowCount ?? 0;
+    }
+
+    // --- 3. Emergency contacts — 2 per student ---------------------------
+    {
+      const r1 = await db.execute(sql`
+        INSERT INTO student_emergency_contacts
+          (school_id, student_id, slot, contact_name, relationship, phone, phone_label)
+        SELECT ${SCHOOL_ID}, s.student_id, 1,
+               COALESCE(s.parent_name, 'Guardian of ' || s.first_name),
+               'Parent/Guardian',
+               '(555) 2' || lpad((floor(random()*900))::int::text, 2, '0')
+                         || '-' || lpad((floor(random()*9000+1000))::int::text, 4, '0'),
+               'Mobile'
+          FROM students s
+         WHERE s.school_id = ${SCHOOL_ID}
+        ON CONFLICT (school_id, student_id, slot) DO NOTHING
+      `);
+      out.emergencyContacts += r1.rowCount ?? 0;
+
+      const r2 = await db.execute(sql`
+        INSERT INTO student_emergency_contacts
+          (school_id, student_id, slot, contact_name, relationship, phone, phone_label)
+        SELECT ${SCHOOL_ID}, s.student_id, 2,
+               'Emergency contact for ' || s.first_name,
+               (ARRAY['Grandparent','Aunt','Uncle','Family Friend','Neighbor'])[1 + floor(random()*5)::int],
+               '(555) 3' || lpad((floor(random()*900))::int::text, 2, '0')
+                         || '-' || lpad((floor(random()*9000+1000))::int::text, 4, '0'),
+               'Mobile'
+          FROM students s
+         WHERE s.school_id = ${SCHOOL_ID}
+        ON CONFLICT (school_id, student_id, slot) DO NOTHING
+      `);
+      out.emergencyContacts += r2.rowCount ?? 0;
+    }
+
+    // --- 4. Cases with deliberate overlap --------------------------------
+    // Pick 18 deterministic students (sorted by student_id) and assign:
+    //   A = idx 0  → cases 1, 2, 4
+    //   B = idx 1  → cases 2, 3
+    //   C = idx 2  → case 2 + side interactions
+    //   D = idx 3  → case 4 + side interactions
+    //   idx 4-6    → case 1 fillers
+    //   idx 7-10   → case 2 fillers
+    //   idx 11-12  → case 3 fillers
+    //   idx 13-15  → case 4 fillers
+    //   idx 16-17  → reserved as side-interaction fillers
+    //   idx 18-20  → additional side-interaction fillers
+    const [lead] = await db
+      .select()
+      .from(staffTable)
+      .where(
+        and(
+          eq(staffTable.schoolId, SCHOOL_ID),
+          eq(staffTable.email, LEAD_EMAIL),
+        ),
+      );
+    if (!lead) {
+      res.status(404).json({
+        error: "lead_not_found",
+        message: `Could not find lead staff ${LEAD_EMAIL} at school ${SCHOOL_ID}`,
+      });
+      return;
+    }
+
+    const roster = await db
+      .select({
+        studentId: studentsTable.studentId,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+      })
+      .from(studentsTable)
+      .where(eq(studentsTable.schoolId, SCHOOL_ID))
+      .orderBy(studentsTable.studentId);
+    if (roster.length < 21) {
+      res.status(409).json({
+        error: "roster_too_small",
+        message: `Need at least 21 students; school ${SCHOOL_ID} has ${roster.length}.`,
+      });
+      return;
+    }
+
+    type Pick = { studentId: string; firstName: string; lastName: string };
+    const pick = (i: number): Pick => roster[i]!;
+    const nameOf = (p: Pick) => `${p.firstName} ${p.lastName}`;
+
+    const A = pick(0), B = pick(1), C = pick(2), D = pick(3);
+    const case1Fillers = [pick(4), pick(5), pick(6)];
+    const case2Fillers = [pick(7), pick(8), pick(9), pick(10)];
+    const case3Fillers = [pick(11), pick(12)];
+    const case4Fillers = [pick(13), pick(14), pick(15)];
+    const side1Others = [pick(16), pick(17)];
+    const side2Others = [pick(18), pick(19)];
+    const side3Other = pick(20);
+
+    type Role =
+      | "direct" | "target" | "instigator" | "rumor"
+      | "witness" | "peripheral" | "deescalator";
+
+    type StatementSpec = {
+      occurredDate: string;
+      kind: "fight" | "verbal" | "rumor" | "property" | "class_disruption" | "peripheral_note" | "threat" | "other";
+      severity: number;
+      location: string;
+      summary: string;
+      anchor: Pick;
+      participants: Array<{ student: Pick; role: Role }>;
+    };
+
+    type CaseSpec = {
+      title: string;
+      status: "open" | "monitoring" | "escalated";
+      summary: string;
+      notes: string[];
+      players: Array<{ student: Pick; impact: 1 | 2 | 3 | 4 }>;
+      statements: StatementSpec[];
+    };
+
+    const CASES: CaseSpec[] = [
+      {
+        title: "Bus 14 afternoon arc",
+        status: "open",
+        summary: "Recurring afternoon-bus friction. Three statements over four weeks.",
+        notes: [
+          "Talked to Bus 14 driver — confirmed seating change Mon.",
+          "Parent contact for two participants complete; seats split.",
+        ],
+        players: [
+          { student: A, impact: 3 },
+          { student: case1Fillers[0], impact: 4 },
+          { student: case1Fillers[1], impact: 3 },
+          { student: case1Fillers[2], impact: 2 },
+        ],
+        statements: [
+          {
+            occurredDate: "2026-04-15", kind: "verbal", severity: 2, location: "Bus 14",
+            summary: "Yelling on bus 14 after dismissal",
+            anchor: A,
+            participants: [
+              { student: A, role: "target" },
+              { student: case1Fillers[0], role: "direct" },
+              { student: case1Fillers[1], role: "direct" },
+            ],
+          },
+          {
+            occurredDate: "2026-04-22", kind: "verbal", severity: 2, location: "Bus 14",
+            summary: "Spitballs from back row, ongoing",
+            anchor: case1Fillers[2],
+            participants: [
+              { student: case1Fillers[2], role: "target" },
+              { student: case1Fillers[0], role: "instigator" },
+              { student: case1Fillers[1], role: "peripheral" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-06", kind: "fight", severity: 3, location: "Bus loop",
+            summary: "Shoving as bus pulled up",
+            anchor: case1Fillers[0],
+            participants: [
+              { student: case1Fillers[0], role: "direct" },
+              { student: case1Fillers[1], role: "direct" },
+              { student: A, role: "witness" },
+            ],
+          },
+        ],
+      },
+      {
+        title: "8th hallway / locker bay",
+        status: "monitoring",
+        summary: "Locker bay friction across 8th hall. Four statements; theft + threat.",
+        notes: [
+          "Locker bay camera review scheduled w/ SRO.",
+          "Mediation between two students — both agreed to space.",
+          "Threat statement (5/12) escalated to admin.",
+        ],
+        players: [
+          { student: A, impact: 4 },
+          { student: B, impact: 3 },
+          { student: C, impact: 4 },
+          { student: case2Fillers[0], impact: 3 },
+          { student: case2Fillers[1], impact: 2 },
+          { student: case2Fillers[2], impact: 2 },
+        ],
+        statements: [
+          {
+            occurredDate: "2026-04-10", kind: "rumor", severity: 2, location: "8th hall lockers",
+            summary: "Rumor about locker theft circulating",
+            anchor: case2Fillers[2],
+            participants: [
+              { student: case2Fillers[2], role: "witness" },
+              { student: C, role: "target" },
+              { student: case2Fillers[0], role: "instigator" },
+            ],
+          },
+          {
+            occurredDate: "2026-04-17", kind: "verbal", severity: 2, location: "8th hall",
+            summary: "Hallway shouting between two students",
+            anchor: B,
+            participants: [
+              { student: B, role: "direct" },
+              { student: C, role: "direct" },
+              { student: A, role: "peripheral" },
+            ],
+          },
+          {
+            occurredDate: "2026-04-29", kind: "property", severity: 3, location: "8th hall lockers",
+            summary: "Lock pried open, items missing",
+            anchor: case2Fillers[0],
+            participants: [
+              { student: case2Fillers[0], role: "target" },
+              { student: case2Fillers[1], role: "direct" },
+              { student: case2Fillers[2], role: "witness" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-12", kind: "threat", severity: 3, location: "8th hall",
+            summary: "Verbal threat outside Room 214",
+            anchor: A,
+            participants: [
+              { student: A, role: "direct" },
+              { student: C, role: "target" },
+              { student: B, role: "witness" },
+              { student: case2Fillers[1], role: "peripheral" },
+            ],
+          },
+        ],
+      },
+      {
+        title: "Cafeteria 2nd lunch",
+        status: "open",
+        summary: "Tension at 2nd-lunch table — name-calling escalating to property.",
+        notes: ["Moved one participant to 1st lunch as a cooldown."],
+        players: [
+          { student: B, impact: 4 },
+          { student: case3Fillers[0], impact: 3 },
+          { student: case3Fillers[1], impact: 2 },
+        ],
+        statements: [
+          {
+            occurredDate: "2026-04-20", kind: "verbal", severity: 2, location: "Cafeteria",
+            summary: "Lunchroom name-calling between two students",
+            anchor: case3Fillers[1],
+            participants: [
+              { student: case3Fillers[1], role: "witness" },
+              { student: B, role: "direct" },
+              { student: case3Fillers[0], role: "direct" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-08", kind: "property", severity: 2, location: "Cafeteria",
+            summary: "Food thrown across table",
+            anchor: case3Fillers[0],
+            participants: [
+              { student: case3Fillers[0], role: "target" },
+              { student: B, role: "instigator" },
+              { student: case3Fillers[1], role: "witness" },
+            ],
+          },
+        ],
+      },
+      {
+        title: "Group chat → Friday fight",
+        status: "escalated",
+        summary: "Online group chat escalated to physical fight 5/8. Four statements.",
+        notes: [
+          "OSS assigned to both fight participants.",
+          "Counselor scheduled for one target — restorative circle pending.",
+          "Group chat exported + shared w/ guardians.",
+        ],
+        players: [
+          { student: A, impact: 4 },
+          { student: D, impact: 4 },
+          { student: case4Fillers[0], impact: 2 },
+          { student: case4Fillers[1], impact: 2 },
+          { student: case4Fillers[2], impact: 3 },
+        ],
+        statements: [
+          {
+            occurredDate: "2026-04-25", kind: "rumor", severity: 2, location: "Online",
+            summary: "Group chat screenshots circulating",
+            anchor: case4Fillers[0],
+            participants: [
+              { student: case4Fillers[0], role: "witness" },
+              { student: A, role: "direct" },
+              { student: D, role: "direct" },
+              { student: case4Fillers[1], role: "peripheral" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-01", kind: "threat", severity: 3, location: "Online",
+            summary: "Threat sent in group chat",
+            anchor: case4Fillers[1],
+            participants: [
+              { student: case4Fillers[1], role: "witness" },
+              { student: A, role: "instigator" },
+              { student: D, role: "target" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-08", kind: "fight", severity: 4, location: "Back parking lot",
+            summary: "Friday fight after dismissal — three students involved",
+            anchor: case4Fillers[2],
+            participants: [
+              { student: case4Fillers[2], role: "witness" },
+              { student: A, role: "direct" },
+              { student: D, role: "direct" },
+              { student: case4Fillers[0], role: "peripheral" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-11", kind: "verbal", severity: 3, location: "8th hall",
+            summary: "Continued verbal escalation Monday",
+            anchor: D,
+            participants: [
+              { student: D, role: "target" },
+              { student: A, role: "instigator" },
+              { student: case4Fillers[2], role: "peripheral" },
+            ],
+          },
+        ],
+      },
+    ];
+
+    const yearLabel = schoolYearLabelFor(new Date(), DEFAULT_SCHOOL_TZ);
+
+    const existing = await db
+      .select({
+        id: interactionCasesTable.id,
+        title: interactionCasesTable.title,
+      })
+      .from(interactionCasesTable)
+      .where(
+        and(
+          eq(interactionCasesTable.schoolId, SCHOOL_ID),
+          inArray(
+            interactionCasesTable.title,
+            CASES.map((c) => c.title),
+          ),
+        ),
+      );
+    const existingTitles = new Set(existing.map((r) => r.title));
+
+    const [{ nextStart }] = (
+      await db.execute(sql`
+        SELECT COALESCE(MAX(case_number), 0) + 1 AS "nextStart"
+          FROM interaction_cases
+         WHERE school_id = ${SCHOOL_ID}
+           AND school_year_label = ${yearLabel}
+      `)
+    ).rows as { nextStart: number }[];
+    let nextNumber = nextStart;
+
+    for (const spec of CASES) {
+      if (existingTitles.has(spec.title)) {
+        out.cases.push({ title: spec.title, status: "skipped" });
+        continue;
+      }
+      const [caseRow] = await db
+        .insert(interactionCasesTable)
+        .values({
+          schoolId: SCHOOL_ID,
+          caseNumber: nextNumber,
+          schoolYearLabel: yearLabel,
+          title: spec.title,
+          status: spec.status,
+          leadStaffId: lead.id,
+          leadStaffName: lead.displayName,
+          summary: spec.summary,
+          createdByStaffId: lead.id,
+          createdByName: lead.displayName,
+        })
+        .returning();
+      nextNumber += 1;
+
+      let firstStmtId: number | null = null;
+      let stmtCount = 0;
+      for (const st of spec.statements) {
+        const [intRow] = await db
+          .insert(interactionsTable)
+          .values({
+            schoolId: SCHOOL_ID,
+            occurredDate: st.occurredDate,
+            kind: st.kind,
+            severity: st.severity,
+            location: st.location,
+            summary: st.summary,
+            caseId: caseRow.id,
+            loggedByStaffId: lead.id,
+            loggedByName: lead.displayName,
+            witnessStudentId: st.anchor.studentId,
+            witnessStudentName: nameOf(st.anchor),
+            status: "open",
+          })
+          .returning();
+        if (firstStmtId === null) firstStmtId = intRow.id;
+        for (const p of st.participants) {
+          await db.insert(interactionParticipantsTable).values({
+            schoolId: SCHOOL_ID,
+            interactionId: intRow.id,
+            studentId: p.student.studentId,
+            role: p.role,
+            notes: "",
+          }).onConflictDoNothing();
+        }
+        stmtCount += 1;
+      }
+      if (firstStmtId !== null) {
+        await db
+          .update(interactionCasesTable)
+          .set({ leadStatementId: firstStmtId })
+          .where(eq(interactionCasesTable.id, caseRow.id));
+      }
+      for (const pl of spec.players) {
+        await db
+          .insert(interactionCasePlayerImpactTable)
+          .values({
+            schoolId: SCHOOL_ID,
+            caseId: caseRow.id,
+            studentId: pl.student.studentId,
+            impact: pl.impact,
+            updatedByStaffId: lead.id,
+            updatedByName: lead.displayName,
+          })
+          .onConflictDoNothing();
+      }
+      for (const body of spec.notes) {
+        await db.insert(interactionCaseNotesTable).values({
+          schoolId: SCHOOL_ID,
+          caseId: caseRow.id,
+          body,
+          authorStaffId: lead.id,
+          authorName: lead.displayName,
+        });
+      }
+      out.cases.push({
+        title: spec.title,
+        status: "created",
+        caseId: caseRow.id,
+        caseNumber: caseRow.caseNumber,
+        playerCount: spec.players.length,
+        statementCount: stmtCount,
+      });
+    }
+
+    // --- 5. Side interactions to bulk up spheres for C and D -------------
+    // Only seed if NO loose (case_id IS NULL) interactions exist yet for
+    // C's or D's student id — keeps re-clicks idempotent without a more
+    // expensive title-style guard.
+    {
+      const existingSide = await db.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n
+          FROM interactions i
+          JOIN interaction_participants p ON p.interaction_id = i.id
+         WHERE i.school_id = ${SCHOOL_ID}
+           AND i.case_id IS NULL
+           AND p.student_id IN (${C.studentId}, ${D.studentId})
+      `);
+      if ((existingSide.rows[0]?.n ?? 0) === 0) {
+        const sideSpecs: StatementSpec[] = [
+          {
+            occurredDate: "2026-04-30", kind: "verbal", severity: 2, location: "8th hall lockers",
+            summary: "Locker dispute outside class",
+            anchor: C,
+            participants: [
+              { student: C, role: "target" },
+              { student: side1Others[0], role: "direct" },
+              { student: side1Others[1], role: "witness" },
+            ],
+          },
+          {
+            occurredDate: "2026-04-18", kind: "verbal", severity: 2, location: "PE locker room",
+            summary: "PE locker room shoving",
+            anchor: D,
+            participants: [
+              { student: D, role: "direct" },
+              { student: side2Others[0], role: "direct" },
+              { student: side2Others[1], role: "peripheral" },
+            ],
+          },
+          {
+            occurredDate: "2026-05-04", kind: "peripheral_note", severity: 1, location: "Cafeteria",
+            summary: "Lunch back-and-forth, no escalation",
+            anchor: side3Other,
+            participants: [
+              { student: side3Other, role: "witness" },
+              { student: C, role: "direct" },
+              { student: D, role: "direct" },
+            ],
+          },
+        ];
+        for (const st of sideSpecs) {
+          const [intRow] = await db
+            .insert(interactionsTable)
+            .values({
+              schoolId: SCHOOL_ID,
+              occurredDate: st.occurredDate,
+              kind: st.kind,
+              severity: st.severity,
+              location: st.location,
+              summary: st.summary,
+              loggedByStaffId: lead.id,
+              loggedByName: lead.displayName,
+              witnessStudentId: st.anchor.studentId,
+              witnessStudentName: nameOf(st.anchor),
+              status: "open",
+            })
+            .returning();
+          for (const p of st.participants) {
+            await db.insert(interactionParticipantsTable).values({
+              schoolId: SCHOOL_ID,
+              interactionId: intRow.id,
+              studentId: p.student.studentId,
+              role: p.role,
+              notes: "",
+            }).onConflictDoNothing();
+          }
+          out.sideInteractions += 1;
+        }
+      }
+    }
+
+    // --- 6. Support notes — ~4-6 per case-involved student ----------------
+    const allCaseStudents = Array.from(
+      new Set(CASES.flatMap((c) => c.players.map((p) => p.student.studentId))),
+    );
+    const noteTypes = [
+      "check_in", "parent_contact", "counselor_meeting",
+      "admin_meeting", "classroom_observation",
+    ];
+    const noteSnippets = [
+      "Strong week — leading group work.",
+      "Parent contact complete; agreed on next step.",
+      "Counselor talked through conflict + repair plan.",
+      "Reviewed incident w/ guardian.",
+      "Re-engaged in classes after warm-up.",
+      "Following safety plan boundaries this week.",
+      "Asked to switch seats — approved.",
+      "Returned Mon after OSS — calm; reviewed plan.",
+    ];
+    for (const sid of allCaseStudents) {
+      const existing = await db.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM support_notes
+         WHERE school_id = ${SCHOOL_ID} AND student_id = ${sid}
+      `);
+      if ((existing.rows[0]?.n ?? 0) > 0) continue;
+      // Deterministic 4-6 notes per student based on student_id hash
+      let h = 0;
+      for (let i = 0; i < sid.length; i++) h = (h * 31 + sid.charCodeAt(i)) >>> 0;
+      const count = 4 + (h % 3);
+      for (let k = 0; k < count; k++) {
+        const dayOffset = 60 - (h + k * 7) % 60;
+        const d = new Date(2026, 4, 1);
+        d.setDate(d.getDate() - dayOffset);
+        await db.insert(supportNotesTable).values({
+          schoolId: SCHOOL_ID,
+          studentId: sid,
+          noteType: noteTypes[(h + k) % noteTypes.length]!,
+          noteText: noteSnippets[(h + k * 3) % noteSnippets.length]!,
+          staffName: lead.displayName,
+          createdAt: d.toISOString().slice(0, 10),
+        });
+        out.supportNotes += 1;
+      }
+    }
+
+    // --- 7. OSS logs — 4 entries, only if none exist for school 1 --------
+    {
+      const r = await db.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM oss_logs WHERE school_id = ${SCHOOL_ID}
+      `);
+      if ((r.rows[0]?.n ?? 0) === 0) {
+        const ossPlan: Array<{ student: Pick; reason: string; notes: string; days: number }> = [
+          { student: A, reason: "Fighting on campus", notes: "5/8 Friday fight (case 4)", days: 3 },
+          { student: D, reason: "Fighting on campus", notes: "5/8 Friday fight (case 4)", days: 3 },
+          { student: case1Fillers[0], reason: "Repeated bus conduct", notes: "Third bus 14 incident", days: 1 },
+          { student: case2Fillers[1], reason: "Property — locker theft", notes: "Locker bay (case 2)", days: 2 },
+        ];
+        for (const e of ossPlan) {
+          await db.insert(ossLogsTable).values({
+            schoolId: SCHOOL_ID,
+            studentId: e.student.studentId,
+            reasonText: e.reason,
+            notes: e.notes,
+            dayCount: e.days,
+            createdById: lead.id,
+            createdByName: lead.displayName,
+          });
+          out.ossLogs += 1;
+        }
+      }
+    }
+
+    // --- 8. ISS admin logs — 8 entries, only if none exist for school 1 --
+    {
+      const r = await db.execute<{ n: number }>(sql`
+        SELECT COUNT(*)::int AS n FROM iss_admin_logs WHERE school_id = ${SCHOOL_ID}
+      `);
+      if ((r.rows[0]?.n ?? 0) === 0) {
+        const issPlan: Array<{ student: Pick; reason: string; notes: string }> = [
+          { student: A, reason: "Threat — verbal", notes: "5/12 hallway statement" },
+          { student: C, reason: "Verbal conflict", notes: "Hallway shouting 4/17" },
+          { student: B, reason: "Cafeteria disruption", notes: "Food thrown 5/8" },
+          { student: case1Fillers[2], reason: "Bus conduct", notes: "Spitball incident — counseling" },
+          { student: case2Fillers[0], reason: "Property — retaliation", notes: "After-locker incident" },
+          { student: case2Fillers[2], reason: "Skipping class", notes: "Skipped 4th period 4/24" },
+          { student: case4Fillers[0], reason: "Phone policy", notes: "Refused to put away phone" },
+          { student: case4Fillers[2], reason: "Class disruption", notes: "Repeated callouts in ELA" },
+        ];
+        for (const e of issPlan) {
+          await db.insert(issAdminLogsTable).values({
+            schoolId: SCHOOL_ID,
+            studentId: e.student.studentId,
+            reasonText: e.reason,
+            notes: e.notes,
+            dayCount: 1,
+            createdById: lead.id,
+            createdByName: lead.displayName,
+          });
+          out.issAdminLogs += 1;
+        }
+      }
+    }
+
+    // --- 9. Sphere top-5 (degree across all interactions) ----------------
+    {
+      const r = await db.execute<{ name: string; co: number; cases: number }>(sql`
+        SELECT s.first_name || ' ' || s.last_name AS name,
+               COUNT(DISTINCT p2.student_id) FILTER (WHERE p2.student_id <> p.student_id)::int AS co,
+               COUNT(DISTINCT i.case_id) FILTER (WHERE i.case_id IS NOT NULL)::int AS cases
+          FROM interaction_participants p
+          JOIN interactions i ON i.id = p.interaction_id
+          JOIN interaction_participants p2 ON p2.interaction_id = i.id
+          JOIN students s ON s.school_id = ${SCHOOL_ID} AND s.student_id = p.student_id
+         WHERE p.school_id = ${SCHOOL_ID}
+         GROUP BY s.first_name, s.last_name, p.student_id
+         ORDER BY co DESC
+         LIMIT 5
+      `);
+      out.sphereTop = r.rows.map((row) => ({
+        name: row.name,
+        coParticipants: row.co,
+        cases: row.cases,
+      }));
+    }
+
+    req.log.warn(out, "seed-demo-school-1 completed");
+    res.json({ ok: true, ...out });
+  } catch (err) {
+    req.log.error({ err }, "seed-demo-school-1 failed");
+    res.status(500).json({
+      error: "seed_demo_school_1_failed",
+      message: err instanceof Error ? err.message : String(err),
     });
   }
 });

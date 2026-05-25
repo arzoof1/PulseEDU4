@@ -3,6 +3,34 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Class Composer — Skill-cluster mode + PM-refresh workflow.
+  Fourth composer mode "Skill-cluster (focus standards)" alongside
+  Intensive / Regular / Cusp. Groups built from per-student benchmark
+  deficit vectors (`clusterByBenchmarkDeficit` + `pickFocusStandards`
+  in `lib/skillProfile.ts`) — each group publishes N focus standards
+  (default 5, range 3–7) with friendly labels + group-average % +
+  coverage. L1/L2 gate same as Intensive. Locked roster is never
+  re-shuffled; focus standards refresh independently per PM window.
+  New endpoints under `/api/intensive-groups/plans/:id/groups/:gid/`:
+  `refresh-focus` (rewrites focus standards, audit-logs, blocks below
+  70% coverage), `check-fit` (read-only drift report — flags moves
+  with ≥25% deficit-distance improvement), `dismiss-check` (silences
+  banner per PM window). Append-only audit trail in
+  `class_composer_plan_group_refreshes` (action: refresh / dismiss /
+  suggest_schedule). Admin Hub surfaces three PM-keyed banners:
+  PM1 "review schedule fit", PM2/PM3 "refresh focus standards" —
+  dismissal token `<schoolYear>|<pmWindow>|skillcluster_refresh`.
+  Result cards render bullet-list focus standards w/ friendly labels;
+  cohesion definition flips to "% of group with ≥ N of focus in
+  their personal bottom 7." Plan PDF gets per-group focus-standards
+  block; both server `/plans/:id/csv` AND client preview CSV widen
+  to `focus_standard_1..N` + `focus_avg_pct_1..N` columns. See
+  `routes/intensiveGroups.ts`, `lib/skillProfile.ts`,
+  `lib/composerPlanPdf.ts`, `components/IntensiveGroupComposerPage.tsx`,
+  `components/AdminHubPage.tsx`. Schema additions in
+  `lib/db/src/schema/classComposerPlans.ts` (focus_standards JSONB
+  on plan groups; class_composer_plan_group_refreshes table).
+
 - Student ID badge redesign + per-house logo upload. Both
   lanyard (portrait) and CR80 (landscape) badges are now visually
   consistent: square student photo (not initials disc on CR80),

@@ -593,6 +593,10 @@ export default function IntensiveGroupComposerPage({
       const a = r.arrangement === "balanced" ? "Balanced" : "Homogeneous";
       return `Regular · ${a} · Levels 1–5 · ${winLabel}`;
     }
+    if (r.mode === "skillcluster") {
+      const n = r.focusCount ?? 5;
+      return `Skill-cluster · Levels 1–2 · ${n} focus standards · ${winLabel}`;
+    }
     const c = r.cusp;
     const dirLabel =
       c?.cuspDirection === "below"
@@ -713,6 +717,11 @@ export default function IntensiveGroupComposerPage({
         cuspDirection: result.cusp?.cuspDirection,
         cuspDoubleCounters: result.cusp?.cuspDoubleCounters,
         cuspTrajectory: result.cusp?.cuspTrajectory,
+        // Persist the user-picked focus count so PM-window refresh
+        // re-picks the same N standards instead of silently
+        // collapsing to the default 5.
+        focusCount:
+          result.mode === "skillcluster" ? result.focusCount ?? undefined : undefined,
         summary,
       };
       const existingCount = planGroups.length;
@@ -730,6 +739,10 @@ export default function IntensiveGroupComposerPage({
               recipe,
               studentIds,
               seatsPerSection: seatsTarget,
+              // Initial focus standards from the suggestion so the
+              // locked group has them before any refresh runs.
+              focusStandards:
+                result.mode === "skillcluster" ? g.focusStandards ?? null : null,
             }),
           },
         );
@@ -779,6 +792,11 @@ export default function IntensiveGroupComposerPage({
         cuspDirection: result.cusp?.cuspDirection,
         cuspDoubleCounters: result.cusp?.cuspDoubleCounters,
         cuspTrajectory: result.cusp?.cuspTrajectory,
+        // Same focusCount persistence as lockCandidates — keeps
+        // single-group locks from silently collapsing to default 5
+        // on the next PM refresh.
+        focusCount:
+          result.mode === "skillcluster" ? result.focusCount ?? undefined : undefined,
         summary,
       };
       const existingCount = planGroups.length;
@@ -794,6 +812,8 @@ export default function IntensiveGroupComposerPage({
             recipe,
             studentIds,
             seatsPerSection: seatsTarget,
+            focusStandards:
+              result.mode === "skillcluster" ? g.focusStandards ?? null : null,
           }),
         },
       );
@@ -1123,6 +1143,20 @@ export default function IntensiveGroupComposerPage({
 
   const exportCsv = () => {
     if (!result) return;
+    // Skill-cluster preview CSV widens the header to fit the busiest
+    // group's focus-standards list (mirrors the server-side
+    // /plans/:id/csv route in artifacts/api-server/src/routes/
+    // intensiveGroups.ts). Groups with fewer focus standards leave
+    // the trailing pairs blank.
+    const maxFocus = result.groups.reduce(
+      (m, g) => Math.max(m, g.focusStandards?.length ?? 0),
+      0,
+    );
+    const focusHeaders: string[] = [];
+    for (let i = 1; i <= maxFocus; i++) {
+      focusHeaders.push(`focus_standard_${i}`, `focus_avg_pct_${i}`);
+    }
+    const blankFocusCells = Array.from({ length: maxFocus * 2 }, () => "");
     const rows: string[][] = [
       [
         "Group",
@@ -1137,9 +1171,17 @@ export default function IntensiveGroupComposerPage({
         "Top Gap 1",
         "Top Gap 2",
         "Top Gap 3",
+        ...focusHeaders,
       ],
     ];
     for (const g of result.groups) {
+      const fs = g.focusStandards ?? [];
+      const focusCells: string[] = [];
+      for (let i = 0; i < maxFocus; i++) {
+        const f = fs[i];
+        focusCells.push(f ? f.benchmarkCode : "");
+        focusCells.push(f ? String(f.groupAvgPct) : "");
+      }
       for (const s of g.students) {
         rows.push([
           `Group ${g.index}`,
@@ -1154,6 +1196,7 @@ export default function IntensiveGroupComposerPage({
           s.topGaps[0] ?? "",
           s.topGaps[1] ?? "",
           s.topGaps[2] ?? "",
+          ...focusCells,
         ]);
       }
     }
@@ -1171,6 +1214,7 @@ export default function IntensiveGroupComposerPage({
         "",
         "",
         "",
+        ...blankFocusCells,
       ]);
     }
     downloadCsv(

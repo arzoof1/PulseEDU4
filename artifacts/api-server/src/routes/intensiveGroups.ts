@@ -1720,6 +1720,30 @@ router.post("/intensive-groups/plans/:id/groups", async (req, res) => {
       ? 1
       : Math.max(...existingGroups.map((g) => g.groupIndex)) + 1;
 
+  // Accept initial focus standards from the client (skill-cluster
+  // lock payloads send them straight from the suggestion). Shape is
+  // a thin array — anything not matching the expected fields is
+  // dropped so a malformed body can't poison the JSONB column.
+  const rawFocus = (body as { focusStandards?: unknown }).focusStandards;
+  let focusStandards: ClassComposerFocusStandard[] | null = null;
+  if (Array.isArray(rawFocus)) {
+    focusStandards = rawFocus
+      .filter(
+        (f): f is Record<string, unknown> =>
+          typeof f === "object" && f !== null,
+      )
+      .map((f) => ({
+        benchmarkCode: String(f.benchmarkCode ?? ""),
+        friendlyLabel: String(f.friendlyLabel ?? ""),
+        groupAvgPct: Number(f.groupAvgPct ?? 0),
+        coverage: Number(f.coverage ?? 0),
+        sourceWindow: String(f.sourceWindow ?? body.recipe?.window ?? ""),
+        sourceSchoolYear: String(f.sourceSchoolYear ?? plan.schoolYear),
+      }))
+      .filter((f) => f.benchmarkCode.length > 0);
+    if (focusStandards.length === 0) focusStandards = null;
+  }
+
   const [created] = await db
     .insert(classComposerPlanGroupsTable)
     .values({
@@ -1730,6 +1754,7 @@ router.post("/intensive-groups/plans/:id/groups", async (req, res) => {
       recipe: body.recipe,
       studentIds,
       seatsPerSection: seats,
+      focusStandards,
     })
     .returning();
   await db
