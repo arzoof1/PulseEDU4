@@ -8624,10 +8624,16 @@ function App() {
   // and self-submission page are for non-exempt employees only (EST,
   // cafeteria, custodial, paraprofessional, etc.). Teachers and other
   // exempt staff don't accrue FLSA comp time so the nav item is hidden
-  // entirely — the server-side splash still catches anyone who reaches
-  // the route via direct URL. Admin Comp Time Approvals + Insights are
-  // separate nav items gated by canApproveCompTime, unaffected here.
-  const canSeeCompTimeStaff = authUser?.exemptStatus === "non_exempt";
+  // for them — the server-side splash still catches direct-URL hits.
+  // Admin / SuperUser / District Admin always see the tile (oversight,
+  // demos, and so they can walk a non-exempt employee through the
+  // page). Admin Comp Time Approvals + Insights are separate nav items
+  // gated by canApproveCompTime, unaffected here.
+  const canSeeCompTimeStaff =
+    authUser?.exemptStatus === "non_exempt" ||
+    Boolean(authUser?.isAdmin) ||
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin);
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
