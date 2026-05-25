@@ -452,9 +452,9 @@ function drawGroupBody(
     { w: 28, label: "Gr" },
     { w: 38, label: "FAST" },
     { w: 38, label: "%" },
-    { w: 60, label: "Flags" },
-    { w: 200, label: "Section / Teacher" },
-    { w: 60, label: "Focus fit" },
+    { w: 50, label: "Flags" },
+    { w: 260, label: "Section / Teacher" },
+    { w: 50, label: "Focus fit" },
   ];
   const rowH = 18;
   let y = doc.y;
@@ -528,7 +528,7 @@ function drawGroupBody(
     for (let ci = 0; ci < rosterCols.length; ci++) {
       doc.text(cells[ci], x + 4, y + 5, {
         width: rosterCols[ci].w - 8,
-        ellipsis: true,
+        ellipsis: true, lineBreak: false,
       });
       x += rosterCols[ci].w;
     }
@@ -608,7 +608,7 @@ function drawGroupBody(
       x += 24;
       doc.text(`${s.lastName}, ${s.firstName}`, x + 4, y + 5, {
         width: matrixNameW - 8,
-        ellipsis: true,
+        ellipsis: true, lineBreak: false,
       });
       x += matrixNameW;
       const bottomSet = new Set(s.bottomBenchmarkCodes);
@@ -704,7 +704,7 @@ function drawGroupBody(
       x += 24;
       doc.text(`${s.lastName}, ${s.firstName}`, x + 4, y + 5, {
         width: 170 - 8,
-        ellipsis: true,
+        ellipsis: true, lineBreak: false,
       });
       x += 170;
       const strandText =
@@ -713,7 +713,7 @@ function drawGroupBody(
           : s.strands.map((c) => `${c.category} ${c.pct}%`).join("  ·  ");
       doc.text(strandText, x + 4, y + 5, {
         width: strandCols[2].w - 8,
-        ellipsis: true,
+        ellipsis: true, lineBreak: false,
       });
       y += rowH;
     }
