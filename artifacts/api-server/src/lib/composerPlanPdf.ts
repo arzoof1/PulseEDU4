@@ -1,15 +1,26 @@
 // Class Composer "Master Plan" printable PDF.
 //
 // Layout:
-//   Page 1 — cover: school + plan name, (subject, grade, SY), saved by,
-//            created/finalized timestamps, and a one-row-per-group
-//            recipe summary so the master scheduler can see at a glance
-//            what's in the plan.
-//   Pages 2..N — one section per group. Each page has:
+//   Page 1 — cover (portrait): school + plan name, (subject, grade,
+//            SY), saved by, created/finalized timestamps, and a
+//            one-row-per-group recipe summary so the master scheduler
+//            can see at a glance what's in the plan.
+//   Pages 2..N — one section per group (landscape). Each page has:
 //      - Top header strip:  plan name  |  "Group i of N"  |  "Page x of y"
 //      - Group title + recipe summary
-//      - Roster table: # | Local SIS ID | Student | Grade | FAST | %
-//      - Footer:  plan publicId  |  QR (encodes "PULSE-COMPOSER:<publicId>")
+//      - Focus-standards bullet list (skill-cluster mode only)
+//      - Group summary line: avg overall %, avg focus mastery,
+//        ESE / 504 / ELL counts
+//      - Roster table:  # | SIS ID | Student | Gr | FAST | % | Flags |
+//                       Section / Teacher | Fit
+//      - Focus-standards matrix (skill-cluster mode only): rows =
+//        student #, cols = focus benchmark codes, cells = mastery %.
+//        Cells are heat-tinted red < 50%, amber 50–69%, green ≥ 70%
+//        so the teacher can sanity-check the recipe at a glance.
+//      - Per-student weakest strands mini-table (one row per student
+//        listing up to 3 weakest instructional strands + %).
+//      - "Confirmed by ___ / Date ___" signature line + Plan ID + QR
+//        footer.
 //
 // Headers/footers on every page so a stray page can be re-assembled.
 // PDFKit emits pages sequentially; we tag each group page with its
@@ -27,6 +38,25 @@ export interface ComposerPlanPdfStudent {
   grade: number | null;
   fastLevel: number | null;
   overallPct: number | null;
+  ese: boolean;
+  is504: boolean;
+  ell: boolean;
+  // benchmarkCode → mastery % (0..100). Empty when the student has
+  // no item responses for the source window — those rows render "—"
+  // in the focus-standards matrix.
+  benchmarkPctByCode: Record<string, number>;
+  // Student's personal bottom-7 weakest benchmark codes (lowest pct
+  // first). Used to compute fit-count against the group's focus
+  // standards on the PDF; the percentage tells the teacher how many
+  // of the recipe's focus standards land in that student's own list
+  // of weakest skills.
+  bottomBenchmarkCodes: string[];
+  strands: Array<{ category: string; pct: number }>;
+  currentSection: {
+    courseName: string;
+    period: number;
+    teacherName: string | null;
+  } | null;
 }
 
 export interface ComposerPlanPdfFocusStandard {
@@ -59,7 +89,7 @@ export interface ComposerPlanPdfInput {
   groups: ComposerPlanPdfGroup[];
 }
 
-const PAGE_MARGIN = 50;
+const PAGE_MARGIN = 40;
 const HEADER_HEIGHT = 28;
 const FOOTER_HEIGHT = 70;
 
@@ -86,6 +116,30 @@ function fmtDate(d: Date): string {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function programFlagsLabel(s: ComposerPlanPdfStudent): string {
+  const f: string[] = [];
+  if (s.ese) f.push("ESE");
+  if (s.is504) f.push("504");
+  if (s.ell) f.push("ELL");
+  return f.join(" · ");
+}
+
+function heatFill(pct: number | null): string | null {
+  if (pct == null) return null;
+  if (pct < 50) return "#fee2e2";
+  if (pct < 70) return "#fef3c7";
+  return "#dcfce7";
+}
+
+// Shorten a benchmark code to its trailing identifier for matrix
+// column headers — e.g. "ELA.6.R.1.1" → "R.1.1" — so the matrix
+// header strip stays readable when there are 5+ focus standards.
+function shortBenchmarkCode(code: string): string {
+  const parts = code.split(".");
+  if (parts.length <= 3) return code;
+  return parts.slice(2).join(".");
 }
 
 export async function renderComposerPlanPdf(
@@ -127,8 +181,8 @@ export async function renderComposerPlanPdf(
 
     const totalPages = 1 + input.groups.length;
 
-    // ----- Page 1: cover -----
-    doc.addPage();
+    // ----- Page 1: cover (portrait) -----
+    doc.addPage({ size: "LETTER", layout: "portrait" });
     drawHeader(doc, input.planName, "Cover", 1, totalPages);
     drawFooter(doc, input.publicId, qrBuffer);
 
@@ -193,10 +247,10 @@ export async function renderComposerPlanPdf(
         { width: 500 },
       );
 
-    // ----- One page per group -----
+    // ----- One landscape page per group -----
     for (let i = 0; i < input.groups.length; i++) {
       const g = input.groups[i];
-      doc.addPage();
+      doc.addPage({ size: "LETTER", layout: "landscape" });
       drawHeader(
         doc,
         input.planName,
@@ -241,12 +295,14 @@ function drawHeader(
     width: width / 3,
     align: "center",
   });
-  doc.text(
-    `Page ${pageNo} of ${totalPages}`,
-    left + (2 * width) / 3,
-    y + 9,
-    { width: width / 3 - 8, align: "right" },
-  );
+  if (pageNo > 0) {
+    doc.text(
+      `Page ${pageNo} of ${totalPages}`,
+      left + (2 * width) / 3,
+      y + 9,
+      { width: width / 3 - 8, align: "right" },
+    );
+  }
 }
 
 function drawFooter(
@@ -266,20 +322,48 @@ function drawFooter(
     .strokeColor("#cbd5e1")
     .stroke()
     .restore();
-  // QR on the right, label on the left.
+  // Signature block on the left, Plan ID + QR on the right.
   const qrSize = 56;
   doc.image(qrBuffer, right - qrSize, top + 8, { width: qrSize, height: qrSize });
   doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-  doc.text("Plan ID", left, top + 14);
-  doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a");
-  doc.text(publicId, left, top + 26);
+  doc.text("Plan ID", right - qrSize - 110, top + 14, { width: 90, align: "right" });
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
+  doc.text(publicId, right - qrSize - 110, top + 26, {
+    width: 90,
+    align: "right",
+  });
+  // "Confirmed by" / "Date" signature lines — Florida districts want
+  // a paper trail showing who reviewed the benchmark-based grouping
+  // before it went to the master scheduler.
+  doc.font("Helvetica").fontSize(9).fillColor("#64748b");
+  doc.text("Confirmed by:", left, top + 14);
+  doc
+    .save()
+    .moveTo(left + 70, top + 24)
+    .lineTo(left + 270, top + 24)
+    .lineWidth(0.5)
+    .strokeColor("#475569")
+    .stroke()
+    .restore();
+  doc.text("Date:", left, top + 38);
+  doc
+    .save()
+    .moveTo(left + 70, top + 48)
+    .lineTo(left + 200, top + 48)
+    .lineWidth(0.5)
+    .strokeColor("#475569")
+    .stroke()
+    .restore();
   doc
     .font("Helvetica")
     .fontSize(8)
     .fillColor("#94a3b8")
-    .text("Scan QR or look up this ID in PulseEDU to find the source plan.", left, top + 48, {
-      width: right - left - qrSize - 16,
-    });
+    .text(
+      "Scan QR or look up the Plan ID in PulseEDU to find the source plan.",
+      left,
+      top + 58,
+      { width: right - left - qrSize - 130 },
+    );
 }
 
 interface GroupPageCtx {
@@ -295,81 +379,139 @@ function drawGroupBody(
   ctx: GroupPageCtx,
 ) {
   const left = PAGE_MARGIN;
-  const top = PAGE_MARGIN + HEADER_HEIGHT + 10;
-  doc.font("Helvetica-Bold").fontSize(18).fillColor("#0f172a");
+  const right = doc.page.width - PAGE_MARGIN;
+  const width = right - left;
+  const top = PAGE_MARGIN + HEADER_HEIGHT + 8;
+
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#0f172a");
   doc.text(g.name, left, top);
-  doc.font("Helvetica").fontSize(10).fillColor("#64748b");
+  doc.font("Helvetica").fontSize(9).fillColor("#64748b");
   doc.text(g.recipeSummary);
+
+  // Group summary — averages + program-flag counts so the reviewer
+  // sees the shape of the group before scanning the roster.
+  const eseCt = g.students.filter((s) => s.ese).length;
+  const fiveOhFourCt = g.students.filter((s) => s.is504).length;
+  const ellCt = g.students.filter((s) => s.ell).length;
+  const scored = g.students.filter((s) => s.overallPct != null);
+  const avgOverall =
+    scored.length === 0
+      ? null
+      : Math.round(
+          scored.reduce((a, s) => a + (s.overallPct ?? 0), 0) / scored.length,
+        );
+  const focusCodes = (g.focusStandards ?? []).map((f) => f.benchmarkCode);
+  let avgFocus: number | null = null;
+  if (focusCodes.length > 0) {
+    const focusPcts: number[] = [];
+    for (const s of g.students) {
+      for (const code of focusCodes) {
+        const p = s.benchmarkPctByCode[code];
+        if (typeof p === "number") focusPcts.push(p);
+      }
+    }
+    avgFocus =
+      focusPcts.length === 0
+        ? null
+        : Math.round(focusPcts.reduce((a, b) => a + b, 0) / focusPcts.length);
+  }
+  doc.moveDown(0.4);
+  doc.font("Helvetica").fontSize(9).fillColor("#334155");
+  const summaryParts: string[] = [
+    `${g.students.length} student${g.students.length === 1 ? "" : "s"}`,
+    `Seats ${g.seatsPerSection}${g.students.length > g.seatsPerSection ? " (OVER)" : ""}`,
+  ];
+  if (avgOverall != null) summaryParts.push(`Avg overall ${avgOverall}%`);
+  if (avgFocus != null) summaryParts.push(`Avg focus ${avgFocus}%`);
+  summaryParts.push(`ESE ${eseCt}`);
+  summaryParts.push(`504 ${fiveOhFourCt}`);
+  summaryParts.push(`ELL ${ellCt}`);
+  doc.text(summaryParts.join("  ·  "));
+
   if (g.focusStandards && g.focusStandards.length > 0) {
     doc.moveDown(0.3);
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
     doc.text("Focus standards:");
-    doc.font("Helvetica").fontSize(10).fillColor("#334155");
+    doc.font("Helvetica").fontSize(9).fillColor("#334155");
     for (const f of g.focusStandards) {
       doc.text(
         `  • ${f.benchmarkCode} — ${f.friendlyLabel.replace(`${f.benchmarkCode} · `, "")} (grp avg ${f.groupAvgPct}%${f.sourceWindow ? `, ${f.sourceWindow.toUpperCase()}` : ""})`,
+        { width: width },
       );
     }
   }
-  const overCap = g.students.length > g.seatsPerSection;
-  doc
-    .font("Helvetica")
-    .fontSize(10)
-    .fillColor(overCap ? "#b91c1c" : "#475569")
-    .text(
-      `${g.students.length} student${g.students.length === 1 ? "" : "s"} · Seats: ${g.seatsPerSection}${overCap ? " (over capacity)" : ""}`,
-    );
 
-  doc.moveDown(0.7);
+  doc.moveDown(0.6);
 
-  const cols = [
-    { w: 28, label: "#" },
-    { w: 80, label: "Local SIS ID" },
-    { w: 230, label: "Student" },
-    { w: 40, label: "Grade" },
-    { w: 50, label: "FAST" },
-    { w: 50, label: "Score %" },
+  // ----- Roster table -----
+  // Widths sum ≤ landscape-letter content width (792 - 80 = 712).
+  const rosterCols: Array<{ w: number; label: string }> = [
+    { w: 24, label: "#" },
+    { w: 70, label: "SIS ID" },
+    { w: 150, label: "Student" },
+    { w: 28, label: "Gr" },
+    { w: 38, label: "FAST" },
+    { w: 38, label: "%" },
+    { w: 60, label: "Flags" },
+    { w: 200, label: "Section / Teacher" },
+    { w: 60, label: "Focus fit" },
   ];
   const rowH = 18;
   let y = doc.y;
-  // Header row
-  doc.save().rect(left, y, sumCols(cols), rowH).fillColor("#e2e8f0").fill().restore();
+  drawRow(doc, left, y, rowH, rosterCols, "header");
   let x = left;
-  doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-  for (const c of cols) {
-    doc.text(c.label, x + 6, y + 4, { width: c.w - 12 });
+  doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+  for (const c of rosterCols) {
+    doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
     x += c.w;
   }
   y += rowH;
 
-  doc.font("Helvetica").fontSize(10).fillColor("#0f172a");
-  const bottomLimit = doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 4;
+  doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+  const bottomLimit = doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 6;
   for (let i = 0; i < g.students.length; i++) {
     if (y + rowH > bottomLimit) {
-      // Overflow students continue on a new page that re-renders the
-      // top header strip (with "(cont.)" suffix) AND the QR + plan-ID
-      // footer, so a shuffled continuation page still re-assembles via
-      // QR scan. We can't update "Page x of y" upfront for continuation
-      // pages — those are tagged "cont." in the header strip's middle
-      // cell instead.
-      doc.addPage();
+      doc.addPage({ size: "LETTER", layout: "landscape" });
       drawHeader(
         doc,
         ctx.planName,
         `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        // pageNo unknown for continuation; tagged "(cont.)" in middle
-        // cell — QR + plan ID still let a shuffled page re-assemble.
         0,
         0,
       );
       drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      drawHeaderContinuation(doc, g);
+      doc.font("Helvetica-Bold").fontSize(13).fillColor("#0f172a");
+      doc.text(`${g.name} (continued)`, left, top);
+      doc.moveDown(0.4);
       y = doc.y;
+      drawRow(doc, left, y, rowH, rosterCols, "header");
+      x = left;
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      for (const c of rosterCols) {
+        doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
+        x += c.w;
+      }
+      y += rowH;
+      doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
     }
     const s = g.students[i];
-    if (i % 2 === 1) {
-      doc.save().rect(left, y, sumCols(cols), rowH).fillColor("#f8fafc").fill().restore();
+    if (i % 2 === 1) drawRow(doc, left, y, rowH, rosterCols, "alt");
+
+    // Fit count: how many of the group's focus standards land in
+    // this student's personal bottom-7 weakest benchmarks. Gives
+    // the teacher a per-student "this kid belongs here" indicator.
+    let fitText = "—";
+    if (focusCodes.length > 0) {
+      const bottomSet = new Set(s.bottomBenchmarkCodes);
+      const hit = focusCodes.filter((c) => bottomSet.has(c)).length;
+      fitText = `${hit}/${focusCodes.length}`;
     }
+
+    const section = s.currentSection;
+    const sectionText = section
+      ? `P${section.period} · ${section.courseName}${section.teacherName ? " — " + section.teacherName : ""}`
+      : "—";
+
     x = left;
     const cells = [
       String(i + 1),
@@ -378,31 +520,219 @@ function drawGroupBody(
       s.grade != null ? String(s.grade) : "—",
       s.fastLevel != null ? `L${s.fastLevel}` : "—",
       s.overallPct != null ? `${Math.round(s.overallPct)}%` : "—",
+      programFlagsLabel(s) || "—",
+      sectionText,
+      fitText,
     ];
     doc.fillColor("#0f172a");
-    for (let ci = 0; ci < cols.length; ci++) {
-      doc.text(cells[ci], x + 6, y + 4, {
-        width: cols[ci].w - 12,
+    for (let ci = 0; ci < rosterCols.length; ci++) {
+      doc.text(cells[ci], x + 4, y + 5, {
+        width: rosterCols[ci].w - 8,
         ellipsis: true,
       });
-      x += cols[ci].w;
+      x += rosterCols[ci].w;
     }
     y += rowH;
   }
+
+  // ----- Focus-standards matrix (skill-cluster mode only) -----
+  if (g.focusStandards && g.focusStandards.length > 0) {
+    if (y + 80 > bottomLimit) {
+      doc.addPage({ size: "LETTER", layout: "landscape" });
+      drawHeader(
+        doc,
+        ctx.planName,
+        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+        0,
+        0,
+      );
+      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+    } else {
+      y += 12;
+    }
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.text("Per-student mastery on focus standards", left, y);
+    y += 14;
+    const matrixNameW = 170;
+    const matrixCodeW = Math.min(
+      80,
+      Math.floor((width - matrixNameW - 50) / g.focusStandards.length),
+    );
+    const matrixFitW = 50;
+    const matrixCols: Array<{ w: number; label: string }> = [
+      { w: 24, label: "#" },
+      { w: matrixNameW, label: "Student" },
+      ...g.focusStandards.map((f) => ({
+        w: matrixCodeW,
+        label: shortBenchmarkCode(f.benchmarkCode),
+      })),
+      { w: matrixFitW, label: "Fit" },
+    ];
+    drawRow(doc, left, y, rowH, matrixCols, "header");
+    x = left;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+    for (const c of matrixCols) {
+      doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
+      x += c.w;
+    }
+    y += rowH;
+    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+    for (let i = 0; i < g.students.length; i++) {
+      if (y + rowH > bottomLimit) {
+        doc.addPage({ size: "LETTER", layout: "landscape" });
+        drawHeader(
+          doc,
+          ctx.planName,
+          `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+          0,
+          0,
+        );
+        drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+        y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+        drawRow(doc, left, y, rowH, matrixCols, "header");
+        x = left;
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+        for (const c of matrixCols) {
+          doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
+          x += c.w;
+        }
+        y += rowH;
+        doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+      }
+      const s = g.students[i];
+      if (i % 2 === 1) drawRow(doc, left, y, rowH, matrixCols, "alt");
+      x = left;
+      doc.fillColor("#0f172a");
+      doc.text(String(i + 1), x + 4, y + 5, { width: 24 - 8 });
+      x += 24;
+      doc.text(`${s.lastName}, ${s.firstName}`, x + 4, y + 5, {
+        width: matrixNameW - 8,
+        ellipsis: true,
+      });
+      x += matrixNameW;
+      const bottomSet = new Set(s.bottomBenchmarkCodes);
+      let fit = 0;
+      for (const f of g.focusStandards) {
+        const pct = s.benchmarkPctByCode[f.benchmarkCode];
+        const cell = typeof pct === "number" ? `${Math.round(pct)}%` : "—";
+        const fill = typeof pct === "number" ? heatFill(pct) : null;
+        if (fill) {
+          doc
+            .save()
+            .rect(x, y, matrixCodeW, rowH)
+            .fillColor(fill)
+            .fill()
+            .restore();
+        }
+        if (bottomSet.has(f.benchmarkCode)) fit++;
+        doc.fillColor("#0f172a");
+        doc.text(cell, x + 4, y + 5, {
+          width: matrixCodeW - 8,
+          align: "center",
+        });
+        x += matrixCodeW;
+      }
+      doc.text(`${fit}/${g.focusStandards.length}`, x + 4, y + 5, {
+        width: matrixFitW - 8,
+        align: "center",
+      });
+      y += rowH;
+    }
+  }
+
+  // ----- Per-student weakest strands mini-table -----
+  if (g.students.some((s) => s.strands.length > 0)) {
+    if (y + 60 > bottomLimit) {
+      doc.addPage({ size: "LETTER", layout: "landscape" });
+      drawHeader(
+        doc,
+        ctx.planName,
+        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+        0,
+        0,
+      );
+      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+    } else {
+      y += 12;
+    }
+    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    doc.text("Weakest FAST strands per student", left, y);
+    y += 14;
+    const strandCols: Array<{ w: number; label: string }> = [
+      { w: 24, label: "#" },
+      { w: 170, label: "Student" },
+      { w: width - 24 - 170, label: "Top 3 weakest strands (avg %)" },
+    ];
+    drawRow(doc, left, y, rowH, strandCols, "header");
+    x = left;
+    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+    for (const c of strandCols) {
+      doc.text(c.label, x + 4, y + 5, { width: c.w - 8 });
+      x += c.w;
+    }
+    y += rowH;
+    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+    for (let i = 0; i < g.students.length; i++) {
+      if (y + rowH > bottomLimit) {
+        doc.addPage({ size: "LETTER", layout: "landscape" });
+        drawHeader(
+          doc,
+          ctx.planName,
+          `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
+          0,
+          0,
+        );
+        drawFooter(doc, ctx.publicId, ctx.qrBuffer);
+        y = PAGE_MARGIN + HEADER_HEIGHT + 8;
+        drawRow(doc, left, y, rowH, strandCols, "header");
+        x = left;
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+        for (const c of strandCols) {
+          doc.text(c.label, x + 4, y + 5, { width: c.w - 8 });
+          x += c.w;
+        }
+        y += rowH;
+        doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+      }
+      const s = g.students[i];
+      if (i % 2 === 1) drawRow(doc, left, y, rowH, strandCols, "alt");
+      x = left;
+      doc.fillColor("#0f172a");
+      doc.text(String(i + 1), x + 4, y + 5, { width: 24 - 8 });
+      x += 24;
+      doc.text(`${s.lastName}, ${s.firstName}`, x + 4, y + 5, {
+        width: 170 - 8,
+        ellipsis: true,
+      });
+      x += 170;
+      const strandText =
+        s.strands.length === 0
+          ? "— (no FAST item data)"
+          : s.strands.map((c) => `${c.category} ${c.pct}%`).join("  ·  ");
+      doc.text(strandText, x + 4, y + 5, {
+        width: strandCols[2].w - 8,
+        ellipsis: true,
+      });
+      y += rowH;
+    }
+  }
 }
 
-function sumCols(cols: { w: number }[]): number {
-  return cols.reduce((a, c) => a + c.w, 0);
-}
-
-function drawHeaderContinuation(
+function drawRow(
   doc: PDFKit.PDFDocument,
-  g: ComposerPlanPdfGroup,
+  left: number,
+  y: number,
+  rowH: number,
+  cols: Array<{ w: number }>,
+  kind: "header" | "alt",
 ) {
-  const left = PAGE_MARGIN;
-  const top = PAGE_MARGIN + HEADER_HEIGHT + 10;
-  doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a");
-  doc.text(`${g.name} (continued)`, left, top);
-  doc.moveDown(0.5);
+  const w = cols.reduce((a, c) => a + c.w, 0);
+  doc
+    .save()
+    .rect(left, y, w, rowH)
+    .fillColor(kind === "header" ? "#e2e8f0" : "#f8fafc")
+    .fill()
+    .restore();
 }
-

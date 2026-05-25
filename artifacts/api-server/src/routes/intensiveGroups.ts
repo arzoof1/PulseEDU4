@@ -2277,6 +2277,63 @@ router.post(
   },
 );
 
+// Course-name match used to attribute a "current section" to each
+// student for the plan's subject — best-effort heuristic since we
+// don't store subject on class_sections. Combined with the intensive
+// regex below to prefer the most relevant section when a student is
+// enrolled in multiple matching periods.
+function courseNameMatchesSubject(
+  courseName: string | null | undefined,
+  subject: string,
+): boolean {
+  if (!courseName) return false;
+  const n = courseName.toLowerCase();
+  switch (subject) {
+    case "ela":
+      return /\b(ela|english|reading|language\s+arts|literature|read\s*180)\b/.test(
+        n,
+      );
+    case "math":
+      return /\b(math|mathematics|math\s*180|saxon)\b/.test(n);
+    case "algebra1":
+      return /\balgebra\b/.test(n);
+    case "geometry":
+      return /\bgeometry\b/.test(n);
+    default:
+      return false;
+  }
+}
+
+export interface HydratedPlanStudent {
+  studentId: string;
+  localSisId: string | null;
+  firstName: string;
+  lastName: string;
+  grade: number | null;
+  fastLevel: number | null;
+  overallPct: number | null;
+  ese: boolean;
+  is504: boolean;
+  ell: boolean;
+  // Per-benchmark mastery — keyed by benchmarkCode for fast lookup
+  // when filling the focus-standards matrix on the PDF.
+  benchmarkPctByCode: Record<string, number>;
+  // Student's personal weakest benchmark codes (lowest mastery first)
+  // — used to compute focus-standard "fit count" (how many of the
+  // group's focus standards land in this student's personal bottom-N).
+  bottomBenchmarkCodes: string[];
+  // Top weak instructional strands for this student (≤3 weakest),
+  // surfaced as a per-student strand mini-row on the PDF.
+  strands: Array<{ category: string; pct: number }>;
+  // Best-guess current period/section for the plan's subject. Picks
+  // the intensive-named section first, then the lowest period.
+  currentSection: {
+    courseName: string;
+    period: number;
+    teacherName: string | null;
+  } | null;
+}
+
 // Shared helper: gather PDF/CSV student rows for a plan's groups by
 // hydrating each group's stored student_ids with current FAST profiles.
 async function hydratePlanStudents(
@@ -2286,15 +2343,7 @@ async function hydratePlanStudents(
 ): Promise<
   Array<{
     group: ClassComposerPlanGroupRow;
-    students: Array<{
-      studentId: string;
-      localSisId: string | null;
-      firstName: string;
-      lastName: string;
-      grade: number | null;
-      fastLevel: number | null;
-      overallPct: number | null;
-    }>;
+    students: HydratedPlanStudent[];
   }>
 > {
   const allIds = Array.from(new Set(groups.flatMap((g) => g.studentIds)));
@@ -2322,7 +2371,7 @@ async function hydratePlanStudents(
   const profById = new Map(profile.map((p) => [p.studentId, p]));
 
   // Fall back to a plain students table read for kids with no profile
-  // (unscored) so we still print their names.
+  // (unscored) so we still print their names + program flags.
   const studentRows = await db
     .select({
       studentId: studentsTable.studentId,
@@ -2330,6 +2379,9 @@ async function hydratePlanStudents(
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
+      ese: studentsTable.ese,
+      is504: studentsTable.is504,
+      ell: studentsTable.ell,
     })
     .from(studentsTable)
     .where(
@@ -2340,11 +2392,75 @@ async function hydratePlanStudents(
     );
   const baseById = new Map(studentRows.map((s) => [s.studentId, s]));
 
+  // Current section lookup — one query for all rostered students,
+  // filtered to non-planning sections at this school, then narrowed
+  // by subject + ranked (intensive first, then lowest period).
+  const sectionRows = await db
+    .select({
+      studentId: sectionRosterTable.studentId,
+      courseName: classSectionsTable.courseName,
+      period: classSectionsTable.period,
+      teacherName: staffTable.displayName,
+    })
+    .from(sectionRosterTable)
+    .innerJoin(
+      classSectionsTable,
+      eq(classSectionsTable.id, sectionRosterTable.sectionId),
+    )
+    .leftJoin(staffTable, eq(staffTable.id, classSectionsTable.teacherStaffId))
+    .where(
+      and(
+        eq(sectionRosterTable.schoolId, schoolId),
+        eq(classSectionsTable.schoolId, schoolId),
+        eq(classSectionsTable.isPlanning, false),
+        inArray(sectionRosterTable.studentId, allIds),
+      ),
+    );
+  const sectionByStudent = new Map<
+    string,
+    HydratedPlanStudent["currentSection"]
+  >();
+  for (const r of sectionRows) {
+    if (!courseNameMatchesSubject(r.courseName, plan.subject)) continue;
+    const prior = sectionByStudent.get(r.studentId);
+    const isIntensive = isIntensiveCourseName(r.courseName);
+    const priorIntensive = prior ? isIntensiveCourseName(prior.courseName) : false;
+    if (
+      !prior ||
+      (isIntensive && !priorIntensive) ||
+      (isIntensive === priorIntensive && r.period < prior.period)
+    ) {
+      sectionByStudent.set(r.studentId, {
+        courseName: r.courseName,
+        period: r.period,
+        teacherName: r.teacherName ?? null,
+      });
+    }
+  }
+
   return groups.map((g) => ({
     group: g,
-    students: g.studentIds.map((sid: string) => {
+    students: g.studentIds.map((sid: string): HydratedPlanStudent => {
       const p = profById.get(sid);
       const b = baseById.get(sid);
+      const pctByCode: Record<string, number> = {};
+      if (p) {
+        for (const bm of p.benchmarks) pctByCode[bm.benchmarkCode] = bm.pct;
+      }
+      // "Personal bottom-7" — the student's seven weakest benchmark
+      // codes by mastery %. Used to compute fit-count vs. the group's
+      // focus standards on the PDF.
+      const bottomCodes = p
+        ? [...p.benchmarks]
+            .sort((a, b) => a.pct - b.pct)
+            .slice(0, 7)
+            .map((bm) => bm.benchmarkCode)
+        : [];
+      const strands = p
+        ? p.categories
+            .slice(0, 3)
+            .map((c) => ({ category: c.category, pct: Math.round(c.pct) }))
+        : [];
       return {
         studentId: sid,
         localSisId: p?.localSisId ?? b?.localSisId ?? null,
@@ -2353,6 +2469,13 @@ async function hydratePlanStudents(
         grade: p?.grade ?? b?.grade ?? null,
         fastLevel: p?.fastLevel ?? null,
         overallPct: p?.overallPct ?? null,
+        ese: b?.ese ?? false,
+        is504: b?.is504 ?? false,
+        ell: b?.ell ?? false,
+        benchmarkPctByCode: pctByCode,
+        bottomBenchmarkCodes: bottomCodes,
+        strands,
+        currentSection: sectionByStudent.get(sid) ?? null,
       };
     }),
   }));
