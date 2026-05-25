@@ -1,16 +1,9 @@
 import { getUncachableResendClient } from "./resendClient.js";
+import { resolvePublicAppOrigin } from "./publicAppUrl.js";
 import { logger } from "./logger.js";
 
-function publicAppOrigin(): string {
-  const explicit = process.env.PUBLIC_APP_URL;
-  if (explicit && explicit.length > 0) return explicit.replace(/\/+$/, "");
-  const replit = process.env.REPLIT_DEV_DOMAIN;
-  if (replit && replit.length > 0) return `https://${replit}`;
-  return "http://localhost:5173";
-}
-
 export function buildStaffPasswordResetUrl(token: string): string {
-  return `${publicAppOrigin()}/reset-password/${encodeURIComponent(token)}`;
+  return `${resolvePublicAppOrigin()}/reset-password/${encodeURIComponent(token)}`;
 }
 
 export async function sendStaffPasswordResetEmail(args: {

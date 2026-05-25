@@ -5,6 +5,7 @@ import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
 import { corsMiddleware } from "./lib/corsConfig.js";
+import { resolvePublicAppOrigin } from "./lib/publicAppUrl.js";
 import { csrfProtectionMiddleware } from "./lib/csrf.js";
 import { logger } from "./lib/logger";
 import {
@@ -65,8 +66,7 @@ function frameAncestors(): string[] {
   if (configured.length > 0) return configured;
 
   const ancestors = ["'self'"];
-  const publicApp = process.env.PUBLIC_APP_URL?.trim();
-  if (publicApp) ancestors.push(publicApp.replace(/\/+$/, ""));
+  ancestors.push(resolvePublicAppOrigin());
 
   // Replit previews are iframe-based in development; keep that opt-in and
   // production-configurable instead of using X-Frame-Options DENY/SAMEORIGIN.
