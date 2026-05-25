@@ -59,7 +59,8 @@ import { schoolYearLabelFor } from "./lib/schoolYear.js";
 // MULTI-SCHOOL SEED
 // =============================================================================
 // This produces the realistic 7-school dataset (Hernando County 6 schools +
-// Pasco County 1 school) used by the live demo. It runs at boot:
+// Pasco County 1 school) used by the live demo. Boot-time execution is gated
+// in index.ts so production does not mutate demo data unless explicitly opted in:
 //   - seedTenancy() always runs and is idempotent. It guarantees the two
 //     districts and seven schools exist.
 //   - seedIfEmpty() runs only when school_accommodations is empty. It
@@ -3688,6 +3689,19 @@ export async function seedIfEmpty() {
     sql`SELECT COUNT(DISTINCT school_id)::int AS n FROM school_accommodations`,
   )).rows as { n: number }[];
   if (n >= SCHOOL_SPECS.length) return; // Already fully seeded.
+
+  if (
+    process.env.NODE_ENV === "production" &&
+    process.env.ALLOW_DESTRUCTIVE_DEMO_RESEED !== "true"
+  ) {
+    logger.error(
+      { distinctSchoolsWithAccs: n, expected: SCHOOL_SPECS.length },
+      "[seed] refusing destructive demo reseed in production",
+    );
+    throw new Error(
+      "Refusing destructive demo reseed in production. Set ALLOW_DESTRUCTIVE_DEMO_RESEED=true only for an intentional demo database rebuild.",
+    );
+  }
 
   logger.info(
     { distinctSchoolsWithAccs: n, expected: SCHOOL_SPECS.length },

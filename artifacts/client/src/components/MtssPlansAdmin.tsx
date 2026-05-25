@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import { fetchAllStudents } from "../lib/students";
 
 type StatusFilter = "active" | "closed" | "all";
 
@@ -163,9 +164,8 @@ export default function MtssPlansAdmin({
   // endpoint is school-scoped, so this returns just the active school's
   // roster.
   useEffect(() => {
-    authFetch("/api/students")
-      .then((r) => (r.ok ? r.json() : []))
-      .then((rows: Student[]) => Array.isArray(rows) && setStudents(rows))
+    fetchAllStudents<Student>()
+      .then((rows) => setStudents(rows))
       .catch(() => {});
   }, []);
 

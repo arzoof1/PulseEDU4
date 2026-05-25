@@ -3,10 +3,17 @@ import crypto from "node:crypto";
 // Optional HMAC bearer used only when STAFF_BEARER_AUTH_ENABLED=true (legacy
 // Replit preview iframe). Production staff auth is HttpOnly session cookies.
 
-const SECRET =
-  process.env.SESSION_SECRET ||
-  process.env.AUTH_TOKEN_SECRET ||
-  "dev-only-insecure-secret-change-me";
+function requireTokenSecret(): string {
+  const secret = process.env.AUTH_TOKEN_SECRET || process.env.SESSION_SECRET;
+  if (!secret) {
+    throw new Error(
+      "AUTH_TOKEN_SECRET or SESSION_SECRET is required for token signing",
+    );
+  }
+  return secret;
+}
+
+const SECRET = requireTokenSecret();
 
 /** Short TTL when bearer is enabled — limits XSS / post-logout exposure. */
 const STAFF_BEARER_TTL_MS = 1000 * 60 * 30; // 30 minutes

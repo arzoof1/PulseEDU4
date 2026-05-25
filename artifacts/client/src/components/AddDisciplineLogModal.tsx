@@ -6,6 +6,7 @@ import {
   type CSSProperties,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import { searchStudents as searchStudentRows } from "../lib/students";
 
 interface Props {
   initialKind: "iss" | "oss";
@@ -148,11 +149,8 @@ export default function AddDisciplineLogModal({
       setStudentResults([]);
       return;
     }
-    const r = await authFetch(`/api/students?q=${encodeURIComponent(q)}`);
-    if (r.ok) {
-      const d = (await r.json()) as StudentRow[];
-      setStudentResults(d.slice(0, 8));
-    }
+    const d = await searchStudentRows<StudentRow>(q, 8);
+    setStudentResults(d);
   }, []);
 
   useEffect(() => {

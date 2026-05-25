@@ -1,9 +1,11 @@
-import express, { type Express } from "express";
+import express, { type Express, type RequestHandler } from "express";
+import helmet from "helmet";
 import pinoHttp from "pino-http";
 import session from "express-session";
 import connectPgSimple from "connect-pg-simple";
 import router from "./routes";
 import { corsMiddleware } from "./lib/corsConfig.js";
+import { resolvePublicAppOrigin } from "./lib/publicAppUrl.js";
 import { csrfProtectionMiddleware } from "./lib/csrf.js";
 import { logger } from "./lib/logger";
 import {
@@ -50,6 +52,32 @@ declare module "express-session" {
 }
 
 const app: Express = express();
+const isProduction = process.env.NODE_ENV === "production";
+
+function csvEnv(name: string): string[] {
+  return (process.env[name] ?? "")
+    .split(",")
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+}
+
+function frameAncestors(): string[] {
+  const configured = csvEnv("SECURITY_FRAME_ANCESTORS");
+  if (configured.length > 0) return configured;
+
+  const ancestors = ["'self'"];
+  ancestors.push(resolvePublicAppOrigin());
+
+  // Replit previews are iframe-based in development; keep that opt-in and
+  // production-configurable instead of using X-Frame-Options DENY/SAMEORIGIN.
+  if (!isProduction) {
+    ancestors.push("http://localhost:5173", "http://localhost:5174");
+    const replit = process.env.REPLIT_DEV_DOMAIN?.trim();
+    if (replit) ancestors.push(`https://${replit}`);
+  }
+
+  return ancestors;
+}
 
 // Required so express-session honors X-Forwarded-Proto from the Replit proxy
 // (TLS terminates upstream, so without this `secure: true` cookies are dropped).
@@ -65,6 +93,41 @@ if (!databaseUrl) {
 }
 
 const PgSession = connectPgSimple(session);
+
+app.use(
+  helmet({
+    // Development Vite/React tooling can require eval/inline assets. Keep CSP
+    // strict in production and disabled locally to avoid breaking dev UX.
+    contentSecurityPolicy: isProduction
+      ? {
+          useDefaults: true,
+          directives: {
+            "default-src": ["'self'"],
+            "base-uri": ["'self'"],
+            "object-src": ["'none'"],
+            "frame-ancestors": frameAncestors(),
+            "form-action": ["'self'"],
+            "img-src": ["'self'", "data:", "blob:", "https:"],
+            "media-src": ["'self'", "data:", "blob:", "https:"],
+            "connect-src": ["'self'", ...csvEnv("CSP_CONNECT_SRC")],
+            "script-src": ["'self'"],
+            "style-src": ["'self'", "'unsafe-inline'"],
+          },
+        }
+      : false,
+    crossOriginEmbedderPolicy: false,
+    // frame-ancestors is more precise than X-Frame-Options for this app's
+    // preview/deployment needs; avoid emitting a conflicting legacy header.
+    frameguard: false,
+    hsts: isProduction
+      ? {
+          maxAge: 15552000,
+          includeSubDomains: true,
+        }
+      : false,
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+  }),
+);
 
 app.use(
   pinoHttp({
@@ -86,11 +149,34 @@ app.use(
   }),
 );
 app.use(corsMiddleware);
-// JSON body limit: bumped from the 100KB default so the Data Imports
-// route can accept CSV text in the request body. The frontend caps file
-// uploads at 10MB; 15MB gives headroom for JSON-quoting overhead.
-app.use(express.json({ limit: "15mb" }));
-app.use(express.urlencoded({ extended: true, limit: "15mb" }));
+
+const defaultJsonParser = express.json({ limit: "256kb" });
+const defaultUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "64kb",
+});
+const importJsonParser = express.json({ limit: "15mb" });
+const importUrlencodedParser = express.urlencoded({
+  extended: true,
+  limit: "15mb",
+});
+
+function skipDataImportRequests(parser: RequestHandler): RequestHandler {
+  return (req, res, next) => {
+    const path = req.originalUrl.split("?")[0] ?? "";
+    if (path.startsWith("/api/data-imports")) {
+      next();
+      return;
+    }
+    parser(req, res, next);
+  };
+}
+
+// Data import endpoints accept CSV text in JSON bodies. Keep the larger limit
+// scoped to those routes; normal APIs use tighter defaults to reduce abuse.
+app.use("/api/data-imports", importJsonParser, importUrlencodedParser);
+app.use(skipDataImportRequests(defaultJsonParser));
+app.use(skipDataImportRequests(defaultUrlencodedParser));
 
 app.use(
   session({
@@ -100,6 +186,11 @@ app.use(
       // Not in Drizzle schema (connect-pg-simple owns this table). Create on first use
       // so local / fresh DBs work without a separate migration step.
       createTableIfMissing: true,
+      // Make the default cleanup behavior explicit: prune expired sessions
+      // every 15 minutes so user_sessions does not grow without bound.
+      pruneSessionInterval: 15 * 60,
+      errorLog: (err: unknown) =>
+        logger.warn({ err }, "session store background error"),
     }),
     secret: sessionSecret,
     resave: false,

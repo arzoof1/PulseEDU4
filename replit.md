@@ -10,6 +10,21 @@ PulseEDU is a multi-tenant application providing tools for school operations, st
 - `pnpm --filter @workspace/db run push`: Push DB schema changes (dev only).
 - `pnpm --filter @workspace/api-server run dev`: Run API server locally.
 
+## Production deployment
+
+Public site: **https://pulseedu.pulsekinetics.us/**
+
+Copy `artifacts/api-server/.env.example` → `.env` on the server and set at least:
+
+- `NODE_ENV=production`
+- `PUBLIC_APP_URL=https://pulseedu.pulsekinetics.us`
+- `CORS_ORIGINS=https://pulseedu.pulsekinetics.us`
+- `DATABASE_URL`, `SESSION_SECRET`, `PORT`
+
+If `PUBLIC_APP_URL` / `CORS_ORIGINS` are missing in production, the API still defaults to `https://pulseedu.pulsekinetics.us` via `src/lib/publicAppUrl.ts`.
+
+Serve the client and proxy `/api` on the same host when possible so the browser uses same-origin `/api` requests.
+
 ## Stack
 
 - **Monorepo tool**: pnpm workspaces

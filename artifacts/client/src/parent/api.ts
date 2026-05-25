@@ -134,7 +134,6 @@ export interface ParentMe {
   displayName: string;
   schoolId: number;
   active: boolean;
-  hasPassword: boolean;
   authToken?: string;
   csrfToken?: string;
   students: Array<{

@@ -1,5 +1,4 @@
 import { Router, type IRouter, type Request, type Response, type NextFunction } from "express";
-import bcrypt from "bcryptjs";
 import { randomBytes, createHash } from "node:crypto";
 import {
   db,
@@ -17,6 +16,7 @@ import { and, eq, isNull, gt, desc, sql, ne, asc } from "drizzle-orm";
 import type { InferSelectModel } from "drizzle-orm";
 import { config } from "../data/config";
 import { requireSchool } from "../lib/scope.js";
+import { bcryptCompare } from "../lib/bcrypt.js";
 import {
   checkLoginAllowed,
   recordLoginFailure,
@@ -398,7 +398,7 @@ router.post("/kiosk/activate", async (req, res) => {
     res.status(401).json({ error: "Invalid email or password" });
     return;
   }
-  const ok = await bcrypt.compare(password, staff.passwordHash);
+  const ok = await bcryptCompare(password, staff.passwordHash);
   if (!ok) {
     await recordLoginFailure(req, "staff", normalizedEmail);
     res.status(401).json({ error: "Invalid email or password" });
