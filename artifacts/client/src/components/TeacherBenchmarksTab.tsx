@@ -2936,6 +2936,14 @@ function ReteachLogModal(props: {
   const [format, setFormat] = useState<"one_on_one" | "small_group">(
     modal.defaultFormat,
   );
+  // Per-student checklist for bulk (small-group) mode. Pre-checked
+  // with everyone so the common path is one click; teacher can
+  // uncheck absentees or split a band across two sessions. Each
+  // submit creates its own groupSessionId, so partial logs stay
+  // accurate (a 12-kid band done over two days = two clean sessions).
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(
+    () => new Set(modal.studentIds ?? []),
+  );
   const [strategy, setStrategy] = useState("");
   const [minutes, setMinutes] = useState("");
   const [note, setNote] = useState("");
@@ -2968,7 +2976,12 @@ function ReteachLogModal(props: {
       let url = "/api/reteach-log";
       if (isBulk) {
         url = "/api/reteach-log/bulk";
-        body.studentIds = modal.studentIds;
+        // Use only the checked subset — lets a teacher drop absentees
+        // or split a band across multiple days while keeping each
+        // session's documentation accurate.
+        body.studentIds = (modal.studentIds ?? []).filter((id) =>
+          selectedIds.has(id),
+        );
       } else {
         body.studentId = modal.studentId;
       }
@@ -3094,23 +3107,126 @@ function ReteachLogModal(props: {
           )}
         </div>
 
-        {isBulk && bulkRoster.length > 0 && (
-          <div
-            style={{
-              fontSize: 12,
-              color: "#374151",
-              background: "#f9fafb",
-              border: "1px solid #e5e7eb",
-              borderRadius: 4,
-              padding: "6px 8px",
-              marginBottom: 10,
-              maxHeight: 110,
-              overflowY: "auto",
-            }}
-          >
-            {bulkRoster
-              .map((s) => `${s.lastName}, ${s.firstName}`)
-              .join(" · ")}
+        {isBulk && (bulkRoster.length > 0 || modal.studentIds!.length > 0) && (
+          <div style={{ marginBottom: 10 }}>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                fontSize: 11,
+                color: "#6b7280",
+                marginBottom: 4,
+              }}
+            >
+              <span>
+                Uncheck anyone absent or being saved for a later session.
+              </span>
+              <span style={{ display: "flex", gap: 6 }}>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setSelectedIds(new Set(modal.studentIds ?? []))
+                  }
+                  style={{
+                    fontSize: 10,
+                    padding: "1px 6px",
+                    background: "white",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 3,
+                    cursor: "pointer",
+                  }}
+                >
+                  All
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedIds(new Set())}
+                  style={{
+                    fontSize: 10,
+                    padding: "1px 6px",
+                    background: "white",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 3,
+                    cursor: "pointer",
+                  }}
+                >
+                  None
+                </button>
+              </span>
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "#374151",
+                background: "#f9fafb",
+                border: "1px solid #e5e7eb",
+                borderRadius: 4,
+                padding: "4px 8px",
+                // ~6 rows visible; scroll the rest. Larger bands
+                // (e.g. Far From Mastery with 15 kids) stay manageable.
+                maxHeight: 180,
+                overflowY: "auto",
+              }}
+            >
+              {(bulkRoster.length > 0
+                ? bulkRoster
+                : modal.studentIds!.map((id) => ({
+                    studentId: id,
+                    firstName: id,
+                    lastName: "",
+                    grade: "",
+                    cells: {},
+                  }))
+              ).map((s) => {
+                const checked = selectedIds.has(s.studentId);
+                return (
+                  <label
+                    key={s.studentId}
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 6,
+                      padding: "3px 0",
+                      cursor: "pointer",
+                      borderBottom: "1px solid #f3f4f6",
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      onChange={(e) =>
+                        setSelectedIds((prev) => {
+                          const next = new Set(prev);
+                          if (e.target.checked) next.add(s.studentId);
+                          else next.delete(s.studentId);
+                          return next;
+                        })
+                      }
+                    />
+                    <span
+                      style={{
+                        color: checked ? "#111827" : "#9ca3af",
+                        textDecoration: checked ? "none" : "line-through",
+                      }}
+                    >
+                      {s.lastName ? `${s.lastName}, ${s.firstName}` : s.firstName}
+                      {s.grade !== "" && (
+                        <span
+                          style={{
+                            color: "#6b7280",
+                            fontSize: 11,
+                            marginLeft: 4,
+                          }}
+                        >
+                          G{s.grade}
+                        </span>
+                      )}
+                    </span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         )}
 
@@ -3396,22 +3512,33 @@ function ReteachLogModal(props: {
             <button
               type="button"
               onClick={() => void submit()}
-              disabled={saving}
+              disabled={saving || (isBulk && selectedIds.size === 0)}
+              title={
+                isBulk && selectedIds.size === 0
+                  ? "Pick at least one student"
+                  : undefined
+              }
               style={{
                 padding: "6px 14px",
                 fontSize: 12,
                 fontWeight: 600,
-                background: saving ? "#9ca3af" : "#1e3a8a",
+                background:
+                  saving || (isBulk && selectedIds.size === 0)
+                    ? "#9ca3af"
+                    : "#1e3a8a",
                 color: "white",
                 border: "none",
                 borderRadius: 4,
-                cursor: saving ? "not-allowed" : "pointer",
+                cursor:
+                  saving || (isBulk && selectedIds.size === 0)
+                    ? "not-allowed"
+                    : "pointer",
               }}
             >
               {saving
                 ? "Saving…"
                 : isBulk
-                  ? `Log for ${bulkRoster.length || modal.studentIds!.length} students`
+                  ? `Log for ${selectedIds.size} student${selectedIds.size === 1 ? "" : "s"}`
                   : "Add log"}
             </button>
           </div>
