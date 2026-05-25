@@ -200,14 +200,17 @@ async function renderLanyardBadge(
       });
   }
 
-  // Square photo slot (centered under the band)
-  const photoSize = 96;
+  // Square photo slot (centered under the band) — sized to roughly double
+  // the area of the original 96pt slot. To make room, the QR/barcode block
+  // below tightens up (smaller QR, less padding) so the badge still fits
+  // the 306pt lanyard height with the FL HB 383 crisis lines intact.
+  const photoSize = 130;
   const photoX = (W - photoSize) / 2;
-  const photoY = bandH + 12;
+  const photoY = bandH + 8;
   drawPhotoSlot(doc, badge, photoX, photoY, photoSize, houseColor);
 
   // Name
-  const nameY = photoY + photoSize + 6;
+  const nameY = photoY + photoSize + 4;
   doc
     .fillColor("#111827")
     .fontSize(14)
@@ -235,18 +238,20 @@ async function renderLanyardBadge(
   }
 
   // QR + barcode + crisis lines, anchored to the bottom of the card so
-  // the layout stays stable as the photo / name area flex.
-  const qrSize = 56;
+  // the layout stays stable as the photo / name area flex. Tightened in
+  // step with the larger photo above to keep the bottom crisis line on
+  // the card.
+  const qrSize = 44;
   const qrX = (W - qrSize) / 2;
-  const qrY = nameY + 32;
+  const qrY = nameY + 22;
   const qrBuf = await renderQrBuffer(badge);
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
   const barcodePng = await renderBarcodeBuffer(badge.studentId);
   const bcW = W - PAGE_MARGIN * 2 - 30;
-  const bcH = 16;
+  const bcH = 14;
   const bcX = (W - bcW) / 2;
-  const bcY = qrY + qrSize + 4;
+  const bcY = qrY + qrSize + 3;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
 
   // Crisis hotlines — FL HB 383 (effective 2021-07-01) requires
@@ -357,8 +362,10 @@ async function renderCr80Badge(
       });
   }
 
-  // Square photo (left-bottom area of the band)
-  const photoSize = 64;
+  // Square photo (left-bottom area of the band) — enlarged from 64 to
+  // 86pt so the photo area roughly doubles. Name + grade column to the
+  // right tightens to fit the remaining horizontal space in the band.
+  const photoSize = 86;
   const photoX = 8;
   const photoY = H - photoSize - 8;
   drawPhotoSlot(doc, badge, photoX, photoY, photoSize, "#ffffff");
