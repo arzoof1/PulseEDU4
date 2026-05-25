@@ -20,6 +20,9 @@ import { verifyAuthToken } from "../lib/authToken.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { requireSchool } from "../lib/scope.js";
 import { bindObjectToSchool } from "./storage.js";
+import { ObjectStorageService, ObjectNotFoundError } from "../lib/objectStorage.js";
+
+const houseLogoStorage = new ObjectStorageService();
 
 type StaffRow = typeof staffTable.$inferSelect;
 
@@ -1279,6 +1282,52 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
 // printed badges. Read access is mediated by /api/storage/objects/*, which
 // already gates by the requester's school via the ACL we apply at bind time.
 // =============================================================================
+
+// GET /api/houses/:id/logo.png — public read of the bound logo bytes.
+// House standings are rendered on unauthenticated hallway signage TVs, so
+// the read path can't require a bearer token (an <img> tag can't carry one
+// anyway). Upload is still gated by school + admin role via the POST below,
+// and the object is bound to the school's ACL at upload time; only the path
+// here is public.
+router.get("/houses/:id/logo.png", async (req, res) => {
+  const houseId = Number(req.params.id);
+  if (!Number.isFinite(houseId) || houseId <= 0) {
+    res.status(400).json({ error: "Invalid house id" });
+    return;
+  }
+  const [row] = await db
+    .select({ key: housesTable.iconObjectKey })
+    .from(housesTable)
+    .where(eq(housesTable.id, houseId));
+  if (!row || !row.key) {
+    res.status(404).json({ error: "No logo" });
+    return;
+  }
+  try {
+    const file = await houseLogoStorage.getObjectEntityFile(row.key);
+    const r = (await houseLogoStorage.downloadObject(file)) as unknown as globalThis.Response;
+    r.headers.forEach((value, key) => res.setHeader(key, value));
+    res.setHeader("Cache-Control", "public, max-age=300");
+    if (!r.body) {
+      res.end();
+      return;
+    }
+    const reader = r.body.getReader();
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+    res.end();
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) {
+      res.status(404).json({ error: "Logo file missing" });
+      return;
+    }
+    req.log?.error({ err }, "house logo download failed");
+    res.status(500).json({ error: "Failed to read logo" });
+  }
+});
 
 // POST /api/houses/:id/logo  body: { objectPath: "/objects/..." }
 router.post("/houses/:id/logo", requireHouseAdmin(), async (req, res) => {

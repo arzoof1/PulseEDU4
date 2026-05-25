@@ -367,7 +367,7 @@ function AppearanceTab(): React.ReactElement {
               >
                 {h.iconObjectKey ? (
                   <img
-                    src={`/api/storage${h.iconObjectKey}`}
+                    src={`/api/houses/${h.id}/logo.png?v=${encodeURIComponent(h.iconObjectKey)}`}
                     alt={`${h.name} logo`}
                     style={{
                       maxHeight: 80,
