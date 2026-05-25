@@ -582,8 +582,6 @@ export default function TeacherBenchmarksTab({
 
   const openPdf = () => {
     if (!pdfHref) return;
-    // eslint-disable-next-line no-console
-    console.log("[Print PDF] URL:", pdfHref, "periodFilter:", periodFilter);
     // authFetch → blob → object URL so the auth header rides along.
     authFetch(pdfHref)
       .then(async (r) => {
