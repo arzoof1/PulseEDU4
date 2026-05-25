@@ -1764,24 +1764,71 @@ export default function TeacherBenchmarksTab({
                   >
                     <div
                       style={{
-                        fontSize: 11,
-                        fontWeight: 700,
-                        textTransform: "uppercase",
-                        letterSpacing: 0.5,
-                        color: bucket.color,
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: 6,
                         marginBottom: 2,
                       }}
                     >
-                      {bucket.label}
-                      <span
+                      <div
                         style={{
-                          marginLeft: 6,
-                          fontWeight: 600,
-                          color: "#374151",
+                          fontSize: 11,
+                          fontWeight: 700,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                          color: bucket.color,
                         }}
                       >
-                        ({bucket.students.length})
-                      </span>
+                        {bucket.label}
+                        <span
+                          style={{
+                            marginLeft: 6,
+                            fontWeight: 600,
+                            color: "#374151",
+                          }}
+                        >
+                          ({bucket.students.length})
+                        </span>
+                      </div>
+                      {/* Quick log-reteach for the whole band (Near/Far only —
+                          Mastery is, by definition, not a reteach target).
+                          Opens the bulk modal with this band's students
+                          pre-checked; teacher can uncheck absentees there. */}
+                      {(bucket.key === "near" || bucket.key === "far") &&
+                        bucket.students.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setReteachModal({
+                                studentId: null,
+                                studentIds: bucket.students.map(
+                                  (s) => s.studentId,
+                                ),
+                                benchmarkCode: focusCode,
+                                defaultFormat: "small_group",
+                              })
+                            }
+                            style={{
+                              padding: "2px 6px",
+                              fontSize: 10,
+                              fontWeight: 600,
+                              background: "white",
+                              border: `1px solid ${bucket.border}`,
+                              color: bucket.color,
+                              borderRadius: 3,
+                              cursor: "pointer",
+                              display: "inline-flex",
+                              alignItems: "center",
+                              gap: 3,
+                              lineHeight: 1.2,
+                            }}
+                            title={`Log a small-group reteach for all ${bucket.students.length} ${bucket.label.toLowerCase()} students`}
+                          >
+                            <span aria-hidden="true">🔁</span>
+                            <span>Log group</span>
+                          </button>
+                        )}
                     </div>
                     <div
                       style={{
