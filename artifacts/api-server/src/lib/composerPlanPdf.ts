@@ -29,7 +29,6 @@
 //         * Cols: # · Student · Gr · FAST · Overall % (heat) · PM 1/2/3 · Flags · Fit
 
 import PDFDocument from "pdfkit";
-import QRCode from "qrcode";
 
 export interface ComposerPlanPdfStudent {
   studentId: string;
@@ -172,17 +171,6 @@ function detectSourceWindowForGroup(
 export async function renderComposerPlanPdf(
   input: ComposerPlanPdfInput,
 ): Promise<Buffer> {
-  const qrPayload = `PULSE-COMPOSER:${input.publicId}`;
-  const qrDataUrl = await QRCode.toDataURL(qrPayload, {
-    margin: 0,
-    width: 160,
-    errorCorrectionLevel: "M",
-  });
-  const qrBuffer = Buffer.from(
-    qrDataUrl.replace(/^data:image\/png;base64,/, ""),
-    "base64",
-  );
-
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER",
@@ -211,7 +199,7 @@ export async function renderComposerPlanPdf(
     // which auto-paginates any text call near the bottom (e.g. footer).
     doc.addPage({ size: "LETTER", layout: "portrait", margins: { top: 0, bottom: 0, left: PAGE_MARGIN, right: PAGE_MARGIN } });
     drawHeader(doc, input.planName, "Cover");
-    drawFooter(doc, input.publicId, qrBuffer, false);
+    drawFooter(doc, input.publicId, false);
     drawCoverBody(doc, input);
 
     // ----- One landscape page per group -----
@@ -223,12 +211,11 @@ export async function renderComposerPlanPdf(
         input.planName,
         `Group ${g.groupIndex} of ${input.groups.length}`,
       );
-      drawFooter(doc, input.publicId, qrBuffer, true);
+      drawFooter(doc, input.publicId, true);
       drawGroupBody(doc, g, {
         planName: input.planName,
         totalGroups: input.groups.length,
         publicId: input.publicId,
-        qrBuffer,
       });
     }
 
@@ -290,7 +277,6 @@ function drawHeader(
 function drawFooter(
   doc: PDFKit.PDFDocument,
   publicId: string,
-  qrBuffer: Buffer,
   showSignature: boolean,
 ) {
   const left = PAGE_MARGIN;
@@ -305,20 +291,15 @@ function drawFooter(
     .strokeColor("#cbd5e1")
     .stroke()
     .restore();
-  const qrSize = 56;
-  doc.image(qrBuffer, right - qrSize, top + 8, {
-    width: qrSize,
-    height: qrSize,
-  });
   doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-  doc.text("Plan ID", right - qrSize - 110, top + 14, {
+  doc.text("Plan ID", right - 200, top + 14, {
     width: 90,
     align: "right",
     lineBreak: false,
   });
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
-  doc.text(publicId, right - qrSize - 110, top + 26, {
-    width: 90,
+  doc.text(publicId, right - 110, top + 14, {
+    width: 110,
     align: "right",
     lineBreak: false,
   });
@@ -345,10 +326,10 @@ function drawFooter(
   }
   doc.font("Helvetica").fontSize(8).fillColor("#94a3b8");
   doc.text(
-    "Scan QR or look up the Plan ID in PulseEDU to find the source plan.",
+    "Look up the Plan ID in PulseEDU (Class Composer → Plans) to find the source plan.",
     left,
     top + 58,
-    { width: right - left - qrSize - 130, height: 10, lineBreak: false, ellipsis: true },
+    { width: right - left - 220, height: 10, lineBreak: false, ellipsis: true },
   );
 }
 
@@ -672,7 +653,7 @@ function drawCoverBody(
   if (y + 20 < bottomLimit) {
     doc.font("Helvetica-Oblique").fontSize(9).fillColor("#94a3b8");
     const note =
-      "Paper artifact only — does not modify Skyward/RosterOne. Each page is tagged with the Plan ID + QR below so shuffled pages can be re-assembled.";
+      "Paper artifact only — does not modify Skyward/RosterOne. Each page is tagged with the Plan ID below so shuffled pages can be re-assembled.";
     const noteH = doc.heightOfString(note, { width });
     doc.text(note, left, y, { width, height: Math.min(noteH, 24) });
   }
@@ -686,7 +667,6 @@ interface GroupPageCtx {
   planName: string;
   totalGroups: number;
   publicId: string;
-  qrBuffer: Buffer;
 }
 
 interface RosterCol {
@@ -1058,7 +1038,7 @@ function drawGroupBody(
       ctx.planName,
       `Group ${g.groupIndex} of ${ctx.totalGroups} (roster cont.)`,
     );
-    drawFooter(doc, ctx.publicId, ctx.qrBuffer, false);
+    drawFooter(doc, ctx.publicId, false);
     let cy = PAGE_MARGIN + HEADER_HEIGHT + 12;
     doc.font("Helvetica-Bold").fontSize(13).fillColor("#0f172a");
     doc.text(`${g.name} — roster continued`, left, cy, {
