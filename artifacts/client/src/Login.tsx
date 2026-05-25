@@ -142,6 +142,31 @@ export default function Login({
         >
           {busy ? "Signing in…" : "Sign in"}
         </button>
+
+        {/* Parent-brand footer. PulseEDU is one of several school /
+            organization apps offered under Pulse Kinetics; the link
+            takes prospective customers (and anyone curious about the
+            company) back to the marketing site. Kept compact + low
+            contrast so it doesn't compete with the sign-in form. */}
+        <div
+          style={{
+            textAlign: "center",
+            fontSize: "0.75rem",
+            opacity: 0.6,
+            marginTop: "0.25rem",
+            lineHeight: 1.4,
+          }}
+        >
+          A Pulse Kinetics product ·{" "}
+          <a
+            href="https://pulsekinetics.us"
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{ color: "#93c5fd", textDecoration: "none" }}
+          >
+            pulsekinetics.us
+          </a>
+        </div>
       </form>
     </div>
   );
