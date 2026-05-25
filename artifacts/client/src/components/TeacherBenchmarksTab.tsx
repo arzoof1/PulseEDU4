@@ -1598,11 +1598,12 @@ export default function TeacherBenchmarksTab({
             lastName: string | null;
             grade: number | string;
             pct: number;
+            reteachCount: number;
           };
           const mastery: Scored[] = [];
           const near: Scored[] = [];
           const far: Scored[] = [];
-          const noData: Array<Omit<Scored, "pct">> = [];
+          const noData: Array<Omit<Scored, "pct" | "reteachCount">> = [];
           for (const s of data.students) {
             const c = s.cells[focusCode];
             if (c == null) {
@@ -1620,6 +1621,7 @@ export default function TeacherBenchmarksTab({
               lastName: s.lastName,
               grade: s.grade,
               pct: c.pct,
+              reteachCount: c.reteachCount ?? 0,
             };
             if (c.pct >= threshold) mastery.push(row);
             else if (c.pct >= 50) near.push(row);
@@ -1862,24 +1864,59 @@ export default function TeacherBenchmarksTab({
                               borderBottom: "1px dotted rgba(0,0,0,0.05)",
                             }}
                           >
-                            <button
-                              type="button"
-                              onClick={() => setStudentDrillId(s.studentId)}
+                            <span
                               style={{
-                                background: "none",
-                                border: "none",
-                                padding: 0,
-                                color: "#0369a1",
-                                textDecoration: "underline",
-                                textDecorationStyle: "dotted",
-                                cursor: "pointer",
-                                fontSize: 13,
-                                textAlign: "left",
+                                display: "inline-flex",
+                                alignItems: "center",
+                                gap: 4,
                               }}
-                              title="View this student's full benchmark profile"
                             >
-                              {s.lastName}, {s.firstName}
-                            </button>
+                              <button
+                                type="button"
+                                onClick={() => setStudentDrillId(s.studentId)}
+                                style={{
+                                  background: "none",
+                                  border: "none",
+                                  padding: 0,
+                                  color: "#0369a1",
+                                  textDecoration: "underline",
+                                  textDecorationStyle: "dotted",
+                                  cursor: "pointer",
+                                  fontSize: 13,
+                                  textAlign: "left",
+                                }}
+                                title="View this student's full benchmark profile"
+                              >
+                                {s.lastName}, {s.firstName}
+                              </button>
+                              {s.reteachCount > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setReteachModal({
+                                      studentId: s.studentId,
+                                      studentIds: null,
+                                      benchmarkCode: focusCode,
+                                      defaultFormat: "one_on_one",
+                                    })
+                                  }
+                                  title={`${s.reteachCount} reteach log${s.reteachCount === 1 ? "" : "s"} — click to view`}
+                                  style={{
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    padding: "1px 5px",
+                                    background: "white",
+                                    color: bucket.color,
+                                    border: `1px solid ${bucket.border}`,
+                                    borderRadius: 8,
+                                    cursor: "pointer",
+                                    lineHeight: 1.2,
+                                  }}
+                                >
+                                  🔁{s.reteachCount}
+                                </button>
+                              )}
+                            </span>
                             <span
                               style={{
                                 fontVariantNumeric: "tabular-nums",
