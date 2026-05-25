@@ -94,6 +94,44 @@ export default function SuperUserHomeRollups() {
   // school in that district out of the app.
   const [pendingDeactivate, setPendingDeactivate] =
     useState<DistrictSummary | null>(null);
+  const [seedBusy, setSeedBusy] = useState(false);
+  const [seedResult, setSeedResult] = useState<string | null>(null);
+
+  async function runSeedDemoCases() {
+    if (
+      !window.confirm(
+        "Seed 3 demo investigation cases at Parrott (school 1)?\n\nSafe to run more than once — existing cases with the same titles are skipped.",
+      )
+    )
+      return;
+    setSeedBusy(true);
+    setSeedResult(null);
+    try {
+      const res = await authFetch("/api/admin/seed-demo-cases", {
+        method: "POST",
+      });
+      const body = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        cases?: Array<{ title: string; status: string; caseNumber?: number }>;
+        error?: string;
+        message?: string;
+      };
+      if (!res.ok || !body.ok) {
+        throw new Error(body.message || body.error || `HTTP ${res.status}`);
+      }
+      const summary = (body.cases ?? [])
+        .map(
+          (c) =>
+            `• ${c.title} — ${c.status}${c.caseNumber ? ` (#${c.caseNumber})` : ""}`,
+        )
+        .join("\n");
+      setSeedResult(`Seed complete:\n${summary || "(no cases reported)"}`);
+    } catch (e) {
+      setSeedResult(`Seed failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setSeedBusy(false);
+    }
+  }
 
   const reload = useCallback(async () => {
     try {
@@ -208,7 +246,38 @@ export default function SuperUserHomeRollups() {
         >
           Refresh
         </button>
+        <button
+          type="button"
+          onClick={() => void runSeedDemoCases()}
+          disabled={seedBusy}
+          title="Insert 3 demo investigation cases at Parrott (school 1). Idempotent."
+          style={{
+            padding: "0.55rem 1rem",
+            border: "1px solid var(--border, #e2e8f0)",
+            borderRadius: 6,
+            background: "var(--surface, #fff)",
+            cursor: seedBusy ? "wait" : "pointer",
+            opacity: seedBusy ? 0.6 : 1,
+          }}
+        >
+          {seedBusy ? "Seeding…" : "Seed demo cases (Parrott)"}
+        </button>
       </div>
+      {seedResult && (
+        <pre
+          style={{
+            marginTop: "0.5rem",
+            padding: "0.5rem 0.75rem",
+            background: "var(--surface-subtle, #f8fafc)",
+            border: "1px solid var(--border, #e2e8f0)",
+            borderRadius: 6,
+            fontSize: "0.8rem",
+            whiteSpace: "pre-wrap",
+          }}
+        >
+          {seedResult}
+        </pre>
+      )}
 
       {/* Per-district summary cards */}
       <h3 style={{ marginTop: "1.5rem", marginBottom: "0.5rem" }}>Districts</h3>
