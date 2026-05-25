@@ -14,7 +14,7 @@ keywords: ["hall pass", "pass", "bathroom", "restroom", "nurse", "office", "kios
    isn't running yet.
 2. **From the teacher screen** — useful if a student is already at your
    desk or the kiosk is offline. Open the **Hall Passes** tab in the
-   sidebar, click the **+ New Pass** button, search the student, pick
+   sidebar, click the **+ Create Pass** button, search the student, pick
    a destination, then **Start**.
 
 ## What the student sees on the kiosk
@@ -34,7 +34,7 @@ keywords: ["hall pass", "pass", "bathroom", "restroom", "nurse", "office", "kios
 
 - **Student hit their pass limit for the day**: the kiosk will refuse
   and show a friendly message. You can override from the teacher screen
-  (+ New Pass → check **Override limit** with a reason).
+  (+ Create Pass → check **Override limit** with a reason).
 - **Destination not in the list**: the destination list is per-period
   and managed by your admin under School Settings → Locations.
 - **Multiple students out at once**: the queue at the top of the page
