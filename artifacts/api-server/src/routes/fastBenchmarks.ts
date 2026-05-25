@@ -1424,13 +1424,25 @@ router.get(
       doc.fillColor("black");
     });
 
+    // Reset cursor to the left margin before drawing the footer.
+    // After the heatmap, doc.x is still parked at the right edge of
+    // the last cell column, so a centered text() call wraps inside
+    // a narrow strip and renders the footer vertically. Anchor it
+    // back to the page's left margin first.
+    doc.x = doc.page.margins.left;
     doc
       .moveDown(0.8)
       .fontSize(8)
       .fillColor("#888")
       .text(
         "Confidential — for staff use only. Cells = percent of points earned on each benchmark.",
-        { align: "center" },
+        doc.page.margins.left,
+        doc.y,
+        {
+          width:
+            doc.page.width - doc.page.margins.left - doc.page.margins.right,
+          align: "center",
+        },
       )
       .fillColor("black");
 
