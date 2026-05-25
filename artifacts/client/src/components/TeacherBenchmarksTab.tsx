@@ -233,12 +233,24 @@ export default function TeacherBenchmarksTab({
   // Tab-local period filter — seeded from the roster page's selection
   // so opening Benchmarks immediately scopes to the same group of
   // students. Users can override here to "All" or any other period.
+  // Default the period filter to the roster's selected period when one
+  // exists; otherwise fall back to the first available period so the
+  // Print PDF is always scoped to a single concrete period (avoids the
+  // "I picked a period but the PDF still shows everyone" footgun when
+  // the user lands on Benchmarks without first clicking a P-chip on
+  // the Roster tab). If the teacher has no periods at all, stays null.
+  const defaultPeriod =
+    rosterSelectedPeriod ??
+    (rosterAvailablePeriods.length > 0 ? rosterAvailablePeriods[0] : null);
   const [periodFilter, setPeriodFilter] = useState<number | null>(
-    rosterSelectedPeriod,
+    defaultPeriod,
   );
   useEffect(() => {
-    setPeriodFilter(rosterSelectedPeriod);
-  }, [rosterSelectedPeriod]);
+    setPeriodFilter(defaultPeriod);
+    // Re-sync only when the upstream defaults change, not when the
+    // local user toggles to "All periods" or another period.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rosterSelectedPeriod, rosterAvailablePeriods.join(",")]);
 
   const [subject, setSubject] = useState<string>("ela");
   const [deliveryCounts, setDeliveryCounts] = useState<DeliveryCounts>({});
@@ -570,6 +582,8 @@ export default function TeacherBenchmarksTab({
 
   const openPdf = () => {
     if (!pdfHref) return;
+    // eslint-disable-next-line no-console
+    console.log("[Print PDF] URL:", pdfHref, "periodFilter:", periodFilter);
     // authFetch → blob → object URL so the auth header rides along.
     authFetch(pdfHref)
       .then(async (r) => {
