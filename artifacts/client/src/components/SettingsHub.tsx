@@ -21,6 +21,7 @@ export type SettingsTileId =
   | "parent-portal-sections"
   | "school-wide-expectations"
   | "intervention-strategies"
+  | "house-logos"
   | "iss-settings"
   | "pickup"
   | "staff-preview"

@@ -141,7 +141,7 @@ export default function HousesPanel({
   // yet — in that case names render as plain text.
   onOpenStudent?: (studentId: string) => void;
 } = {}): React.ReactElement {
-  const [tab, setTab] = useState<"sort" | "audit" | "appearance">("sort");
+  const [tab, setTab] = useState<"sort" | "audit">("sort");
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: "1rem" }}>
@@ -159,23 +159,14 @@ export default function HousesPanel({
         >
           Recent changes
         </button>
-        <button
-          type="button"
-          className={tab === "appearance" ? "btn primary" : "btn"}
-          onClick={() => setTab("appearance")}
-        >
-          House logos
-        </button>
       </div>
       {tab === "sort" ? (
         <SortTab
           onGoToAudit={() => setTab("audit")}
           onOpenStudent={onOpenStudent}
         />
-      ) : tab === "audit" ? (
-        <AuditTab />
       ) : (
-        <AppearanceTab />
+        <AuditTab />
       )}
     </div>
   );
@@ -197,6 +188,10 @@ type HouseAppearance = {
   studentCount: number;
   staffCount: number;
 };
+
+export function HouseLogosPanel(): React.ReactElement {
+  return <AppearanceTab />;
+}
 
 function AppearanceTab(): React.ReactElement {
   const [houses, setHouses] = useState<HouseAppearance[]>([]);

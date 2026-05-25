@@ -82,7 +82,7 @@ import PbisNeedsAttention from "./components/PbisNeedsAttention";
 // the main content pane (sidebar stays visible). The component file is
 // kept for possible future reuse but is no longer imported.
 import HousesSignage from "./signage/HousesSignage";
-import HousesPanel from "./components/HousesPanel";
+import HousesPanel, { HouseLogosPanel } from "./components/HousesPanel";
 import PbisPointsHub, {
   SchoolWidePbisAdminView,
   SchoolStoreView,
@@ -20406,6 +20406,16 @@ function App() {
                 "Categories and strategies shown in the Tier 3 weekly checklist.",
               group: "behavior-pbis",
             });
+            // House logos — admin uploads per-house PNG/JPEG/WebP that prints
+            // on Student ID badges next to the house color band.
+            tiles.push({
+              id: "house-logos",
+              icon: "🏠",
+              title: "House Logos",
+              subtitle:
+                "Upload a logo per PBIS house — prints on Student ID badges next to the house color.",
+              group: "behavior-pbis",
+            });
             // ISS settings — daily seat capacity, soft/hard behavior,
             // school-closed days, and discipline reasons. Visible to
             // anyone who can manage settings; the closed-days and
@@ -21414,6 +21424,10 @@ function App() {
 
       {activeSection === "settings" && canManageSettings && settingsTile === "bell-schedule" && (
         <BellScheduleSection />
+      )}
+
+      {activeSection === "settings" && canManageSettings && settingsTile === "house-logos" && (
+        <HouseLogosPanel />
       )}
 
       {activeSection === "settings" && canManageSettings && settingsTile === "pbis-thresholds" && (() => {
