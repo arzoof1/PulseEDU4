@@ -170,15 +170,6 @@ function heatFill(pct: number | null): string | null {
   return "#dcfce7";
 }
 
-// Shorten a benchmark code to its trailing identifier for matrix
-// column headers — e.g. "ELA.6.R.1.1" → "R.1.1" — so the matrix
-// header strip stays readable when there are 5+ focus standards.
-function shortBenchmarkCode(code: string): string {
-  const parts = code.split(".");
-  if (parts.length <= 3) return code;
-  return parts.slice(2).join(".");
-}
-
 export async function renderComposerPlanPdf(
   input: ComposerPlanPdfInput,
 ): Promise<Buffer> {
@@ -799,17 +790,14 @@ function drawGroupBody(
   const wbList = g.weakestBenchmarks ?? [];
   const podList = g.subPods ?? [];
   if (wbList.length > 0 || podList.length > 0) {
-    const wbBlockH = wbList.length > 0 ? 18 + (wbList.length + 1) * rowH : 0;
-    const podBlockH =
-      podList.length > 0
-        ? 28 +
-          podList.reduce(
-            (m, p) => Math.max(m, 14 + Math.ceil(p.memberNames.length / 3) * 11),
-            0,
-          )
-        : 0;
+    // Tight height estimate so we don't push a new page for a band
+    // that will actually fit. Worst case: weakest-benchmark table
+    // is rowH per row + ~32pt of titles/padding. Sub-pods are
+    // narrow text — empirically ~22pt per pod.
+    const wbBlockH = wbList.length > 0 ? 32 + wbList.length * rowH : 0;
+    const podBlockH = podList.length > 0 ? 28 + podList.length * 22 : 0;
     const bandH = Math.max(wbBlockH, podBlockH);
-    if (y + bandH + 10 > bottomLimit) {
+    if (y + bandH > bottomLimit) {
       doc.addPage({ size: "LETTER", layout: "landscape" });
       drawHeader(
         doc,
@@ -961,212 +949,12 @@ function drawGroupBody(
     y = bandY + bandH;
   }
 
-  // ----- Focus-standards matrix (skill-cluster mode only) -----
-  if (g.focusStandards && g.focusStandards.length > 0) {
-    if (y + 80 > bottomLimit) {
-      doc.addPage({ size: "LETTER", layout: "landscape" });
-      drawHeader(
-        doc,
-        ctx.planName,
-        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        0,
-        0,
-      );
-      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-    } else {
-      y += 12;
-    }
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-    doc.text("Per-student mastery on focus standards", left, y);
-    y += 14;
-    const matrixNameW = 170;
-    const matrixCodeW = Math.min(
-      80,
-      Math.floor((width - matrixNameW - 50) / g.focusStandards.length),
-    );
-    const matrixFitW = 50;
-    const matrixCols: Array<{ w: number; label: string }> = [
-      { w: 24, label: "#" },
-      { w: matrixNameW, label: "Student" },
-      ...g.focusStandards.map((f) => ({
-        w: matrixCodeW,
-        label: shortBenchmarkCode(f.benchmarkCode),
-      })),
-      { w: matrixFitW, label: "Fit" },
-    ];
-    drawRow(doc, left, y, rowH, matrixCols, "header");
-    x = left;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-    for (const c of matrixCols) {
-      doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
-      x += c.w;
-    }
-    y += rowH;
-    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-    for (let i = 0; i < g.students.length; i++) {
-      if (y + rowH > bottomLimit) {
-        doc.addPage({ size: "LETTER", layout: "landscape" });
-        drawHeader(
-          doc,
-          ctx.planName,
-          `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-          0,
-          0,
-        );
-        drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-        y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-        drawRow(doc, left, y, rowH, matrixCols, "header");
-        x = left;
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-        for (const c of matrixCols) {
-          doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
-          x += c.w;
-        }
-        y += rowH;
-        doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-      }
-      const s = g.students[i];
-      if (i % 2 === 1) drawRow(doc, left, y, rowH, matrixCols, "alt");
-      x = left;
-      doc.fillColor("#0f172a");
-      doc.text(String(i + 1), x + 4, y + 5, { width: 24 - 8 });
-      x += 24;
-      doc.text(`${s.lastName}, ${s.firstName}`, x + 4, y + 5, {
-        width: matrixNameW - 8,
-        ellipsis: true, lineBreak: false,
-      });
-      x += matrixNameW;
-      const bottomSet = new Set(s.bottomBenchmarkCodes);
-      let fit = 0;
-      for (const f of g.focusStandards) {
-        const pct = s.benchmarkPctByCode[f.benchmarkCode];
-        const cell = typeof pct === "number" ? `${Math.round(pct)}%` : "—";
-        const fill = typeof pct === "number" ? heatFill(pct) : null;
-        if (fill) {
-          doc
-            .save()
-            .rect(x, y, matrixCodeW, rowH)
-            .fillColor(fill)
-            .fill()
-            .restore();
-        }
-        if (bottomSet.has(f.benchmarkCode)) fit++;
-        doc.fillColor("#0f172a");
-        doc.text(cell, x + 4, y + 5, {
-          width: matrixCodeW - 8,
-          align: "center",
-        });
-        x += matrixCodeW;
-      }
-      doc.text(`${fit}/${g.focusStandards.length}`, x + 4, y + 5, {
-        width: matrixFitW - 8,
-        align: "center",
-      });
-      y += rowH;
-    }
-  }
-
-  // ----- Per-student weakest strands mini-table -----
-  // Suppress when every student has at most one strand — in that case
-  // the column just restates the overall % already shown in the roster
-  // (typical for Cusp plans grouped on a single instructional category).
-  const maxStrandsAcrossGroup = g.students.reduce(
-    (m, s) => Math.max(m, s.strands.length),
-    0,
-  );
-  if (
-    maxStrandsAcrossGroup >= 2 &&
-    g.students.some((s) => s.strands.length > 0)
-  ) {
-    if (y + 60 > bottomLimit) {
-      doc.addPage({ size: "LETTER", layout: "landscape" });
-      drawHeader(
-        doc,
-        ctx.planName,
-        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        0,
-        0,
-      );
-      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-    } else {
-      y += 12;
-    }
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-    // Title says "up to 3" because Cusp plans grouped on a single
-    // strand will only surface that one strand per student — saying
-    // "Top 3" there would be misleading.
-    const maxStrands = g.students.reduce(
-      (m, s) => Math.max(m, s.strands.length),
-      0,
-    );
-    doc.text("Weakest FAST strands per student", left, y);
-    y += 14;
-    const strandCols: Array<{ w: number; label: string }> = [
-      { w: 24, label: "#" },
-      { w: 170, label: "Student" },
-      {
-        w: width - 24 - 170,
-        label:
-          maxStrands <= 1
-            ? "Weakest strand (avg %)"
-            : `Up to ${Math.min(3, maxStrands)} weakest strands (avg %)`,
-      },
-    ];
-    drawRow(doc, left, y, rowH, strandCols, "header");
-    x = left;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-    for (const c of strandCols) {
-      doc.text(c.label, x + 4, y + 5, { width: c.w - 8 });
-      x += c.w;
-    }
-    y += rowH;
-    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-    for (let i = 0; i < g.students.length; i++) {
-      if (y + rowH > bottomLimit) {
-        doc.addPage({ size: "LETTER", layout: "landscape" });
-        drawHeader(
-          doc,
-          ctx.planName,
-          `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-          0,
-          0,
-        );
-        drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-        y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-        drawRow(doc, left, y, rowH, strandCols, "header");
-        x = left;
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-        for (const c of strandCols) {
-          doc.text(c.label, x + 4, y + 5, { width: c.w - 8 });
-          x += c.w;
-        }
-        y += rowH;
-        doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-      }
-      const s = g.students[i];
-      if (i % 2 === 1) drawRow(doc, left, y, rowH, strandCols, "alt");
-      x = left;
-      doc.fillColor("#0f172a");
-      doc.text(String(i + 1), x + 4, y + 5, { width: 24 - 8 });
-      x += 24;
-      doc.text(`${s.lastName}, ${s.firstName}`, x + 4, y + 5, {
-        width: 170 - 8,
-        ellipsis: true, lineBreak: false,
-      });
-      x += 170;
-      const strandText =
-        s.strands.length === 0
-          ? "— (no FAST item data)"
-          : s.strands.map((c) => `${c.category} ${c.pct}%`).join("  ·  ");
-      doc.text(strandText, x + 4, y + 5, {
-        width: strandCols[2].w - 8,
-        ellipsis: true, lineBreak: false,
-      });
-      y += rowH;
-    }
-  }
+  // Note: per-student focus-mastery matrix and weakest-strands
+  // mini-tables were removed in the density redesign. The roster
+  // already exposes the same signal: "Fit" column (X/N focus
+  // standards in student's bottom 7) and "%" column (overall FAST
+  // pct). Re-rendering 18-25 student rows twice more was the main
+  // driver of empty continuation pages.
 
   // ----- Pre-printed M-F × 3-rotation grid (D) -----
   // Only render on the last group page so the deck ends with one
