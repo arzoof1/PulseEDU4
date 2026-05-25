@@ -658,12 +658,25 @@ function drawGroupBody(
       y += 12;
     }
     doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+    // Title says "up to 3" because Cusp plans grouped on a single
+    // strand will only surface that one strand per student — saying
+    // "Top 3" there would be misleading.
+    const maxStrands = g.students.reduce(
+      (m, s) => Math.max(m, s.strands.length),
+      0,
+    );
     doc.text("Weakest FAST strands per student", left, y);
     y += 14;
     const strandCols: Array<{ w: number; label: string }> = [
       { w: 24, label: "#" },
       { w: 170, label: "Student" },
-      { w: width - 24 - 170, label: "Top 3 weakest strands (avg %)" },
+      {
+        w: width - 24 - 170,
+        label:
+          maxStrands <= 1
+            ? "Weakest strand (avg %)"
+            : `Up to ${Math.min(3, maxStrands)} weakest strands (avg %)`,
+      },
     ];
     drawRow(doc, left, y, rowH, strandCols, "header");
     x = left;
