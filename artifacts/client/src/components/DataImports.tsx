@@ -1466,10 +1466,31 @@ export default function DataImports({
     void runPreview(csvText, next);
   };
 
+  // Final "is this current or historical?" gate for fast_florida.
+  // Fires AFTER the type-echo, BEFORE the network call. The checkbox
+  // on the upload step is easy to miss, and a missed-historical
+  // commit lands as current-year FAST data — silently corrupting
+  // dashboards. This modal forces an explicit pick every single time.
+  const [historicalGate, setHistoricalGate] = useState<null | "ask">(null);
+
   const handleCommit = async () => {
     if (!preview) return;
     if (kind !== "fast_florida" && !csvText) return;
     if (kind === "fast_florida" && !xlsxBase64) return;
+    // For fast_florida, intercept the first click and require an
+    // explicit current-vs-historical pick. doCommit() below is what
+    // actually performs the upload after the modal resolves.
+    if (kind === "fast_florida") {
+      setHistoricalGate("ask");
+      return;
+    }
+    await doCommit(isHistoricalImport);
+  };
+
+  const doCommit = async (historical: boolean) => {
+    if (!preview) return;
+    setHistoricalGate(null);
+    setIsHistoricalImport(historical);
     setCommitting(true);
     setError("");
     try {
@@ -1482,7 +1503,7 @@ export default function DataImports({
                 xlsxBase64,
                 schoolYear: selectedSchoolYear || undefined,
                 filename,
-                isHistorical: isHistoricalImport,
+                isHistorical: historical,
               })
             : JSON.stringify({ csv: csvText, filename, mapping }),
       });
@@ -3376,6 +3397,147 @@ export default function DataImports({
               </table>
             </div>
           )}
+        </div>
+      )}
+      {historicalGate === "ask" && kind === "fast_florida" && preview && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="historical-gate-title"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setHistoricalGate(null);
+          }}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(2, 6, 23, 0.72)",
+            backdropFilter: "blur(6px)",
+            WebkitBackdropFilter: "blur(6px)",
+            zIndex: 9999,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: "1.5rem",
+          }}
+        >
+          <div
+            style={{
+              maxWidth: 560,
+              width: "100%",
+              background: "var(--card-bg, #0f172a)",
+              border: "1px solid var(--border, #2a3447)",
+              borderRadius: 12,
+              padding: "1.5rem",
+              boxShadow: "0 25px 50px -12px rgba(0,0,0,0.6)",
+            }}
+          >
+            <div
+              id="historical-gate-title"
+              style={{
+                fontSize: 18,
+                fontWeight: 700,
+                marginBottom: 8,
+              }}
+            >
+              Wait — is this current-year data or a prior-year backfill?
+            </div>
+            <div
+              style={{
+                fontSize: 13,
+                color: "var(--text-subtle)",
+                lineHeight: 1.5,
+                marginBottom: 16,
+              }}
+            >
+              You are about to commit{" "}
+              <strong>{preview.validRows}</strong> FAST rows for school
+              year <strong>{selectedSchoolYear || "(unknown)"}</strong> from{" "}
+              <code>{filename}</code>. Picking the wrong option here
+              silently corrupts dashboards, so we are asking explicitly.
+            </div>
+            <div
+              style={{
+                display: "grid",
+                gap: 10,
+                marginBottom: 14,
+              }}
+            >
+              <button
+                type="button"
+                onClick={() => void doCommit(false)}
+                disabled={committing}
+                style={{
+                  padding: "0.85rem 1rem",
+                  border: "1px solid #3b82f6",
+                  borderRadius: 8,
+                  background: "rgba(59, 130, 246, 0.12)",
+                  color: "inherit",
+                  font: "inherit",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  Current-year data
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-subtle)",
+                  }}
+                >
+                  Lands in PM1/PM2/PM3 dashboards and feeds Class
+                  Composer + Insights for this school year.
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => void doCommit(true)}
+                disabled={committing}
+                style={{
+                  padding: "0.85rem 1rem",
+                  border: "1px solid #f59e0b",
+                  borderRadius: 8,
+                  background: "rgba(245, 158, 11, 0.12)",
+                  color: "inherit",
+                  font: "inherit",
+                  textAlign: "left",
+                  cursor: "pointer",
+                }}
+              >
+                <div style={{ fontWeight: 700, marginBottom: 4 }}>
+                  Historical (prior-year backfill)
+                </div>
+                <div
+                  style={{
+                    fontSize: 12,
+                    color: "var(--text-subtle)",
+                  }}
+                >
+                  PM3-only. Stamped <code>is_historical=true</code>. Does
+                  not appear in current-year charts; surfaces in the
+                  multi-year FAST history chip.
+                </div>
+              </button>
+            </div>
+            <button
+              type="button"
+              onClick={() => setHistoricalGate(null)}
+              disabled={committing}
+              style={{
+                padding: "0.5rem 0.9rem",
+                border: "1px solid var(--border, #2a3447)",
+                borderRadius: 6,
+                background: "transparent",
+                color: "var(--text-subtle)",
+                font: "inherit",
+                fontSize: 13,
+                cursor: "pointer",
+              }}
+            >
+              Cancel — don't commit
+            </button>
+          </div>
         </div>
       )}
     </div>
