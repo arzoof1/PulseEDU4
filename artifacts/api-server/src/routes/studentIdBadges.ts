@@ -169,7 +169,13 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
   );
   const houseById = new Map<
     number,
-    { name: string; color: string; iconKey: string | null }
+    {
+      name: string;
+      color: string;
+      iconKey: string | null;
+      iconObjectKey: string | null;
+      logoBytes: Buffer | null;
+    }
   >();
   if (houseIds.length) {
     const rows = await db
@@ -178,6 +184,7 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
         name: housesTable.name,
         color: housesTable.color,
         iconKey: housesTable.iconKey,
+        iconObjectKey: housesTable.iconObjectKey,
       })
       .from(housesTable)
       .where(
@@ -186,11 +193,36 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
           inArray(housesTable.id, houseIds),
         ),
       );
+    // Pre-fetch any uploaded house logos in parallel — at most one
+    // round-trip per house in the batch (typical = 4). SVG bytes are
+    // not supported by pdfkit's .image(), so we only embed
+    // PNG/JPEG/WebP. Bytes that don't pass that bar fall back to
+    // the colored letter circle on the renderer side.
+    const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+    const logoBytesById = new Map<number, Buffer>();
+    await Promise.all(
+      rows
+        .filter((r) => r.iconObjectKey)
+        .map(async (r) => {
+          const bytes = await fetchObjectBytes(r.iconObjectKey as string);
+          if (bytes && bytes.length <= MAX_LOGO_BYTES) {
+            // Skip SVG — pdfkit can't rasterize it without svg-to-pdfkit,
+            // which we haven't pulled into the bundle. Header sniff: the
+            // first non-whitespace bytes of an SVG file are "<".
+            const head = bytes.slice(0, 16).toString("utf8").trimStart();
+            if (!head.startsWith("<")) {
+              logoBytesById.set(r.id, bytes);
+            }
+          }
+        }),
+    );
     for (const r of rows) {
       houseById.set(r.id, {
         name: r.name,
         color: r.color,
         iconKey: r.iconKey,
+        iconObjectKey: r.iconObjectKey,
+        logoBytes: logoBytesById.get(r.id) ?? null,
       });
     }
   }
@@ -236,10 +268,17 @@ async function handleBadges(req: Request, res: Response): Promise<void> {
     dismissalMode: s.dismissalMode ?? null,
     schoolName,
     baseUrl,
-    house:
-      s.houseId !== null && s.houseId !== undefined
-        ? houseById.get(s.houseId) ?? null
-        : null,
+    house: (() => {
+      if (s.houseId === null || s.houseId === undefined) return null;
+      const h = houseById.get(s.houseId);
+      if (!h) return null;
+      return {
+        name: h.name,
+        color: h.color,
+        iconKey: h.iconKey,
+        logoBytes: h.logoBytes,
+      };
+    })(),
     photoBytes: photoByStudent.get(s.id) ?? null,
   }));
 

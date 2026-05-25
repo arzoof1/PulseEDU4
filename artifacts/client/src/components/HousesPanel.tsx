@@ -141,7 +141,7 @@ export default function HousesPanel({
   // yet — in that case names render as plain text.
   onOpenStudent?: (studentId: string) => void;
 } = {}): React.ReactElement {
-  const [tab, setTab] = useState<"sort" | "audit">("sort");
+  const [tab, setTab] = useState<"sort" | "audit" | "appearance">("sort");
   return (
     <div>
       <div style={{ display: "flex", gap: 8, marginBottom: "1rem" }}>
@@ -159,14 +159,280 @@ export default function HousesPanel({
         >
           Recent changes
         </button>
+        <button
+          type="button"
+          className={tab === "appearance" ? "btn primary" : "btn"}
+          onClick={() => setTab("appearance")}
+        >
+          House logos
+        </button>
       </div>
       {tab === "sort" ? (
         <SortTab
           onGoToAudit={() => setTab("audit")}
           onOpenStudent={onOpenStudent}
         />
-      ) : (
+      ) : tab === "audit" ? (
         <AuditTab />
+      ) : (
+        <AppearanceTab />
+      )}
+    </div>
+  );
+}
+
+// =============================================================================
+// AppearanceTab — admin uploads a custom logo (PNG/JPEG) per house. Logos
+// appear on printed Student ID badges alongside the house color. Uses the
+// shared /api/storage/uploads/request-url presigned-PUT pipeline; the
+// bind step (POST /api/houses/:id/logo) attaches the object to the
+// house's row and to the school's ACL.
+// =============================================================================
+type HouseAppearance = {
+  id: number;
+  name: string;
+  color: string;
+  iconKey: string | null;
+  iconObjectKey: string | null;
+  studentCount: number;
+  staffCount: number;
+};
+
+function AppearanceTab(): React.ReactElement {
+  const [houses, setHouses] = useState<HouseAppearance[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const res = await authFetch("/api/houses/with-staff-counts");
+      if (!res.ok) {
+        setHouses([]);
+        setErr(`Could not load houses (${res.status})`);
+        return;
+      }
+      const body = (await res.json()) as { houses?: HouseAppearance[] };
+      setHouses(Array.isArray(body.houses) ? body.houses : []);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not load houses");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  async function uploadLogo(houseId: number, file: File): Promise<void> {
+    if (file.size > 2 * 1024 * 1024) {
+      setErr("Logo must be 2 MB or smaller.");
+      return;
+    }
+    const ok = ["image/png", "image/jpeg", "image/webp"].includes(file.type);
+    if (!ok) {
+      setErr("Logo must be a PNG, JPEG, or WebP image (SVG not supported on PDF badges).");
+      return;
+    }
+    setBusyId(houseId);
+    setErr(null);
+    try {
+      const reqRes = await authFetch("/api/storage/uploads/request-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: file.name,
+          size: file.size,
+          contentType: file.type,
+        }),
+      });
+      if (!reqRes.ok) throw new Error("Could not start upload");
+      const { uploadURL, objectPath } = (await reqRes.json()) as {
+        uploadURL: string;
+        objectPath: string;
+      };
+      const putRes = await fetch(uploadURL, {
+        method: "PUT",
+        headers: { "Content-Type": file.type },
+        body: file,
+      });
+      if (!putRes.ok) throw new Error("Upload failed");
+      const bindRes = await authFetch(`/api/houses/${houseId}/logo`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ objectPath }),
+      });
+      const bindBody = (await bindRes.json()) as { error?: string };
+      if (!bindRes.ok) {
+        throw new Error(bindBody.error ?? `Could not save logo (${bindRes.status})`);
+      }
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Logo upload failed");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function clearLogo(houseId: number): Promise<void> {
+    if (!window.confirm("Remove the custom logo for this house? Badges will fall back to the colored initial.")) {
+      return;
+    }
+    setBusyId(houseId);
+    setErr(null);
+    try {
+      const res = await authFetch(`/api/houses/${houseId}/logo`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const body = (await res.json().catch(() => ({}))) as { error?: string };
+        throw new Error(body.error ?? `Could not remove logo (${res.status})`);
+      }
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "Could not remove logo");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <div className="card">
+      <h3 style={{ marginTop: 0 }}>House logos for printed Student ID badges</h3>
+      <p style={{ color: "#475569", marginTop: 0 }}>
+        Upload a small PNG, JPEG, or WebP image (max 2 MB) for each house. The
+        logo prints next to the house name on every student ID badge that's
+        assigned to that house. Square images work best.
+      </p>
+      {err && (
+        <div
+          style={{
+            margin: "0.5rem 0",
+            color: "#991b1b",
+            background: "#fee2e2",
+            border: "1px solid #fecaca",
+            padding: "0.5rem 0.75rem",
+            borderRadius: 6,
+          }}
+        >
+          {err}
+        </div>
+      )}
+      {loading ? (
+        <p style={{ color: "#94a3b8" }}>Loading houses…</p>
+      ) : houses.length === 0 ? (
+        <p style={{ color: "#475569" }}>
+          No PBIS houses configured for this school yet.
+        </p>
+      ) : (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
+            gap: "0.75rem",
+          }}
+        >
+          {houses.map((h) => (
+            <div
+              key={h.id}
+              style={{
+                border: "1px solid #e2e8f0",
+                borderRadius: 8,
+                padding: "0.75rem",
+                background: "#fff",
+                display: "flex",
+                flexDirection: "column",
+                gap: "0.5rem",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <span style={pillStyle(h.color)}>{h.name}</span>
+                <span style={{ color: "#94a3b8", fontSize: "0.78rem" }}>
+                  {h.studentCount} student{h.studentCount === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div
+                style={{
+                  height: 96,
+                  borderRadius: 6,
+                  background: h.color || "#e2e8f0",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  overflow: "hidden",
+                }}
+              >
+                {h.iconObjectKey ? (
+                  <img
+                    src={`/api/storage${h.iconObjectKey}`}
+                    alt={`${h.name} logo`}
+                    style={{
+                      maxHeight: 80,
+                      maxWidth: "85%",
+                      background: "#fff",
+                      borderRadius: 4,
+                      padding: 4,
+                    }}
+                  />
+                ) : (
+                  <span
+                    style={{
+                      color: "#fff",
+                      fontWeight: 700,
+                      fontSize: 36,
+                      opacity: 0.85,
+                    }}
+                  >
+                    {(h.name.charAt(0) || "H").toUpperCase()}
+                  </span>
+                )}
+              </div>
+              <label
+                className="btn"
+                style={{
+                  display: "inline-block",
+                  textAlign: "center",
+                  cursor: busyId === h.id ? "not-allowed" : "pointer",
+                  opacity: busyId === h.id ? 0.6 : 1,
+                }}
+              >
+                {busyId === h.id
+                  ? "Working…"
+                  : h.iconObjectKey
+                    ? "Replace logo"
+                    : "Upload logo"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  disabled={busyId === h.id}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (f) void uploadLogo(h.id, f);
+                  }}
+                  style={{ display: "none" }}
+                />
+              </label>
+              {h.iconObjectKey && (
+                <button
+                  type="button"
+                  className="btn"
+                  disabled={busyId === h.id}
+                  onClick={() => void clearLogo(h.id)}
+                  style={{
+                    color: "#991b1b",
+                    borderColor: "#fecaca",
+                  }}
+                >
+                  Remove logo
+                </button>
+              )}
+            </div>
+          ))}
+        </div>
       )}
     </div>
   );

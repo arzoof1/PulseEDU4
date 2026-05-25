@@ -3,6 +3,25 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Student ID badge redesign + per-house logo upload. Both
+  lanyard (portrait) and CR80 (landscape) badges are now visually
+  consistent: square student photo (not initials disc on CR80),
+  uploaded house logo in place of the first-letter circle, house
+  name + color, school name, grade · dismissal-mode, QR (kiosk
+  sign-in deep link), Code 128 barcode of `student_id`, and both
+  FL HB 383 crisis lines (988 + Crisis Text Line 741741) on every
+  badge. New `houses.icon_object_key` column + admin "House logos"
+  tab under Houses (PNG/JPEG/WebP, 2 MB cap; SVG rejected because
+  pdfkit can't rasterize it). Upload uses the standard
+  `/api/storage/uploads/request-url` → PUT → bind pipeline.
+  `bindObjectToSchool` enforces school-scoped ACL on every logo.
+  Badge route pre-fetches all referenced house logos in a single
+  `Promise.all` (no N+1). Corrupt-image bytes fall back silently
+  to the initials disc. See `lib/studentIdBadgesPdf.ts`,
+  `routes/studentIdBadges.ts`, `routes/houses.ts` (new
+  POST/DELETE `/houses/:id/logo`), and `components/HousesPanel.tsx`
+  ("House logos" tab).
+
 - **LG green-check on Teacher Roster (Phase 1).** The LG column now
   swaps the bucket bubble for a green check ✓ when the student met
   the FAST Learning Gain rule, computed server-side in

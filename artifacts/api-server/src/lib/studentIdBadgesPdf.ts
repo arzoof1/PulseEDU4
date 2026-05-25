@@ -1,11 +1,12 @@
-// Per-student printable ID badges (Phase 3). Two physical sizes:
-//   - "lanyard" (default): portrait 3.375" × 4.25" — the common
-//     school-issued lanyard ID card. Big initials bubble, centered
-//     QR, barcode strip, ID number.
-//   - "cr80": standard credit-card ID 3.375" × 2.125", landscape.
-//     Two-column layout (left = ribbon/identity, right = QR + barcode)
-//     so the smaller canvas still carries every required element.
-// One badge per page; the school picks the size when printing.
+// Per-student printable ID badges. Two physical sizes, both single-sided
+// (one badge = one page), visually consistent:
+//   - "lanyard": portrait 3.375" × 4.25" (standard lanyard ID).
+//   - "cr80":    landscape 3.375" × 2.125" (credit-card ID).
+// Each badge carries: square student photo (or initials fallback), house
+// color block + uploaded house logo (or initials disc fallback), house
+// name, school name, student name, "Grade N · Car Rider" line, QR (links
+// to kiosk sign-in), Code 128 barcode, and the two FL HB 383 crisis
+// hotlines (988 + Crisis Text Line 741741).
 
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
@@ -25,38 +26,37 @@ const PAGE_MARGIN = 10;
 
 export interface StudentBadgeInput {
   studentId: string;
-  // District-level Local SIS ID (6-digit). Displayed on the badge front
-  // and back when present; FLEID-style studentId remains the barcode/QR
-  // payload so existing sign-in scanners keep working.
+  // District-level Local SIS ID (6-digit). The badge's barcode + QR still
+  // encode studentId (FLEID) so existing sign-in scanners keep working;
+  // localSisId is currently unused on the visible face but kept on the
+  // type so callers don't break.
   localSisId?: string | null;
   firstName: string;
   lastName: string;
   grade: number | null;
-  // End-of-day dismissal mode (car_rider / walker / bus / aftercare /
-  // parent_pickup_only). Rendered as a human label next to the grade
-  // so front-office staff can answer "is Maya a walker today?" from
-  // the badge alone. Null/unknown → omitted.
+  // End-of-day dismissal mode. Rendered as a human label next to grade.
   dismissalMode?: string | null;
   schoolName: string;
-  // Same QR contract as the kiosk card: the kiosk page reads
-  // `?signin=<studentId>` and pre-fills the sign-in field.
+  // QR points to: `${baseUrl}?signin=<studentId>` — the kiosk reads
+  // `?signin=…` and pre-fills the sign-in field.
   baseUrl: string;
   house?: {
     name: string;
     color: string;
     iconKey: string | null;
+    // Optional admin-uploaded house logo bytes (PNG/JPEG/WebP). When
+    // present, rendered in the house emblem slot instead of the
+    // initials disc. SVG is filtered out upstream because pdfkit
+    // can't rasterize it.
+    logoBytes?: Buffer | null;
   } | null;
-  // Optional rectangular photo bytes — when present we render a
-  // rectangle photo in place of the initials bubble (Phase 4 — the
-  // user explicitly approved rectangle photos on the ID badge only;
-  // every other surface keeps the circular avatar). Null/undefined =
-  // fall back to initials bubble.
+  // Optional square student photo bytes — when present we render a
+  // square photo in the photo slot. Null/undefined = colored initials
+  // disc fallback.
   photoBytes?: Buffer | null;
 }
 
-// Human label for a stored dismissal_mode value. Mirrors the
-// DISMISSAL_OPTIONS list on the client so the badge reads the same
-// as the StudentProfile chip.
+// Human label for a stored dismissal_mode value.
 function dismissalLabel(mode: string | null | undefined): string | null {
   if (!mode) return null;
   switch (mode) {
@@ -76,12 +76,10 @@ export async function renderStudentBadgesPdf(
   const [W, H] = size === "cr80" ? [CR80_W, CR80_H] : [LANYARD_W, LANYARD_H];
   const doc = new PDFDocument({
     size: [W, H],
-    // Bottom margin intentionally small: the badge layout positions
-    // every element absolutely and we need to write the crisis
-    // hotline lines almost flush against the page edge. A larger
-    // bottom margin makes pdfkit auto-page text() calls whose y
-    // crosses (pageHeight - bottomMargin), which is exactly the
-    // bug that shipped the 741741 line to a phantom second page.
+    // Bottom margin intentionally small — the badge layout positions
+    // every element absolutely and the crisis hotline lines sit almost
+    // flush against the page edge. A larger bottom margin would push
+    // pdfkit to auto-page when text crosses (pageHeight - bottomMargin).
     margins: {
       top: PAGE_MARGIN,
       bottom: 2,
@@ -110,13 +108,27 @@ export async function renderStudentBadgesPdf(
   return done;
 }
 
+// ---------------------------------------------------------------------------
+// Lanyard (portrait 243 × 306)
+//
+// Layout, top to bottom:
+//   [ house-color band, 56pt tall ]
+//     house logo (square, 32×32) at left, white if no upload
+//     "House Name"  in white on band
+//     "School Name" in faint white under house name
+//   [ square photo, 96×96, centered, framed in house color ]
+//   "First Last" (14pt)  · "Grade N · Car Rider" (9pt)
+//   QR (60×60, centered) → Code 128 barcode → crisis lines (988 / 741741)
+// ---------------------------------------------------------------------------
 async function renderLanyardBadge(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
 ) {
   const W = LANYARD_W;
   const H = LANYARD_H;
+  const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
 
+  // Card outline
   doc
     .save()
     .lineWidth(0.5)
@@ -125,104 +137,77 @@ async function renderLanyardBadge(
     .stroke()
     .restore();
 
-  const ribbonH = 36;
-  const ribbonColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
+  // Top color band
+  const bandH = 56;
   doc
     .save()
-    .fillColor(ribbonColor)
-    .roundedRect(2, 2, W - 4, ribbonH, 8)
+    .fillColor(houseColor)
+    .roundedRect(2, 2, W - 4, bandH, 8)
     .fill()
     .restore();
+  // Square the bottom edge of the band so it butts cleanly against the
+  // photo area (the roundedRect rounds all corners; we paint a small
+  // rect over the bottom-rounded portion to flatten it).
   doc
     .save()
-    .fillColor(ribbonColor)
-    .rect(2, ribbonH - 6, W - 4, 8)
+    .fillColor(houseColor)
+    .rect(2, bandH - 6, W - 4, 8)
     .fill()
     .restore();
 
+  // House emblem (top-left on band) — uploaded logo if we have it,
+  // else white disc with first letter in house color.
+  const logoSize = 32;
+  const logoX = 10;
+  const logoY = (bandH - logoSize) / 2 + 2;
+  drawHouseEmblem(doc, badge, logoX, logoY, logoSize, houseColor);
+
+  // House name + school, stacked right of the emblem on the band.
+  const labelX = logoX + logoSize + 8;
+  const labelW = W - labelX - 8;
   if (badge.house) {
-    // Bigger letter-in-circle "logo" — until we add svg-to-pdfkit +
-    // lucide-static to render real glyphs, the first letter on a
-    // larger white disc is the closest we can get to a recognizable
-    // house emblem in plain pdfkit.
-    const letter = (badge.house.name.charAt(0) || "H").toUpperCase();
     doc
-      .save()
       .fillColor("#ffffff")
-      .circle(22, ribbonH / 2 + 2, 13)
-      .fill()
-      .restore();
-    doc
-      .fillColor(ribbonColor)
-      .fontSize(16)
-      .text(letter, 16, ribbonH / 2 - 6, {
-        width: 12,
-        align: "center",
+      .fontSize(13)
+      .text(`${badge.house.name} House`, labelX, 10, {
+        width: labelW,
+        ellipsis: true,
         lineBreak: false,
       });
+    doc
+      .fillColor("rgba(255,255,255,0.88)")
+      .fontSize(8.5)
+      .text(badge.schoolName, labelX, 28, {
+        width: labelW,
+        ellipsis: true,
+        height: 24,
+      });
+  } else {
     doc
       .fillColor("#ffffff")
       .fontSize(12)
-      .text(`${badge.house.name} House`, 40, ribbonH / 2 - 5, {
-        width: W - 48,
+      .text("Student ID", labelX, 12, {
+        width: labelW,
         lineBreak: false,
       });
-  } else {
     doc
-      .fillColor("#ffffff")
-      .fontSize(11)
-      .text("Student ID", 12, ribbonH / 2 - 4, {
-        width: W - 16,
-        lineBreak: false,
+      .fillColor("rgba(255,255,255,0.88)")
+      .fontSize(8.5)
+      .text(badge.schoolName, labelX, 30, {
+        width: labelW,
+        ellipsis: true,
+        height: 22,
       });
   }
 
-  doc
-    .fillColor("#475569")
-    .fontSize(8)
-    .text(badge.schoolName, PAGE_MARGIN, ribbonH + 8, {
-      width: W - PAGE_MARGIN * 2,
-      align: "center",
-      lineBreak: false,
-    });
+  // Square photo slot (centered under the band)
+  const photoSize = 96;
+  const photoX = (W - photoSize) / 2;
+  const photoY = bandH + 12;
+  drawPhotoSlot(doc, badge, photoX, photoY, photoSize, houseColor);
 
-  // Photo slot — rectangle (user explicitly approved rectangle on
-  // the ID badge in Phase 4). Falls back to a colored initials bubble
-  // when no photo bytes are available. Slightly compressed from the
-  // original 90×108 to make room for the new "Grade · Car Rider"
-  // line + the crisis hotline footer without overflowing the page.
-  const photoW = 88;
-  const photoH = 100;
-  const photoX = (W - photoW) / 2;
-  const photoY = ribbonH + 18;
-  if (badge.photoBytes) {
-    // Border frame in house color so the badge still reads as
-    // "belonging to this house" even without the bubble.
-    const frame = badge.house ? normalizeHex(badge.house.color) : "#475569";
-    doc
-      .save()
-      .lineWidth(2)
-      .strokeColor(frame)
-      .roundedRect(photoX - 1, photoY - 1, photoW + 2, photoH + 2, 4)
-      .stroke()
-      .restore();
-    try {
-      doc.image(badge.photoBytes, photoX, photoY, {
-        width: photoW,
-        height: photoH,
-        cover: [photoW, photoH],
-        align: "center",
-        valign: "center",
-      });
-    } catch {
-      // Corrupt image — fall back silently to the initials bubble.
-      drawInitialsBubble(doc, badge, photoX, photoY, photoW, photoH);
-    }
-  } else {
-    drawInitialsBubble(doc, badge, photoX, photoY, photoW, photoH);
-  }
-
-  const nameY = photoY + photoH + 6;
+  // Name
+  const nameY = photoY + photoSize + 6;
   doc
     .fillColor("#111827")
     .fontSize(14)
@@ -232,9 +217,8 @@ async function renderLanyardBadge(
       ellipsis: true,
       height: 18,
     });
-  // "Grade 6 · Car Rider" — combine grade and dismissal so the
-  // front-office desk can answer the dismissal question without
-  // looking the student up.
+
+  // Grade · Dismissal mode
   const dLabel = dismissalLabel(badge.dismissalMode);
   const gradeBits: string[] = [];
   if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
@@ -243,23 +227,19 @@ async function renderLanyardBadge(
     doc
       .fillColor("#475569")
       .fontSize(9)
-      .text(gradeBits.join(" · "), PAGE_MARGIN, nameY + 18, {
+      .text(gradeBits.join(" · "), PAGE_MARGIN, nameY + 17, {
         width: W - PAGE_MARGIN * 2,
         align: "center",
         lineBreak: false,
       });
   }
 
-  // Layout note: page is 243×306. Targets:
-  //   QR 56pt → barcode 16pt → crisis line 1 → crisis line 2
-  // Final y of crisis line 2 must clear (H - bottomMargin) = 304.
-  // Bottom margin lowered to 2 in the PDFDocument config above so
-  // text() at y=294 doesn't trigger pdfkit's auto-page (the bug
-  // that put "Text HOME to 741741" on a phantom page 2).
-  const qrBuf = await renderQrBuffer(badge);
+  // QR + barcode + crisis lines, anchored to the bottom of the card so
+  // the layout stays stable as the photo / name area flex.
   const qrSize = 56;
   const qrX = (W - qrSize) / 2;
-  const qrY = nameY + 34;
+  const qrY = nameY + 32;
+  const qrBuf = await renderQrBuffer(badge);
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
   const barcodePng = await renderBarcodeBuffer(badge.studentId);
@@ -269,11 +249,8 @@ async function renderLanyardBadge(
   const bcY = qrY + qrSize + 4;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
 
-  // Crisis hotlines — required on FL student IDs grades 6-12 by
-  // HB 383 (effective 2021-07-01): 988 Suicide & Crisis Lifeline +
-  // a text line. We include the Crisis Text Line (HOME → 741741)
-  // as the companion text channel. 988 line is red so it's the
-  // first thing the eye finds on the lower half of the badge.
+  // Crisis hotlines — FL HB 383 (effective 2021-07-01) requires
+  // 988 + a text crisis line on student IDs grades 6-12.
   const crisisY1 = bcY + bcH + 5;
   doc
     .fillColor("#b91c1c")
@@ -293,15 +270,22 @@ async function renderLanyardBadge(
     });
 }
 
+// ---------------------------------------------------------------------------
+// CR80 (landscape 243 × 153)
+//
+// Layout: full-card house-color background, with a white rounded "card"
+// inset on the RIGHT for QR + barcode + crisis lines. Left side carries
+// the house logo, house name, school name, square photo, student name,
+// and grade · dismissal — matching the user's mock visually but with all
+// content on a single side.
+// ---------------------------------------------------------------------------
 async function renderCr80Badge(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
 ) {
   const W = CR80_W;
   const H = CR80_H;
-  const leftColW = 138;
-  const rightColX = leftColW + 4;
-  const rightColW = W - rightColX - 4;
+  const houseColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
 
   // Card outline
   doc
@@ -312,165 +296,245 @@ async function renderCr80Badge(
     .stroke()
     .restore();
 
-  // Colored left band — house color or neutral.
-  const bandColor = badge.house ? normalizeHex(badge.house.color) : "#0f172a";
+  // Left house-color zone (≈ 60% of width)
+  const leftW = 148;
   doc
     .save()
-    .fillColor(bandColor)
-    .roundedRect(2, 2, leftColW, H - 4, 6)
+    .fillColor(houseColor)
+    .roundedRect(2, 2, leftW, H - 4, 6)
     .fill()
     .restore();
-  // Square the right edge of the band so it butts against the right
-  // column cleanly.
+  // Square the right edge of the band so it butts against the white
+  // right-hand zone cleanly.
   doc
     .save()
-    .fillColor(bandColor)
-    .rect(leftColW - 4, 2, 6, H - 4)
+    .fillColor(houseColor)
+    .rect(leftW - 4, 2, 6, H - 4)
     .fill()
     .restore();
 
-  // Initials bubble (top-left of band)
-  const bubbleSize = 40;
-  const bubbleX = 10;
-  const bubbleY = 10;
-  doc
-    .save()
-    .fillColor("#ffffff")
-    .circle(bubbleX + bubbleSize / 2, bubbleY + bubbleSize / 2, bubbleSize / 2)
-    .fill()
-    .restore();
-  const initials = computeInitials(badge);
-  doc
-    .fillColor(bandColor)
-    .fontSize(18)
-    .text(initials, bubbleX, bubbleY + bubbleSize / 2 - 9, {
-      width: bubbleSize,
-      align: "center",
-      lineBreak: false,
-    });
+  // House emblem (top-left)
+  const logoSize = 28;
+  const logoX = 8;
+  const logoY = 8;
+  drawHouseEmblem(doc, badge, logoX, logoY, logoSize, houseColor);
 
-  // House label beside bubble
+  // House name + school next to the emblem
+  const labelX = logoX + logoSize + 6;
+  const labelW = leftW - labelX - 4;
   if (badge.house) {
     doc
       .fillColor("#ffffff")
-      .fontSize(8)
-      .text(`${badge.house.name} House`, bubbleX + bubbleSize + 6, bubbleY + 4, {
-        width: leftColW - (bubbleX + bubbleSize + 10),
+      .fontSize(9)
+      .text(`${badge.house.name} House`, labelX, logoY + 1, {
+        width: labelW,
+        ellipsis: true,
         lineBreak: false,
       });
-  }
-  doc
-    .fillColor("rgba(255,255,255,0.85)")
-    .fontSize(7)
-    .text(
-      badge.schoolName,
-      bubbleX + bubbleSize + 6,
-      bubbleY + (badge.house ? 16 : 8),
-      {
-        width: leftColW - (bubbleX + bubbleSize + 10),
+    doc
+      .fillColor("rgba(255,255,255,0.88)")
+      .fontSize(7)
+      .text(badge.schoolName, labelX, logoY + 13, {
+        width: labelW,
+        ellipsis: true,
+        height: 18,
+      });
+  } else {
+    doc
+      .fillColor("#ffffff")
+      .fontSize(9)
+      .text("Student ID", labelX, logoY + 1, {
+        width: labelW,
         lineBreak: false,
-      },
-    );
+      });
+    doc
+      .fillColor("rgba(255,255,255,0.88)")
+      .fontSize(7)
+      .text(badge.schoolName, labelX, logoY + 13, {
+        width: labelW,
+        ellipsis: true,
+        height: 18,
+      });
+  }
 
-  // Name + grade beneath the bubble row
-  const nameY = bubbleY + bubbleSize + 8;
+  // Square photo (left-bottom area of the band)
+  const photoSize = 64;
+  const photoX = 8;
+  const photoY = H - photoSize - 8;
+  drawPhotoSlot(doc, badge, photoX, photoY, photoSize, "#ffffff");
+
+  // Name + grade right of the photo, within the house-color zone
+  const txtX = photoX + photoSize + 6;
+  const txtW = leftW - txtX - 4;
   doc
     .fillColor("#ffffff")
-    .fontSize(12)
-    .text(`${badge.firstName} ${badge.lastName}`, 8, nameY, {
-      width: leftColW - 12,
+    .fontSize(10.5)
+    .text(`${badge.firstName} ${badge.lastName}`, txtX, photoY + 4, {
+      width: txtW,
       ellipsis: true,
-      height: 16,
+      height: 28,
     });
-  const cr80Dlabel = dismissalLabel(badge.dismissalMode);
-  const cr80Bits: string[] = [];
-  if (badge.grade !== null) cr80Bits.push(`Grade ${badge.grade}`);
-  if (cr80Dlabel) cr80Bits.push(cr80Dlabel);
-  if (cr80Bits.length > 0) {
+  const dLabel = dismissalLabel(badge.dismissalMode);
+  const gradeBits: string[] = [];
+  if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
+  if (dLabel) gradeBits.push(dLabel);
+  if (gradeBits.length > 0) {
     doc
-      .fillColor("rgba(255,255,255,0.85)")
+      .fillColor("rgba(255,255,255,0.92)")
       .fontSize(8)
-      .text(cr80Bits.join(" · "), 8, nameY + 16, {
-        width: leftColW - 12,
+      .text(gradeBits.join(" · "), txtX, photoY + photoSize - 22, {
+        width: txtW,
+        ellipsis: true,
+        height: 12,
         lineBreak: false,
       });
   }
-  // Visible "ID …" line removed by request — a lost CR80 badge would
-  // otherwise expose the student number in plain text. QR + Code 128
-  // still encode the ID for kiosk sign-in.
 
-  // Right column — QR on top, Code 128 below.
+  // Right white zone: QR on top, barcode below, crisis lines underneath.
+  const rightX = leftW + 2;
+  const rightW = W - rightX - 4;
+
   const qrBuf = await renderQrBuffer(badge);
-  const qrSize = 70;
-  const qrX = rightColX + (rightColW - qrSize) / 2;
+  const qrSize = 64;
+  const qrX = rightX + (rightW - qrSize) / 2;
   const qrY = 8;
   doc.image(qrBuf, qrX, qrY, { width: qrSize, height: qrSize });
 
   const barcodePng = await renderBarcodeBuffer(badge.studentId);
-  const bcW = rightColW - 6;
-  const bcH = 28;
-  const bcX = rightColX + (rightColW - bcW) / 2;
-  const bcY = qrY + qrSize + 4;
+  const bcW = rightW - 4;
+  const bcH = 26;
+  const bcX = rightX + (rightW - bcW) / 2;
+  const bcY = qrY + qrSize + 3;
   doc.image(barcodePng, bcX, bcY, { width: bcW, height: bcH });
 
-  // Crisis hotlines — see lanyard comment above (FL HB 383 mandate).
-  // CR80 has less vertical room; we stack the two lines tightly in
-  // the right column under the barcode.
+  // Crisis hotlines — FL HB 383 mandate, see lanyard comment.
   doc
     .fillColor("#b91c1c")
     .fontSize(6)
-    .text("Crisis? Call or text 988", rightColX, bcY + bcH + 2, {
-      width: rightColW,
+    .text("Crisis? Call or text 988", rightX, bcY + bcH + 2, {
+      width: rightW,
       align: "center",
       lineBreak: false,
     });
   doc
     .fillColor("#475569")
     .fontSize(6)
-    .text("Text HOME to 741741", rightColX, bcY + bcH + 10, {
-      width: rightColW,
+    .text("Text HOME to 741741", rightX, bcY + bcH + 10, {
+      width: rightW,
       align: "center",
       lineBreak: false,
     });
 }
 
-// Lanyard-only initials-bubble fallback. Draws a circle inside the
-// reserved photo slot so the layout below it doesn't shift whether
-// or not a photo is present.
-function drawInitialsBubble(
+// ---------------------------------------------------------------------------
+// Shared drawing helpers
+// ---------------------------------------------------------------------------
+
+// House emblem: uploaded logo (rounded-rect clipped) if we have bytes,
+// otherwise a white disc with the house's first letter in the house color.
+function drawHouseEmblem(
   doc: PDFKit.PDFDocument,
   badge: StudentBadgeInput,
-  slotX: number,
-  slotY: number,
-  slotW: number,
-  slotH: number,
+  x: number,
+  y: number,
+  size: number,
+  houseColor: string,
 ): void {
-  const bubbleSize = Math.min(slotW, slotH);
-  const bubbleX = slotX + (slotW - bubbleSize) / 2;
-  const bubbleY = slotY + (slotH - bubbleSize) / 2;
-  const bubbleColor = badge.house
-    ? normalizeHex(badge.house.color)
-    : "#475569";
+  const logo = badge.house?.logoBytes;
+  // White rounded background tile — gives both uploaded logos and the
+  // letter fallback a consistent contrast against the colored band.
   doc
     .save()
-    .fillColor(bubbleColor)
-    .circle(bubbleX + bubbleSize / 2, bubbleY + bubbleSize / 2, bubbleSize / 2)
+    .fillColor("#ffffff")
+    .roundedRect(x, y, size, size, 4)
+    .fill()
+    .restore();
+  if (logo) {
+    try {
+      // Inset slightly so the logo doesn't touch the white tile edge.
+      const pad = 2;
+      doc.save();
+      doc.roundedRect(x + pad, y + pad, size - pad * 2, size - pad * 2, 3).clip();
+      doc.image(logo, x + pad, y + pad, {
+        width: size - pad * 2,
+        height: size - pad * 2,
+        cover: [size - pad * 2, size - pad * 2],
+        align: "center",
+        valign: "center",
+      });
+      doc.restore();
+      return;
+    } catch {
+      // Corrupt image — fall through to letter fallback.
+    }
+  }
+  const letter = (badge.house?.name.charAt(0) || "H").toUpperCase();
+  doc
+    .fillColor(houseColor)
+    .fontSize(Math.round(size * 0.55))
+    .text(letter, x, y + size / 2 - Math.round(size * 0.32), {
+      width: size,
+      align: "center",
+      lineBreak: false,
+    });
+}
+
+// Square photo slot: rounded-rect-clipped photo when present, otherwise
+// a colored disc with student initials. `frameColor` becomes the
+// border of the photo (or the disc color when there's no photo).
+function drawPhotoSlot(
+  doc: PDFKit.PDFDocument,
+  badge: StudentBadgeInput,
+  x: number,
+  y: number,
+  size: number,
+  frameColor: string,
+): void {
+  if (badge.photoBytes) {
+    // Border tile in the frame color.
+    doc
+      .save()
+      .lineWidth(2)
+      .strokeColor(frameColor)
+      .roundedRect(x - 1, y - 1, size + 2, size + 2, 5)
+      .stroke()
+      .restore();
+    try {
+      doc.save();
+      doc.roundedRect(x, y, size, size, 4).clip();
+      doc.image(badge.photoBytes, x, y, {
+        width: size,
+        height: size,
+        cover: [size, size],
+        align: "center",
+        valign: "center",
+      });
+      doc.restore();
+      return;
+    } catch {
+      doc.restore?.();
+      // Corrupt image — fall through to initials.
+    }
+  }
+  // Initials fallback — square rounded tile in the frame color (white
+  // outline if frame is white).
+  const bgColor = frameColor === "#ffffff" ? "#e2e8f0" : frameColor;
+  doc
+    .save()
+    .fillColor(bgColor)
+    .roundedRect(x, y, size, size, 4)
     .fill()
     .restore();
   const initials = computeInitials(badge);
+  const textColor = frameColor === "#ffffff" ? "#475569" : "#ffffff";
   doc
-    .fillColor("#ffffff")
-    .fontSize(Math.min(36, bubbleSize / 2.4))
-    .text(
-      initials,
-      bubbleX,
-      bubbleY + bubbleSize / 2 - Math.min(20, bubbleSize / 4),
-      {
-        width: bubbleSize,
-        align: "center",
-        lineBreak: false,
-      },
-    );
+    .fillColor(textColor)
+    .fontSize(Math.round(size * 0.42))
+    .text(initials, x, y + size / 2 - Math.round(size * 0.22), {
+      width: size,
+      align: "center",
+      lineBreak: false,
+    });
 }
 
 function computeInitials(badge: StudentBadgeInput): string {

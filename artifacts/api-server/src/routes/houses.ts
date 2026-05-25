@@ -19,6 +19,7 @@ import { eq, and, gte, isNull, inArray, sql, desc } from "drizzle-orm";
 import { verifyAuthToken } from "../lib/authToken.js";
 import { isCoreTeam } from "../lib/coreTeam.js";
 import { requireSchool } from "../lib/scope.js";
+import { bindObjectToSchool } from "./storage.js";
 
 type StaffRow = typeof staffTable.$inferSelect;
 
@@ -96,6 +97,7 @@ router.get("/houses", async (req, res) => {
             color: h.color,
             motto: h.motto,
             iconKey: h.iconKey,
+            iconObjectKey: h.iconObjectKey,
             memberCount: 0,
             totalPoints: 0,
             weekPoints: 0,
@@ -154,6 +156,7 @@ router.get("/houses", async (req, res) => {
           color: h.color,
           motto: h.motto,
           iconKey: h.iconKey,
+          iconObjectKey: h.iconObjectKey,
           memberCount: memberCountByHouse.get(h.id) ?? studentIds.length,
           totalPoints: allRows[0]?.points ?? 0,
           weekPoints,
@@ -249,6 +252,7 @@ router.get("/houses/with-staff-counts", async (req, res) => {
         name: h.name,
         color: h.color,
         iconKey: h.iconKey,
+        iconObjectKey: h.iconObjectKey,
         studentCount: studentCounts.get(h.id) ?? 0,
         staffCount: staffCounts.get(h.id) ?? 0,
       })),
@@ -1265,6 +1269,75 @@ router.get("/houses/changes", requireHouseAdmin(), async (req, res) => {
     students: studentRows,
     undoable,
   });
+});
+
+// =============================================================================
+// House logo upload — admin can attach a custom PNG/SVG logo per house. The
+// uploaded object lives in school-scoped object storage (same `/api/storage/*`
+// pipeline used by store-item thumbnails + school branding). The bound path
+// is stored on houses.icon_object_key and takes priority over iconKey on
+// printed badges. Read access is mediated by /api/storage/objects/*, which
+// already gates by the requester's school via the ACL we apply at bind time.
+// =============================================================================
+
+// POST /api/houses/:id/logo  body: { objectPath: "/objects/..." }
+router.post("/houses/:id/logo", requireHouseAdmin(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
+  const houseId = Number(req.params.id);
+  if (!Number.isFinite(houseId) || houseId <= 0) {
+    res.status(400).json({ error: "Invalid house id" });
+    return;
+  }
+  const raw = (req.body as { objectPath?: unknown })?.objectPath;
+  if (typeof raw !== "string" || !raw.startsWith("/objects/")) {
+    res
+      .status(400)
+      .json({ error: "objectPath must be a /objects/... path" });
+    return;
+  }
+  const [house] = await db
+    .select({ id: housesTable.id })
+    .from(housesTable)
+    .where(and(eq(housesTable.id, houseId), eq(housesTable.schoolId, schoolId)));
+  if (!house) {
+    res.status(404).json({ error: "House not found" });
+    return;
+  }
+  const ok = await bindObjectToSchool(raw.trim(), schoolId);
+  if (!ok) {
+    res
+      .status(403)
+      .json({ error: "Logo upload not authorized for this school" });
+    return;
+  }
+  await db
+    .update(housesTable)
+    .set({ iconObjectKey: raw.trim() })
+    .where(eq(housesTable.id, houseId));
+  res.json({ ok: true, iconObjectKey: raw.trim() });
+});
+
+// DELETE /api/houses/:id/logo — clears the custom logo; falls back to
+// iconKey / letter bubble on badges + signage.
+router.delete("/houses/:id/logo", requireHouseAdmin(), async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (schoolId === null) return;
+  const houseId = Number(req.params.id);
+  if (!Number.isFinite(houseId) || houseId <= 0) {
+    res.status(400).json({ error: "Invalid house id" });
+    return;
+  }
+  const result = await db
+    .update(housesTable)
+    .set({ iconObjectKey: null })
+    .where(and(eq(housesTable.id, houseId), eq(housesTable.schoolId, schoolId)))
+    .returning({ id: housesTable.id });
+  if (result.length === 0) {
+    res.status(404).json({ error: "House not found" });
+    return;
+  }
+  res.json({ ok: true });
 });
 
 export default router;

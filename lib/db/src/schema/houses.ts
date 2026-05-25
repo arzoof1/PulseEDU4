@@ -18,6 +18,13 @@ export const housesTable = pgTable("houses", {
   // letter. Kept as a free string rather than a Drizzle enum so admins
   // can pick any Lucide icon without a schema migration.
   iconKey: text("icon_key"),
+  // Object-storage path (e.g. "/objects/uploads/abc123") to a custom
+  // house logo PNG/SVG uploaded by an admin. When present, takes
+  // priority over iconKey on printed surfaces (ID badges) and is the
+  // intended path for schools that want their actual house crest on
+  // student IDs. Bound to the school's ACL via bindObjectToSchool at
+  // upload time. Null = fall back to iconKey, then to letter bubble.
+  iconObjectKey: text("icon_object_key"),
   createdAt: text("created_at").notNull(),
 });
 
