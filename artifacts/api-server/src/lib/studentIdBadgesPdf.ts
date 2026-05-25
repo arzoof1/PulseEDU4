@@ -56,17 +56,62 @@ export interface StudentBadgeInput {
   photoBytes?: Buffer | null;
 }
 
-// Human label for a stored dismissal_mode value.
+// Human label for a stored dismissal_mode value. `car_rider` is rendered
+// as a small vector car icon instead of text (see drawCarIcon) because
+// the words wouldn't fit cleanly on the CR80 layout next to a Grade label.
 function dismissalLabel(mode: string | null | undefined): string | null {
   if (!mode) return null;
   switch (mode) {
-    case "car_rider": return "Car Rider";
+    case "car_rider": return null; // drawn as an icon, not text
     case "walker": return "Walker";
     case "bus": return "Bus";
     case "aftercare": return "Aftercare";
     case "parent_pickup_only": return "Parent Pickup";
     default: return null;
   }
+}
+
+// Tiny side-profile car icon — body + roof + two wheels. Used in place of
+// the "Car Rider" text on student ID badges so the dismissal mode reads at
+// a glance without crowding the Grade label.
+function drawCarIcon(
+  doc: PDFKit.PDFDocument,
+  x: number,
+  y: number,
+  width: number,
+  color: string,
+): void {
+  // width drives everything; height is ~55% of width for a car silhouette.
+  const w = width;
+  const h = w * 0.55;
+  const bodyTop = y + h * 0.35;
+  const bodyH = h * 0.45;
+  const wheelR = h * 0.18;
+  const wheelY = y + h - wheelR;
+  doc.save();
+  doc.fillColor(color);
+  // Lower body (rounded rect)
+  doc.roundedRect(x, bodyTop, w, bodyH, h * 0.12).fill();
+  // Roof (trapezoid via polygon)
+  const roofLeftBottom = x + w * 0.22;
+  const roofRightBottom = x + w * 0.78;
+  const roofLeftTop = x + w * 0.34;
+  const roofRightTop = x + w * 0.66;
+  doc
+    .moveTo(roofLeftBottom, bodyTop + 0.5)
+    .lineTo(roofLeftTop, y + h * 0.08)
+    .lineTo(roofRightTop, y + h * 0.08)
+    .lineTo(roofRightBottom, bodyTop + 0.5)
+    .closePath()
+    .fill();
+  // Wheels — drawn over the body in the same color so they read as one
+  // shape; a thin contrast disc inside makes the wheel hub visible.
+  doc.circle(x + w * 0.25, wheelY, wheelR).fill();
+  doc.circle(x + w * 0.75, wheelY, wheelR).fill();
+  doc.fillColor("#ffffff");
+  doc.circle(x + w * 0.25, wheelY, wheelR * 0.4).fill();
+  doc.circle(x + w * 0.75, wheelY, wheelR * 0.4).fill();
+  doc.restore();
 }
 
 export async function renderStudentBadgesPdf(
@@ -221,20 +266,30 @@ async function renderLanyardBadge(
       height: 18,
     });
 
-  // Grade · Dismissal mode
+  // Grade · Dismissal mode. Car riders get a small car icon to the right
+  // of the Grade text (the words "Car Rider" don't fit cleanly on a CR80
+  // badge so the lanyard mirrors the same convention for consistency).
   const dLabel = dismissalLabel(badge.dismissalMode);
+  const isCarRider = badge.dismissalMode === "car_rider";
   const gradeBits: string[] = [];
   if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
   if (dLabel) gradeBits.push(dLabel);
-  if (gradeBits.length > 0) {
-    doc
-      .fillColor("#475569")
-      .fontSize(9)
-      .text(gradeBits.join(" · "), PAGE_MARGIN, nameY + 17, {
-        width: W - PAGE_MARGIN * 2,
-        align: "center",
-        lineBreak: false,
-      });
+  const gradeY = nameY + 17;
+  if (gradeBits.length > 0 || isCarRider) {
+    const text = gradeBits.join(" · ");
+    doc.fillColor("#475569").fontSize(9);
+    const iconW = 18;
+    const iconH = iconW * 0.55;
+    const gap = text ? 4 : 0;
+    const textW = text ? doc.widthOfString(text) : 0;
+    const totalW = textW + (isCarRider ? gap + iconW : 0);
+    const startX = PAGE_MARGIN + (W - PAGE_MARGIN * 2 - totalW) / 2;
+    if (text) {
+      doc.text(text, startX, gradeY, { lineBreak: false });
+    }
+    if (isCarRider) {
+      drawCarIcon(doc, startX + textW + gap, gradeY + (9 - iconH) / 2, iconW, "#475569");
+    }
   }
 
   // QR + barcode + crisis lines, anchored to the bottom of the card so
@@ -382,19 +437,29 @@ async function renderCr80Badge(
       height: 28,
     });
   const dLabel = dismissalLabel(badge.dismissalMode);
+  const isCarRider = badge.dismissalMode === "car_rider";
   const gradeBits: string[] = [];
   if (badge.grade !== null) gradeBits.push(`Grade ${badge.grade}`);
   if (dLabel) gradeBits.push(dLabel);
-  if (gradeBits.length > 0) {
-    doc
-      .fillColor("rgba(255,255,255,0.92)")
-      .fontSize(8)
-      .text(gradeBits.join(" · "), txtX, photoY + photoSize - 22, {
+  const gradeRowY = photoY + photoSize - 22;
+  if (gradeBits.length > 0 || isCarRider) {
+    const text = gradeBits.join(" · ");
+    doc.fillColor("rgba(255,255,255,0.92)").fontSize(8);
+    if (text) {
+      doc.text(text, txtX, gradeRowY, {
         width: txtW,
         ellipsis: true,
         height: 12,
         lineBreak: false,
       });
+    }
+    if (isCarRider) {
+      const iconW = 16;
+      const iconH = iconW * 0.55;
+      const textW = text ? doc.widthOfString(text) : 0;
+      const iconX = txtX + textW + (text ? 4 : 0);
+      drawCarIcon(doc, iconX, gradeRowY + (8 - iconH) / 2, iconW, "#ffffff");
+    }
   }
 
   // Right white zone: QR on top, barcode below, crisis lines underneath.
