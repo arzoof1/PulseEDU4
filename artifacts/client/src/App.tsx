@@ -8620,6 +8620,14 @@ function App() {
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isDistrictAdmin) ||
     Boolean(authUser?.canApproveCompTime);
+  // Comp Time self-submission visibility. The "Comp Time" sidebar tile
+  // and self-submission page are for non-exempt employees only (EST,
+  // cafeteria, custodial, paraprofessional, etc.). Teachers and other
+  // exempt staff don't accrue FLSA comp time so the nav item is hidden
+  // entirely — the server-side splash still catches anyone who reaches
+  // the route via direct URL. Admin Comp Time Approvals + Insights are
+  // separate nav items gated by canApproveCompTime, unaffected here.
+  const canSeeCompTimeStaff = authUser?.exemptStatus === "non_exempt";
   const bellScheduleNavSections: NavSection[] = [
     { key: "bellSchedule", label: "Bell Schedule", icon: IconClock },
   ];
@@ -9689,26 +9697,30 @@ function App() {
                 </span>
               </span>
             </FeatureGate>
-            {/* Comp Time — sibling of AST. Visible to every staff
-                member; the server returns an eligibility splash for
-                exempt staff so the page renders an explanatory card
-                instead of action buttons. Feature-gated: hidden when
-                off, locked-upsell pill when showUpsell. */}
-            <FeatureGate
-              feature="compTime"
-              fallback={
-                <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
-                  {renderNavItem({ key: "comp", label: "Comp Time", icon: IconClock })}
-                  <span style={{ marginLeft: 4 }}><LockedBadge /></span>
-                </span>
-              }
-            >
-              {renderNavItem({
-                key: "comp",
-                label: "Comp Time",
-                icon: IconClock,
-              })}
-            </FeatureGate>
+            {/* Comp Time — sibling of AST. Visible only to non-exempt
+                employees (EST, cafeteria, custodial, paraprofessional);
+                teachers and other exempt staff don't accrue FLSA comp
+                time so the tile is hidden entirely. Admin Approvals +
+                Insights live under their own nav items elsewhere.
+                Feature-gated on top: hidden when off, locked-upsell
+                pill when showUpsell. */}
+            {canSeeCompTimeStaff && (
+              <FeatureGate
+                feature="compTime"
+                fallback={
+                  <span style={{ position: "relative", display: "inline-flex", alignItems: "center" }}>
+                    {renderNavItem({ key: "comp", label: "Comp Time", icon: IconClock })}
+                    <span style={{ marginLeft: 4 }}><LockedBadge /></span>
+                  </span>
+                }
+              >
+                {renderNavItem({
+                  key: "comp",
+                  label: "Comp Time",
+                  icon: IconClock,
+                })}
+              </FeatureGate>
+            )}
             {/* Verify Pullout — surfaces in Quick Access ONLY when there's
                 pending work (pendingPulloutCount > 0). When the queue is
                 empty it retreats to its quiet home in Behavior Support.
@@ -16669,7 +16681,7 @@ function App() {
         </FeatureGate>
       )}
 
-      {activeSection === "comp" && (
+      {activeSection === "comp" && canSeeCompTimeStaff && (
         <FeatureGate feature="compTime" label="Comp Time">
           <StaffCompPage />
         </FeatureGate>
