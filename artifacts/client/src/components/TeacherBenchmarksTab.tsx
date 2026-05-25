@@ -216,6 +216,7 @@ export default function TeacherBenchmarksTab({
   isOwnRoster,
   rosterSelectedPeriod = null,
   rosterAvailablePeriods = [],
+  onOpenClassComposer,
 }: {
   teacherId: number | null;
   // Reserved for future role-aware UI; currently the server enforces
@@ -227,6 +228,10 @@ export default function TeacherBenchmarksTab({
   // previous tab. `null` = all periods.
   rosterSelectedPeriod?: number | null;
   rosterAvailablePeriods?: number[];
+  // When provided, the "Send to Class Composer" button on the Focus
+  // Benchmark panel becomes active and navigates to the composer
+  // (admin / Core Team only — gated by the parent).
+  onOpenClassComposer?: () => void;
 }) {
   void isOwnRoster;
 
@@ -276,6 +281,40 @@ export default function TeacherBenchmarksTab({
   const [drillCode, setDrillCode] = useState<string | null>(null);
   const [drill, setDrill] = useState<DrillResponse | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+
+  // Focus-benchmark mode — when set, render the 3-bucket small-group
+  // panel above the heatmap (Mastery / Near / Far). null = panel hidden.
+  const [focusCode, setFocusCode] = useState<string | null>(null);
+  // Student-profile drill — opened by clicking a student's name in the
+  // heatmap. Shows every benchmark + % for that student in one list.
+  const [studentDrillId, setStudentDrillId] = useState<string | null>(null);
+  // "Suggest small group" modal — lists the ~8 lowest scorers on the
+  // focus benchmark with a "Send to Class Composer" handoff.
+  const [suggestOpen, setSuggestOpen] = useState(false);
+
+  // Reconcile focus/drill/suggest state when the underlying data changes
+  // (subject/window/teacher switch reloads `data`). If the previously
+  // selected benchmark or student no longer exists in the new payload,
+  // clear the state and force-close any open modal so a stale focusCode
+  // can't keep an invisible-but-active modal mounted.
+  useEffect(() => {
+    if (!data) {
+      if (focusCode !== null) setFocusCode(null);
+      if (studentDrillId !== null) setStudentDrillId(null);
+      if (suggestOpen) setSuggestOpen(false);
+      return;
+    }
+    if (focusCode && !data.benchmarks.some((b) => b.code === focusCode)) {
+      setFocusCode(null);
+      setSuggestOpen(false);
+    }
+    if (
+      studentDrillId &&
+      !data.students.some((s) => s.studentId === studentDrillId)
+    ) {
+      setStudentDrillId(null);
+    }
+  }, [data, focusCode, studentDrillId, suggestOpen]);
 
   // Benchmark Progress Report modal — printable per-student item
   // analysis across PM1/PM2/PM3. Either one student or all (alpha).
@@ -798,6 +837,40 @@ export default function TeacherBenchmarksTab({
             </select>
           </label>
         )}
+        {/* Focus benchmark picker — when set, renders a 3-bucket
+            small-group panel above the heatmap (Mastery / Near / Far).
+            Only shown in absolute mode where per-benchmark % cells
+            exist; growth mode is delta-based so buckets don't apply. */}
+        {mode === "absolute" && data && data.benchmarks.length > 0 && (
+          <label
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              fontSize: 12,
+              color: "#374151",
+            }}
+            title="Pick a benchmark to sort students into Mastery / Near mastery / Far from mastery groups"
+          >
+            Focus benchmark:
+            <select
+              value={focusCode ?? ""}
+              onChange={(e) => setFocusCode(e.target.value || null)}
+              style={{ fontSize: 12, maxWidth: 220 }}
+            >
+              <option value="">— none —</option>
+              {grouped.map((g) => (
+                <optgroup key={g.category} label={g.category}>
+                  {g.codes.map((b) => (
+                    <option key={b.code} value={b.code}>
+                      {b.code.split(".").slice(-2).join(".")} — {b.code}
+                    </option>
+                  ))}
+                </optgroup>
+              ))}
+            </select>
+          </label>
+        )}
         <button
           onClick={openPdf}
           disabled={!data || data.benchmarks.length === 0}
@@ -1113,7 +1186,8 @@ export default function TeacherBenchmarksTab({
         growth.benchmarks.length > 0 && (
           <div
             style={{
-              overflowX: "auto",
+              overflow: "auto",
+              maxHeight: "calc(100vh - 240px)",
               border: "1px solid #e5e7eb",
               borderRadius: 6,
             }}
@@ -1135,11 +1209,12 @@ export default function TeacherBenchmarksTab({
                       textAlign: "left",
                       position: "sticky",
                       left: 0,
+                      top: 0,
                       background: "#f3f4f6",
                       minWidth: 180,
                       width: 180,
                       borderRight: "1px solid #d4d4d4",
-                      zIndex: 2,
+                      zIndex: 5,
                     }}
                   >
                     Student
@@ -1155,7 +1230,6 @@ export default function TeacherBenchmarksTab({
                           padding: "6px 8px 6px 36px",
                           fontSize: 13,
                           textAlign: "center",
-                          position: "relative",
                           borderLeft: expanded
                             ? "4px solid #1e3a8a"
                             : "3px solid #6b7280",
@@ -1176,6 +1250,9 @@ export default function TeacherBenchmarksTab({
                           wordBreak: "normal",
                           overflowWrap: "break-word",
                           lineHeight: 1.2,
+                          position: "sticky",
+                          top: 0,
+                          zIndex: 4,
                         }}
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
@@ -1262,7 +1339,10 @@ export default function TeacherBenchmarksTab({
                           width: 44,
                           minWidth: 44,
                           textAlign: "center",
-                          position: "relative",
+                          position: "sticky",
+                          top: 32,
+                          background: "#f3f4f6",
+                          zIndex: 3,
                           borderLeft:
                             i === 0
                               ? "4px solid #1e3a8a"
@@ -1466,13 +1546,307 @@ export default function TeacherBenchmarksTab({
           </div>
         )}
 
+      {/* Focus-benchmark small-group panel — renders above the heatmap
+          when the teacher picks a benchmark from the toolbar dropdown.
+          Buckets students into Mastery (≥ threshold) / Near (50% – just
+          below threshold) / Far (< 50%). "Suggest small group" pulls
+          the ~8 lowest scorers + hands off to Class Composer. */}
+      {mode === "absolute" &&
+        !loading &&
+        data &&
+        focusCode &&
+        data.students.length > 0 &&
+        (() => {
+          const benchmark = data.benchmarks.find((b) => b.code === focusCode);
+          if (!benchmark) return null;
+          const threshold = data.thresholdPct;
+          type Scored = {
+            studentId: string;
+            firstName: string | null;
+            lastName: string | null;
+            grade: number | string;
+            pct: number;
+          };
+          const mastery: Scored[] = [];
+          const near: Scored[] = [];
+          const far: Scored[] = [];
+          const noData: Array<Omit<Scored, "pct">> = [];
+          for (const s of data.students) {
+            const c = s.cells[focusCode];
+            if (c == null) {
+              noData.push({
+                studentId: s.studentId,
+                firstName: s.firstName,
+                lastName: s.lastName,
+                grade: s.grade,
+              });
+              continue;
+            }
+            const row: Scored = {
+              studentId: s.studentId,
+              firstName: s.firstName,
+              lastName: s.lastName,
+              grade: s.grade,
+              pct: c.pct,
+            };
+            if (c.pct >= threshold) mastery.push(row);
+            else if (c.pct >= 50) near.push(row);
+            else far.push(row);
+          }
+          mastery.sort((a, b) => b.pct - a.pct);
+          near.sort((a, b) => b.pct - a.pct);
+          far.sort((a, b) => a.pct - b.pct); // lowest first
+          const buckets: Array<{
+            key: "mastery" | "near" | "far";
+            label: string;
+            range: string;
+            students: Scored[];
+            bg: string;
+            border: string;
+            color: string;
+          }> = [
+            {
+              key: "mastery",
+              label: "Mastery",
+              range: `≥ ${threshold}%`,
+              students: mastery,
+              bg: "#f0fdf4",
+              border: "#bbf7d0",
+              color: "#065f46",
+            },
+            {
+              key: "near",
+              label: "Near mastery",
+              range: `50% – ${threshold - 1}%`,
+              students: near,
+              bg: "#fffbeb",
+              border: "#fde68a",
+              color: "#854d0e",
+            },
+            {
+              key: "far",
+              label: "Far from mastery",
+              range: `< 50%`,
+              students: far,
+              bg: "#fef2f2",
+              border: "#fecaca",
+              color: "#991b1b",
+            },
+          ];
+          const friendly = focusCode.split(".").slice(-2).join(".");
+          return (
+            <div
+              style={{
+                border: "1px solid #c7d2fe",
+                background: "#eef2ff",
+                borderRadius: 8,
+                padding: "12px 14px",
+                marginBottom: 14,
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  alignItems: "center",
+                  flexWrap: "wrap",
+                  gap: 10,
+                  marginBottom: 10,
+                }}
+              >
+                <div style={{ fontWeight: 700, fontSize: 14, color: "#1e3a8a" }}>
+                  Focus benchmark: {friendly}
+                </div>
+                <div style={{ color: "#475569", fontSize: 12 }}>
+                  {focusCode}
+                  {benchmark.category ? ` · ${benchmark.category}` : ""}
+                </div>
+                <span style={{ flex: 1 }} />
+                <button
+                  type="button"
+                  onClick={() => setSuggestOpen(true)}
+                  disabled={far.length + near.length === 0}
+                  style={{
+                    padding: "4px 10px",
+                    fontWeight: 600,
+                    fontSize: 12,
+                    background: "#1e3a8a",
+                    color: "white",
+                    border: "none",
+                    borderRadius: 4,
+                    cursor:
+                      far.length + near.length === 0 ? "not-allowed" : "pointer",
+                    opacity: far.length + near.length === 0 ? 0.5 : 1,
+                  }}
+                  title="Pull the lowest scorers on this benchmark into a small group"
+                >
+                  Suggest small group
+                </button>
+                <button
+                  type="button"
+                  onClick={() => window.print()}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    background: "white",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                  title="Print this page"
+                >
+                  Print groups
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setFocusCode(null)}
+                  style={{
+                    padding: "4px 10px",
+                    fontSize: 12,
+                    background: "white",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    cursor: "pointer",
+                  }}
+                  title="Hide focus panel"
+                >
+                  Close
+                </button>
+              </div>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+                  gap: 10,
+                }}
+              >
+                {buckets.map((bucket) => (
+                  <div
+                    key={bucket.key}
+                    style={{
+                      background: bucket.bg,
+                      border: `1px solid ${bucket.border}`,
+                      borderRadius: 6,
+                      padding: "8px 10px",
+                      minHeight: 80,
+                    }}
+                  >
+                    <div
+                      style={{
+                        fontSize: 11,
+                        fontWeight: 700,
+                        textTransform: "uppercase",
+                        letterSpacing: 0.5,
+                        color: bucket.color,
+                        marginBottom: 2,
+                      }}
+                    >
+                      {bucket.label}
+                      <span
+                        style={{
+                          marginLeft: 6,
+                          fontWeight: 600,
+                          color: "#374151",
+                        }}
+                      >
+                        ({bucket.students.length})
+                      </span>
+                    </div>
+                    <div
+                      style={{
+                        fontSize: 11,
+                        color: "#6b7280",
+                        marginBottom: 6,
+                      }}
+                    >
+                      {bucket.range}
+                    </div>
+                    {bucket.students.length === 0 ? (
+                      <div style={{ fontSize: 12, color: "#9ca3af" }}>
+                        — none —
+                      </div>
+                    ) : (
+                      <ul
+                        style={{
+                          listStyle: "none",
+                          padding: 0,
+                          margin: 0,
+                          fontSize: 13,
+                        }}
+                      >
+                        {bucket.students.map((s) => (
+                          <li
+                            key={s.studentId}
+                            style={{
+                              display: "flex",
+                              justifyContent: "space-between",
+                              padding: "2px 0",
+                              borderBottom: "1px dotted rgba(0,0,0,0.05)",
+                            }}
+                          >
+                            <button
+                              type="button"
+                              onClick={() => setStudentDrillId(s.studentId)}
+                              style={{
+                                background: "none",
+                                border: "none",
+                                padding: 0,
+                                color: "#0369a1",
+                                textDecoration: "underline",
+                                textDecorationStyle: "dotted",
+                                cursor: "pointer",
+                                fontSize: 13,
+                                textAlign: "left",
+                              }}
+                              title="View this student's full benchmark profile"
+                            >
+                              {s.lastName}, {s.firstName}
+                            </button>
+                            <span
+                              style={{
+                                fontVariantNumeric: "tabular-nums",
+                                fontWeight: 600,
+                                color: bucket.color,
+                              }}
+                            >
+                              {s.pct}%
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                ))}
+              </div>
+              {noData.length > 0 && (
+                <div
+                  style={{
+                    marginTop: 8,
+                    fontSize: 11,
+                    color: "#6b7280",
+                  }}
+                >
+                  No response on this benchmark: {noData.length} student
+                  {noData.length === 1 ? "" : "s"}
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
       {/* Absolute heatmap */}
       {mode === "absolute" &&
         !loading &&
         data &&
         data.students.length > 0 &&
         data.benchmarks.length > 0 && (
-          <div style={{ overflowX: "auto", border: "1px solid #e5e7eb", borderRadius: 6 }}>
+          <div
+            style={{
+              overflow: "auto",
+              maxHeight: "calc(100vh - 240px)",
+              border: "1px solid #e5e7eb",
+              borderRadius: 6,
+            }}
+          >
             <table
               style={{
                 borderCollapse: "separate",
@@ -1491,11 +1865,12 @@ export default function TeacherBenchmarksTab({
                       textAlign: "left",
                       position: "sticky",
                       left: 0,
+                      top: 0,
                       background: "#f3f4f6",
                       minWidth: 200,
                       width: 200,
                       borderRight: "1px solid #d4d4d4",
-                      zIndex: 2,
+                      zIndex: 5,
                       fontSize: 13,
                       fontWeight: 700,
                     }}
@@ -1513,7 +1888,6 @@ export default function TeacherBenchmarksTab({
                           padding: "6px 8px 6px 36px",
                           fontSize: 13,
                           textAlign: "center",
-                          position: "relative",
                           borderLeft: expanded
                             ? "4px solid #1e3a8a"
                             : "3px solid #6b7280",
@@ -1534,6 +1908,9 @@ export default function TeacherBenchmarksTab({
                           wordBreak: "normal",
                           overflowWrap: "break-word",
                           lineHeight: 1.2,
+                          position: "sticky",
+                          top: 0,
+                          zIndex: 4,
                         }}
                         title={`${g.category} — click to ${expanded ? "collapse" : "expand"} (${g.codes.length} benchmark${g.codes.length === 1 ? "" : "s"})`}
                         onClick={() => toggleCat(g.category)}
@@ -1620,7 +1997,10 @@ export default function TeacherBenchmarksTab({
                           width: 84,
                           minWidth: 84,
                           textAlign: "center",
-                          position: "relative",
+                          position: "sticky",
+                          top: 32,
+                          background: "#f3f4f6",
+                          zIndex: 3,
                           borderLeft:
                             i === 0
                               ? "4px solid #1e3a8a"
@@ -1698,8 +2078,13 @@ export default function TeacherBenchmarksTab({
                         zIndex: 1,
                         fontWeight: 700,
                         fontSize: 14,
+                        cursor: "pointer",
+                        color: "#0369a1",
+                        textDecoration: "underline",
+                        textDecorationStyle: "dotted",
                       }}
-                      title={`${s.firstName} ${s.lastName} (G${s.grade})`}
+                      title={`${s.firstName} ${s.lastName} (G${s.grade}) — click for full benchmark profile`}
+                      onClick={() => setStudentDrillId(s.studentId)}
                     >
                       {s.lastName}, {s.firstName}
                     </td>
@@ -2008,6 +2393,352 @@ export default function TeacherBenchmarksTab({
           deliveryCounts={deliveryCounts}
         />
       )}
+
+      {/* Student-profile drill modal — opens when a teacher clicks a
+          student name in the heatmap (or in the focus panel). Lists
+          every benchmark + this student's %, grouped by category and
+          sorted weakest → strongest so the teacher can spot priorities
+          for one student at a glance. */}
+      {studentDrillId && data && (() => {
+        const s = data.students.find((x) => x.studentId === studentDrillId);
+        if (!s) return null;
+        const rows: Array<{
+          code: string;
+          category: string | null;
+          pct: number | null;
+        }> = data.benchmarks.map((b) => ({
+          code: b.code,
+          category: b.category,
+          pct: s.cells[b.code]?.pct ?? null,
+        }));
+        const scored = rows.filter((r) => r.pct != null) as Array<{
+          code: string;
+          category: string | null;
+          pct: number;
+        }>;
+        scored.sort((a, b) => a.pct - b.pct);
+        const missing = rows.filter((r) => r.pct == null);
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setStudentDrillId(null)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              zIndex: 50,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: "white",
+                borderRadius: 8,
+                padding: 18,
+                maxWidth: 620,
+                width: "94%",
+                maxHeight: "84vh",
+                overflowY: "auto",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 8,
+                }}
+              >
+                <h3 style={{ margin: 0, fontSize: 16 }}>
+                  {s.lastName}, {s.firstName}
+                  <span
+                    style={{
+                      color: "#6b7280",
+                      fontSize: 12,
+                      fontWeight: 400,
+                      marginLeft: 8,
+                    }}
+                  >
+                    G{s.grade} · {data.schoolYear}{" "}
+                    {data.window.toUpperCase()}
+                  </span>
+                </h3>
+                <button onClick={() => setStudentDrillId(null)}>Close</button>
+              </div>
+              <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 10 }}>
+                Full benchmark profile — sorted weakest → strongest. Mastery
+                threshold: <strong>{data.thresholdPct}%</strong>.
+              </div>
+              {scored.length === 0 ? (
+                <div style={{ color: "#9ca3af", padding: 8 }}>
+                  No benchmark responses for this student in this window.
+                </div>
+              ) : (
+                <table
+                  style={{
+                    width: "100%",
+                    fontSize: 13,
+                    borderCollapse: "collapse",
+                  }}
+                >
+                  <thead>
+                    <tr style={{ background: "#f3f4f6", textAlign: "left" }}>
+                      <th style={{ padding: "6px 8px" }}>Benchmark</th>
+                      <th style={{ padding: "6px 8px" }}>Category</th>
+                      <th style={{ padding: "6px 8px", textAlign: "right" }}>%</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {scored.map((r) => {
+                      const c = cellColor(r.pct, data.thresholdPct);
+                      return (
+                        <tr
+                          key={r.code}
+                          style={{ borderTop: "1px solid #f3f4f6" }}
+                        >
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              fontFamily: "monospace",
+                              fontSize: 12,
+                            }}
+                          >
+                            {r.code}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              color: "#6b7280",
+                              fontSize: 12,
+                            }}
+                          >
+                            {r.category ?? "—"}
+                          </td>
+                          <td
+                            style={{
+                              padding: "6px 8px",
+                              textAlign: "right",
+                              background: c.bg,
+                              color: c.fg,
+                              fontWeight: 700,
+                              fontVariantNumeric: "tabular-nums",
+                            }}
+                          >
+                            {r.pct}%
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+              {missing.length > 0 && (
+                <div
+                  style={{ marginTop: 8, fontSize: 11, color: "#6b7280" }}
+                >
+                  No response on {missing.length} other benchmark
+                  {missing.length === 1 ? "" : "s"} in this window.
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* Suggest small group modal — pulls the 8 lowest scorers on the
+          focus benchmark and offers a handoff to Class Composer. The
+          composer button is gated by the onOpenClassComposer prop
+          (admin / Core Team only); other staff still see the list. */}
+      {suggestOpen && focusCode && data && (() => {
+        const benchmark = data.benchmarks.find((b) => b.code === focusCode);
+        if (!benchmark) return null;
+        type SuggestRow = {
+          studentId: string;
+          firstName: string | null;
+          lastName: string | null;
+          grade: number | string;
+          pct: number;
+        };
+        const scored: SuggestRow[] = data.students
+          .flatMap<SuggestRow>((s) => {
+            const pct = s.cells[focusCode]?.pct ?? null;
+            if (pct == null) return [];
+            return [{
+              studentId: s.studentId,
+              firstName: s.firstName,
+              lastName: s.lastName,
+              grade: s.grade,
+              pct,
+            }];
+          })
+          .sort((a, b) => a.pct - b.pct)
+          .slice(0, 8);
+        const friendly = focusCode.split(".").slice(-2).join(".");
+        const copyList = () => {
+          const lines = scored.map(
+            (s) =>
+              `${s.lastName}, ${s.firstName} (G${s.grade}) — ${s.pct}%`,
+          );
+          const text = `Suggested small group · ${friendly} (${focusCode})\n${lines.join("\n")}`;
+          void navigator.clipboard?.writeText(text);
+        };
+        return (
+          <div
+            role="dialog"
+            aria-modal="true"
+            onClick={() => setSuggestOpen(false)}
+            style={{
+              position: "fixed",
+              inset: 0,
+              background: "rgba(0,0,0,0.4)",
+              zIndex: 50,
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              style={{
+                background: "white",
+                borderRadius: 8,
+                padding: 18,
+                maxWidth: 520,
+                width: "94%",
+                maxHeight: "84vh",
+                overflowY: "auto",
+                boxShadow: "0 10px 30px rgba(0,0,0,0.2)",
+              }}
+            >
+              <div
+                style={{
+                  display: "flex",
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                  marginBottom: 8,
+                }}
+              >
+                <h3 style={{ margin: 0, fontSize: 16 }}>
+                  Suggested small group — {friendly}
+                </h3>
+                <button onClick={() => setSuggestOpen(false)}>Close</button>
+              </div>
+              <div style={{ color: "#6b7280", fontSize: 12, marginBottom: 10 }}>
+                The {scored.length} lowest scorers on{" "}
+                <span style={{ fontFamily: "monospace" }}>{focusCode}</span>{" "}
+                in {data.schoolYear} {data.window.toUpperCase()}.
+              </div>
+              {scored.length === 0 ? (
+                <div style={{ color: "#9ca3af", padding: 8 }}>
+                  No students have a recorded score on this benchmark.
+                </div>
+              ) : (
+                <ol style={{ paddingLeft: 18, margin: "0 0 12px 0" }}>
+                  {scored.map((s) => (
+                    <li key={s.studentId} style={{ marginBottom: 3 }}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setSuggestOpen(false);
+                          setStudentDrillId(s.studentId);
+                        }}
+                        style={{
+                          background: "none",
+                          border: "none",
+                          padding: 0,
+                          color: "#0369a1",
+                          textDecoration: "underline",
+                          textDecorationStyle: "dotted",
+                          cursor: "pointer",
+                          fontSize: 13,
+                        }}
+                      >
+                        {s.lastName}, {s.firstName}
+                      </button>{" "}
+                      <span style={{ color: "#6b7280", fontSize: 12 }}>
+                        G{s.grade}
+                      </span>{" "}
+                      <span
+                        style={{
+                          float: "right",
+                          fontWeight: 700,
+                          color: "#991b1b",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {s.pct}%
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 8,
+                  justifyContent: "flex-end",
+                  flexWrap: "wrap",
+                }}
+              >
+                <button
+                  type="button"
+                  onClick={copyList}
+                  disabled={scored.length === 0}
+                  style={{
+                    padding: "6px 12px",
+                    fontSize: 12,
+                    background: "white",
+                    border: "1px solid #d1d5db",
+                    borderRadius: 4,
+                    cursor: scored.length === 0 ? "not-allowed" : "pointer",
+                  }}
+                  title="Copy this list to clipboard"
+                >
+                  Copy list
+                </button>
+                {onOpenClassComposer ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSuggestOpen(false);
+                      onOpenClassComposer();
+                    }}
+                    style={{
+                      padding: "6px 12px",
+                      fontSize: 12,
+                      fontWeight: 600,
+                      background: "#1e3a8a",
+                      color: "white",
+                      border: "none",
+                      borderRadius: 4,
+                      cursor: "pointer",
+                    }}
+                    title="Open Class Composer to build formal groups"
+                  >
+                    Open in Class Composer
+                  </button>
+                ) : (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      color: "#6b7280",
+                      alignSelf: "center",
+                    }}
+                    title="Class Composer is admin / Core Team only"
+                  >
+                    Class Composer is admin / Core Team only
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }

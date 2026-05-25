@@ -205,6 +205,11 @@ interface Props {
   // active safety plans) but is non-clickable — hover still shows the
   // contents popover.
   onOpenSafetyPlan?: (studentId: string) => void;
+  // When provided, the Benchmarks tab's "Suggest small group" modal
+  // shows a "Open in Class Composer" button that calls this. Gated by
+  // the host (admin / Core Team only); regular teachers see the
+  // suggested list but no composer handoff.
+  onOpenClassComposer?: () => void;
   // Fires whenever the user picks a different teacher from the
   // dropdown. The host (App.tsx) uses this to remember the picked
   // teacher across page unmounts — e.g. when a SuperUser opens a
@@ -1292,6 +1297,7 @@ export default function TeacherRosterPage({
   onBack,
   onOpenSpider,
   onOpenSafetyPlan,
+  onOpenClassComposer,
   onTeacherChange,
 }: Props) {
   const [teachers, setTeachers] = useState<TeacherOpt[]>([]);
@@ -1810,6 +1816,7 @@ export default function TeacherRosterPage({
           isOwnRoster={isOwnRoster}
           rosterSelectedPeriod={data?.selectedPeriod ?? null}
           rosterAvailablePeriods={data?.availablePeriods ?? []}
+          onOpenClassComposer={onOpenClassComposer}
         />
       )}
 

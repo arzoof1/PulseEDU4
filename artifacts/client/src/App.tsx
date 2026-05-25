@@ -17667,6 +17667,11 @@ function App() {
           }
           onTeacherChange={(id) => setTeacherRosterTeacherId(id)}
           onBack={() => setActiveSection("hallPasses")}
+          onOpenClassComposer={
+            canAccessMtssHub
+              ? () => setActiveSection("classComposer")
+              : undefined
+          }
           onOpenSpider={(studentId) => {
             setSelectedInsightsStudentId(studentId);
             setStudentProfileReturnTo("teacherRoster");
