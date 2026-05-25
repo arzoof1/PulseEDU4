@@ -1329,15 +1329,17 @@ router.get(
 
       // Column header row — rotate -45° so long benchmark codes fit
       // without overflowing the column width. headerHeight needs to
-      // be tall enough that the rotated text (~80pt wide at 7pt,
-      // ~57pt vertical extent after rotation) fully clears the top
-      // of the band; previously 90pt and the tops of codes like
-      // "2.1.1" / "2.1.2" got clipped on the printed page.
-      const headerHeight = 120;
-      // Push the band down a touch so the rotated text never bleeds
+      // be tall enough that the rotated text (80pt wide at 7pt has
+      // ~57pt vertical extent after a 45° rotation) fully clears the
+      // top of the band. 75pt gives a small safety margin without
+      // wasting page real estate — earlier value of 120 left ~45pt
+      // of pure whitespace above the codes and pushed the first
+      // student row off the page.
+      const headerHeight = 75;
+      // Small buffer above the band so the rotated text never bleeds
       // into the bottom-3 tile above on chunk 0, or into the previous
       // row of cells on subsequent chunks.
-      doc.y = doc.y + 10;
+      doc.y = doc.y + 4;
       const headerY = doc.y;
       doc
         .font("Helvetica-Bold")
