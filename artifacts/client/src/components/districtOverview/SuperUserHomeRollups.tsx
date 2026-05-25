@@ -100,32 +100,51 @@ export default function SuperUserHomeRollups() {
   async function runSeedDemoCases() {
     if (
       !window.confirm(
-        "Seed 3 demo investigation cases at Parrott (school 1)?\n\nSafe to run more than once — existing cases with the same titles are skipped.",
+        "Seed Parrott (school 1) demo data?\n\nPopulates parent emails + phones, emergency contacts, demo cases, OSS/ISS logs, and support notes. Idempotent — safe to re-click.",
       )
     )
       return;
     setSeedBusy(true);
     setSeedResult(null);
     try {
-      const res = await authFetch("/api/admin/seed-demo-cases", {
+      const res = await authFetch("/api/admin/seed-demo-school-1", {
         method: "POST",
       });
       const body = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
+        parentEmails?: number;
+        parentPhones?: number;
+        emergencyContacts?: number;
         cases?: Array<{ title: string; status: string; caseNumber?: number }>;
+        sideInteractions?: number;
+        supportNotes?: number;
+        ossLogs?: number;
+        issAdminLogs?: number;
         error?: string;
         message?: string;
       };
-      if (!res.ok || !body.ok) {
+      if (!res.ok) {
         throw new Error(body.message || body.error || `HTTP ${res.status}`);
       }
-      const summary = (body.cases ?? [])
+      const caseLines = (body.cases ?? [])
         .map(
           (c) =>
-            `• ${c.title} — ${c.status}${c.caseNumber ? ` (#${c.caseNumber})` : ""}`,
+            `   • ${c.title} — ${c.status}${c.caseNumber ? ` (#${c.caseNumber})` : ""}`,
         )
         .join("\n");
-      setSeedResult(`Seed complete:\n${summary || "(no cases reported)"}`);
+      setSeedResult(
+        [
+          "Seed complete:",
+          `• Parent emails filled: ${body.parentEmails ?? 0}`,
+          `• Parent phones filled: ${body.parentPhones ?? 0}`,
+          `• Emergency contacts added: ${body.emergencyContacts ?? 0}`,
+          `• Support notes: ${body.supportNotes ?? 0}`,
+          `• OSS logs: ${body.ossLogs ?? 0}`,
+          `• ISS admin logs: ${body.issAdminLogs ?? 0}`,
+          `• Side interactions: ${body.sideInteractions ?? 0}`,
+          `• Cases:`,
+          caseLines || "   (none)",
+        ].join("\n"),
+      );
     } catch (e) {
       setSeedResult(`Seed failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
@@ -250,7 +269,7 @@ export default function SuperUserHomeRollups() {
           type="button"
           onClick={() => void runSeedDemoCases()}
           disabled={seedBusy}
-          title="Insert 3 demo investigation cases at Parrott (school 1). Idempotent."
+          title="Populate Parrott (school 1) with parent emails + phones, emergency contacts, demo cases, OSS/ISS logs, and support notes. Idempotent."
           style={{
             padding: "0.55rem 1rem",
             border: "1px solid var(--border, #e2e8f0)",
@@ -260,7 +279,7 @@ export default function SuperUserHomeRollups() {
             opacity: seedBusy ? 0.6 : 1,
           }}
         >
-          {seedBusy ? "Seeding…" : "Seed demo cases (Parrott)"}
+          {seedBusy ? "Seeding…" : "Seed demo data (Parrott)"}
         </button>
       </div>
       {seedResult && (
