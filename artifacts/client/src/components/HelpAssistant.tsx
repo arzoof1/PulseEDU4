@@ -13,6 +13,7 @@ import {
   useState,
   type FormEvent,
 } from "react";
+import { authFetch } from "../lib/authToken";
 
 type Role = "user" | "assistant";
 
@@ -63,7 +64,7 @@ export default function HelpAssistant() {
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
-    fetch(
+    authFetch(
       `/api/help-assistant/suggestions?path=${encodeURIComponent(currentPath)}`,
     )
       .then((r) => (r.ok ? r.json() : { suggestions: [] }))
@@ -112,10 +113,9 @@ export default function HelpAssistant() {
       setInput("");
       setSending(true);
       try {
-        const r = await fetch("/api/help-assistant/chat", {
+        const r = await authFetch("/api/help-assistant/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          credentials: "include",
           body: JSON.stringify({ messages: next, currentPath }),
         });
         if (!r.ok) {
