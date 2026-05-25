@@ -1,31 +1,32 @@
-// Class Composer "Master Plan" printable PDF.
+// Class Composer "Master Plan" printable PDF — teacher-facing redesign.
+//
+// Design goals (per user request):
+//   - Answer 5 questions in under 2 minutes: who's in my class, where
+//     are they, what skills are they missing, how do I differentiate
+//     inside the class, why was this group built this way.
+//   - One page per group (landscape). Roster overflow ONLY produces a
+//     continuation page — focus/pods/rationale never repeat.
+//   - Strict y-tracking: pdfkit margins are top:0/bottom:0 so the
+//     library never auto-paginates on us. Every text call has explicit
+//     x,y AND either lineBreak:false or a measured `height` clip.
 //
 // Layout:
-//   Page 1 — cover (portrait): school + plan name, (subject, grade,
-//            SY), saved by, created/finalized timestamps, and a
-//            one-row-per-group recipe summary so the master scheduler
-//            can see at a glance what's in the plan.
-//   Pages 2..N — one section per group (landscape). Each page has:
-//      - Top header strip:  plan name  |  "Group i of N"  |  "Page x of y"
-//      - Group title + recipe summary
-//      - Focus-standards bullet list (skill-cluster mode only)
-//      - Group summary line: avg overall %, avg focus mastery,
-//        ESE / 504 / ELL counts
-//      - Roster table:  # | SIS ID | Student | Gr | FAST | % | Flags |
-//                       Section / Teacher | Fit
-//      - Focus-standards matrix (skill-cluster mode only): rows =
-//        student #, cols = focus benchmark codes, cells = mastery %.
-//        Cells are heat-tinted red < 50%, amber 50–69%, green ≥ 70%
-//        so the teacher can sanity-check the recipe at a glance.
-//      - Per-student weakest strands mini-table (one row per student
-//        listing up to 3 weakest instructional strands + %).
-//      - "Confirmed by ___ / Date ___" signature line + Plan ID + QR
-//        footer.
+//   Cover (portrait):
+//     - Title + subtitle (school · subject/grade/SY · status · saved by)
+//     - "How these groups were built" — 5 plain-language criteria
+//     - Plan snapshot: two columns (counts | FAST level distribution bar)
+//     - "Most-deficit benchmarks plan-wide" heat strip (top 7, weighted)
+//     - "Groups in this plan" — 2-column index (name + seats + top focus)
 //
-// Headers/footers on every page so a stray page can be re-assembled.
-// PDFKit emits pages sequentially; we tag each group page with its
-// "Page x of y" using a post-pass that writes the total count once we
-// know it (we know it up front — number of groups + cover = pages).
+//   One landscape page per group:
+//     - Top band: name (left) + counts (right) + recipe + context chips
+//     - Left col (~42% width):
+//         * Focus standards (5) with heat bars + friendly labels
+//         * Why this group — auto-generated rationale
+//         * Suggested small-group pods (skill-themed)
+//     - Right col (~58% width):
+//         * Roster sorted Fit desc, then Overall asc
+//         * Cols: # · Student · Gr · FAST · Overall % (heat) · PM 1/2/3 · Flags · Fit
 
 import PDFDocument from "pdfkit";
 import QRCode from "qrcode";
@@ -41,15 +42,7 @@ export interface ComposerPlanPdfStudent {
   ese: boolean;
   is504: boolean;
   ell: boolean;
-  // benchmarkCode → mastery % (0..100). Empty when the student has
-  // no item responses for the source window — those rows render "—"
-  // in the focus-standards matrix.
   benchmarkPctByCode: Record<string, number>;
-  // Student's personal bottom-7 weakest benchmark codes (lowest pct
-  // first). Used to compute fit-count against the group's focus
-  // standards on the PDF; the percentage tells the teacher how many
-  // of the recipe's focus standards land in that student's own list
-  // of weakest skills.
   bottomBenchmarkCodes: string[];
   strands: Array<{ category: string; pct: number }>;
   currentSection: {
@@ -57,16 +50,11 @@ export interface ComposerPlanPdfStudent {
     period: number;
     teacherName: string | null;
   } | null;
-  // PM1/PM2/PM3 FAST achievement levels (1..5 | null) — surfaced as
-  // a trajectory chip in the roster table so the teacher can see
-  // movement at a glance without paging into the student profile.
   pmLevels?: {
     pm1: number | null;
     pm2: number | null;
     pm3: number | null;
   };
-  // Cross-module context flags. All optional so older callers that
-  // don't supply them still render the same roster.
   hasActiveMtss?: boolean;
   hasActiveSafetyPlan?: boolean;
   everRetained?: boolean;
@@ -87,23 +75,16 @@ export interface ComposerPlanPdfGroup {
   seatsPerSection: number;
   students: ComposerPlanPdfStudent[];
   focusStandards?: ComposerPlanPdfFocusStandard[] | null;
-  // Group-level "what does this whole class most need to work on?"
-  // — the 5 lowest-average benchmarks across the roster (each
-  // surfaced only when at least half the group has responses).
   weakestBenchmarks?: Array<{
     benchmarkCode: string;
     avgPct: number;
     coveragePct: number;
   }>;
-  // Within-class small-group suggestions. Only populated by the
-  // route layer when the group has ≥8 students with FAST profiles.
   subPods?: Array<{
     podIndex: number;
     dominantCategory: string | null;
     memberNames: string[];
   }>;
-  // Quick cross-module context counts — printed under the group
-  // summary so the teacher knows what they're walking into.
   context?: {
     activeMtss: number;
     activeSafetyPlan: number;
@@ -160,7 +141,7 @@ function programFlagsLabel(s: ComposerPlanPdfStudent): string {
   if (s.ese) f.push("ESE");
   if (s.is504) f.push("504");
   if (s.ell) f.push("ELL");
-  return f.join(" · ");
+  return f.join("·");
 }
 
 function heatFill(pct: number | null): string | null {
@@ -170,10 +151,27 @@ function heatFill(pct: number | null): string | null {
   return "#dcfce7";
 }
 
+function detectSourceWindow(input: ComposerPlanPdfInput): string | null {
+  for (const g of input.groups) {
+    for (const f of g.focusStandards ?? []) {
+      if (f.sourceWindow) return f.sourceWindow.toUpperCase();
+    }
+  }
+  return null;
+}
+
+function detectSourceWindowForGroup(
+  g: ComposerPlanPdfGroup,
+): string | null {
+  for (const f of g.focusStandards ?? []) {
+    if (f.sourceWindow) return f.sourceWindow.toUpperCase();
+  }
+  return null;
+}
+
 export async function renderComposerPlanPdf(
   input: ComposerPlanPdfInput,
 ): Promise<Buffer> {
-  // Pre-render the QR (small, ~80px) once — same QR on every page.
   const qrPayload = `PULSE-COMPOSER:${input.publicId}`;
   const qrDataUrl = await QRCode.toDataURL(qrPayload, {
     margin: 0,
@@ -188,12 +186,11 @@ export async function renderComposerPlanPdf(
   return new Promise<Buffer>((resolve, reject) => {
     const doc = new PDFDocument({
       size: "LETTER",
-      margins: {
-        top: PAGE_MARGIN + HEADER_HEIGHT,
-        bottom: PAGE_MARGIN + FOOTER_HEIGHT,
-        left: PAGE_MARGIN,
-        right: PAGE_MARGIN,
-      },
+      // These doc-level margins are inherited by addPage ONLY when addPage
+      // is called without margin options. We pass margins explicitly on
+      // every addPage below (pdfkit otherwise resets to 72pt defaults,
+      // shrinking page.maxY() and causing auto-pagination on bottom text).
+      margins: { top: 0, bottom: 0, left: PAGE_MARGIN, right: PAGE_MARGIN },
       autoFirstPage: false,
       bufferPages: true,
       info: {
@@ -208,23 +205,23 @@ export async function renderComposerPlanPdf(
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    // ----- Page 1: cover (portrait) -----
-    doc.addPage({ size: "LETTER", layout: "portrait" });
-    drawHeader(doc, input.planName, "Cover", 0, 0);
-    drawFooter(doc, input.publicId, qrBuffer);
-
+    // ----- Cover (portrait) -----
+    // CRITICAL: must pass margins on every addPage. pdfkit does NOT inherit
+    // doc-level margins; without this, page.maxY() falls back to height-72,
+    // which auto-paginates any text call near the bottom (e.g. footer).
+    doc.addPage({ size: "LETTER", layout: "portrait", margins: { top: 0, bottom: 0, left: PAGE_MARGIN, right: PAGE_MARGIN } });
+    drawHeader(doc, input.planName, "Cover");
+    drawFooter(doc, input.publicId, qrBuffer, false);
     drawCoverBody(doc, input);
 
     // ----- One landscape page per group -----
     for (let i = 0; i < input.groups.length; i++) {
       const g = input.groups[i];
-      doc.addPage({ size: "LETTER", layout: "landscape" });
+      doc.addPage({ size: "LETTER", layout: "landscape", margins: { top: 0, bottom: 0, left: PAGE_MARGIN, right: PAGE_MARGIN } });
       drawHeader(
         doc,
         input.planName,
         `Group ${g.groupIndex} of ${input.groups.length}`,
-        0,
-        0,
       );
       drawFooter(doc, input.publicId, qrBuffer, true);
       drawGroupBody(doc, g, {
@@ -232,14 +229,11 @@ export async function renderComposerPlanPdf(
         totalGroups: input.groups.length,
         publicId: input.publicId,
         qrBuffer,
-        isLastGroup: i === input.groups.length - 1,
       });
     }
 
-    // Stamp page numbers (X / Y) once we know the final count. We do
-    // this in a post-pass because continuation pages from oversized
-    // groups inflate the count past `1 + groups.length`. The header
-    // band already painted on each page leaves room for the stamp.
+    // Post-pass: stamp "Page X of Y" once we know the final count
+    // (roster overflows can push past the up-front estimate).
     const range = doc.bufferedPageRange();
     const total = range.count;
     for (let p = 0; p < total; p++) {
@@ -251,7 +245,11 @@ export async function renderComposerPlanPdf(
         `Page ${p + 1} of ${total}`,
         PAGE_MARGIN + (2 * widthBand) / 3,
         PAGE_MARGIN + 9,
-        { width: widthBand / 3 - 8, align: "right", lineBreak: false },
+        {
+          width: widthBand / 3 - 8,
+          align: "right",
+          lineBreak: false,
+        },
       );
     }
 
@@ -263,8 +261,6 @@ function drawHeader(
   doc: PDFKit.PDFDocument,
   planName: string,
   middle: string,
-  pageNo: number,
-  totalPages: number,
 ) {
   const y = PAGE_MARGIN;
   const left = PAGE_MARGIN;
@@ -277,27 +273,25 @@ function drawHeader(
     .fill()
     .restore();
   doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-  doc.text(planName, left + 8, y + 9, { width: width / 3, ellipsis: true });
+  doc.text(planName, left + 8, y + 9, {
+    width: width / 3,
+    ellipsis: true,
+    lineBreak: false,
+  });
   doc.font("Helvetica").fontSize(10).fillColor("#334155");
   doc.text(middle, left + width / 3, y + 9, {
     width: width / 3,
     align: "center",
+    lineBreak: false,
   });
-  if (pageNo > 0) {
-    doc.text(
-      `Page ${pageNo} of ${totalPages}`,
-      left + (2 * width) / 3,
-      y + 9,
-      { width: width / 3 - 8, align: "right" },
-    );
-  }
+  // Page X of Y is stamped post-pass in renderComposerPlanPdf.
 }
 
 function drawFooter(
   doc: PDFKit.PDFDocument,
   publicId: string,
   qrBuffer: Buffer,
-  showSignature: boolean = false,
+  showSignature: boolean,
 ) {
   const left = PAGE_MARGIN;
   const right = doc.page.width - PAGE_MARGIN;
@@ -311,24 +305,26 @@ function drawFooter(
     .strokeColor("#cbd5e1")
     .stroke()
     .restore();
-  // Signature block on the left, Plan ID + QR on the right.
   const qrSize = 56;
-  doc.image(qrBuffer, right - qrSize, top + 8, { width: qrSize, height: qrSize });
+  doc.image(qrBuffer, right - qrSize, top + 8, {
+    width: qrSize,
+    height: qrSize,
+  });
   doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-  doc.text("Plan ID", right - qrSize - 110, top + 14, { width: 90, align: "right" });
+  doc.text("Plan ID", right - qrSize - 110, top + 14, {
+    width: 90,
+    align: "right",
+    lineBreak: false,
+  });
   doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
   doc.text(publicId, right - qrSize - 110, top + 26, {
     width: 90,
     align: "right",
+    lineBreak: false,
   });
-  // "Confirmed by" / "Date" signature lines — Florida districts want
-  // a paper trail showing who reviewed the benchmark-based grouping
-  // before it went to the master scheduler. Only printed on the first
-  // page of each group; cover and continuation pages skip it so the
-  // reviewer isn't asked to sign 7+ lines for a 6-group plan.
   if (showSignature) {
     doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-    doc.text("Confirmed by:", left, top + 14);
+    doc.text("Confirmed by:", left, top + 14, { lineBreak: false });
     doc
       .save()
       .moveTo(left + 70, top + 24)
@@ -337,7 +333,7 @@ function drawFooter(
       .strokeColor("#475569")
       .stroke()
       .restore();
-    doc.text("Date:", left, top + 38);
+    doc.text("Date:", left, top + 38, { lineBreak: false });
     doc
       .save()
       .moveTo(left + 70, top + 48)
@@ -347,116 +343,226 @@ function drawFooter(
       .stroke()
       .restore();
   }
-  doc
-    .font("Helvetica")
-    .fontSize(8)
-    .fillColor("#94a3b8")
-    .text(
-      "Scan QR or look up the Plan ID in PulseEDU to find the source plan.",
-      left,
-      top + 58,
-      { width: right - left - qrSize - 130 },
-    );
+  doc.font("Helvetica").fontSize(8).fillColor("#94a3b8");
+  doc.text(
+    "Scan QR or look up the Plan ID in PulseEDU to find the source plan.",
+    left,
+    top + 58,
+    { width: right - left - qrSize - 130, height: 10, lineBreak: false, ellipsis: true },
+  );
 }
+
+// ============================================================
+// COVER
+// ============================================================
 
 function drawCoverBody(
   doc: PDFKit.PDFDocument,
   input: ComposerPlanPdfInput,
 ) {
-  const contentLeft = PAGE_MARGIN;
-  const contentRight = doc.page.width - PAGE_MARGIN;
-  const contentTop = PAGE_MARGIN + HEADER_HEIGHT + 10;
-  const colW = (contentRight - contentLeft - 16) / 2;
+  const left = PAGE_MARGIN;
+  const right = doc.page.width - PAGE_MARGIN;
+  const width = right - left;
+  const bottomLimit =
+    doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 8;
+  let y = PAGE_MARGIN + HEADER_HEIGHT + 14;
 
-  // Title block
+  // === Title ===
   doc.font("Helvetica-Bold").fontSize(22).fillColor("#0f172a");
-  doc.text(input.planName, contentLeft, contentTop, { width: contentRight - contentLeft });
-  doc.moveDown(0.2);
-  doc
-    .font("Helvetica")
-    .fontSize(12)
-    .fillColor("#475569")
-    .text(input.schoolName, { width: contentRight - contentLeft });
+  doc.text(input.planName, left, y, {
+    width,
+    lineBreak: false,
+    ellipsis: true,
+  });
+  y += 28;
 
-  // Roll up plan-wide aggregates.
+  doc.font("Helvetica").fontSize(11).fillColor("#475569");
+  const subtitleParts = [
+    input.schoolName,
+    `${subjectLabel(input.subject)} · Grade ${input.grade} · ${input.schoolYear}`,
+    input.status === "final" && input.finalizedAt
+      ? `Finalized ${fmtDate(input.finalizedAt)}`
+      : `Draft (created ${fmtDate(input.createdAt)})`,
+    `Saved by ${input.savedByName}`,
+  ];
+  doc.text(subtitleParts.join("  ·  "), left, y, {
+    width,
+    lineBreak: false,
+    ellipsis: true,
+  });
+  y += 20;
+
+  // Divider
+  doc
+    .save()
+    .moveTo(left, y)
+    .lineTo(right, y)
+    .lineWidth(0.5)
+    .strokeColor("#cbd5e1")
+    .stroke()
+    .restore();
+  y += 12;
+
+  // === How these groups were built ===
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
+  doc.text("How these groups were built", left, y, {
+    width,
+    lineBreak: false,
+  });
+  y += 16;
+
+  const hasFocus = input.groups.some(
+    (g) => g.focusStandards && g.focusStandards.length > 0,
+  );
+  const sw = detectSourceWindow(input);
+  const criteria = [
+    hasFocus
+      ? "Eligibility — students at FAST levels 1-2 in the source PM window (and below grade-level decile for tier-3 pools)."
+      : "Eligibility — pool defined by the recipe (typically L1/L2 for intensive, broader for cusp).",
+    "Cohesion metric — students placed with peers whose personal bottom-7 weakest benchmarks overlap.",
+    hasFocus
+      ? "Focus standards — top 5 benchmarks per group where avg mastery ≤ 50% AND ≥ 60% of the group has item-response coverage."
+      : "Focus skills — ranked by lowest group-average mastery with coverage floor applied.",
+    "Caps & guardrails — section seat limit, ESE concentration ceiling, no co-listing of students cross-listed on each other's safety plans.",
+    `Source window — ${sw ?? "latest PM"} — anchors the recipe; the plan does not auto-refresh when newer data arrives.`,
+  ];
+  doc.font("Helvetica").fontSize(10).fillColor("#334155");
+  for (const c of criteria) {
+    const bulletText = `•  ${c}`;
+    const h = doc.heightOfString(bulletText, { width: width - 12 });
+    doc.text(bulletText, left + 6, y, {
+      width: width - 12,
+      height: h,
+    });
+    y += h + 3;
+  }
+  y += 8;
+
+  // === Plan snapshot: two columns ===
   const allStudents = input.groups.flatMap((g) => g.students);
   const totalStudents = allStudents.length;
-  const eseTotal = allStudents.filter((s) => s.ese).length;
-  const fiveOhFourTotal = allStudents.filter((s) => s.is504).length;
-  const ellTotal = allStudents.filter((s) => s.ell).length;
-  const mtssTotal = allStudents.filter((s) => s.hasActiveMtss).length;
-  const safetyTotal = allStudents.filter((s) => s.hasActiveSafetyPlan).length;
-  const retainedTotal = allStudents.filter((s) => s.everRetained).length;
-  const disciplineTotal = allStudents.reduce(
-    (a, s) => a + (s.disciplineDays30 ?? 0),
-    0,
-  );
+  const counts = {
+    ese: allStudents.filter((s) => s.ese).length,
+    is504: allStudents.filter((s) => s.is504).length,
+    ell: allStudents.filter((s) => s.ell).length,
+    mtss: allStudents.filter((s) => s.hasActiveMtss).length,
+    safety: allStudents.filter((s) => s.hasActiveSafetyPlan).length,
+    retained: allStudents.filter((s) => s.everRetained).length,
+    disc30: allStudents.reduce(
+      (a, s) => a + (s.disciplineDays30 ?? 0),
+      0,
+    ),
+  };
   const scored = allStudents.filter((s) => s.overallPct != null);
   const planAvg =
     scored.length === 0
       ? null
       : Math.round(
-          scored.reduce((a, s) => a + (s.overallPct ?? 0), 0) / scored.length,
+          scored.reduce((a, s) => a + (s.overallPct ?? 0), 0) /
+            scored.length,
         );
-
-  // ----- Two-column band: details (left) | snapshot (right) -----
-  const bandTop = doc.y + 14;
-  // Left: Plan details
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
-  doc.text("Plan details", contentLeft, bandTop);
-  doc.font("Helvetica").fontSize(10).fillColor("#334155");
-  const detailLines = [
-    `Subject: ${subjectLabel(input.subject)}`,
-    `Grade: ${input.grade}`,
-    `School year: ${input.schoolYear}`,
-    `Status: ${input.status === "final" ? "Finalized" : "Draft"}`,
-    `Saved by: ${input.savedByName}`,
-    `Created: ${fmtDate(input.createdAt)}`,
-    ...(input.finalizedAt ? [`Finalized: ${fmtDate(input.finalizedAt)}`] : []),
-    `Plan ID: ${input.publicId}`,
-    `Groups: ${input.groups.length}`,
-    `Total students: ${totalStudents}`,
-  ];
-  let dy = bandTop + 16;
-  for (const line of detailLines) {
-    doc.text(line, contentLeft, dy, { width: colW });
-    dy += 13;
+  const levelCounts = [0, 0, 0, 0, 0];
+  for (const s of allStudents) {
+    if (s.fastLevel && s.fastLevel >= 1 && s.fastLevel <= 5)
+      levelCounts[s.fastLevel - 1]++;
   }
 
-  // Right: Roster snapshot
-  const rightX = contentLeft + colW + 16;
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
-  doc.text("Roster snapshot", rightX, bandTop);
-  doc.font("Helvetica").fontSize(10).fillColor("#334155");
-  let ry = bandTop + 16;
-  const snapshotLines: Array<[string, string, string?]> = [
+  doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
+  doc.text("Plan snapshot", left, y, { width, lineBreak: false });
+  y += 16;
+
+  const colW = (width - 16) / 2;
+  const rightColX = left + colW + 16;
+
+  // LEFT — counts
+  const leftRows: [string, string][] = [
+    ["Total students", String(totalStudents)],
+    ["Groups", String(input.groups.length)],
     ["Avg overall %", planAvg != null ? `${planAvg}%` : "—"],
-    ["ESE", String(eseTotal)],
-    ["504", String(fiveOhFourTotal)],
-    ["ELL", String(ellTotal)],
-    ["Active MTSS plans", String(mtssTotal)],
-    ["Active safety plans", String(safetyTotal)],
-    ["Ever retained", String(retainedTotal)],
-    ["ISS+OSS days (last 30)", String(disciplineTotal)],
+    ["ESE", String(counts.ese)],
+    ["504", String(counts.is504)],
+    ["ELL", String(counts.ell)],
+    ["Active MTSS", String(counts.mtss)],
+    ["Active safety plans", String(counts.safety)],
+    ["Ever retained", String(counts.retained)],
+    ["ISS+OSS days (last 30)", String(counts.disc30)],
   ];
-  for (const [label, value] of snapshotLines) {
-    doc.fillColor("#475569").text(label, rightX, ry, { width: colW * 0.6, lineBreak: false });
-    doc
-      .fillColor("#0f172a")
-      .font("Helvetica-Bold")
-      .text(value, rightX + colW * 0.6, ry, {
-        width: colW * 0.4,
-        align: "right",
-        lineBreak: false,
-      });
-    doc.font("Helvetica");
-    ry += 13;
+  let ly = y;
+  for (const [k, v] of leftRows) {
+    doc.font("Helvetica").fontSize(10).fillColor("#475569");
+    doc.text(k, left, ly, {
+      width: colW * 0.65,
+      lineBreak: false,
+    });
+    doc.font("Helvetica-Bold").fillColor("#0f172a");
+    doc.text(v, left + colW * 0.65, ly, {
+      width: colW * 0.35,
+      align: "right",
+      lineBreak: false,
+    });
+    ly += 13;
   }
 
-  // ----- Plan-wide top weakest benchmarks (aggregated across groups) -----
-  // Aggregate from per-group weakestBenchmarks (already coverage-floor-
-  // gated). Weight each benchmark's avg by its group's student count so
-  // a 30-kid group's deficit isn't equal-weighted with a 6-kid pod.
+  // RIGHT — FAST level distribution
+  doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+  doc.text("FAST level distribution", rightColX, y, {
+    width: colW,
+    lineBreak: false,
+  });
+  let ry = y + 16;
+  const barH = 22;
+  const barW = colW;
+  const colors = [
+    "#ef4444",
+    "#f97316",
+    "#eab308",
+    "#22c55e",
+    "#15803d",
+  ];
+  let cumX = 0;
+  for (let i = 0; i < 5; i++) {
+    const c = levelCounts[i];
+    const segW =
+      totalStudents > 0 ? (c / totalStudents) * barW : 0;
+    if (segW > 0) {
+      doc
+        .save()
+        .rect(rightColX + cumX, ry, segW, barH)
+        .fillColor(colors[i])
+        .fill()
+        .restore();
+    }
+    cumX += segW;
+  }
+  doc
+    .save()
+    .rect(rightColX, ry, barW, barH)
+    .lineWidth(0.5)
+    .strokeColor("#475569")
+    .stroke()
+    .restore();
+  ry += barH + 8;
+  // Legend — 5 chips side-by-side
+  const legW = colW / 5;
+  for (let i = 0; i < 5; i++) {
+    const lx = rightColX + i * legW;
+    doc
+      .save()
+      .rect(lx, ry, 10, 10)
+      .fillColor(colors[i])
+      .fill()
+      .restore();
+    doc.font("Helvetica").fontSize(9).fillColor("#334155");
+    doc.text(`L${i + 1}: ${levelCounts[i]}`, lx + 14, ry + 1, {
+      width: legW - 16,
+      lineBreak: false,
+    });
+  }
+  ry += 18;
+
+  y = Math.max(ly, ry) + 12;
+
+  // === Plan-wide weakest benchmarks (heat strip) ===
   const weightedByCode = new Map<
     string,
     { weightedSum: number; weight: number }
@@ -474,102 +580,183 @@ function drawCoverBody(
     }
   }
   const topWeakest = Array.from(weightedByCode.entries())
-    .map(([code, v]) => ({ code, avg: Math.round(v.weightedSum / v.weight) }))
+    .map(([code, v]) => ({
+      code,
+      avg: Math.round(v.weightedSum / v.weight),
+    }))
     .sort((a, b) => a.avg - b.avg)
     .slice(0, 7);
 
-  // Place after whichever column ended lower.
-  const bandBottom = Math.max(dy, ry) + 14;
-  let curY = bandBottom;
-  if (topWeakest.length > 0) {
-    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
-    doc.text("Most-deficit benchmarks plan-wide (weighted)", contentLeft, curY);
-    curY += 16;
-    doc.font("Helvetica").fontSize(10).fillColor("#334155");
-    const wbColW = (contentRight - contentLeft) / Math.min(topWeakest.length, 7);
+  if (topWeakest.length > 0 && y + 50 < bottomLimit) {
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
+    doc.text(
+      "Most-deficit benchmarks plan-wide (weighted)",
+      left,
+      y,
+      { width, lineBreak: false },
+    );
+    y += 16;
+    const cellW = width / topWeakest.length;
     for (let i = 0; i < topWeakest.length; i++) {
-      const w = topWeakest[i];
-      const x = contentLeft + i * wbColW;
-      const fill = heatFill(w.avg);
+      const wb = topWeakest[i];
+      const x = left + i * cellW;
+      const fill = heatFill(wb.avg);
       if (fill) {
         doc
           .save()
-          .rect(x, curY, wbColW - 4, 32)
+          .rect(x, y, cellW - 4, 36)
           .fillColor(fill)
           .fill()
           .restore();
       }
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(9)
-        .fillColor("#0f172a")
-        .text(w.code, x + 4, curY + 5, { width: wbColW - 12, lineBreak: false });
-      doc
-        .font("Helvetica")
-        .fontSize(11)
-        .fillColor("#0f172a")
-        .text(`${w.avg}%`, x + 4, curY + 17, {
-          width: wbColW - 12,
-          lineBreak: false,
-        });
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      doc.text(wb.code, x + 4, y + 6, {
+        width: cellW - 12,
+        lineBreak: false,
+        ellipsis: true,
+      });
+      doc.font("Helvetica").fontSize(12).fillColor("#0f172a");
+      doc.text(`${wb.avg}%`, x + 4, y + 20, {
+        width: cellW - 12,
+        lineBreak: false,
+      });
     }
-    curY += 42;
+    y += 46;
   }
 
-  // ----- Group list (compact: 2 columns) -----
-  doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
-  doc.text("Groups in this plan", contentLeft, curY);
-  curY += 16;
-  doc.font("Helvetica").fontSize(10).fillColor("#334155");
-  const groupRowH = 26;
-  const groupColW = (contentRight - contentLeft - 12) / 2;
-  for (let i = 0; i < input.groups.length; i++) {
-    const g = input.groups[i];
-    const col = i % 2;
-    const row = Math.floor(i / 2);
-    const gx = contentLeft + col * (groupColW + 12);
-    const gy = curY + row * groupRowH;
-    const overCap = g.students.length > g.seatsPerSection;
-    doc
-      .font("Helvetica-Bold")
-      .fontSize(10)
-      .fillColor("#0f172a")
-      .text(`${g.groupIndex}. ${g.name}`, gx, gy, {
+  // === Groups in this plan (index) ===
+  if (y + 40 < bottomLimit) {
+    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
+    doc.text("Groups in this plan", left, y, {
+      width,
+      lineBreak: false,
+    });
+    y += 16;
+    const groupRowH = 26;
+    const groupColW = (width - 12) / 2;
+    for (let i = 0; i < input.groups.length; i++) {
+      const g = input.groups[i];
+      const col = i % 2;
+      const row = Math.floor(i / 2);
+      const gx = left + col * (groupColW + 12);
+      const gy = y + row * groupRowH;
+      if (gy + groupRowH > bottomLimit) break;
+      const overCap = g.students.length > g.seatsPerSection;
+      const topFocus =
+        g.focusStandards && g.focusStandards.length > 0
+          ? g.focusStandards[0].benchmarkCode
+          : g.weakestBenchmarks && g.weakestBenchmarks.length > 0
+            ? g.weakestBenchmarks[0].benchmarkCode
+            : null;
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+      doc.text(`${g.groupIndex}. ${g.name}`, gx, gy, {
         width: groupColW,
         lineBreak: false,
         ellipsis: true,
       });
-    doc
-      .font("Helvetica")
-      .fontSize(9)
-      .fillColor(overCap ? "#b91c1c" : "#64748b")
-      .text(
-        `${g.students.length}/${g.seatsPerSection}${overCap ? " OVER" : ""}  ·  ${g.recipeSummary}`,
-        gx,
-        gy + 12,
-        { width: groupColW, lineBreak: false, ellipsis: true },
-      );
+      doc
+        .font("Helvetica")
+        .fontSize(9)
+        .fillColor(overCap ? "#b91c1c" : "#64748b");
+      const meta = `${g.students.length}/${g.seatsPerSection} seats${overCap ? " (OVER)" : ""}${topFocus ? `  ·  Top focus: ${topFocus}` : ""}`;
+      doc.text(meta, gx, gy + 12, {
+        width: groupColW,
+        lineBreak: false,
+        ellipsis: true,
+      });
+    }
+    y += Math.ceil(input.groups.length / 2) * groupRowH + 8;
   }
-  curY += Math.ceil(input.groups.length / 2) * groupRowH + 12;
 
-  doc
-    .font("Helvetica-Oblique")
-    .fontSize(9)
-    .fillColor("#94a3b8")
-    .text(
-      "Paper artifact only — does not modify Skyward/RosterOne. Each page is tagged with the Plan ID + QR below so shuffled pages can be re-assembled.",
-      contentLeft,
-      curY,
-      { width: contentRight - contentLeft },
-    );
+  // Disclaimer
+  if (y + 20 < bottomLimit) {
+    doc.font("Helvetica-Oblique").fontSize(9).fillColor("#94a3b8");
+    const note =
+      "Paper artifact only — does not modify Skyward/RosterOne. Each page is tagged with the Plan ID + QR below so shuffled pages can be re-assembled.";
+    const noteH = doc.heightOfString(note, { width });
+    doc.text(note, left, y, { width, height: Math.min(noteH, 24) });
+  }
 }
+
+// ============================================================
+// GROUP PAGE
+// ============================================================
 
 interface GroupPageCtx {
   planName: string;
   totalGroups: number;
   publicId: string;
   qrBuffer: Buffer;
-  isLastGroup: boolean;
+}
+
+interface RosterCol {
+  w: number;
+  label: string;
+  key:
+    | "idx"
+    | "name"
+    | "grade"
+    | "fast"
+    | "overall"
+    | "pm"
+    | "flags"
+    | "fit";
+}
+
+function buildRosterCols(
+  totalW: number,
+  hasFocus: boolean,
+): RosterCol[] {
+  const base: RosterCol[] = [
+    { w: 20, label: "#", key: "idx" },
+    { w: 0, label: "Student", key: "name" }, // flex
+    { w: 24, label: "Gr", key: "grade" },
+    { w: 32, label: "FAST", key: "fast" },
+    { w: 42, label: "Overall", key: "overall" },
+    { w: 70, label: "PM 1/2/3", key: "pm" },
+    { w: 56, label: "Flags", key: "flags" },
+  ];
+  if (hasFocus) base.push({ w: 40, label: "Fit", key: "fit" });
+  const used = base.reduce((a, c) => a + c.w, 0);
+  base[1].w = Math.max(80, totalW - used);
+  return base;
+}
+
+function buildReasonText(
+  g: ComposerPlanPdfGroup,
+  cohesionPct: number | null,
+  focusCount: number,
+): string {
+  const parts: string[] = [];
+  if (g.focusStandards && g.focusStandards.length >= 2) {
+    const top2 = g.focusStandards.slice(0, 2);
+    parts.push(
+      `Built around shared deficit in ${top2
+        .map((f) => f.benchmarkCode)
+        .join(" and ")} (lowest-mastery benchmarks across the roster).`,
+    );
+  } else if (g.focusStandards && g.focusStandards.length === 1) {
+    parts.push(
+      `Built around shared deficit in ${g.focusStandards[0].benchmarkCode} (lowest-mastery benchmark across the roster).`,
+    );
+  } else if (g.weakestBenchmarks && g.weakestBenchmarks.length > 0) {
+    parts.push(
+      `Roster's most common deficit is ${g.weakestBenchmarks[0].benchmarkCode} at ${g.weakestBenchmarks[0].avgPct}% group average.`,
+    );
+  } else {
+    parts.push(
+      `Built per recipe — see roster for FAST level mix and PM trajectory.`,
+    );
+  }
+  if (cohesionPct != null && focusCount > 0) {
+    const threshold = Math.max(1, Math.ceil(focusCount / 2));
+    parts.push(
+      `${cohesionPct}% of the roster has at least ${threshold} of the ${focusCount} focus standards in their personal bottom-7 weakest skills — the higher this number, the more the group can be taught as one.`,
+    );
+  }
+  const sw = detectSourceWindowForGroup(g);
+  if (sw) parts.push(`Recipe anchored to ${sw}.`);
+  return parts.join(" ");
 }
 
 function drawGroupBody(
@@ -580,173 +767,416 @@ function drawGroupBody(
   const left = PAGE_MARGIN;
   const right = doc.page.width - PAGE_MARGIN;
   const width = right - left;
-  const top = PAGE_MARGIN + HEADER_HEIGHT + 8;
+  const top = PAGE_MARGIN + HEADER_HEIGHT + 10;
+  const bottomLimit =
+    doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 8;
 
-  // Compact title — group name + recipe on the same line so the
-  // title block stays under ~32pt, leaving more vertical room for
-  // the roster and aggregate blocks.
-  doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a");
-  doc.text(g.name, left, top, { continued: true });
-  doc
-    .font("Helvetica")
-    .fontSize(9)
-    .fillColor("#64748b")
-    .text(`   ${g.recipeSummary}`);
+  // === Top band ===
+  let y = top;
 
-  // Group summary — averages + program-flag counts so the reviewer
-  // sees the shape of the group before scanning the roster.
-  const eseCt = g.students.filter((s) => s.ese).length;
-  const fiveOhFourCt = g.students.filter((s) => s.is504).length;
-  const ellCt = g.students.filter((s) => s.ell).length;
+  // Computed aggregates
+  const ese = g.students.filter((s) => s.ese).length;
+  const fpf = g.students.filter((s) => s.is504).length;
+  const ell = g.students.filter((s) => s.ell).length;
   const scored = g.students.filter((s) => s.overallPct != null);
   const avgOverall =
     scored.length === 0
       ? null
       : Math.round(
-          scored.reduce((a, s) => a + (s.overallPct ?? 0), 0) / scored.length,
+          scored.reduce((a, s) => a + (s.overallPct ?? 0), 0) /
+            scored.length,
         );
-  const focusCodes = (g.focusStandards ?? []).map((f) => f.benchmarkCode);
-  let avgFocus: number | null = null;
-  if (focusCodes.length > 0) {
-    const focusPcts: number[] = [];
-    for (const s of g.students) {
-      for (const code of focusCodes) {
-        const p = s.benchmarkPctByCode[code];
-        if (typeof p === "number") focusPcts.push(p);
-      }
-    }
-    avgFocus =
-      focusPcts.length === 0
-        ? null
-        : Math.round(focusPcts.reduce((a, b) => a + b, 0) / focusPcts.length);
+  const focusCodes = (g.focusStandards ?? []).map(
+    (f) => f.benchmarkCode,
+  );
+  let cohesionPct: number | null = null;
+  if (focusCodes.length > 0 && g.students.length > 0) {
+    const threshold = Math.max(1, Math.ceil(focusCodes.length / 2));
+    const cohered = g.students.filter((s) => {
+      const bs = new Set(s.bottomBenchmarkCodes);
+      return focusCodes.filter((c) => bs.has(c)).length >= threshold;
+    }).length;
+    cohesionPct = Math.round((cohered / g.students.length) * 100);
   }
-  // Single-line summary: counts + context merged, ·-separated, so we
-  // don't burn two lines on what's effectively a header strip.
-  doc.font("Helvetica").fontSize(9).fillColor("#334155");
-  const summaryParts: string[] = [
+
+  // Group name (left) + counts (right)
+  doc.font("Helvetica-Bold").fontSize(16).fillColor("#0f172a");
+  doc.text(g.name, left, y, {
+    width: width * 0.6,
+    lineBreak: false,
+    ellipsis: true,
+  });
+
+  const overCap = g.students.length > g.seatsPerSection;
+  const countsParts = [
     `${g.students.length} student${g.students.length === 1 ? "" : "s"}`,
-    `Seats ${g.seatsPerSection}${g.students.length > g.seatsPerSection ? " (OVER)" : ""}`,
+    `Seats ${g.seatsPerSection}${overCap ? " (OVER)" : ""}`,
+    ...(avgOverall != null ? [`Avg ${avgOverall}%`] : []),
+    ...(cohesionPct != null ? [`Cohesion ${cohesionPct}%`] : []),
   ];
-  if (avgOverall != null) summaryParts.push(`Avg ${avgOverall}%`);
-  if (avgFocus != null) summaryParts.push(`Focus ${avgFocus}%`);
-  if (eseCt > 0) summaryParts.push(`ESE ${eseCt}`);
-  if (fiveOhFourCt > 0) summaryParts.push(`504 ${fiveOhFourCt}`);
-  if (ellCt > 0) summaryParts.push(`ELL ${ellCt}`);
+  doc
+    .font("Helvetica")
+    .fontSize(10)
+    .fillColor(overCap ? "#b91c1c" : "#334155");
+  doc.text(countsParts.join("  ·  "), left + width * 0.6, y + 5, {
+    width: width * 0.4,
+    align: "right",
+    lineBreak: false,
+  });
+  y += 22;
+
+  // Recipe (1 line clipped)
+  doc.font("Helvetica-Oblique").fontSize(9).fillColor("#64748b");
+  doc.text(g.recipeSummary, left, y, {
+    width,
+    lineBreak: false,
+    ellipsis: true,
+  });
+  y += 14;
+
+  // Context chips (1 line)
+  const chips: string[] = [];
+  if (ese > 0) chips.push(`ESE ${ese}`);
+  if (fpf > 0) chips.push(`504 ${fpf}`);
+  if (ell > 0) chips.push(`ELL ${ell}`);
   if (g.context) {
     if (g.context.activeMtss > 0)
-      summaryParts.push(`MTSS ${g.context.activeMtss}`);
+      chips.push(`MTSS ${g.context.activeMtss}`);
     if (g.context.activeSafetyPlan > 0)
-      summaryParts.push(`Safety ${g.context.activeSafetyPlan}`);
+      chips.push(`Safety ${g.context.activeSafetyPlan}`);
     if (g.context.everRetained > 0)
-      summaryParts.push(`Retained ${g.context.everRetained}`);
+      chips.push(`Retained ${g.context.everRetained}`);
     if (g.context.disciplineEvents30 > 0)
-      summaryParts.push(`Disc-30d ${g.context.disciplineEvents30}`);
+      chips.push(`Disc-30d ${g.context.disciplineEvents30}`);
   }
-  doc.text(summaryParts.join("  ·  "), { width });
+  if (chips.length > 0) {
+    doc.font("Helvetica").fontSize(9).fillColor("#475569");
+    doc.text(chips.join("   ·   "), left, y, {
+      width,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    y += 13;
+  }
 
+  // Divider
+  doc
+    .save()
+    .moveTo(left, y)
+    .lineTo(right, y)
+    .lineWidth(0.5)
+    .strokeColor("#cbd5e1")
+    .stroke()
+    .restore();
+  y += 8;
+
+  // === Two-column body ===
+  const colGap = 16;
+  const leftColW = Math.floor((width - colGap) * 0.42);
+  const rightColW = width - leftColW - colGap;
+  const rightColX = left + leftColW + colGap;
+  const colTop = y;
+
+  // ----- LEFT COL -----
+  let ly = colTop;
+
+  // Focus standards
   if (g.focusStandards && g.focusStandards.length > 0) {
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-    doc.text("Focus standards:", { continued: false });
-    doc.font("Helvetica").fontSize(9).fillColor("#334155");
-    // Render focus standards compactly: one per line is fine, but
-    // strip the redundant code prefix from the friendly label.
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+    doc.text(
+      `Focus standards (${g.focusStandards.length})`,
+      left,
+      ly,
+      { width: leftColW, lineBreak: false },
+    );
+    ly += 16;
     for (const f of g.focusStandards) {
-      doc.text(
-        `  • ${f.benchmarkCode} — ${f.friendlyLabel.replace(`${f.benchmarkCode} · `, "")} (avg ${f.groupAvgPct}%${f.sourceWindow ? `, ${f.sourceWindow.toUpperCase()}` : ""})`,
-        { width },
+      if (ly + 28 > bottomLimit) break;
+      // Code on left, heat bar with % on right
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      doc.text(f.benchmarkCode, left, ly + 1, {
+        width: leftColW * 0.55,
+        lineBreak: false,
+        ellipsis: true,
+      });
+      const barX = left + leftColW * 0.55;
+      const barW = leftColW * 0.45;
+      const fill = heatFill(f.groupAvgPct) ?? "#f1f5f9";
+      doc
+        .save()
+        .rect(barX, ly - 1, barW, 13)
+        .fillColor(fill)
+        .fill()
+        .restore();
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      doc.text(`${f.groupAvgPct}% group avg`, barX + 4, ly + 1, {
+        width: barW - 8,
+        align: "center",
+        lineBreak: false,
+      });
+      ly += 14;
+      // Friendly label, clipped to 2 lines (~22pt)
+      doc.font("Helvetica").fontSize(8.5).fillColor("#475569");
+      const label = f.friendlyLabel.replace(
+        `${f.benchmarkCode} · `,
+        "",
       );
+      doc.text(label, left, ly, {
+        width: leftColW,
+        height: 22,
+        ellipsis: true,
+      });
+      ly += 24;
+    }
+    ly += 6;
+  }
+
+  // Why this group
+  if (ly + 50 < bottomLimit) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+    doc.text("Why this group", left, ly, {
+      width: leftColW,
+      lineBreak: false,
+    });
+    ly += 15;
+    const reason = buildReasonText(
+      g,
+      cohesionPct,
+      focusCodes.length,
+    );
+    doc.font("Helvetica").fontSize(9).fillColor("#334155");
+    const reasonH = Math.min(
+      doc.heightOfString(reason, { width: leftColW }),
+      bottomLimit - ly - 4,
+    );
+    doc.text(reason, left, ly, {
+      width: leftColW,
+      height: Math.max(reasonH, 12),
+    });
+    ly += reasonH + 10;
+  }
+
+  // Suggested sub-pods
+  if (
+    g.subPods &&
+    g.subPods.length > 0 &&
+    ly + 40 < bottomLimit
+  ) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+    doc.text(
+      `Suggested small-group pods (${g.subPods.length})`,
+      left,
+      ly,
+      { width: leftColW, lineBreak: false },
+    );
+    ly += 14;
+    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#64748b");
+    const helperText =
+      "Auto-clustered by shared skill deficit — pull together during teacher-led rotations.";
+    const helperH = Math.min(
+      doc.heightOfString(helperText, { width: leftColW }),
+      20,
+    );
+    doc.text(helperText, left, ly, {
+      width: leftColW,
+      height: helperH,
+    });
+    ly += helperH + 4;
+    for (const pod of g.subPods) {
+      if (ly + 22 > bottomLimit) break;
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      const podHeader = pod.dominantCategory
+        ? `Pod ${pod.podIndex} · ${pod.dominantCategory} (${pod.memberNames.length})`
+        : `Pod ${pod.podIndex} (${pod.memberNames.length})`;
+      doc.text(podHeader, left, ly, {
+        width: leftColW,
+        lineBreak: false,
+        ellipsis: true,
+      });
+      ly += 11;
+      doc.font("Helvetica").fontSize(8).fillColor("#475569");
+      const members = pod.memberNames.join(", ") || "—";
+      const remaining = bottomLimit - ly;
+      const mH = Math.min(
+        doc.heightOfString(members, { width: leftColW }),
+        Math.max(11, Math.min(22, remaining)),
+      );
+      doc.text(members, left, ly, {
+        width: leftColW,
+        height: mH,
+        ellipsis: true,
+      });
+      ly += mH + 4;
     }
   }
 
-  doc.moveDown(0.3);
+  // ----- RIGHT COL: roster -----
+  // Sort: Fit desc (most-targeted at top), then Overall asc
+  const sortedStudents = [...g.students].sort((a, b) => {
+    let fitA = 0;
+    let fitB = 0;
+    if (focusCodes.length > 0) {
+      const sA = new Set(a.bottomBenchmarkCodes);
+      const sB = new Set(b.bottomBenchmarkCodes);
+      fitA = focusCodes.filter((c) => sA.has(c)).length;
+      fitB = focusCodes.filter((c) => sB.has(c)).length;
+    }
+    if (fitB !== fitA) return fitB - fitA;
+    const pA = a.overallPct ?? 999;
+    const pB = b.overallPct ?? 999;
+    return pA - pB;
+  });
 
-  // ----- Roster table -----
-  // Widths sum ≤ landscape-letter content width (792 - 80 = 712).
-  // PM trajectory col is always present (renders "—" when there's
-  // no score). Focus-fit col is dropped when the plan isn't a
-  // skill-cluster plan — that column is meaningless without focus
-  // standards, and shedding it gives Section / Teacher room to
-  // breathe on Cusp plans (where most rows wrap otherwise).
-  const hasFocus = !!(g.focusStandards && g.focusStandards.length > 0);
-  // Common cols: 24+70+150+28+38+38+50+72 = 470. Remaining 242pt for
-  // Section (and optional Focus-fit).
-  const rosterCols: Array<{ w: number; label: string }> = [
-    { w: 24, label: "#" },
-    { w: 70, label: "SIS ID" },
-    { w: 150, label: "Student" },
-    { w: 28, label: "Gr" },
-    { w: 38, label: "FAST" },
-    { w: 38, label: "%" },
-    { w: 50, label: "Flags" },
-    { w: 72, label: "PM1/2/3" },
-    { w: hasFocus ? 192 : 242, label: "Section / Teacher" },
-    ...(hasFocus ? [{ w: 50, label: "Focus fit" }] : []),
-  ];
+  const hasFocus = focusCodes.length > 0;
+  const rosterCols = buildRosterCols(rightColW, hasFocus);
+  const headerH = 18;
   const rowH = 16;
-  let y = doc.y;
-  drawRow(doc, left, y, rowH, rosterCols, "header");
-  let x = left;
+
+  let ry = colTop;
+  drawRosterHeader(doc, rightColX, ry, headerH, rightColW, rosterCols);
+  ry += headerH;
+
+  const availRows = Math.floor((bottomLimit - ry) / rowH);
+  const rowsThisPage = Math.min(sortedStudents.length, availRows);
+  drawRosterRows(
+    doc,
+    sortedStudents.slice(0, rowsThisPage),
+    rightColX,
+    ry,
+    rowH,
+    rosterCols,
+    focusCodes,
+    0,
+  );
+
+  // Continuation pages — roster only, no left col, full-width table.
+  let drawn = rowsThisPage;
+  while (drawn < sortedStudents.length) {
+    doc.addPage({ size: "LETTER", layout: "landscape", margins: { top: 0, bottom: 0, left: PAGE_MARGIN, right: PAGE_MARGIN } });
+    drawHeader(
+      doc,
+      ctx.planName,
+      `Group ${g.groupIndex} of ${ctx.totalGroups} (roster cont.)`,
+    );
+    drawFooter(doc, ctx.publicId, ctx.qrBuffer, false);
+    let cy = PAGE_MARGIN + HEADER_HEIGHT + 12;
+    doc.font("Helvetica-Bold").fontSize(13).fillColor("#0f172a");
+    doc.text(`${g.name} — roster continued`, left, cy, {
+      width,
+      lineBreak: false,
+      ellipsis: true,
+    });
+    cy += 22;
+    const fullCols = buildRosterCols(width, hasFocus);
+    drawRosterHeader(doc, left, cy, headerH, width, fullCols);
+    cy += headerH;
+    const contBottom =
+      doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 8;
+    const remainingRows = Math.floor((contBottom - cy) / rowH);
+    const sliceCount = Math.min(
+      sortedStudents.length - drawn,
+      remainingRows,
+    );
+    drawRosterRows(
+      doc,
+      sortedStudents.slice(drawn, drawn + sliceCount),
+      left,
+      cy,
+      rowH,
+      fullCols,
+      focusCodes,
+      drawn,
+    );
+    drawn += sliceCount;
+    // Guard against infinite loop if the page can't fit any rows
+    // (shouldn't happen at rowH=16, but defensive).
+    if (sliceCount === 0) break;
+  }
+}
+
+function drawRosterHeader(
+  doc: PDFKit.PDFDocument,
+  x0: number,
+  y: number,
+  headerH: number,
+  totalW: number,
+  cols: RosterCol[],
+) {
+  doc
+    .save()
+    .rect(x0, y, totalW, headerH)
+    .fillColor("#e2e8f0")
+    .fill()
+    .restore();
   doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-  for (const c of rosterCols) {
-    doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
+  let x = x0;
+  for (const c of cols) {
+    doc.text(c.label, x + 4, y + 5, {
+      width: c.w - 8,
+      lineBreak: false,
+      ellipsis: true,
+    });
     x += c.w;
   }
-  y += rowH;
+}
 
-  doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-  const bottomLimit = doc.page.height - PAGE_MARGIN - FOOTER_HEIGHT - 6;
-  for (let i = 0; i < g.students.length; i++) {
-    if (y + rowH > bottomLimit) {
-      doc.addPage({ size: "LETTER", layout: "landscape" });
-      drawHeader(
-        doc,
-        ctx.planName,
-        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        0,
-        0,
-      );
-      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      doc.font("Helvetica-Bold").fontSize(13).fillColor("#0f172a");
-      doc.text(`${g.name} (continued)`, left, top);
-      doc.moveDown(0.4);
-      y = doc.y;
-      drawRow(doc, left, y, rowH, rosterCols, "header");
-      x = left;
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-      for (const c of rosterCols) {
-        doc.text(c.label, x + 4, y + 5, { width: c.w - 8, ellipsis: true });
-        x += c.w;
-      }
-      y += rowH;
-      doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+function drawRosterRows(
+  doc: PDFKit.PDFDocument,
+  students: ComposerPlanPdfStudent[],
+  x0: number,
+  y0: number,
+  rowH: number,
+  cols: RosterCol[],
+  focusCodes: string[],
+  indexOffset: number,
+): void {
+  let y = y0;
+  const totalW = cols.reduce((a, c) => a + c.w, 0);
+  for (let i = 0; i < students.length; i++) {
+    const s = students[i];
+    // Zebra stripe
+    if (i % 2 === 1) {
+      doc
+        .save()
+        .rect(x0, y, totalW, rowH)
+        .fillColor("#f8fafc")
+        .fill()
+        .restore();
     }
-    const s = g.students[i];
-    if (i % 2 === 1) drawRow(doc, left, y, rowH, rosterCols, "alt");
+    // Heat-tint the Overall column cell
+    const overallCol = cols.find((c) => c.key === "overall");
+    if (overallCol && s.overallPct != null) {
+      let ox = x0;
+      for (const c of cols) {
+        if (c.key === "overall") break;
+        ox += c.w;
+      }
+      const fill = heatFill(s.overallPct);
+      if (fill) {
+        doc
+          .save()
+          .rect(ox, y, overallCol.w, rowH)
+          .fillColor(fill)
+          .fill()
+          .restore();
+      }
+    }
 
-    // Fit count: how many of the group's focus standards land in
-    // this student's personal bottom-7 weakest benchmarks. Gives
-    // the teacher a per-student "this kid belongs here" indicator.
     let fitText = "—";
     if (focusCodes.length > 0) {
-      const bottomSet = new Set(s.bottomBenchmarkCodes);
-      const hit = focusCodes.filter((c) => bottomSet.has(c)).length;
+      const bs = new Set(s.bottomBenchmarkCodes);
+      const hit = focusCodes.filter((c) => bs.has(c)).length;
       fitText = `${hit}/${focusCodes.length}`;
     }
-
-    const section = s.currentSection;
-    const sectionText = section
-      ? `P${section.period} · ${section.courseName}${section.teacherName ? " — " + section.teacherName : ""}`
-      : "—";
-
-    // PM trajectory chip: "L#/L#/L# ▲" (or ▼ / – / no glyph if only
-    // one window has data). Glyph compares the latest two windows
-    // that both have a score — purely directional, no magnitude.
     const pm = s.pmLevels;
-    const pmCell = (() => {
+    const pmText = (() => {
       if (!pm) return "—";
       const fmt = (v: number | null) => (v == null ? "—" : `L${v}`);
-      const parts = [fmt(pm.pm1), fmt(pm.pm2), fmt(pm.pm3)].join("/");
-      // Pick the most-recent two non-null levels for the glyph.
+      const parts = [
+        fmt(pm.pm1),
+        fmt(pm.pm2),
+        fmt(pm.pm3),
+      ].join("/");
       const seq: number[] = [];
       if (pm.pm1 != null) seq.push(pm.pm1);
       if (pm.pm2 != null) seq.push(pm.pm2);
@@ -757,319 +1187,46 @@ function drawGroupBody(
       const glyph = last > prev ? "▲" : last < prev ? "▼" : "–";
       return `${parts} ${glyph}`;
     })();
+    const overallText =
+      s.overallPct != null ? `${Math.round(s.overallPct)}%` : "—";
 
-    x = left;
-    const cells = [
-      String(i + 1),
-      s.localSisId ?? "—",
-      `${s.lastName}, ${s.firstName}`,
-      s.grade != null ? String(s.grade) : "—",
-      s.fastLevel != null ? `L${s.fastLevel}` : "—",
-      s.overallPct != null ? `${Math.round(s.overallPct)}%` : "—",
-      programFlagsLabel(s) || "—",
-      pmCell,
-      sectionText,
-      ...(hasFocus ? [fitText] : []),
-    ];
-    doc.fillColor("#0f172a");
-    for (let ci = 0; ci < rosterCols.length; ci++) {
-      doc.text(cells[ci], x + 4, y + 5, {
-        width: rosterCols[ci].w - 8,
-        ellipsis: true, lineBreak: false,
+    let x = x0;
+    for (const c of cols) {
+      let v = "";
+      switch (c.key) {
+        case "idx":
+          v = String(indexOffset + i + 1);
+          break;
+        case "name":
+          v = `${s.lastName}, ${s.firstName}`;
+          break;
+        case "grade":
+          v = s.grade != null ? String(s.grade) : "—";
+          break;
+        case "fast":
+          v = s.fastLevel != null ? `L${s.fastLevel}` : "—";
+          break;
+        case "overall":
+          v = overallText;
+          break;
+        case "pm":
+          v = pmText;
+          break;
+        case "flags":
+          v = programFlagsLabel(s) || "—";
+          break;
+        case "fit":
+          v = fitText;
+          break;
+      }
+      doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+      doc.text(v, x + 4, y + 4, {
+        width: c.w - 8,
+        lineBreak: false,
+        ellipsis: true,
       });
-      x += rosterCols[ci].w;
+      x += c.w;
     }
     y += rowH;
   }
-
-  // ----- Aggregate band: weakest benchmarks (left) + sub-pods (right) -----
-  // Two-column layout so both blocks consume one vertical band instead
-  // of two — major density win. Each column is independent so the band
-  // height = max(left height, right height). Renders only when there's
-  // at least one block to show.
-  const wbList = g.weakestBenchmarks ?? [];
-  const podList = g.subPods ?? [];
-  if (wbList.length > 0 || podList.length > 0) {
-    // Tight height estimate so we don't push a new page for a band
-    // that will actually fit. Worst case: weakest-benchmark table
-    // is rowH per row + ~32pt of titles/padding. Sub-pods are
-    // narrow text — empirically ~22pt per pod.
-    const wbBlockH = wbList.length > 0 ? 32 + wbList.length * rowH : 0;
-    const podBlockH = podList.length > 0 ? 28 + podList.length * 22 : 0;
-    const bandH = Math.max(wbBlockH, podBlockH);
-    if (y + bandH > bottomLimit) {
-      doc.addPage({ size: "LETTER", layout: "landscape" });
-      drawHeader(
-        doc,
-        ctx.planName,
-        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        0,
-        0,
-      );
-      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-    } else {
-      y += 8;
-    }
-    const bandY = y;
-    const colGap = 12;
-    // When both blocks present split 50/50; when only one, give it
-    // full width to stay readable.
-    const haveBoth = wbList.length > 0 && podList.length > 0;
-    const leftColW = haveBoth ? (width - colGap) / 2 : width;
-    const rightColW = haveBoth ? (width - colGap) / 2 : 0;
-    const rightX = left + leftColW + colGap;
-
-    // ----- Left: Weakest benchmarks (A) -----
-    if (wbList.length > 0) {
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-      doc.text(
-        `Group's ${wbList.length} weakest benchmarks (whole-class focus)`,
-        left,
-        bandY,
-        { width: leftColW },
-      );
-      let wy = bandY + 14;
-      // Compact columns: #, benchmark, avg %, coverage.
-      const codeW = leftColW - 24 - 60 - 90;
-      const wbCols: Array<{ w: number; label: string }> = [
-        { w: 24, label: "#" },
-        { w: codeW, label: "Benchmark" },
-        { w: 60, label: "Avg" },
-        { w: 90, label: "Coverage" },
-      ];
-      drawRow(doc, left, wy, rowH, wbCols, "header");
-      let wx = left;
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-      for (const c of wbCols) {
-        doc.text(c.label, wx + 4, wy + 4, { width: c.w - 8, lineBreak: false });
-        wx += c.w;
-      }
-      wy += rowH;
-      doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-      for (let i = 0; i < wbList.length; i++) {
-        const wb = wbList[i];
-        if (i % 2 === 1) drawRow(doc, left, wy, rowH, wbCols, "alt");
-        const fill = heatFill(wb.avgPct);
-        if (fill) {
-          doc
-            .save()
-            .rect(left + 24 + codeW, wy, 60, rowH)
-            .fillColor(fill)
-            .fill()
-            .restore();
-        }
-        wx = left;
-        doc.fillColor("#0f172a");
-        doc.text(String(i + 1), wx + 4, wy + 4, { width: 16, lineBreak: false });
-        wx += 24;
-        doc.text(wb.benchmarkCode, wx + 4, wy + 4, {
-          width: codeW - 8,
-          ellipsis: true,
-          lineBreak: false,
-        });
-        wx += codeW;
-        doc.text(`${wb.avgPct}%`, wx + 4, wy + 4, {
-          width: 60 - 8,
-          align: "center",
-          lineBreak: false,
-        });
-        wx += 60;
-        doc.text(`${wb.coveragePct}% of grp`, wx + 4, wy + 4, {
-          width: 90 - 8,
-          lineBreak: false,
-        });
-        wy += rowH;
-      }
-    }
-
-    // ----- Right: Sub-pods (E) -----
-    if (podList.length > 0 && haveBoth) {
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-      doc.text(
-        `Suggested within-class sub-pods (${podList.length})`,
-        rightX,
-        bandY,
-        { width: rightColW, lineBreak: false },
-      );
-      doc.font("Helvetica-Oblique").fontSize(8).fillColor("#64748b");
-      doc.text(
-        "Auto-clustered by benchmark deficit. Adjust as needed.",
-        rightX,
-        bandY + 12,
-        { width: rightColW, lineBreak: false, ellipsis: true },
-      );
-      // Stack pods vertically inside the right column — names wrap
-      // naturally and the column is narrow enough that 3 horizontal
-      // pods would clip too many names.
-      let py = bandY + 26;
-      for (const pod of podList) {
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-        const podHeader = pod.dominantCategory
-          ? `Pod ${pod.podIndex} · ${pod.dominantCategory} (${pod.memberNames.length})`
-          : `Pod ${pod.podIndex} (${pod.memberNames.length})`;
-        doc.text(podHeader, rightX, py, {
-          width: rightColW,
-          lineBreak: false,
-          ellipsis: true,
-        });
-        doc.font("Helvetica").fontSize(8).fillColor("#334155");
-        doc.text(pod.memberNames.join(", "), rightX, py + 11, {
-          width: rightColW,
-        });
-        py = doc.y + 4;
-      }
-    } else if (podList.length > 0) {
-      // Full-width sub-pods (when there are no weakest benchmarks to
-      // pair with — rare, but happens for tiny groups).
-      let py = bandY;
-      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-      doc.text(`Suggested within-class sub-pods (${podList.length})`, left, py);
-      py += 14;
-      const podW = Math.floor(width / podList.length);
-      const maxRowH = podList.reduce(
-        (m, p) => Math.max(m, 14 + Math.ceil(p.memberNames.length / 3) * 11),
-        0,
-      );
-      for (let pi = 0; pi < podList.length; pi++) {
-        const pod = podList[pi];
-        const px = left + pi * podW;
-        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-        const header = pod.dominantCategory
-          ? `Pod ${pod.podIndex} · ${pod.dominantCategory}`
-          : `Pod ${pod.podIndex}`;
-        doc.text(header, px + 4, py, { width: podW - 8, ellipsis: true });
-        doc.font("Helvetica").fontSize(8).fillColor("#334155");
-        doc.text(pod.memberNames.join(", ") || "—", px + 4, py + 12, {
-          width: podW - 8,
-        });
-      }
-      y = py + maxRowH + 8;
-    }
-    y = bandY + bandH;
-  }
-
-  // Note: per-student focus-mastery matrix and weakest-strands
-  // mini-tables were removed in the density redesign. The roster
-  // already exposes the same signal: "Fit" column (X/N focus
-  // standards in student's bottom 7) and "%" column (overall FAST
-  // pct). Re-rendering 18-25 student rows twice more was the main
-  // driver of empty continuation pages.
-
-  // ----- Pre-printed M-F × 3-rotation grid (D) -----
-  // Only render on the last group page so the deck ends with one
-  // ready-to-write grid the teacher can fill in by hand. Three
-  // rotations per day is the small-group standard for K-8 reading
-  // and math blocks (teacher-led / independent / partner).
-  if (ctx.isLastGroup) {
-    const gridTitleH = 18;
-    const gridRows = 3;
-    const gridHeaderH = 18;
-    const gridCellH = 42;
-    const gridBlockH = gridTitleH + gridHeaderH + gridRows * gridCellH + 8;
-    if (y + gridBlockH > bottomLimit) {
-      doc.addPage({ size: "LETTER", layout: "landscape" });
-      drawHeader(
-        doc,
-        ctx.planName,
-        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        0,
-        0,
-      );
-      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-    } else {
-      y += 16;
-    }
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-    doc.text("Weekly rotation grid (fill in by hand)", left, y);
-    y += gridTitleH;
-    const days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
-    const labelW = 80;
-    const dayW = Math.floor((width - labelW) / days.length);
-    // Header row.
-    doc
-      .save()
-      .rect(left, y, labelW + dayW * days.length, gridHeaderH)
-      .fillColor("#e2e8f0")
-      .fill()
-      .restore();
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-    doc.text("", left + 4, y + 5, { width: labelW - 8 });
-    for (let di = 0; di < days.length; di++) {
-      doc.text(days[di], left + labelW + di * dayW + 4, y + 5, {
-        width: dayW - 8,
-        align: "center",
-      });
-    }
-    // Outline header bottom border.
-    doc
-      .save()
-      .moveTo(left, y + gridHeaderH)
-      .lineTo(left + labelW + dayW * days.length, y + gridHeaderH)
-      .lineWidth(0.5)
-      .strokeColor("#94a3b8")
-      .stroke()
-      .restore();
-    y += gridHeaderH;
-    // Three rotation rows.
-    const rotationLabels = ["Rotation A", "Rotation B", "Rotation C"];
-    for (let ri = 0; ri < gridRows; ri++) {
-      // Label cell.
-      doc
-        .save()
-        .rect(left, y, labelW, gridCellH)
-        .fillColor("#f8fafc")
-        .fill()
-        .restore();
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-      doc.text(rotationLabels[ri], left + 4, y + 6, { width: labelW - 8 });
-      // Day cells — empty bordered boxes.
-      for (let di = 0; di < days.length; di++) {
-        const cx = left + labelW + di * dayW;
-        doc
-          .save()
-          .rect(cx, y, dayW, gridCellH)
-          .lineWidth(0.5)
-          .strokeColor("#cbd5e1")
-          .stroke()
-          .restore();
-      }
-      // Vertical separator after label.
-      doc
-        .save()
-        .moveTo(left + labelW, y)
-        .lineTo(left + labelW, y + gridCellH)
-        .lineWidth(0.5)
-        .strokeColor("#94a3b8")
-        .stroke()
-        .restore();
-      y += gridCellH;
-    }
-    // Outer border.
-    doc
-      .save()
-      .rect(left, y - gridRows * gridCellH - gridHeaderH, labelW + dayW * days.length, gridRows * gridCellH + gridHeaderH)
-      .lineWidth(0.7)
-      .strokeColor("#475569")
-      .stroke()
-      .restore();
-  }
-}
-
-function drawRow(
-  doc: PDFKit.PDFDocument,
-  left: number,
-  y: number,
-  rowH: number,
-  cols: Array<{ w: number }>,
-  kind: "header" | "alt",
-) {
-  const w = cols.reduce((a, c) => a + c.w, 0);
-  doc
-    .save()
-    .rect(left, y, w, rowH)
-    .fillColor(kind === "header" ? "#e2e8f0" : "#f8fafc")
-    .fill()
-    .restore();
 }
