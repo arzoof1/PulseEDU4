@@ -204,6 +204,7 @@ export async function renderComposerPlanPdf(
         right: PAGE_MARGIN,
       },
       autoFirstPage: false,
+      bufferPages: true,
       info: {
         Title: `${input.planName} — Class Composer Plan`,
         Author: "PulseEDU",
@@ -216,73 +217,12 @@ export async function renderComposerPlanPdf(
     doc.on("end", () => resolve(Buffer.concat(chunks)));
     doc.on("error", reject);
 
-    const totalPages = 1 + input.groups.length;
-
     // ----- Page 1: cover (portrait) -----
     doc.addPage({ size: "LETTER", layout: "portrait" });
-    drawHeader(doc, input.planName, "Cover", 1, totalPages);
+    drawHeader(doc, input.planName, "Cover", 0, 0);
     drawFooter(doc, input.publicId, qrBuffer);
 
-    const contentLeft = PAGE_MARGIN;
-    const contentTop = PAGE_MARGIN + HEADER_HEIGHT + 10;
-    doc.font("Helvetica-Bold").fontSize(22).fillColor("#0f172a");
-    doc.text(input.planName, contentLeft, contentTop, { width: 500 });
-    doc.moveDown(0.3);
-    doc
-      .font("Helvetica")
-      .fontSize(12)
-      .fillColor("#475569")
-      .text(input.schoolName, { width: 500 });
-
-    doc.moveDown(0.8);
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
-    doc.text("Plan details", { underline: false });
-    doc.moveDown(0.2);
-    doc.font("Helvetica").fontSize(11).fillColor("#334155");
-    const detailLines = [
-      `Subject: ${subjectLabel(input.subject)}`,
-      `Grade: ${input.grade}`,
-      `School year: ${input.schoolYear}`,
-      `Status: ${input.status === "final" ? "Finalized" : "Draft"}`,
-      `Saved by: ${input.savedByName}`,
-      `Created: ${fmtDate(input.createdAt)}`,
-      ...(input.finalizedAt ? [`Finalized: ${fmtDate(input.finalizedAt)}`] : []),
-      `Plan ID: ${input.publicId}`,
-      `Groups: ${input.groups.length}`,
-      `Total students: ${input.groups.reduce((a, g) => a + g.students.length, 0)}`,
-    ];
-    for (const line of detailLines) doc.text(line);
-
-    doc.moveDown(1);
-    doc.font("Helvetica-Bold").fontSize(12).fillColor("#0f172a");
-    doc.text("Groups in this plan");
-    doc.moveDown(0.3);
-    doc.font("Helvetica").fontSize(11).fillColor("#334155");
-    for (const g of input.groups) {
-      const overCap = g.students.length > g.seatsPerSection;
-      const capStr = `${g.students.length}/${g.seatsPerSection}${overCap ? " (over)" : ""}`;
-      doc
-        .font("Helvetica-Bold")
-        .fontSize(11)
-        .fillColor("#0f172a")
-        .text(`${g.groupIndex}. ${g.name}  `, { continued: true })
-        .font("Helvetica")
-        .fillColor(overCap ? "#b91c1c" : "#475569")
-        .text(capStr + "  ", { continued: true })
-        .fillColor("#64748b")
-        .text(g.recipeSummary);
-      doc.moveDown(0.2);
-    }
-
-    doc.moveDown(1);
-    doc
-      .font("Helvetica-Oblique")
-      .fontSize(9)
-      .fillColor("#94a3b8")
-      .text(
-        "Paper artifact only — does not modify Skyward/RosterOne. Each page is tagged with the Plan ID + QR below so shuffled pages can be re-assembled.",
-        { width: 500 },
-      );
+    drawCoverBody(doc, input);
 
     // ----- One landscape page per group -----
     for (let i = 0; i < input.groups.length; i++) {
@@ -292,8 +232,8 @@ export async function renderComposerPlanPdf(
         doc,
         input.planName,
         `Group ${g.groupIndex} of ${input.groups.length}`,
-        i + 2,
-        totalPages,
+        0,
+        0,
       );
       drawFooter(doc, input.publicId, qrBuffer, true);
       drawGroupBody(doc, g, {
@@ -303,6 +243,25 @@ export async function renderComposerPlanPdf(
         qrBuffer,
         isLastGroup: i === input.groups.length - 1,
       });
+    }
+
+    // Stamp page numbers (X / Y) once we know the final count. We do
+    // this in a post-pass because continuation pages from oversized
+    // groups inflate the count past `1 + groups.length`. The header
+    // band already painted on each page leaves room for the stamp.
+    const range = doc.bufferedPageRange();
+    const total = range.count;
+    for (let p = 0; p < total; p++) {
+      doc.switchToPage(range.start + p);
+      const right = doc.page.width - PAGE_MARGIN;
+      const widthBand = right - PAGE_MARGIN;
+      doc.font("Helvetica").fontSize(10).fillColor("#334155");
+      doc.text(
+        `Page ${p + 1} of ${total}`,
+        PAGE_MARGIN + (2 * widthBand) / 3,
+        PAGE_MARGIN + 9,
+        { width: widthBand / 3 - 8, align: "right", lineBreak: false },
+      );
     }
 
     doc.end();
@@ -409,6 +368,211 @@ function drawFooter(
     );
 }
 
+function drawCoverBody(
+  doc: PDFKit.PDFDocument,
+  input: ComposerPlanPdfInput,
+) {
+  const contentLeft = PAGE_MARGIN;
+  const contentRight = doc.page.width - PAGE_MARGIN;
+  const contentTop = PAGE_MARGIN + HEADER_HEIGHT + 10;
+  const colW = (contentRight - contentLeft - 16) / 2;
+
+  // Title block
+  doc.font("Helvetica-Bold").fontSize(22).fillColor("#0f172a");
+  doc.text(input.planName, contentLeft, contentTop, { width: contentRight - contentLeft });
+  doc.moveDown(0.2);
+  doc
+    .font("Helvetica")
+    .fontSize(12)
+    .fillColor("#475569")
+    .text(input.schoolName, { width: contentRight - contentLeft });
+
+  // Roll up plan-wide aggregates.
+  const allStudents = input.groups.flatMap((g) => g.students);
+  const totalStudents = allStudents.length;
+  const eseTotal = allStudents.filter((s) => s.ese).length;
+  const fiveOhFourTotal = allStudents.filter((s) => s.is504).length;
+  const ellTotal = allStudents.filter((s) => s.ell).length;
+  const mtssTotal = allStudents.filter((s) => s.hasActiveMtss).length;
+  const safetyTotal = allStudents.filter((s) => s.hasActiveSafetyPlan).length;
+  const retainedTotal = allStudents.filter((s) => s.everRetained).length;
+  const disciplineTotal = allStudents.reduce(
+    (a, s) => a + (s.disciplineDays30 ?? 0),
+    0,
+  );
+  const scored = allStudents.filter((s) => s.overallPct != null);
+  const planAvg =
+    scored.length === 0
+      ? null
+      : Math.round(
+          scored.reduce((a, s) => a + (s.overallPct ?? 0), 0) / scored.length,
+        );
+
+  // ----- Two-column band: details (left) | snapshot (right) -----
+  const bandTop = doc.y + 14;
+  // Left: Plan details
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+  doc.text("Plan details", contentLeft, bandTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#334155");
+  const detailLines = [
+    `Subject: ${subjectLabel(input.subject)}`,
+    `Grade: ${input.grade}`,
+    `School year: ${input.schoolYear}`,
+    `Status: ${input.status === "final" ? "Finalized" : "Draft"}`,
+    `Saved by: ${input.savedByName}`,
+    `Created: ${fmtDate(input.createdAt)}`,
+    ...(input.finalizedAt ? [`Finalized: ${fmtDate(input.finalizedAt)}`] : []),
+    `Plan ID: ${input.publicId}`,
+    `Groups: ${input.groups.length}`,
+    `Total students: ${totalStudents}`,
+  ];
+  let dy = bandTop + 16;
+  for (const line of detailLines) {
+    doc.text(line, contentLeft, dy, { width: colW });
+    dy += 13;
+  }
+
+  // Right: Roster snapshot
+  const rightX = contentLeft + colW + 16;
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+  doc.text("Roster snapshot", rightX, bandTop);
+  doc.font("Helvetica").fontSize(10).fillColor("#334155");
+  let ry = bandTop + 16;
+  const snapshotLines: Array<[string, string, string?]> = [
+    ["Avg overall %", planAvg != null ? `${planAvg}%` : "—"],
+    ["ESE", String(eseTotal)],
+    ["504", String(fiveOhFourTotal)],
+    ["ELL", String(ellTotal)],
+    ["Active MTSS plans", String(mtssTotal)],
+    ["Active safety plans", String(safetyTotal)],
+    ["Ever retained", String(retainedTotal)],
+    ["ISS+OSS days (last 30)", String(disciplineTotal)],
+  ];
+  for (const [label, value] of snapshotLines) {
+    doc.fillColor("#475569").text(label, rightX, ry, { width: colW * 0.6, lineBreak: false });
+    doc
+      .fillColor("#0f172a")
+      .font("Helvetica-Bold")
+      .text(value, rightX + colW * 0.6, ry, {
+        width: colW * 0.4,
+        align: "right",
+        lineBreak: false,
+      });
+    doc.font("Helvetica");
+    ry += 13;
+  }
+
+  // ----- Plan-wide top weakest benchmarks (aggregated across groups) -----
+  // Aggregate from per-group weakestBenchmarks (already coverage-floor-
+  // gated). Weight each benchmark's avg by its group's student count so
+  // a 30-kid group's deficit isn't equal-weighted with a 6-kid pod.
+  const weightedByCode = new Map<
+    string,
+    { weightedSum: number; weight: number }
+  >();
+  for (const g of input.groups) {
+    const w = g.students.length;
+    for (const wb of g.weakestBenchmarks ?? []) {
+      const cur = weightedByCode.get(wb.benchmarkCode) ?? {
+        weightedSum: 0,
+        weight: 0,
+      };
+      cur.weightedSum += wb.avgPct * w;
+      cur.weight += w;
+      weightedByCode.set(wb.benchmarkCode, cur);
+    }
+  }
+  const topWeakest = Array.from(weightedByCode.entries())
+    .map(([code, v]) => ({ code, avg: Math.round(v.weightedSum / v.weight) }))
+    .sort((a, b) => a.avg - b.avg)
+    .slice(0, 7);
+
+  // Place after whichever column ended lower.
+  const bandBottom = Math.max(dy, ry) + 14;
+  let curY = bandBottom;
+  if (topWeakest.length > 0) {
+    doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+    doc.text("Most-deficit benchmarks plan-wide (weighted)", contentLeft, curY);
+    curY += 16;
+    doc.font("Helvetica").fontSize(10).fillColor("#334155");
+    const wbColW = (contentRight - contentLeft) / Math.min(topWeakest.length, 7);
+    for (let i = 0; i < topWeakest.length; i++) {
+      const w = topWeakest[i];
+      const x = contentLeft + i * wbColW;
+      const fill = heatFill(w.avg);
+      if (fill) {
+        doc
+          .save()
+          .rect(x, curY, wbColW - 4, 32)
+          .fillColor(fill)
+          .fill()
+          .restore();
+      }
+      doc
+        .font("Helvetica-Bold")
+        .fontSize(9)
+        .fillColor("#0f172a")
+        .text(w.code, x + 4, curY + 5, { width: wbColW - 12, lineBreak: false });
+      doc
+        .font("Helvetica")
+        .fontSize(11)
+        .fillColor("#0f172a")
+        .text(`${w.avg}%`, x + 4, curY + 17, {
+          width: wbColW - 12,
+          lineBreak: false,
+        });
+    }
+    curY += 42;
+  }
+
+  // ----- Group list (compact: 2 columns) -----
+  doc.font("Helvetica-Bold").fontSize(11).fillColor("#0f172a");
+  doc.text("Groups in this plan", contentLeft, curY);
+  curY += 16;
+  doc.font("Helvetica").fontSize(10).fillColor("#334155");
+  const groupRowH = 26;
+  const groupColW = (contentRight - contentLeft - 12) / 2;
+  for (let i = 0; i < input.groups.length; i++) {
+    const g = input.groups[i];
+    const col = i % 2;
+    const row = Math.floor(i / 2);
+    const gx = contentLeft + col * (groupColW + 12);
+    const gy = curY + row * groupRowH;
+    const overCap = g.students.length > g.seatsPerSection;
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(10)
+      .fillColor("#0f172a")
+      .text(`${g.groupIndex}. ${g.name}`, gx, gy, {
+        width: groupColW,
+        lineBreak: false,
+        ellipsis: true,
+      });
+    doc
+      .font("Helvetica")
+      .fontSize(9)
+      .fillColor(overCap ? "#b91c1c" : "#64748b")
+      .text(
+        `${g.students.length}/${g.seatsPerSection}${overCap ? " OVER" : ""}  ·  ${g.recipeSummary}`,
+        gx,
+        gy + 12,
+        { width: groupColW, lineBreak: false, ellipsis: true },
+      );
+  }
+  curY += Math.ceil(input.groups.length / 2) * groupRowH + 12;
+
+  doc
+    .font("Helvetica-Oblique")
+    .fontSize(9)
+    .fillColor("#94a3b8")
+    .text(
+      "Paper artifact only — does not modify Skyward/RosterOne. Each page is tagged with the Plan ID + QR below so shuffled pages can be re-assembled.",
+      contentLeft,
+      curY,
+      { width: contentRight - contentLeft },
+    );
+}
+
 interface GroupPageCtx {
   planName: string;
   totalGroups: number;
@@ -427,10 +591,16 @@ function drawGroupBody(
   const width = right - left;
   const top = PAGE_MARGIN + HEADER_HEIGHT + 8;
 
-  doc.font("Helvetica-Bold").fontSize(16).fillColor("#0f172a");
-  doc.text(g.name, left, top);
-  doc.font("Helvetica").fontSize(9).fillColor("#64748b");
-  doc.text(g.recipeSummary);
+  // Compact title — group name + recipe on the same line so the
+  // title block stays under ~32pt, leaving more vertical room for
+  // the roster and aggregate blocks.
+  doc.font("Helvetica-Bold").fontSize(14).fillColor("#0f172a");
+  doc.text(g.name, left, top, { continued: true });
+  doc
+    .font("Helvetica")
+    .fontSize(9)
+    .fillColor("#64748b")
+    .text(`   ${g.recipeSummary}`);
 
   // Group summary — averages + program-flag counts so the reviewer
   // sees the shape of the group before scanning the roster.
@@ -459,53 +629,45 @@ function drawGroupBody(
         ? null
         : Math.round(focusPcts.reduce((a, b) => a + b, 0) / focusPcts.length);
   }
-  doc.moveDown(0.4);
+  // Single-line summary: counts + context merged, ·-separated, so we
+  // don't burn two lines on what's effectively a header strip.
   doc.font("Helvetica").fontSize(9).fillColor("#334155");
   const summaryParts: string[] = [
     `${g.students.length} student${g.students.length === 1 ? "" : "s"}`,
     `Seats ${g.seatsPerSection}${g.students.length > g.seatsPerSection ? " (OVER)" : ""}`,
   ];
-  if (avgOverall != null) summaryParts.push(`Avg overall ${avgOverall}%`);
-  if (avgFocus != null) summaryParts.push(`Avg focus ${avgFocus}%`);
-  summaryParts.push(`ESE ${eseCt}`);
-  summaryParts.push(`504 ${fiveOhFourCt}`);
-  summaryParts.push(`ELL ${ellCt}`);
-  doc.text(summaryParts.join("  ·  "));
-
-  // Second summary line — cross-module context counts. Only render
-  // when there's anything to show (otherwise the empty "·" line is
-  // visual noise on plans whose students happen to have no MTSS /
-  // safety / retention / discipline footprint at all).
+  if (avgOverall != null) summaryParts.push(`Avg ${avgOverall}%`);
+  if (avgFocus != null) summaryParts.push(`Focus ${avgFocus}%`);
+  if (eseCt > 0) summaryParts.push(`ESE ${eseCt}`);
+  if (fiveOhFourCt > 0) summaryParts.push(`504 ${fiveOhFourCt}`);
+  if (ellCt > 0) summaryParts.push(`ELL ${ellCt}`);
   if (g.context) {
-    const ctxParts: string[] = [];
     if (g.context.activeMtss > 0)
-      ctxParts.push(`Active MTSS ${g.context.activeMtss}`);
+      summaryParts.push(`MTSS ${g.context.activeMtss}`);
     if (g.context.activeSafetyPlan > 0)
-      ctxParts.push(`Safety plan ${g.context.activeSafetyPlan}`);
+      summaryParts.push(`Safety ${g.context.activeSafetyPlan}`);
     if (g.context.everRetained > 0)
-      ctxParts.push(`Ever retained ${g.context.everRetained}`);
+      summaryParts.push(`Retained ${g.context.everRetained}`);
     if (g.context.disciplineEvents30 > 0)
-      ctxParts.push(`ISS+OSS last 30d ${g.context.disciplineEvents30}`);
-    if (ctxParts.length > 0) {
-      doc.font("Helvetica").fontSize(9).fillColor("#475569");
-      doc.text(ctxParts.join("  ·  "));
-    }
+      summaryParts.push(`Disc-30d ${g.context.disciplineEvents30}`);
   }
+  doc.text(summaryParts.join("  ·  "), { width });
 
   if (g.focusStandards && g.focusStandards.length > 0) {
-    doc.moveDown(0.3);
     doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-    doc.text("Focus standards:");
+    doc.text("Focus standards:", { continued: false });
     doc.font("Helvetica").fontSize(9).fillColor("#334155");
+    // Render focus standards compactly: one per line is fine, but
+    // strip the redundant code prefix from the friendly label.
     for (const f of g.focusStandards) {
       doc.text(
-        `  • ${f.benchmarkCode} — ${f.friendlyLabel.replace(`${f.benchmarkCode} · `, "")} (grp avg ${f.groupAvgPct}%${f.sourceWindow ? `, ${f.sourceWindow.toUpperCase()}` : ""})`,
-        { width: width },
+        `  • ${f.benchmarkCode} — ${f.friendlyLabel.replace(`${f.benchmarkCode} · `, "")} (avg ${f.groupAvgPct}%${f.sourceWindow ? `, ${f.sourceWindow.toUpperCase()}` : ""})`,
+        { width },
       );
     }
   }
 
-  doc.moveDown(0.6);
+  doc.moveDown(0.3);
 
   // ----- Roster table -----
   // Widths sum ≤ landscape-letter content width (792 - 80 = 712).
@@ -529,7 +691,7 @@ function drawGroupBody(
     { w: hasFocus ? 192 : 242, label: "Section / Teacher" },
     ...(hasFocus ? [{ w: 50, label: "Focus fit" }] : []),
   ];
-  const rowH = 18;
+  const rowH = 16;
   let y = doc.y;
   drawRow(doc, left, y, rowH, rosterCols, "header");
   let x = left;
@@ -629,13 +791,25 @@ function drawGroupBody(
     y += rowH;
   }
 
-  // ----- Group weakest benchmarks (A) -----
-  // Always render when we have aggregate data — gives Cusp plans
-  // a "where to focus instruction" handle (they have no focus
-  // standards) and gives skill-cluster plans a sanity check (the
-  // recipe's focus codes should overlap heavily with this list).
-  if (g.weakestBenchmarks && g.weakestBenchmarks.length > 0) {
-    if (y + 60 + g.weakestBenchmarks.length * rowH > bottomLimit) {
+  // ----- Aggregate band: weakest benchmarks (left) + sub-pods (right) -----
+  // Two-column layout so both blocks consume one vertical band instead
+  // of two — major density win. Each column is independent so the band
+  // height = max(left height, right height). Renders only when there's
+  // at least one block to show.
+  const wbList = g.weakestBenchmarks ?? [];
+  const podList = g.subPods ?? [];
+  if (wbList.length > 0 || podList.length > 0) {
+    const wbBlockH = wbList.length > 0 ? 18 + (wbList.length + 1) * rowH : 0;
+    const podBlockH =
+      podList.length > 0
+        ? 28 +
+          podList.reduce(
+            (m, p) => Math.max(m, 14 + Math.ceil(p.memberNames.length / 3) * 11),
+            0,
+          )
+        : 0;
+    const bandH = Math.max(wbBlockH, podBlockH);
+    if (y + bandH + 10 > bottomLimit) {
       doc.addPage({ size: "LETTER", layout: "landscape" });
       drawHeader(
         doc,
@@ -647,51 +821,144 @@ function drawGroupBody(
       drawFooter(doc, ctx.publicId, ctx.qrBuffer);
       y = PAGE_MARGIN + HEADER_HEIGHT + 8;
     } else {
-      y += 12;
+      y += 8;
     }
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-    doc.text("Group's 5 weakest benchmarks (whole-class focus)", left, y);
-    y += 14;
-    const wbCols: Array<{ w: number; label: string }> = [
-      { w: 24, label: "#" },
-      { w: 180, label: "Benchmark" },
-      { w: 80, label: "Group avg" },
-      { w: 100, label: "Coverage" },
-      { w: width - 24 - 180 - 80 - 100, label: "" },
-    ];
-    drawRow(doc, left, y, rowH, wbCols, "header");
-    x = left;
-    doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-    for (const c of wbCols) {
-      doc.text(c.label, x + 4, y + 5, { width: c.w - 8 });
-      x += c.w;
-    }
-    y += rowH;
-    doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
-    for (let i = 0; i < g.weakestBenchmarks.length; i++) {
-      const wb = g.weakestBenchmarks[i];
-      if (i % 2 === 1) drawRow(doc, left, y, rowH, wbCols, "alt");
-      const fill = heatFill(wb.avgPct);
-      if (fill) {
-        doc.save().rect(left + 24 + 180, y, 80, rowH).fillColor(fill).fill().restore();
+    const bandY = y;
+    const colGap = 12;
+    // When both blocks present split 50/50; when only one, give it
+    // full width to stay readable.
+    const haveBoth = wbList.length > 0 && podList.length > 0;
+    const leftColW = haveBoth ? (width - colGap) / 2 : width;
+    const rightColW = haveBoth ? (width - colGap) / 2 : 0;
+    const rightX = left + leftColW + colGap;
+
+    // ----- Left: Weakest benchmarks (A) -----
+    if (wbList.length > 0) {
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+      doc.text(
+        `Group's ${wbList.length} weakest benchmarks (whole-class focus)`,
+        left,
+        bandY,
+        { width: leftColW },
+      );
+      let wy = bandY + 14;
+      // Compact columns: #, benchmark, avg %, coverage.
+      const codeW = leftColW - 24 - 60 - 90;
+      const wbCols: Array<{ w: number; label: string }> = [
+        { w: 24, label: "#" },
+        { w: codeW, label: "Benchmark" },
+        { w: 60, label: "Avg" },
+        { w: 90, label: "Coverage" },
+      ];
+      drawRow(doc, left, wy, rowH, wbCols, "header");
+      let wx = left;
+      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+      for (const c of wbCols) {
+        doc.text(c.label, wx + 4, wy + 4, { width: c.w - 8, lineBreak: false });
+        wx += c.w;
       }
-      x = left;
-      doc.fillColor("#0f172a");
-      doc.text(String(i + 1), x + 4, y + 5, { width: 24 - 8 });
-      x += 24;
-      doc.text(wb.benchmarkCode, x + 4, y + 5, {
-        width: 180 - 8,
-        ellipsis: true,
-        lineBreak: false,
-      });
-      x += 180;
-      doc.text(`${wb.avgPct}%`, x + 4, y + 5, { width: 80 - 8, align: "center" });
-      x += 80;
-      doc.text(`${wb.coveragePct}% of group`, x + 4, y + 5, {
-        width: 100 - 8,
-      });
-      y += rowH;
+      wy += rowH;
+      doc.font("Helvetica").fontSize(9).fillColor("#0f172a");
+      for (let i = 0; i < wbList.length; i++) {
+        const wb = wbList[i];
+        if (i % 2 === 1) drawRow(doc, left, wy, rowH, wbCols, "alt");
+        const fill = heatFill(wb.avgPct);
+        if (fill) {
+          doc
+            .save()
+            .rect(left + 24 + codeW, wy, 60, rowH)
+            .fillColor(fill)
+            .fill()
+            .restore();
+        }
+        wx = left;
+        doc.fillColor("#0f172a");
+        doc.text(String(i + 1), wx + 4, wy + 4, { width: 16, lineBreak: false });
+        wx += 24;
+        doc.text(wb.benchmarkCode, wx + 4, wy + 4, {
+          width: codeW - 8,
+          ellipsis: true,
+          lineBreak: false,
+        });
+        wx += codeW;
+        doc.text(`${wb.avgPct}%`, wx + 4, wy + 4, {
+          width: 60 - 8,
+          align: "center",
+          lineBreak: false,
+        });
+        wx += 60;
+        doc.text(`${wb.coveragePct}% of grp`, wx + 4, wy + 4, {
+          width: 90 - 8,
+          lineBreak: false,
+        });
+        wy += rowH;
+      }
     }
+
+    // ----- Right: Sub-pods (E) -----
+    if (podList.length > 0 && haveBoth) {
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+      doc.text(
+        `Suggested within-class sub-pods (${podList.length})`,
+        rightX,
+        bandY,
+        { width: rightColW, lineBreak: false },
+      );
+      doc.font("Helvetica-Oblique").fontSize(8).fillColor("#64748b");
+      doc.text(
+        "Auto-clustered by benchmark deficit. Adjust as needed.",
+        rightX,
+        bandY + 12,
+        { width: rightColW, lineBreak: false, ellipsis: true },
+      );
+      // Stack pods vertically inside the right column — names wrap
+      // naturally and the column is narrow enough that 3 horizontal
+      // pods would clip too many names.
+      let py = bandY + 26;
+      for (const pod of podList) {
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+        const podHeader = pod.dominantCategory
+          ? `Pod ${pod.podIndex} · ${pod.dominantCategory} (${pod.memberNames.length})`
+          : `Pod ${pod.podIndex} (${pod.memberNames.length})`;
+        doc.text(podHeader, rightX, py, {
+          width: rightColW,
+          lineBreak: false,
+          ellipsis: true,
+        });
+        doc.font("Helvetica").fontSize(8).fillColor("#334155");
+        doc.text(pod.memberNames.join(", "), rightX, py + 11, {
+          width: rightColW,
+        });
+        py = doc.y + 4;
+      }
+    } else if (podList.length > 0) {
+      // Full-width sub-pods (when there are no weakest benchmarks to
+      // pair with — rare, but happens for tiny groups).
+      let py = bandY;
+      doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
+      doc.text(`Suggested within-class sub-pods (${podList.length})`, left, py);
+      py += 14;
+      const podW = Math.floor(width / podList.length);
+      const maxRowH = podList.reduce(
+        (m, p) => Math.max(m, 14 + Math.ceil(p.memberNames.length / 3) * 11),
+        0,
+      );
+      for (let pi = 0; pi < podList.length; pi++) {
+        const pod = podList[pi];
+        const px = left + pi * podW;
+        doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
+        const header = pod.dominantCategory
+          ? `Pod ${pod.podIndex} · ${pod.dominantCategory}`
+          : `Pod ${pod.podIndex}`;
+        doc.text(header, px + 4, py, { width: podW - 8, ellipsis: true });
+        doc.font("Helvetica").fontSize(8).fillColor("#334155");
+        doc.text(pod.memberNames.join(", ") || "—", px + 4, py + 12, {
+          width: podW - 8,
+        });
+      }
+      y = py + maxRowH + 8;
+    }
+    y = bandY + bandH;
   }
 
   // ----- Focus-standards matrix (skill-cluster mode only) -----
@@ -899,59 +1166,6 @@ function drawGroupBody(
       });
       y += rowH;
     }
-  }
-
-  // ----- Suggested within-class sub-pods (E) -----
-  // Only when the route layer found enough students with FAST
-  // profiles to be worth pod-ing (≥6 profiles, capped at 3 pods).
-  if (g.subPods && g.subPods.length > 0) {
-    const podBlockH = 30 + g.subPods.length * 32;
-    if (y + podBlockH > bottomLimit) {
-      doc.addPage({ size: "LETTER", layout: "landscape" });
-      drawHeader(
-        doc,
-        ctx.planName,
-        `Group ${g.groupIndex} of ${ctx.totalGroups} (cont.)`,
-        0,
-        0,
-      );
-      drawFooter(doc, ctx.publicId, ctx.qrBuffer);
-      y = PAGE_MARGIN + HEADER_HEIGHT + 8;
-    } else {
-      y += 12;
-    }
-    doc.font("Helvetica-Bold").fontSize(10).fillColor("#0f172a");
-    doc.text(
-      `Suggested within-class sub-pods (${g.subPods.length})`,
-      left,
-      y,
-    );
-    y += 4;
-    doc.font("Helvetica-Oblique").fontSize(8).fillColor("#64748b");
-    doc.text(
-      "Auto-generated from benchmark deficit clustering. Adjust as needed.",
-      left,
-      y + 8,
-    );
-    y += 20;
-    const podW = Math.floor(width / g.subPods.length);
-    const podY = y;
-    let maxPodH = 0;
-    for (let pi = 0; pi < g.subPods.length; pi++) {
-      const pod = g.subPods[pi];
-      const px = left + pi * podW;
-      doc.font("Helvetica-Bold").fontSize(9).fillColor("#0f172a");
-      const header = pod.dominantCategory
-        ? `Pod ${pod.podIndex} · ${pod.dominantCategory}`
-        : `Pod ${pod.podIndex}`;
-      doc.text(header, px + 4, podY, { width: podW - 8, ellipsis: true });
-      doc.font("Helvetica").fontSize(8).fillColor("#334155");
-      const memberText = pod.memberNames.join(", ") || "—";
-      doc.text(memberText, px + 4, podY + 12, { width: podW - 8 });
-      const podH = doc.y - podY;
-      if (podH > maxPodH) maxPodH = podH;
-    }
-    y = podY + maxPodH + 8;
   }
 
   // ----- Pre-printed M-F × 3-rotation grid (D) -----
