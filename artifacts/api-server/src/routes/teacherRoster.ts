@@ -295,15 +295,20 @@ function buildSubjectBlock(
   // (computed above with `placeOnChart(..., grade-1)`); that's the same
   // chart pm3Placement uses, so the two levels are directly comparable.
   //
-  // Rule (per district guidance):
+  // Rule (per district guidance, confirmed May 2026):
   //   - Moved up a performance level → MET
   //   - Stayed at L5 → MET (top of scale; growth not measurable)
   //   - Stayed at L3 or L4 → MET only when this year's PM3 is at least
   //     last year's PM3 + 1 (i.e. some scale-score growth, not flat).
   //     "Maintaining proficiency" requires evidence of forward motion;
   //     a flat or declining score within the same band does not count.
-  //   - Stayed at L1 or L2 → NOT MET (within-level point thresholds
-  //     deferred; see Phase 1 caveats above).
+  //   - Stayed at L1 or L2 → MET only when this year's PM3 sub-tier is
+  //     HIGHER than last year's sub-tier. Same or lower sub-tier within
+  //     the band does not count. Sub-tiers come from `placeOnChart`:
+  //       L1 splits into thirds → "1.1" / "1.2" / "1.3"
+  //       L2 splits into halves → "2.1" / "2.2"  (no "2.3" today; if the
+  //         FLDOE chart adds a Level-2 Upper third, extend the L2 ranges
+  //         in `fastCutScores.ts` and this branch picks it up for free).
   //   - Dropped a level → NOT MET.
   const learningGain: boolean | null = (() => {
     const priorLevel = priorPm3?.placement?.level ?? null;
@@ -317,6 +322,16 @@ function buildSubjectBlock(
         const currentScore = row.pm3 ?? null;
         if (priorScore == null || currentScore == null) return null;
         return currentScore >= priorScore + 1;
+      }
+      if (currentLevel === 1 || currentLevel === 2) {
+        // Sub-tier order within L1/L2: "1.1" < "1.2" < "1.3"
+        // (and same for "2.1"/"2.2"/"2.3"). Lexicographic compare
+        // is safe because all sub-tier strings share the same
+        // "<digit>.<digit>" shape with identical lengths.
+        const priorSub = priorPm3?.placement?.subLevel ?? null;
+        const currentSub = pm3Placement?.subLevel ?? null;
+        if (priorSub == null || currentSub == null) return null;
+        return currentSub > priorSub;
       }
     }
     return false;

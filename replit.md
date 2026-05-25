@@ -93,16 +93,17 @@ pointer here.
 
 ### Open work
 
-- **LG within-level threshold for L1/L2 (Phase 2).** Phase 1 of
-  the LG green-check shipped (Teacher Roster LG column swaps the
-  bucket bubble for a green check ✓ when the student moved up a
-  level, maintained L5, or maintained L3/L4 with ≥ +1 scale-score
-  point growth). L1/L2 maintain cases currently read "no check"
-  because FLDOE's within-level point thresholds vary by grade and
-  the district hasn't confirmed values. Once confirmed, extend
+- **LG subject-band promotions (Algebra I etc.).** Phase 1 +
+  Phase 2 of the LG green-check are SHIPPED. Phase 2 extended
   the `learningGain` branch in `buildSubjectBlock`
-  (`routes/teacherRoster.ts`) with a per-grade lookup table.
-  Subject-band promotions (Algebra I etc.) also remain
+  (`routes/teacherRoster.ts`) to credit within-level moves in
+  L1/L2 by sub-tier, e.g. 1.1 → 1.2, 1.2 → 1.3, or 2.1 → 2.2.
+  Same/lower sub-tier = no check. Sub-tier comes from
+  `placeOnChart` in `lib/fastCutScores.ts`: L1 is split into
+  thirds (1.1/1.2/1.3), L2 currently only into halves (2.1/2.2).
+  If FLDOE confirms a Level-2 Upper third, extend the L2 ranges
+  in `fastCutScores.ts` and the LG branch picks it up for free.
+  Still open: subject-band promotions (Algebra I etc.) remain
   uncredited — out of scope until the FL importer captures
   prior course code.
 
