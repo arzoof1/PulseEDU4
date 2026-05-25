@@ -2252,15 +2252,16 @@ export default function TeacherBenchmarksTab({
                               <span
                                 style={{
                                   position: "absolute",
-                                  top: 1,
+                                  top: 2,
                                   right: 2,
-                                  fontSize: 9,
-                                  fontWeight: 700,
+                                  fontSize: 11,
+                                  fontWeight: 800,
                                   background: "#1e3a8a",
                                   color: "#fff",
-                                  borderRadius: 8,
-                                  padding: "1px 4px",
+                                  borderRadius: 10,
+                                  padding: "2px 6px",
                                   lineHeight: 1.1,
+                                  boxShadow: "0 1px 2px rgba(0,0,0,0.25)",
                                 }}
                               >
                                 🔁{rc}
