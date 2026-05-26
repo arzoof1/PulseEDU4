@@ -27,7 +27,8 @@ type SectionKey =
   | "showStaffNotes"
   | "showIss"
   | "showMtss"
-  | "showOss";
+  | "showOss"
+  | "showReteach";
 
 interface SectionRow {
   key: SectionKey;
@@ -118,6 +119,13 @@ const SECTION_LABELS: SectionLabel[] = [
     key: "showMtss",
     label: "MTSS plans",
     description: "Active multi-tiered support plan, goals, and progress notes.",
+    sensitive: true,
+  },
+  {
+    key: "showReteach",
+    label: "Extra Support — Focused Reteach",
+    description:
+      "Per-standard count of 1:1 and small-group focused practice your child has received this school year. Counts only — never teacher notes.",
     sensitive: true,
   },
 ];

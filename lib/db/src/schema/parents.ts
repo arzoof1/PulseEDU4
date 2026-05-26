@@ -201,6 +201,14 @@ export const schoolHeartbeatSettingsTable = pgTable(
     // day count this year. Reasons are gated separately by showOssReason.
     showOss: boolean("show_oss").notNull().default(false),
     showOssReason: boolean("show_oss_reason").notNull().default(false),
+    // Reteach activity (benchmark_reteach_log rollup) section in the
+    // parent portal. Off by default — schools opt in via Heartbeat
+    // Settings. When ON parents see, per benchmark code, the count of
+    // 1:1 and small-group reteach moments their child received this
+    // school year. Teacher notes / strategy are NEVER surfaced —
+    // counts + benchmark codes only. Per-student visibility is also
+    // gated by `students.reteach_logs_parent_visible`.
+    showReteach: boolean("show_reteach").notNull().default(false),
     // When true, the school allows parents to opt in to the weekly Sunday
     // PDF email. When false, we hide that toggle on the parent side.
     allowWeeklyEmail: boolean("allow_weekly_email").notNull().default(true),
@@ -241,6 +249,8 @@ export const parentHeartbeatPrefsTable = pgTable(
     showMtss: boolean("show_mtss"),
     // Per-parent OSS toggle. Null = inherit school's showOss flag.
     showOss: boolean("show_oss"),
+    // Per-parent reteach toggle. Null = inherit school's showReteach flag.
+    showReteach: boolean("show_reteach"),
     // Weekly email opt-in (independent per student so a parent can subscribe
     // for one kid but not another).
     weeklyEmailEnabled: boolean("weekly_email_enabled").notNull().default(false),

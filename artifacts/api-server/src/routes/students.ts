@@ -303,6 +303,83 @@ router.patch(
   },
 );
 
+// GET /students/:studentId/reteach-visibility — admin-only readback
+// of the per-student parent-portal toggle for benchmark reteach logs.
+router.get(
+  "/students/:studentId/reteach-visibility",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    if (!isAdminOrSuperUser(staff)) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const studentId = String(req.params.studentId ?? "");
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const [row] = await db
+      .select({ visible: studentsTable.reteachLogsParentVisible })
+      .from(studentsTable)
+      .where(
+        and(
+          eq(studentsTable.studentId, studentId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
+    if (!row) {
+      res.status(404).json({ error: "Student not found" });
+      return;
+    }
+    res.json({ visible: row.visible });
+  },
+);
+
+// PATCH /students/:studentId/reteach-visibility  body: { visible: boolean }
+// Admin-only toggle controlling whether this student's reteach log
+// rollup is exposed on the parent HeartBEAT report. Default FALSE
+// at the column level; admins flip true per student. Even when ON,
+// the parent only sees it if the school also enabled the
+// `showReteach` heartbeat section AND the parent hasn't hidden it.
+router.patch(
+  "/students/:studentId/reteach-visibility",
+  requireStaff,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const staff = (req as Request & { staff: typeof staffTable.$inferSelect })
+      .staff;
+    if (!isAdminOrSuperUser(staff)) {
+      res.status(403).json({ error: "Admin only" });
+      return;
+    }
+    const studentId = String(req.params.studentId ?? "");
+    const visible = req.body?.visible;
+    if (typeof visible !== "boolean") {
+      res.status(400).json({ error: "visible (boolean) required" });
+      return;
+    }
+    if (!studentId) {
+      res.status(400).json({ error: "studentId required" });
+      return;
+    }
+    const result = await db
+      .update(studentsTable)
+      .set({ reteachLogsParentVisible: visible })
+      .where(
+        and(
+          eq(studentsTable.studentId, studentId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      );
+    res.json({ ok: true, updated: result.rowCount ?? 0 });
+  },
+);
+
 // PATCH /students/:studentId/house — admin-only, single-row house change
 // with a required reason. Writes the new house_id AND appends a row to
 // student_house_changes so the move is auditable. Cross-tenant guards:

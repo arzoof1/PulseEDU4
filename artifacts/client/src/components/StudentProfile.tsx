@@ -1898,6 +1898,104 @@ function StudentPhotoManager({
 // Existing retentions render as black "R Grade N" chips with an "x"
 // to remove. The picker on the right marks a new grade. Server is
 // idempotent on (student, grade), so a re-mark is a safe no-op.
+// ReteachParentVisibilityToggle — admin-only per-student switch
+// controlling whether benchmark reteach activity appears on this
+// student's parent HeartBEAT report. Three gates must ALL be true
+// for a parent to see the section: (1) school-wide `showReteach`
+// heartbeat section flag, (2) parent's own pref (defaults to the
+// school setting), (3) this per-student flag. Self-contained:
+// fetches its own state on mount via the dedicated endpoint so we
+// don't have to thread it through the profile payload.
+function ReteachParentVisibilityToggle({ studentId }: { studentId: string }) {
+  const [visible, setVisible] = useState<boolean | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const r = await authFetch(
+          `/api/students/${encodeURIComponent(studentId)}/reteach-visibility`,
+        );
+        if (!r.ok) throw new Error("load failed");
+        const j: { visible: boolean } = await r.json();
+        if (alive) setVisible(!!j.visible);
+      } catch {
+        if (alive) setVisible(false);
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [studentId]);
+  async function toggle(next: boolean) {
+    setBusy(true);
+    setErr(null);
+    try {
+      const r = await authFetch(
+        `/api/students/${encodeURIComponent(studentId)}/reteach-visibility`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ visible: next }),
+        },
+      );
+      if (!r.ok) throw new Error("update failed");
+      setVisible(next);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : "update failed");
+    } finally {
+      setBusy(false);
+    }
+  }
+  if (visible === null) return null;
+  return (
+    <div
+      style={{
+        marginTop: "0.6rem",
+        padding: "0.6rem 0.75rem",
+        background: "#f8fafc",
+        border: "1px solid #cbd5e1",
+        borderRadius: 6,
+      }}
+    >
+      <label
+        style={{
+          fontSize: "0.78rem",
+          color: "#334155",
+          display: "inline-flex",
+          alignItems: "flex-start",
+          gap: 8,
+          cursor: busy ? "not-allowed" : "pointer",
+        }}
+      >
+        <input
+          type="checkbox"
+          checked={visible}
+          disabled={busy}
+          onChange={(e) => toggle(e.target.checked)}
+          style={{ marginTop: 2 }}
+        />
+        <span>
+          <strong>Show focused reteach on parent report (admin)</strong>
+          <div style={{ color: "#64748b", marginTop: 2 }}>
+            When on, this student's parents see a counts-only rollup of
+            benchmark reteach activity (1:1 and small-group). Teacher
+            notes and strategy are NEVER surfaced. Also requires the
+            school-wide "Extra Support — Focused Reteach" section to be
+            enabled in HeartBEAT settings.
+          </div>
+        </span>
+      </label>
+      {err && (
+        <div style={{ color: "#b91c1c", fontSize: "0.72rem", marginTop: 4 }}>
+          {err}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function RetentionManager({
   studentId,
   retainedGrades,
@@ -2748,6 +2846,9 @@ export default function StudentProfile({
             )}
             {isAdmin && data?.header && (
               <InlinePrintBadgeButton studentRecordId={data.header.studentDbId} />
+            )}
+            {isAdmin && (
+              <ReteachParentVisibilityToggle studentId={studentId} />
             )}
             {canEditSafetyPlan && (
               <div style={{ marginTop: "0.6rem" }}>

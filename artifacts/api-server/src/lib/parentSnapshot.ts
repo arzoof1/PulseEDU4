@@ -28,6 +28,7 @@ import {
   studentAttendanceDayTable,
   bellSchedulesTable,
   bellSchedulePeriodsTable,
+  benchmarkReteachLogTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
@@ -69,6 +70,12 @@ export interface ParentSnapshot {
     iss: boolean;
     mtss: boolean;
     oss: boolean;
+    // Reteach activity rollup. Gated by BOTH the school-wide
+    // `showReteach` flag AND per-student
+    // `students.reteach_logs_parent_visible`. Teacher notes /
+    // strategy are never included in the payload — only counts +
+    // benchmark codes.
+    reteach: boolean;
   };
   pbis: {
     total: number;
@@ -180,6 +187,20 @@ export interface ParentSnapshot {
       notes: string | null;
     }>;
   };
+  // Reteach activity for this school year. Empty array when the
+  // section is gated off or simply has no rows. Each entry is one
+  // benchmark code with counts of 1:1 and small-group reteach
+  // moments. Strategy / notes / teacher attribution are NEVER
+  // included — counts + benchmark codes only.
+  reteach: {
+    items: Array<{
+      benchmarkCode: string;
+      oneOnOne: number;
+      smallGroup: number;
+      total: number;
+      lastAt: string;
+    }>;
+  };
 }
 
 export type SnapshotResult =
@@ -285,6 +306,13 @@ export async function buildParentSnapshot(
     iss: gate(settingsRow?.showIss, false, prefsRow?.showIss),
     mtss: gate(settingsRow?.showMtss, false, prefsRow?.showMtss),
     oss: gate(settingsRow?.showOss, false, prefsRow?.showOss),
+    // Reteach requires school flag AND parent pref AND per-student
+    // opt-in. Per-student flag defaults FALSE so a school flipping
+    // showReteach on doesn't accidentally expose students whose
+    // admins haven't approved visibility.
+    reteach:
+      gate(settingsRow?.showReteach, false, prefsRow?.showReteach) &&
+      Boolean(student.reteachLogsParentVisible),
   };
 
   // ----- PBIS -----
@@ -724,6 +752,59 @@ export async function buildParentSnapshot(
     }));
   }
 
+  // ----- Reteach activity (parent-safe rollup) -----
+  // Strict whitelist of fields. Strategy / note / teacher_staff_id are
+  // intentionally EXCLUDED from the SELECT so they can never leak into
+  // the parent payload even on a refactor mistake. Soft-deleted rows
+  // are excluded. Scoped to current school year by created_at.
+  let reteachItems: ParentSnapshot["reteach"]["items"] = [];
+  if (sectionsAvailable.reteach) {
+    const { startIso, endExclusiveIso } = schoolYearBounds();
+    const rows = await db
+      .select({
+        benchmarkCode: benchmarkReteachLogTable.benchmarkCode,
+        format: benchmarkReteachLogTable.format,
+        createdAt: benchmarkReteachLogTable.createdAt,
+      })
+      .from(benchmarkReteachLogTable)
+      .where(
+        and(
+          eq(benchmarkReteachLogTable.schoolId, student.schoolId),
+          eq(benchmarkReteachLogTable.studentId, student.studentId),
+          isNull(benchmarkReteachLogTable.deletedAt),
+          sql`${benchmarkReteachLogTable.createdAt} >= ${startIso}`,
+          sql`${benchmarkReteachLogTable.createdAt} < ${endExclusiveIso}`,
+        ),
+      );
+    const byCode = new Map<
+      string,
+      { oneOnOne: number; smallGroup: number; lastAt: string }
+    >();
+    for (const r of rows) {
+      const code = r.benchmarkCode;
+      const at =
+        r.createdAt instanceof Date ? r.createdAt.toISOString() : String(r.createdAt);
+      const cur = byCode.get(code) ?? {
+        oneOnOne: 0,
+        smallGroup: 0,
+        lastAt: at,
+      };
+      if (r.format === "one_on_one") cur.oneOnOne += 1;
+      else if (r.format === "small_group") cur.smallGroup += 1;
+      if (at > cur.lastAt) cur.lastAt = at;
+      byCode.set(code, cur);
+    }
+    reteachItems = [...byCode.entries()]
+      .map(([benchmarkCode, v]) => ({
+        benchmarkCode,
+        oneOnOne: v.oneOnOne,
+        smallGroup: v.smallGroup,
+        total: v.oneOnOne + v.smallGroup,
+        lastAt: v.lastAt,
+      }))
+      .sort((a, b) => b.total - a.total || (a.benchmarkCode < b.benchmarkCode ? -1 : 1));
+  }
+
   return {
     ok: true,
     data: {
@@ -805,6 +886,7 @@ export async function buildParentSnapshot(
         })),
       },
       oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
+      reteach: { items: reteachItems },
     },
   };
 }

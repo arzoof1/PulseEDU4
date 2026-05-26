@@ -145,6 +145,18 @@ interface Snapshot {
       notes: string | null;
     }>;
   };
+  // Reteach activity — gated by sec.reteach. Counts-only rollup; no
+  // teacher notes or strategy ever leave the server. Optional so
+  // older API servers without the field still type-check.
+  reteach?: {
+    items: Array<{
+      benchmarkCode: string;
+      oneOnOne: number;
+      smallGroup: number;
+      total: number;
+      lastAt: string;
+    }>;
+  };
 }
 
 const EkgDivider = () => (
@@ -870,6 +882,61 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           icon={<Target className="h-4 w-4 text-emerald-600" />}
         >
           <MtssBlock mtss={snapshot.mtss ?? { tier: 1, plans: [] }} />
+        </Section>
+      )}
+
+      {/* Extra Support — Focused Reteach. Counts-only rollup of
+          benchmark_reteach_log rows for the current school year, gated by
+          BOTH the school-wide showReteach flag, the parent's pref, AND
+          the per-student reteach_logs_parent_visible toggle. Teacher
+          notes / strategy are NEVER in the payload — see
+          lib/parentSnapshot.ts. Section hides when there are zero rows
+          so the page doesn't end with an empty block. */}
+      {sec.reteach && (snapshot.reteach?.items ?? []).length > 0 && (
+        <Section
+          title="Extra Support — Focused Reteach"
+          icon={<Target className="h-4 w-4 text-indigo-600" />}
+        >
+          <p className="text-sm text-slate-600 mb-3">
+            In addition to the regular classroom lessons every student
+            receives, your child's teachers have provided focused extra
+            practice on the standards below this school year.
+          </p>
+          <ul className="divide-y divide-slate-100">
+            {(snapshot.reteach?.items ?? []).map((r) => (
+              <li
+                key={r.benchmarkCode}
+                className="py-3 flex items-center justify-between gap-4"
+              >
+                <div className="min-w-0">
+                  <div className="text-sm font-mono font-semibold text-slate-800">
+                    {r.benchmarkCode}
+                  </div>
+                  <div className="text-xs text-slate-500 mt-0.5">
+                    Most recent {fmtDate(r.lastAt)}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  {r.oneOnOne > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="bg-indigo-50 text-indigo-700 border-indigo-200 tabular-nums"
+                    >
+                      1:1 × {r.oneOnOne}
+                    </Badge>
+                  )}
+                  {r.smallGroup > 0 && (
+                    <Badge
+                      variant="outline"
+                      className="bg-teal-50 text-teal-700 border-teal-200 tabular-nums"
+                    >
+                      Small group × {r.smallGroup}
+                    </Badge>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
         </Section>
       )}
 

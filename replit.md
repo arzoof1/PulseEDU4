@@ -75,6 +75,18 @@ _Populate as you build_
 Archived to `docs/shipped.md` to keep this file focused on active
 work. Most recent entries:
 
+- Reteach log — parent-portal surfacing. Counts-only rollup on the
+  Parent HeartBEAT dashboard + PDF ("Extra Support — Focused
+  Reteach"), grouped by benchmark with 1:1 and small-group counts.
+  Gated by three independent flags ALL of which must be true:
+  school-wide `school_heartbeat_settings.show_reteach` (admin),
+  per-parent `parent_heartbeat_prefs.show_reteach` (parent), and
+  per-student `students.reteach_logs_parent_visible` (admin via
+  `PATCH /api/students/:studentId/reteach-visibility`, modeled on
+  the photo-consent toggle). Server payload is a strict whitelist
+  (benchmarkCode / format / createdAt) so teacher notes, strategy,
+  and teacher_staff_id can never leak. Scoped to current school
+  year, soft-deleted rows excluded.
 - Reteach Activity school-wide rollup (Insights → 🔁 Reteach Activity, admin / Core Team / counselor) — 30-day summary tiles (🔁 1:1, 👥 small-group, students reached, benchmarks targeted), top loggers + top benchmarks, full filterable detail table (date range, teacher, grade, benchmark, format) with CSV export. Backed by `GET /api/reteach-activity/summary` + `GET /api/reteach-activity` in `routes/reteachActivity.ts`. Insights hub entry gate (`canAccessInsightsHub`) broadened to include counselor / guidance / school-psych so the new tile (and Algebra Placement) are actually reachable. Per-teacher view: indigo "Reteach activity on this roster" footer banner on the Benchmark Progress Report modal showing per-roster totals.
 - Class Composer Skill-cluster mode + PM-refresh workflow — 4th composer mode; per-group focus standards (3–7, default 5); locked rosters never re-shuffle; PM1 check-fit / PM2+PM3 refresh-focus endpoints; Admin Hub PM-keyed banners; focus_standard_N columns on both server + client CSVs.
 - Multi-year FAST history chip (Teacher Roster + Student Profile + MTSS Tier-2 suggestions) — surfaces FL Florida historical-importer rows.
@@ -94,17 +106,6 @@ When you ship something new, add a bullet to the top of
 pointer here.
 
 ### Open work
-
-- **Reteach log — parent-portal surfacing.** Schema-only stub
-  shipped: `students.reteach_logs_parent_visible BOOL DEFAULT false`
-  is in place but never read. When the portal-side rendering is
-  built, add a per-student toggle to the existing parent-visibility
-  settings UI (alongside PBIS / hall pass / tardy section toggles)
-  and an aggregated "Reteach support this year" tile on the parent
-  HeartBEAT view that respects the per-student flag AND the
-  school-wide section-visibility setting. Keep teacher-private notes
-  out of the parent payload — surface counts + benchmark codes only
-  by default; full notes require a separate "share note" opt-in.
 
 - **LG subject-band promotions (Algebra I etc.).** Phase 1 +
   Phase 2 of the LG green-check are SHIPPED. Phase 2 extended
