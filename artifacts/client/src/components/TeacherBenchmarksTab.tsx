@@ -3828,6 +3828,17 @@ function ProgressReportModal(props: {
             padding: 2px 4px !important;
           }
           .item-chip { font-size: 7.5px !important; padding: 0 3px !important; }
+          .reteach-cell-badge {
+            visibility: visible !important;
+            display: block !important;
+            color: #3730a3 !important;
+            background: #eef2ff !important;
+            border: 1px solid #c7d2fe !important;
+            -webkit-print-color-adjust: exact !important;
+            print-color-adjust: exact !important;
+            font-size: 7.5px !important;
+            font-weight: 700 !important;
+          }
         }
         .progress-report-print.no-descriptions .benchmark-description {
           display: none !important;
@@ -4752,19 +4763,28 @@ function ProgressReportModal(props: {
                                     )}
                                     {(rt1 > 0 || rtG > 0) && (
                                       <div
+                                        className="reteach-cell-badge"
                                         style={{
                                           marginTop: 3,
                                           fontSize: 9,
-                                          fontWeight: 600,
+                                          fontWeight: 700,
                                           color: "#3730a3",
-                                          display: "flex",
-                                          gap: 6,
-                                          flexWrap: "wrap",
+                                          background: "#eef2ff",
+                                          border: "1px solid #c7d2fe",
+                                          borderRadius: 3,
+                                          padding: "1px 3px",
+                                          display: "block",
+                                          WebkitPrintColorAdjust: "exact",
+                                          printColorAdjust: "exact",
                                         }}
                                         title={`Reteach sessions logged in ${winLabel[w]}: ${rt1} 1:1, ${rtG} small-group`}
                                       >
-                                        {rt1 > 0 && <span>🔁{rt1}</span>}
-                                        {rtG > 0 && <span>👥{rtG}</span>}
+                                        {rt1 > 0 && (
+                                          <span style={{ marginRight: rtG > 0 ? 6 : 0 }}>
+                                            🔁 1:1×{rt1}
+                                          </span>
+                                        )}
+                                        {rtG > 0 && <span>👥 SG×{rtG}</span>}
                                       </div>
                                     )}
                                   </td>
