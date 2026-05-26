@@ -110,6 +110,7 @@ import BehaviorDashboard from "./components/BehaviorDashboard";
 import AcademicsDashboard from "./components/AcademicsDashboard";
 import AcademicsTrajectory from "./components/AcademicsTrajectory";
 import AlgebraPlacementReview from "./components/AlgebraPlacementReview";
+import ReteachActivityPage from "./components/ReteachActivityPage";
 import AttendanceDashboard from "./components/AttendanceDashboard";
 import SebSelDashboard from "./components/SebSelDashboard";
 import EquityDashboard from "./components/EquityDashboard";
@@ -4049,6 +4050,16 @@ const INSIGHTS_TILES: InsightsTile[] = [
     group: "monitoring",
     targetSection: "algebraPlacement",
   },
+  {
+    id: "reteachActivity",
+    icon: "🔁",
+    title: "Reteach Activity",
+    subtitle:
+      "School-wide view of benchmark reteach logged across every teacher. 1:1 vs small-group totals, top loggers, top benchmarks. Filter by date, teacher, grade, benchmark — export CSV.",
+    phase: "Today",
+    group: "monitoring",
+    targetSection: "reteachActivityDetail",
+  },
 ];
 
 // Phase 2 polish — sidebar group ownership map for the accordion behavior.
@@ -4536,6 +4547,7 @@ function App() {
     | "attendanceDashboard"
     | "academicsTrajectory"
     | "algebraPlacement"
+    | "reteachActivityDetail"
     | "trustedAdultsAdmin"
     | "displays"
     | "interventionsToday"
@@ -8240,6 +8252,29 @@ function App() {
     Boolean(authUser?.isSchoolPsychologist) ||
     Boolean(authUser?.isCounselor) ||
     Boolean(authUser?.isGuidanceCounselor);
+  // Reteach Activity — mirrors the server gate in routes/reteachActivity.ts
+  // (isCoreTeam + counselor / guidance counselor). Read-only school-wide
+  // rollup of benchmark_reteach_log; teachers see their own roster's
+  // reteach via the progress-report footer instead.
+  const canViewReteachActivityClient =
+    Boolean(authUser?.isSuperUser) ||
+    Boolean(authUser?.isDistrictAdmin) ||
+    isAdmin ||
+    Boolean(authUser?.isBehaviorSpecialist) ||
+    Boolean(authUser?.isMtssCoordinator) ||
+    Boolean(authUser?.isSchoolPsychologist) ||
+    Boolean(authUser?.isCounselor) ||
+    Boolean(authUser?.isGuidanceCounselor);
+  // Reachability gate for the Insights hub itself. canAccessMtssHub is
+  // the original (admin / MTSS / behavior spec) check; counselor +
+  // guidance counselor + school psych still need a path in so they can
+  // reach tiles authored for them (Algebra Placement, Reteach Activity).
+  // Individual tile visibility is still filtered by per-tile gates in
+  // the INSIGHTS_TILES.filter() below.
+  const canAccessInsightsHub =
+    canAccessMtssHub ||
+    canViewAlgebraPlacementClient ||
+    canViewReteachActivityClient;
   const canManageStaffRoles =
     Boolean(authUser?.isSuperUser) ||
     Boolean(authUser?.isAdmin) ||
@@ -8375,7 +8410,7 @@ function App() {
       setActiveSection("hallPasses");
       return;
     }
-    if (!canAccessMtssHub && activeSection === "insights") {
+    if (!canAccessInsightsHub && activeSection === "insights") {
       setActiveSection("insightsWatchlist");
     }
     // Trusted Adults admin is core-team only — bounce anyone who lost
@@ -8420,6 +8455,7 @@ function App() {
     canManageSettings,
     canManageStaffRoles,
     canAccessMtssHub,
+    canAccessInsightsHub,
     isSuperUser,
     canActAsDistrict,
   ]);
@@ -20755,6 +20791,11 @@ function App() {
         <AlgebraPlacementReview onBack={() => setActiveSection("insights")} />
       )}
 
+      {activeSection === "reteachActivityDetail" &&
+        canViewReteachActivityClient && (
+          <ReteachActivityPage onBack={() => setActiveSection("insights")} />
+        )}
+
       {activeSection === "instructionalCoverage" &&
         canAccessFastBenchmarksInsights && (
           <InstructionalCoverageDashboard
@@ -20801,11 +20842,15 @@ function App() {
         </div>
       )}
 
-      {activeSection === "insights" && canAccessMtssHub && (
+      {activeSection === "insights" && canAccessInsightsHub && (
         <InsightsHub
-          tiles={INSIGHTS_TILES.filter((t) =>
-            t.id === "algebraPlacement" ? canViewAlgebraPlacementClient : true,
-          )}
+          tiles={INSIGHTS_TILES.filter((t) => {
+            if (t.id === "algebraPlacement")
+              return canViewAlgebraPlacementClient;
+            if (t.id === "reteachActivity")
+              return canViewReteachActivityClient;
+            return true;
+          })}
           onNavigate={(target) => setActiveSection(target as typeof activeSection)}
         />
       )}

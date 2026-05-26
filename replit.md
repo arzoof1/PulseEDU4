@@ -75,6 +75,7 @@ _Populate as you build_
 Archived to `docs/shipped.md` to keep this file focused on active
 work. Most recent entries:
 
+- Reteach Activity school-wide rollup (Insights → 🔁 Reteach Activity, admin / Core Team / counselor) — 30-day summary tiles (🔁 1:1, 👥 small-group, students reached, benchmarks targeted), top loggers + top benchmarks, full filterable detail table (date range, teacher, grade, benchmark, format) with CSV export. Backed by `GET /api/reteach-activity/summary` + `GET /api/reteach-activity` in `routes/reteachActivity.ts`. Insights hub entry gate (`canAccessInsightsHub`) broadened to include counselor / guidance / school-psych so the new tile (and Algebra Placement) are actually reachable. Per-teacher view: indigo "Reteach activity on this roster" footer banner on the Benchmark Progress Report modal showing per-roster totals.
 - Class Composer Skill-cluster mode + PM-refresh workflow — 4th composer mode; per-group focus standards (3–7, default 5); locked rosters never re-shuffle; PM1 check-fit / PM2+PM3 refresh-focus endpoints; Admin Hub PM-keyed banners; focus_standard_N columns on both server + client CSVs.
 - Multi-year FAST history chip (Teacher Roster + Student Profile + MTSS Tier-2 suggestions) — surfaces FL Florida historical-importer rows.
 - Bulk feature picker + admin "reset to temp password".

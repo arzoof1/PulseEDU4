@@ -1106,6 +1106,41 @@ router.get(
       };
     }
 
+    // Roster-wide reteach summary — footer line on the printed report
+    // so a teacher (or admin reading their teacher's report) can see at
+    // a glance "this roster received N 1:1 + M small-group sessions
+    // across K students and J benchmarks this year." Counts every
+    // active log on the roster regardless of who logged it (a reading
+    // coach pulling small groups across multiple teachers' classes
+    // still shows up on those teachers' reports).
+    let rosterTotal1on1 = 0;
+    let rosterTotalGroup = 0;
+    const rosterStudents = new Set<string>();
+    const rosterBenchmarks = new Set<string>();
+    for (const r of reteachRows) {
+      if (r.format === "one_on_one") rosterTotal1on1 += r.count;
+      else if (r.format === "small_group") rosterTotalGroup += r.count;
+      rosterStudents.add(r.studentId);
+      rosterBenchmarks.add(r.benchmarkCode);
+    }
+    const rosterReteachSummary = {
+      oneOnOne: rosterTotal1on1,
+      smallGroup: rosterTotalGroup,
+      uniqueStudents: rosterStudents.size,
+      uniqueBenchmarks: rosterBenchmarks.size,
+    };
+
+    req.log.info(
+      {
+        teacherId: ctx.targetTeacher.id,
+        schoolYear,
+        subject: ctx.subject,
+        reteachRowsFetched: reteachRows.length,
+        rosterReteachSummary,
+      },
+      "[progress-report] reteach summary",
+    );
+
     res.json({
       teacher: {
         id: ctx.targetTeacher.id,
@@ -1117,6 +1152,7 @@ router.get(
       benchmarks,
       classMedians,
       students: studentOut,
+      rosterReteachSummary,
     });
   },
 );

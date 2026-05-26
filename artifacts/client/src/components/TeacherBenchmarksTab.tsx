@@ -126,6 +126,12 @@ interface ProgressReportResponse {
   benchmarks: Benchmark[];
   classMedians?: Record<string, ClassMedian>;
   students: ReportStudent[];
+  rosterReteachSummary?: {
+    oneOnOne: number;
+    smallGroup: number;
+    uniqueStudents: number;
+    uniqueBenchmarks: number;
+  };
 }
 
 interface MatrixResponse {
@@ -3969,6 +3975,52 @@ function ProgressReportModal(props: {
             Close
           </button>
         </div>
+
+        {report?.rosterReteachSummary &&
+          (report.rosterReteachSummary.oneOnOne > 0 ||
+            report.rosterReteachSummary.smallGroup > 0) && (
+            <div
+              className="progress-report-reteach-summary"
+              style={{
+                margin: "0 auto 14px auto",
+                width: "10.5in",
+                maxWidth: "calc(100% - 32px)",
+                background: "#eef2ff",
+                border: "1px solid #c7d2fe",
+                borderRadius: 6,
+                padding: "8px 12px",
+                fontSize: 12,
+                color: "#3730a3",
+                display: "flex",
+                gap: 16,
+                flexWrap: "wrap",
+                alignItems: "center",
+                boxSizing: "border-box",
+              }}
+            >
+              <strong style={{ fontSize: 12 }}>
+                Reteach activity on this roster ({report.schoolYear}):
+              </strong>
+              <span>
+                🔁 <strong>{report.rosterReteachSummary.oneOnOne}</strong>{" "}
+                one-on-one
+              </span>
+              <span>
+                👥 <strong>{report.rosterReteachSummary.smallGroup}</strong>{" "}
+                small-group
+              </span>
+              <span>
+                across <strong>{report.rosterReteachSummary.uniqueStudents}</strong>{" "}
+                student
+                {report.rosterReteachSummary.uniqueStudents === 1 ? "" : "s"}
+              </span>
+              <span>
+                · <strong>{report.rosterReteachSummary.uniqueBenchmarks}</strong>{" "}
+                benchmark
+                {report.rosterReteachSummary.uniqueBenchmarks === 1 ? "" : "s"}
+              </span>
+            </div>
+          )}
 
         <div
           className={`progress-report-print${

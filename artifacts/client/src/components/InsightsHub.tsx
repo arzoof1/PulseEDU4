@@ -31,7 +31,8 @@ export type InsightsTileId =
   | "fastBenchmarks"
   | "instructionalCoverage"
   | "classComposer"
-  | "algebraPlacement";
+  | "algebraPlacement"
+  | "reteachActivity";
 
 export type InsightsGroupId = "domains" | "actions" | "monitoring";
 
