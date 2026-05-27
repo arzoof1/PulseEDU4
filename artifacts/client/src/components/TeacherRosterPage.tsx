@@ -13,7 +13,15 @@
 // Bucket is intentionally suppressed for grade 3 and for any subject
 // without a chart (Algebra 1 / Geometry — not in v1).
 
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import {
+  createContext,
+  Fragment,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { authFetch } from "../lib/authToken";
 import SuggestSeparationModal from "./SuggestSeparationModal";
 import StudentPhoto from "./StudentPhoto";
@@ -402,10 +410,22 @@ const BUCKET_INK: Record<BucketColor, string> = {
   purple: "#4c1d95",
 };
 
-// Click-to-flip pill. Default face shows the FAST sub-level; clicking
-// (or focusing + pressing Enter/Space) flips it to show the raw scale
-// score. Each pill manages its own flipped state so users can pop open
-// just the cells they care about without losing the rest of the table.
+// Roster-wide default for what every ScorePill shows on its front
+// face. The toggle at the top of the Roster tab flips this for the
+// whole page; individual pills can still be clicked to override on a
+// case-by-case basis, but the next change to the global toggle
+// re-syncs every pill to the new default so the page never gets
+// stuck in a half-flipped state.
+type PillView = "level" | "score";
+const PillViewContext = createContext<PillView>("level");
+
+// Click-to-flip pill. Default face is driven by PillViewContext
+// (Roster-wide "Show: Level | Scale score" toggle); a per-pill click
+// overrides locally so users can pop open just the cells they care
+// about without losing the rest of the table. When the global view
+// changes, the local override is cleared so every pill snaps back to
+// the new default — otherwise stale overrides would silently
+// contradict what the toggle says.
 function ScorePill({
   score,
   placement,
@@ -415,7 +435,13 @@ function ScorePill({
   placement: Placement | null;
   pmLabel: string;
 }) {
-  const [flipped, setFlipped] = useState(false);
+  const view = useContext(PillViewContext);
+  const [override, setOverride] = useState<PillView | null>(null);
+  useEffect(() => {
+    setOverride(null);
+  }, [view]);
+  const effective: PillView = override ?? view;
+  const flipped = effective === "score";
   // Pills sized to roughly match the 44px bucket icon for a consistent
   // visual rhythm across the row. Raw scale scores can be 3 digits, so
   // minWidth needs to accommodate that without wrapping.
@@ -483,7 +509,9 @@ function ScorePill({
         title={tooltip}
         aria-label={tooltip}
         aria-pressed={flipped}
-        onClick={() => setFlipped((f) => !f)}
+        onClick={() =>
+          setOverride(effective === "level" ? "score" : "level")
+        }
         style={{
           display: "inline-flex",
           alignItems: "center",
@@ -1331,6 +1359,21 @@ export default function TeacherRosterPage({
   }, [teacherId, onTeacherChange]);
   const [period, setPeriod] = useState<number | null>(null);
   const [tab, setTab] = useState<RosterTab>("roster");
+  // Roster-wide pill view default. Persisted to localStorage so the
+  // teacher's choice survives reloads + navigation. Per-browser, not
+  // per-server-user — keeps the schema clean and avoids a round-trip
+  // for what is purely a display preference. Default "level" matches
+  // the historical behavior (pills show FAST sub-level on first load).
+  const PILL_VIEW_KEY = "pulseedu.teacherRoster.pillView";
+  const [pillView, setPillView] = useState<PillView>(() => {
+    if (typeof window === "undefined") return "level";
+    const raw = window.localStorage.getItem(PILL_VIEW_KEY);
+    return raw === "score" ? "score" : "level";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(PILL_VIEW_KEY, pillView);
+  }, [pillView]);
   const [data, setData] = useState<RosterResponse | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -1833,7 +1876,64 @@ export default function TeacherRosterPage({
       )}
 
       {tab === "roster" && (
-      <>
+      <PillViewContext.Provider value={pillView}>
+      {/* Pill view toggle — flips every FAST pill on the page between
+          sub-level (default) and raw scale score. Persisted per
+          browser. Per-pill clicks still work as a one-off override. */}
+      <div
+        style={{
+          display: "flex",
+          gap: 8,
+          alignItems: "center",
+          marginBottom: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <span style={{ fontSize: 13, color: "#6b7280" }}>Show pills as:</span>
+        <div
+          role="group"
+          aria-label="FAST pill display mode"
+          style={{
+            display: "inline-flex",
+            border: "1px solid #d1d5db",
+            borderRadius: 999,
+            overflow: "hidden",
+            background: "#fff",
+          }}
+        >
+          {(
+            [
+              { value: "level", label: "Level" },
+              { value: "score", label: "Scale score" },
+            ] as Array<{ value: PillView; label: string }>
+          ).map((opt, i) => {
+            const active = pillView === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setPillView(opt.value)}
+                style={{
+                  padding: "5px 14px",
+                  border: "none",
+                  borderLeft: i === 0 ? "none" : "1px solid #d1d5db",
+                  background: active ? "#1f2937" : "transparent",
+                  color: active ? "#fff" : "#374151",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 13,
+                  cursor: "pointer",
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+        <span style={{ fontSize: 11, color: "#9ca3af" }}>
+          Click any pill to flip just that one.
+        </span>
+      </div>
       {/* Period selector — chip row */}
       <div
         style={{
@@ -2547,7 +2647,7 @@ export default function TeacherRosterPage({
           </table>
         </div>
       )}
-      </>
+      </PillViewContext.Provider>
       )}
       {sepTarget && sepSectionId != null && (
         <SuggestSeparationModal
