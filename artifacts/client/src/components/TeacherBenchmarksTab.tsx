@@ -877,10 +877,31 @@ export default function TeacherBenchmarksTab({
             </select>
           </label>
         )}
-        {/* Focus benchmark picker — when set, renders a 3-bucket
-            small-group panel above the heatmap (Mastery / Near / Far).
-            Only shown in absolute mode where per-benchmark % cells
-            exist; growth mode is delta-based so buckets don't apply. */}
+        <button
+          onClick={openPdf}
+          disabled={!data || data.benchmarks.length === 0}
+          style={{ padding: "4px 10px", fontWeight: 600 }}
+          title="Open printable PDF of this heatmap"
+        >
+          Print PDF{" "}
+          {periodFilter == null ? "(All periods)" : `(Period ${periodFilter})`}
+        </button>
+        <button
+          onClick={openReport}
+          disabled={!data}
+          style={{ padding: "4px 10px" }}
+          title="Per-student item-analysis sheet across PM1 / PM2 / PM3 — printable so students can see growth"
+        >
+          Benchmark Progress Report
+        </button>
+        {/* Focus benchmark picker — moved to the END of the toolbar so
+            when its dropdown opens it anchors at the far right of the
+            row. The Bottom 3 panel below sits on the LEFT, so a
+            right-anchored dropdown no longer covers it.
+            When set, renders a 3-bucket small-group panel above the
+            heatmap (Mastery / Near / Far). Only shown in absolute mode
+            where per-benchmark % cells exist; growth mode is delta-
+            based so buckets don't apply. */}
         {mode === "absolute" && data && data.benchmarks.length > 0 && (
           <label
             style={{
@@ -889,6 +910,7 @@ export default function TeacherBenchmarksTab({
               gap: 4,
               fontSize: 12,
               color: "#374151",
+              marginLeft: "auto",
             }}
             title="Pick a benchmark to sort students into Mastery / Near mastery / Far from mastery groups"
           >
@@ -911,23 +933,6 @@ export default function TeacherBenchmarksTab({
             </select>
           </label>
         )}
-        <button
-          onClick={openPdf}
-          disabled={!data || data.benchmarks.length === 0}
-          style={{ padding: "4px 10px", fontWeight: 600 }}
-          title="Open printable PDF of this heatmap"
-        >
-          Print PDF{" "}
-          {periodFilter == null ? "(All periods)" : `(Period ${periodFilter})`}
-        </button>
-        <button
-          onClick={openReport}
-          disabled={!data}
-          style={{ padding: "4px 10px" }}
-          title="Per-student item-analysis sheet across PM1 / PM2 / PM3 — printable so students can see growth"
-        >
-          Benchmark Progress Report
-        </button>
       </div>
 
       {/* Color legend — only relevant in absolute mode. */}

@@ -350,6 +350,20 @@ router.post("/reteach-log/bulk", async (req: Request, res: Response) => {
     });
     return;
   }
+  // Strict-set guard: reject the whole batch if ANY supplied id was
+  // silently dropped by the school-scope or roster-scope filters.
+  // Without this, a teacher could send 8 ids, see "logged for 8" in
+  // the UI optimistic state, but only 5 actually persist — and the
+  // session id would represent a group that never met. Better to
+  // 409 and force the client to reconcile its selection.
+  if (insertIds.length !== cleanIds.length) {
+    const dropped = cleanIds.filter((id) => !insertIds.includes(id));
+    res.status(409).json({
+      error: "Some students are not on your roster or not in this school",
+      droppedStudentIds: dropped,
+    });
+    return;
+  }
   const groupSessionId = randomUUID();
   const rows = await db
     .insert(benchmarkReteachLogTable)
@@ -445,11 +459,26 @@ router.patch("/reteach-log/:id", async (req: Request, res: Response) => {
         ? b.note.slice(0, 500)
         : null;
   }
+  // Defensive: re-assert school-scope + not-soft-deleted on the
+  // UPDATE itself. The pre-check above already loaded the row with
+  // these guards, but repeating them on the write closes any TOCTOU
+  // window (e.g. another request soft-deletes the row between SELECT
+  // and UPDATE) and prevents accidentally un-deleting a row.
   const [updated] = await db
     .update(benchmarkReteachLogTable)
     .set(patch)
-    .where(eq(benchmarkReteachLogTable.id, id))
+    .where(
+      and(
+        eq(benchmarkReteachLogTable.id, id),
+        eq(benchmarkReteachLogTable.schoolId, schoolId),
+        isNull(benchmarkReteachLogTable.deletedAt),
+      ),
+    )
     .returning();
+  if (!updated) {
+    res.status(409).json({ error: "Log was deleted while editing" });
+    return;
+  }
   res.json({ log: updated });
 });
 
@@ -493,14 +522,30 @@ router.delete("/reteach-log/:id", async (req: Request, res: Response) => {
     res.status(403).json({ error: "Student not on your roster" });
     return;
   }
-  await db
+  // Defensive: same TOCTOU guards as PATCH. Also prevents a
+  // double-delete from overwriting the original deletedByStaffId
+  // attribution if two admins click delete at the same moment.
+  const result = await db
     .update(benchmarkReteachLogTable)
     .set({
       deletedAt: new Date(),
       deletedByStaffId: staff.id,
       updatedAt: new Date(),
     })
-    .where(eq(benchmarkReteachLogTable.id, id));
+    .where(
+      and(
+        eq(benchmarkReteachLogTable.id, id),
+        eq(benchmarkReteachLogTable.schoolId, schoolId),
+        isNull(benchmarkReteachLogTable.deletedAt),
+      ),
+    )
+    .returning({ id: benchmarkReteachLogTable.id });
+  if (result.length === 0) {
+    // Lost the race — someone else deleted it first. Treat as success
+    // from the caller's perspective (the row IS deleted).
+    res.json({ ok: true, alreadyDeleted: true });
+    return;
+  }
   res.json({ ok: true });
 });
 
