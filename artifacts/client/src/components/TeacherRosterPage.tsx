@@ -1070,7 +1070,6 @@ function ProgramPill({
       <span
         ref={anchorRef}
         tabIndex={0}
-        title={meta.title}
         aria-label={meta.title}
         style={{
           display: "inline-block",
