@@ -14810,66 +14810,148 @@ function App() {
                                                 >
                                                   {a.name}
                                                 </span>
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    setEntry(
-                                                      sid,
-                                                      a.id,
-                                                      "provided",
-                                                    )
-                                                  }
+                                                {/* Touch-friendly 3-way segmented
+                                                    toggle: Provided | Not marked |
+                                                    Refused. 48px tall (Apple/Google
+                                                    HIG min ~44px), pill-shaped, with
+                                                    icons so teachers can scan a roster
+                                                    of 25 at arm's length. Center
+                                                    segment ("—") clears back to
+                                                    unmarked — exactly what
+                                                    setEntry(..., null) already does.
+                                                    aria-pressed gives screen readers
+                                                    the same state info as the visual
+                                                    selection. */}
+                                                <div
+                                                  role="group"
+                                                  aria-label={`Log ${a.name} for this student`}
                                                   style={{
-                                                    padding: "0.2rem 0.6rem",
-                                                    background:
-                                                      cur === "provided"
-                                                        ? "#0f766e"
-                                                        : "#e2e8f0",
-                                                    color:
-                                                      cur === "provided"
-                                                        ? "white"
-                                                        : "#0f172a",
-                                                    border: "none",
-                                                    borderRadius: 4,
-                                                    cursor: "pointer",
-                                                    fontWeight:
-                                                      cur === "provided"
-                                                        ? 700
-                                                        : 500,
+                                                    display: "inline-flex",
+                                                    height: 48,
+                                                    border: "1px solid #cbd5e1",
+                                                    borderRadius: 999,
+                                                    overflow: "hidden",
+                                                    background: "#fff",
+                                                    boxShadow:
+                                                      "0 1px 2px rgba(15,23,42,0.06)",
+                                                    flexShrink: 0,
                                                   }}
                                                 >
-                                                  Provided
-                                                </button>
-                                                <button
-                                                  type="button"
-                                                  onClick={() =>
-                                                    setEntry(
-                                                      sid,
-                                                      a.id,
-                                                      "refused",
-                                                    )
-                                                  }
-                                                  style={{
-                                                    padding: "0.2rem 0.6rem",
-                                                    background:
-                                                      cur === "refused"
-                                                        ? "#b91c1c"
-                                                        : "#fde2e2",
-                                                    color:
-                                                      cur === "refused"
+                                                  <button
+                                                    type="button"
+                                                    aria-pressed={
+                                                      cur === "provided"
+                                                    }
+                                                    onClick={() =>
+                                                      setEntry(
+                                                        sid,
+                                                        a.id,
+                                                        "provided",
+                                                      )
+                                                    }
+                                                    style={{
+                                                      padding: "0 18px",
+                                                      minWidth: 108,
+                                                      background:
+                                                        cur === "provided"
+                                                          ? "#0f766e"
+                                                          : "#ecfdf5",
+                                                      color:
+                                                        cur === "provided"
+                                                          ? "white"
+                                                          : "#0f766e",
+                                                      border: "none",
+                                                      borderRight:
+                                                        "1px solid #cbd5e1",
+                                                      cursor: "pointer",
+                                                      fontWeight: 700,
+                                                      fontSize: "0.9rem",
+                                                      display: "inline-flex",
+                                                      alignItems: "center",
+                                                      justifyContent:
+                                                        "center",
+                                                      gap: 6,
+                                                      touchAction:
+                                                        "manipulation",
+                                                    }}
+                                                  >
+                                                    <span aria-hidden="true">
+                                                      ✓
+                                                    </span>
+                                                    Provided
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    aria-pressed={!cur}
+                                                    aria-label="Clear — not marked"
+                                                    onClick={() =>
+                                                      setEntry(sid, a.id, null)
+                                                    }
+                                                    style={{
+                                                      padding: "0 14px",
+                                                      minWidth: 56,
+                                                      background: !cur
+                                                        ? "#475569"
+                                                        : "#f8fafc",
+                                                      color: !cur
                                                         ? "white"
-                                                        : "#7f1d1d",
-                                                    border: "none",
-                                                    borderRadius: 4,
-                                                    cursor: "pointer",
-                                                    fontWeight:
+                                                        : "#64748b",
+                                                      border: "none",
+                                                      borderRight:
+                                                        "1px solid #cbd5e1",
+                                                      cursor: "pointer",
+                                                      fontWeight: 700,
+                                                      fontSize: "1.05rem",
+                                                      lineHeight: 1,
+                                                      touchAction:
+                                                        "manipulation",
+                                                    }}
+                                                    title="Not marked (skipped students count as absent and aren't logged)"
+                                                  >
+                                                    —
+                                                  </button>
+                                                  <button
+                                                    type="button"
+                                                    aria-pressed={
                                                       cur === "refused"
-                                                        ? 700
-                                                        : 500,
-                                                  }}
-                                                >
-                                                  Refused
-                                                </button>
+                                                    }
+                                                    onClick={() =>
+                                                      setEntry(
+                                                        sid,
+                                                        a.id,
+                                                        "refused",
+                                                      )
+                                                    }
+                                                    style={{
+                                                      padding: "0 18px",
+                                                      minWidth: 108,
+                                                      background:
+                                                        cur === "refused"
+                                                          ? "#b91c1c"
+                                                          : "#fef2f2",
+                                                      color:
+                                                        cur === "refused"
+                                                          ? "white"
+                                                          : "#b91c1c",
+                                                      border: "none",
+                                                      cursor: "pointer",
+                                                      fontWeight: 700,
+                                                      fontSize: "0.9rem",
+                                                      display: "inline-flex",
+                                                      alignItems: "center",
+                                                      justifyContent:
+                                                        "center",
+                                                      gap: 6,
+                                                      touchAction:
+                                                        "manipulation",
+                                                    }}
+                                                  >
+                                                    <span aria-hidden="true">
+                                                      ✗
+                                                    </span>
+                                                    Refused
+                                                  </button>
+                                                </div>
                                               </li>
                                             );
                                           })}
