@@ -96,6 +96,7 @@ router.get("/admin/parent-invites", async (req, res) => {
     .select({
       id: studentsTable.id,
       studentId: studentsTable.studentId,
+      localSisId: studentsTable.localSisId,
       firstName: studentsTable.firstName,
       lastName: studentsTable.lastName,
       grade: studentsTable.grade,
@@ -194,6 +195,11 @@ router.get("/admin/parent-invites", async (req, res) => {
         student: {
           id: s.id,
           studentId: s.studentId,
+          // Local SIS ID (Skyward / Focus) — what the front office
+          // actually uses day-to-day. Surfaced alongside the FLEID
+          // so the Parent Access page can show the more familiar
+          // number; falls back to FLEID when this is null.
+          localSisId: s.localSisId,
           firstName: s.firstName,
           lastName: s.lastName,
           grade: s.grade,
