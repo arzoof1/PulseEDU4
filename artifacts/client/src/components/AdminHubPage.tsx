@@ -416,7 +416,7 @@ export default function AdminHubPage({
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "1rem" }}>
       <div>
-        <h1 style={{ marginTop: 0 }}>Admin Hub</h1>
+        <h1 style={{ marginTop: 0 }}>Log ODR</h1>
         <p style={{ color: "var(--text-subtle)", marginTop: 0 }}>
           Log ISS or OSS for one or more days. Teachers see soft reminders
           on their roster automatically. Parents see what your school has

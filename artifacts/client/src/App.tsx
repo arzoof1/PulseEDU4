@@ -9006,7 +9006,7 @@ function App() {
     });
     add(isAdmin || isBehaviorSpec, {
       key: "adminHub",
-      label: "Admin Hub",
+      label: "Log ODR",
       description: "Disciplinary actions and administrative overrides.",
       emoji: "🏛️",
       group: "support",
@@ -9966,7 +9966,7 @@ function App() {
                   isMtss) &&
                   renderNavItem({
                     key: "adminHub",
-                    label: "Admin Hub",
+                    label: "Log ODR",
                     icon: IconClipboard,
                   })}
                 {(isAdmin ||
