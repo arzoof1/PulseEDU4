@@ -157,6 +157,19 @@ interface Snapshot {
       lastAt: string;
     }>;
   };
+  // PBIS house affiliation. Optional so older API servers still
+  // type-check. Null when the student isn't on a house (or the
+  // school doesn't run houses). `totalPoints` is the school-wide
+  // house total — same number kids see on the hallway TVs.
+  house?: {
+    id: number;
+    name: string;
+    color: string;
+    motto: string | null;
+    iconKey: string | null;
+    iconObjectKey: string | null;
+    totalPoints: number;
+  } | null;
 }
 
 const EkgDivider = () => (
@@ -551,6 +564,15 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           {onTrack ? "On track this week" : "Needs attention this week"}
         </Badge>
       </div>
+
+      {/* House affiliation tile — shows the student's PBIS house, its
+          custom logo (or letter-bubble fallback), and the current
+          school-wide house total. Same number families see on the
+          hallway signage. Gated under `recognition` like everything
+          PBIS. */}
+      {sec.recognition && snapshot.house && (
+        <HouseTile house={snapshot.house} />
+      )}
 
       {/* Parent-facing weekly mood meter — same red(left)/green(right)
           pattern as the signage screens so families learn to read it once.
@@ -1160,6 +1182,88 @@ function ParentMoodMeter({ snapshot }: { snapshot: Snapshot }) {
             <div className="h-3 w-3 rounded-full bg-amber-500" />
             <span className="font-bold text-amber-700 tabular-nums">{concernCount}</span>
             <span className="text-slate-500">tardies</span>
+          </div>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+// House affiliation tile. Mirrors the staff-facing HousesPanel logo
+// treatment (custom uploaded PNG on a colored backdrop, letter-bubble
+// fallback when no logo is set) so the parent's view matches the
+// poster on the hallway wall. The house's accent color is used for
+// the backdrop + the points pill so each house looks distinct without
+// us having to think about a palette.
+function HouseTile({
+  house,
+}: {
+  house: NonNullable<Snapshot["house"]>;
+}) {
+  const accent = house.color || "#6366f1";
+  return (
+    <Card className="border-slate-100 overflow-hidden">
+      <div className="h-1 w-full" style={{ background: accent }} />
+      <CardContent className="p-5">
+        <div className="flex items-center gap-4">
+          <div
+            className="flex items-center justify-center rounded-xl overflow-hidden shrink-0"
+            style={{
+              background: accent,
+              width: 72,
+              height: 72,
+            }}
+          >
+            {house.iconObjectKey ? (
+              <img
+                src={`/api/houses/${house.id}/logo.png?v=${encodeURIComponent(
+                  house.iconObjectKey,
+                )}`}
+                alt={`${house.name} logo`}
+                style={{
+                  maxHeight: 60,
+                  maxWidth: "85%",
+                  background: "#fff",
+                  borderRadius: 6,
+                  padding: 4,
+                }}
+              />
+            ) : (
+              <span
+                style={{
+                  color: "#fff",
+                  fontWeight: 700,
+                  fontSize: 32,
+                  opacity: 0.9,
+                }}
+              >
+                {(house.name.charAt(0) || "H").toUpperCase()}
+              </span>
+            )}
+          </div>
+          <div className="flex-1 min-w-0">
+            <div className="text-xs uppercase tracking-wider text-slate-500 font-medium">
+              House
+            </div>
+            <div className="text-xl font-bold text-slate-900 truncate">
+              {house.name}
+            </div>
+            {house.motto && (
+              <div className="text-sm text-slate-600 italic truncate mt-0.5">
+                "{house.motto}"
+              </div>
+            )}
+          </div>
+          <div className="text-right shrink-0">
+            <div
+              className="text-3xl font-bold tabular-nums"
+              style={{ color: accent }}
+            >
+              {house.totalPoints.toLocaleString()}
+            </div>
+            <div className="text-[11px] uppercase tracking-wider text-slate-500 font-medium">
+              House points
+            </div>
           </div>
         </div>
       </CardContent>

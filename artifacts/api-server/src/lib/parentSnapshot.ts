@@ -29,6 +29,7 @@ import {
   bellSchedulesTable,
   bellSchedulePeriodsTable,
   benchmarkReteachLogTable,
+  housesTable,
 } from "@workspace/db";
 import { and, eq, desc, isNull, sql, gte, lt } from "drizzle-orm";
 import { schoolYearLabelFor, DEFAULT_SCHOOL_TZ } from "./schoolYear.js";
@@ -201,6 +202,23 @@ export interface ParentSnapshot {
       lastAt: string;
     }>;
   };
+  // PBIS house affiliation. Null when the student isn't assigned to a
+  // house (or the school doesn't run houses). Gated under the same
+  // `recognition` flag as PBIS points since house standing is the
+  // school-wide PBIS rollup. `totalPoints` is the sum of all active
+  // (non-voided) PBIS points across every member of the house in the
+  // current school — same calculation as the houses signage and the
+  // staff-facing Houses panel, so the number a parent sees matches
+  // what the kids see on the hallway TVs.
+  house: {
+    id: number;
+    name: string;
+    color: string;
+    motto: string | null;
+    iconKey: string | null;
+    iconObjectKey: string | null;
+    totalPoints: number;
+  } | null;
 }
 
 export type SnapshotResult =
@@ -805,6 +823,59 @@ export async function buildParentSnapshot(
       .sort((a, b) => b.total - a.total || (a.benchmarkCode < b.benchmarkCode ? -1 : 1));
   }
 
+  // ----- House affiliation (PBIS) -----
+  // Gated under `recognition` because house standings are the school-
+  // wide PBIS rollup; if a parent has hidden recognition (or the
+  // school disabled it) we suppress house too rather than leaking the
+  // PBIS competition through a side door. Two cheap queries when the
+  // student actually has a houseId: one to fetch the house row, one to
+  // sum the house's all-time active points (same calc as the staff
+  // Houses panel — sum across every PBIS entry whose student belongs
+  // to the same house in this school, excluding voided rows).
+  let housePayload: ParentSnapshot["house"] = null;
+  if (sectionsAvailable.recognition && student.houseId !== null) {
+    const [houseRow] = await db
+      .select()
+      .from(housesTable)
+      .where(
+        and(
+          eq(housesTable.id, student.houseId),
+          eq(housesTable.schoolId, student.schoolId),
+        ),
+      );
+    if (houseRow) {
+      // Sum points across all students in this house. We join through
+      // students so we can scope by (school_id, house_id) without
+      // trusting pbis_entries to carry a house_id of its own.
+      const [{ points } = { points: 0 }] = await db
+        .select({
+          points: sql<number>`COALESCE(SUM(${pbisEntriesTable.points}), 0)::int`,
+        })
+        .from(pbisEntriesTable)
+        .innerJoin(
+          studentsTable,
+          eq(pbisEntriesTable.studentId, studentsTable.studentId),
+        )
+        .where(
+          and(
+            eq(pbisEntriesTable.schoolId, student.schoolId),
+            eq(studentsTable.schoolId, student.schoolId),
+            eq(studentsTable.houseId, houseRow.id),
+            isNull(pbisEntriesTable.voidedAt),
+          ),
+        );
+      housePayload = {
+        id: houseRow.id,
+        name: houseRow.name,
+        color: houseRow.color,
+        motto: houseRow.motto,
+        iconKey: houseRow.iconKey,
+        iconObjectKey: houseRow.iconObjectKey,
+        totalPoints: points ?? 0,
+      };
+    }
+  }
+
   return {
     ok: true,
     data: {
@@ -887,6 +958,7 @@ export async function buildParentSnapshot(
       },
       oss: { daysThisYear: ossDaysThisYear, recent: ossRecent },
       reteach: { items: reteachItems },
+      house: housePayload,
     },
   };
 }
