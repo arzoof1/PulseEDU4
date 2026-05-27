@@ -1701,7 +1701,12 @@ ul[style*="listStyle: none"] li button:hover {
   align-items: flex-end;
   justify-content: center;
   gap: 0.65rem;
-  min-height: 220px;
+  /* Resting bottles sit ~60px LOWER than the shelf so their dark-blue
+     caps are fully visible BELOW the shelf instead of hidden behind
+     it. The winner's `bottle-land` keyframes were shifted by the same
+     60px (rest Y was -120, now -180) so the landed bottle still
+     touches down flush on the shelf surface. */
+  min-height: 280px;
   padding-top: 110px;
   perspective: 800px;
 }
@@ -1792,43 +1797,47 @@ ul[style*="listStyle: none"] li button:hover {
   z-index: 3;
 }
 @keyframes bottle-land {
+  /* All Y values bumped by -60px vs. the prior version because the
+     bottles row was lowered by 60px to expose the caps below the
+     shelf. Final landed Y is now -180px (was -120) so the landed
+     bottle's base still sits flush on the shelf top. */
   /* 0% — at rest, about to flick */
   0% {
     transform: translate(0, 0) rotate(0deg) scale(1);
   }
   /* 35% — mid-air at peak, halfway through the rotation */
   35% {
-    transform: translate(0, -220px) rotate(180deg) scale(1.05);
+    transform: translate(0, -280px) rotate(180deg) scale(1.05);
   }
   /* 60% — descending, rotation completes to upright */
   60% {
-    transform: translate(0, -150px) rotate(360deg) scale(1.02);
+    transform: translate(0, -210px) rotate(360deg) scale(1.02);
   }
   /* 70% — TOUCHDOWN: base hits the table, body squashes (wide & short) */
   70% {
-    transform: translate(0, -118px) rotate(360deg) scaleX(1.12) scaleY(0.86);
+    transform: translate(0, -178px) rotate(360deg) scaleX(1.12) scaleY(0.86);
   }
   /* 76% — recovery from squash, slight rebound stretch */
   76% {
-    transform: translate(0, -124px) rotate(360deg) scaleX(0.97) scaleY(1.03);
+    transform: translate(0, -184px) rotate(360deg) scaleX(0.97) scaleY(1.03);
   }
   /* 82% — wobble LEFT: bottle tips, almost falls. translateX paired with
             rotate keeps the bottle's base on the table (faking a pivot
             at the base instead of the center). */
   82% {
-    transform: translate(-5px, -120px) rotate(351deg) scale(1);
+    transform: translate(-5px, -180px) rotate(351deg) scale(1);
   }
   /* 88% — wobble RIGHT: tips the other way */
   88% {
-    transform: translate(5px, -120px) rotate(369deg) scale(1);
+    transform: translate(5px, -180px) rotate(369deg) scale(1);
   }
   /* 94% — tiny final left tip */
   94% {
-    transform: translate(-1.5px, -120px) rotate(357deg) scale(1);
+    transform: translate(-1.5px, -180px) rotate(357deg) scale(1);
   }
   /* 100% — SETTLED upright on the table, dead still */
   100% {
-    transform: translate(0, -120px) rotate(360deg) scale(1);
+    transform: translate(0, -180px) rotate(360deg) scale(1);
   }
 }
 
