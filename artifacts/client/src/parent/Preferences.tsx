@@ -4,7 +4,6 @@ import {
   Mail,
   Eye,
   EyeOff,
-  Shield,
   RotateCcw,
   ShieldCheck,
 } from "lucide-react";
@@ -251,8 +250,7 @@ export default function Preferences({ studentId, studentName, onBack }: Props) {
           </h1>
           <p className="text-sm text-slate-600">
             Choose which parts of {studentName}'s HeartBEAT snapshot you want
-            visible. You can hide a section the school has shown — you can't
-            reveal one the school has hidden.
+            visible. You can hide any section your school has chosen to share.
           </p>
         </div>
 
@@ -275,13 +273,22 @@ export default function Preferences({ studentId, studentName, onBack }: Props) {
           <>
             <Card>
               <CardContent className="p-0">
-                {SECTION_LABELS.map((s, idx) => {
+                {/* Only render sections the school has enabled. Previously
+                    we rendered every row with a "Hidden by school" badge,
+                    which leaked the full menu of available sections —
+                    parents could see that e.g. Reteach OR Staff Notes
+                    exist as features even when admin had turned them
+                    off. Now: if schoolEnabled is false, the row is
+                    invisible to the parent. Same gate applies to the
+                    Weekly Email card below. */}
+                {SECTION_LABELS.filter((s) => {
+                  const row = data.sections.find((x) => x.key === s.key);
+                  return Boolean(row?.schoolEnabled);
+                }).map((s, idx) => {
                   const row = data.sections.find((x) => x.key === s.key);
                   if (!row) return null;
-                  const visible =
-                    row.schoolEnabled && row.parentPref !== false;
-                  const hiddenByParent =
-                    row.schoolEnabled && row.parentPref === false;
+                  const visible = row.parentPref !== false;
+                  const hiddenByParent = row.parentPref === false;
                   const isSaving = savingKey === s.key;
                   return (
                     <div
@@ -311,15 +318,11 @@ export default function Preferences({ studentId, studentName, onBack }: Props) {
                               Sensitive
                             </Badge>
                           )}
-                          {!row.schoolEnabled && (
-                            <Badge
-                              variant="outline"
-                              className="text-[10px] uppercase tracking-wider border-slate-300 text-slate-500 gap-1"
-                            >
-                              <Shield className="h-3 w-3" />
-                              Hidden by school
-                            </Badge>
-                          )}
+                          {/* "Hidden by school" badge removed — rows where
+                              schoolEnabled is false are now filtered out
+                              entirely above, so this branch is unreachable.
+                              Keeping the badge would re-leak the section
+                              name. */}
                           {hiddenByParent && (
                             <Badge
                               variant="outline"
@@ -336,7 +339,7 @@ export default function Preferences({ studentId, studentName, onBack }: Props) {
                       <div className="flex items-center gap-2 pt-1">
                         <Switch
                           checked={visible}
-                          disabled={!row.schoolEnabled || isSaving}
+                          disabled={isSaving}
                           onCheckedChange={() =>
                             toggleSection(s.key, visible)
                           }
@@ -349,47 +352,41 @@ export default function Preferences({ studentId, studentName, onBack }: Props) {
               </CardContent>
             </Card>
 
-            {/* Weekly email opt-in */}
-            <Card>
-              <CardContent className="p-4">
-                <div className="flex items-start gap-4">
-                  <div className="mt-0.5 text-violet-500">
-                    <Mail className="h-4 w-4" />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-semibold text-slate-900">
-                        Weekly email
-                      </span>
-                      {!data.weeklyEmailAllowed && (
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] uppercase tracking-wider border-slate-300 text-slate-500 gap-1"
-                        >
-                          <Shield className="h-3 w-3" />
-                          Disabled by school
-                        </Badge>
-                      )}
+            {/* Weekly email opt-in — only shown if the school has enabled
+                weekly email for this school. When disabled by admin,
+                hide the whole card rather than rendering a disabled
+                switch with a "Disabled by school" badge (same leak
+                pattern as the sections list above). */}
+            {data.weeklyEmailAllowed && (
+              <Card>
+                <CardContent className="p-4">
+                  <div className="flex items-start gap-4">
+                    <div className="mt-0.5 text-violet-500">
+                      <Mail className="h-4 w-4" />
                     </div>
-                    <p className="text-sm text-slate-600 mt-1 leading-snug">
-                      Receive a Sunday-evening snapshot summary by email for{" "}
-                      {studentName}.
-                    </p>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="font-semibold text-slate-900">
+                          Weekly email
+                        </span>
+                      </div>
+                      <p className="text-sm text-slate-600 mt-1 leading-snug">
+                        Receive a Sunday-evening snapshot summary by email for{" "}
+                        {studentName}.
+                      </p>
+                    </div>
+                    <div className="flex items-center pt-1">
+                      <Switch
+                        checked={data.weeklyEmailEnabled}
+                        disabled={savingKey === "weeklyEmail"}
+                        onCheckedChange={toggleWeeklyEmail}
+                        aria-label="Toggle weekly email"
+                      />
+                    </div>
                   </div>
-                  <div className="flex items-center pt-1">
-                    <Switch
-                      checked={data.weeklyEmailEnabled}
-                      disabled={
-                        !data.weeklyEmailAllowed ||
-                        savingKey === "weeklyEmail"
-                      }
-                      onCheckedChange={toggleWeeklyEmail}
-                      aria-label="Toggle weekly email"
-                    />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
+                </CardContent>
+              </Card>
+            )}
 
             <div className="text-xs text-slate-500 flex items-center gap-1.5">
               <RotateCcw className="h-3 w-3" />
