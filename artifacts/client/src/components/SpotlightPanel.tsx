@@ -140,7 +140,11 @@ type SpinState =
       // a long way before settling. Only set when animStyle === "reel".
       reelSlots?: RosterStudent[];
     }
-  | { kind: "result"; pick: PickResult };
+  // `awarded` flips true after a successful /spotlight/award call.
+  // The card stays put on the same student so the teacher can decide
+  // their next move (change animation style, spin again, or Done)
+  // instead of being auto-advanced into another spin.
+  | { kind: "result"; pick: PickResult; awarded: boolean };
 
 interface SpotlightPanelProps {
   isAdmin: boolean;
@@ -567,7 +571,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         reelSlots,
       });
       animTimerRef.current = setTimeout(() => {
-        setSpin({ kind: "result", pick: result });
+        setSpin({ kind: "result", pick: result, awarded: false });
       }, ANIM_DURATION_MS);
     } catch (e) {
       setSpin({ kind: "idle" });
@@ -588,6 +592,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
       setSpin({
         kind: "result",
         pick: { ...spin.pick, prompt: body.prompt },
+        awarded: spin.awarded,
       });
     } catch {
       // ignore
@@ -720,20 +725,19 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         setFireworksKey(Date.now());
         playChime();
       }
-      // Auto-advance after a short celebration window so the teacher can
-      // get back to the rhythm of asking the next question. Long enough
-      // for the fireworks burst (~1.5s) to land and the bar to spring.
-      // Read state via spinRef so a Done/Skip click during the wait
-      // cancels the implicit re-pick instead of firing it anyway.
-      if (awardAdvanceTimerRef.current !== null) {
-        clearTimeout(awardAdvanceTimerRef.current);
+      // Flip the card into its "awarded" state. The card stays on
+      // this student so the teacher can switch animation styles,
+      // hit "Spin again" deliberately, or Done — instead of being
+      // auto-rolled into the next pick. Per-pick "already awarded"
+      // is tracked on the spin state so a double-click on Correct
+      // can't double-credit the same student.
+      if (spinRef.current.kind === "result") {
+        setSpin({
+          kind: "result",
+          pick: spinRef.current.pick,
+          awarded: true,
+        });
       }
-      awardAdvanceTimerRef.current = setTimeout(() => {
-        awardAdvanceTimerRef.current = null;
-        if (spinRef.current.kind === "result") {
-          void pick();
-        }
-      }, 2200);
     } catch (e) {
       setAwardError(e instanceof Error ? e.message : "Award failed");
     } finally {
@@ -980,6 +984,7 @@ export default function SpotlightPanel({ isAdmin }: SpotlightPanelProps) {
         {spin.kind === "result" ? (
           <ResultCard
             pick={spin.pick}
+            awarded={spin.awarded}
             onCorrect={() => void awardCorrect()}
             awarding={awarding}
             awardError={awardError}
@@ -1557,6 +1562,7 @@ function SpotlightSweep({
 
 interface ResultCardProps {
   pick: PickResult;
+  awarded: boolean;
   onCorrect: () => void;
   awarding: boolean;
   awardError: string | null;
@@ -1568,6 +1574,7 @@ interface ResultCardProps {
 
 function ResultCard({
   pick,
+  awarded,
   onCorrect,
   awarding,
   awardError,
@@ -1666,41 +1673,51 @@ function ResultCard({
         <button
           type="button"
           onClick={onCorrect}
-          disabled={awarding}
+          disabled={awarding || awarded}
+          aria-pressed={awarded}
           style={{
-            background: house?.color ?? "#16a34a",
-            color: "#fff",
+            background: awarded
+              ? "#e2e8f0"
+              : house?.color ?? "#16a34a",
+            color: awarded ? "#0f172a" : "#fff",
             border: "none",
             borderRadius: 12,
             padding: "0.7rem 1.4rem",
             fontWeight: 700,
             fontSize: "1.05rem",
-            cursor: awarding ? "wait" : "pointer",
-            boxShadow: "0 6px 16px rgba(0,0,0,0.18)",
+            cursor: awarding || awarded ? "default" : "pointer",
+            boxShadow: awarded
+              ? "none"
+              : "0 6px 16px rgba(0,0,0,0.18)",
             opacity: awarding ? 0.7 : 1,
             minWidth: 180,
           }}
         >
           {awarding
             ? "Awarding…"
-            : `✅ Correct! +${pick.awardedPoints} pt${pick.awardedPoints === 1 ? "" : "s"}`}
+            : awarded
+              ? `✅ Awarded +${pick.awardedPoints} pt${pick.awardedPoints === 1 ? "" : "s"}`
+              : `✅ Correct! +${pick.awardedPoints} pt${pick.awardedPoints === 1 ? "" : "s"}`}
         </button>
         <button
           type="button"
           onClick={onPickAgain}
           disabled={awarding}
           style={{
-            background: "#fff",
-            color: "#334155",
-            border: "1px solid #cbd5e1",
+            background: awarded ? "#1d4ed8" : "#fff",
+            color: awarded ? "#fff" : "#334155",
+            border: awarded ? "none" : "1px solid #cbd5e1",
             borderRadius: 12,
             padding: "0.7rem 1.1rem",
-            fontWeight: 600,
+            fontWeight: awarded ? 700 : 600,
             fontSize: "1rem",
             cursor: awarding ? "not-allowed" : "pointer",
+            boxShadow: awarded
+              ? "0 6px 16px rgba(0,0,0,0.18)"
+              : "none",
           }}
         >
-          Skip — pick next
+          {awarded ? "🎲 Spin again" : "Skip — pick next"}
         </button>
       </div>
 
@@ -1727,13 +1744,19 @@ function ResultCard({
         className="spotlight-result-actions"
         style={{ marginTop: "0.85rem" }}
       >
-        <button
-          type="button"
-          onClick={onReroll}
-          className="spotlight-result-btn"
-        >
-          New prompt
-        </button>
+        {/* "New prompt" only makes sense when a prompt is actually
+            attached to the pick — for schools that don't use the
+            prompt library it was dead UI. Hidden when pick.prompt is
+            null so the secondary row stays purposeful. */}
+        {pick.prompt && (
+          <button
+            type="button"
+            onClick={onReroll}
+            className="spotlight-result-btn"
+          >
+            New prompt
+          </button>
+        )}
         {/* "They're absent — re-pick" button hidden by user request.
             The handler (onAbsentAndRepick / markAbsentAndRepick) is left
             wired up so we can resurface this affordance trivially later
