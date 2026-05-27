@@ -1877,68 +1877,15 @@ export default function TeacherRosterPage({
 
       {tab === "roster" && (
       <PillViewContext.Provider value={pillView}>
-      {/* Pill view toggle — flips every FAST pill on the page between
-          sub-level (default) and raw scale score. Persisted per
-          browser. Per-pill clicks still work as a one-off override. */}
+      {/* Period selector + Pill view toggle — combined row.
+          Period chips on the left (primary filter), pill-view toggle
+          right-aligned (display preference, persisted per browser).
+          Keeping both on a single row trims one full row of vertical
+          chrome above the roster without hiding either control. */}
       <div
         style={{
           display: "flex",
-          gap: 8,
-          alignItems: "center",
-          marginBottom: 8,
-          flexWrap: "wrap",
-        }}
-      >
-        <span style={{ fontSize: 13, color: "#6b7280" }}>Show pills as:</span>
-        <div
-          role="group"
-          aria-label="FAST pill display mode"
-          style={{
-            display: "inline-flex",
-            border: "1px solid #d1d5db",
-            borderRadius: 999,
-            overflow: "hidden",
-            background: "#fff",
-          }}
-        >
-          {(
-            [
-              { value: "level", label: "Level" },
-              { value: "score", label: "Scale score" },
-            ] as Array<{ value: PillView; label: string }>
-          ).map((opt, i) => {
-            const active = pillView === opt.value;
-            return (
-              <button
-                key={opt.value}
-                type="button"
-                aria-pressed={active}
-                onClick={() => setPillView(opt.value)}
-                style={{
-                  padding: "5px 14px",
-                  border: "none",
-                  borderLeft: i === 0 ? "none" : "1px solid #d1d5db",
-                  background: active ? "#1f2937" : "transparent",
-                  color: active ? "#fff" : "#374151",
-                  fontWeight: active ? 700 : 500,
-                  fontSize: 13,
-                  cursor: "pointer",
-                }}
-              >
-                {opt.label}
-              </button>
-            );
-          })}
-        </div>
-        <span style={{ fontSize: 11, color: "#9ca3af" }}>
-          Click any pill to flip just that one.
-        </span>
-      </div>
-      {/* Period selector — chip row */}
-      <div
-        style={{
-          display: "flex",
-          gap: 6,
+          gap: 10,
           alignItems: "center",
           marginBottom: 12,
           flexWrap: "wrap",
@@ -1974,16 +1921,64 @@ export default function TeacherRosterPage({
             P{p}
           </button>
         ))}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: "#6b7280" }}>Show pills as:</span>
+        <div
+          role="group"
+          aria-label="FAST pill display mode"
+          title="Flip every FAST pill on the page. Click any individual pill to flip just that one."
+          style={{
+            display: "inline-flex",
+            border: "1px solid #d1d5db",
+            borderRadius: 999,
+            overflow: "hidden",
+            background: "#fff",
+          }}
+        >
+          {(
+            [
+              { value: "level", label: "Level" },
+              { value: "score", label: "Scale score" },
+            ] as Array<{ value: PillView; label: string }>
+          ).map((opt, i) => {
+            const active = pillView === opt.value;
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                aria-pressed={active}
+                onClick={() => setPillView(opt.value)}
+                style={{
+                  padding: "4px 12px",
+                  border: "none",
+                  borderLeft: i === 0 ? "none" : "1px solid #d1d5db",
+                  background: active ? "#1f2937" : "transparent",
+                  color: active ? "#fff" : "#374151",
+                  fontWeight: active ? 700 : 500,
+                  fontSize: 12,
+                  cursor: "pointer",
+                }}
+              >
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
       </div>
 
-      {/* Legend */}
+      {/* Legend — wrapped in the same disclosure pattern as
+          "How to use Teacher Roster" so veteran users get a clean
+          header without losing reference info. Defaults to collapsed;
+          HowToUseHelp uses the global help-mode flag, so legend also
+          honors the user's "hide all help" preference. */}
+      <HowToUseHelp title="Legend">
       <div
         style={{
           display: "flex",
           gap: 16,
           alignItems: "center",
           flexWrap: "wrap",
-          marginBottom: 8,
+          padding: "8px 12px",
           fontSize: 12,
           color: "#374151",
         }}
@@ -2099,6 +2094,7 @@ export default function TeacherRosterPage({
           retained (hover for grade levels)
         </span>
       </div>
+      </HowToUseHelp>
 
       {/* View toggles — let teachers hide optional columns. PM pills
           stay always-on since they're the core data. Preferences are
