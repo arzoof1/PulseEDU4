@@ -1958,8 +1958,13 @@ ul[style*="listStyle: none"] li button:hover {
   z-index: 1;
 }
 .spotlight-grid-cell {
-  background: rgba(255, 255, 255, 0.04);
-  color: #94a3b8;
+  /* Resting cells are intentionally dim — near-black bg + dark slate
+     text — so the cone overlay (mix-blend-mode: screen) visibly LIFTS
+     the cells under the light and the un-lit cells read as "in
+     shadow". Previously the cells were already bright (#94a3b8 text)
+     so the cone made little visual difference. */
+  background: rgba(255, 255, 255, 0.015);
+  color: #475569;
   padding: 0.6rem 0.4rem;
   text-align: center;
   border-radius: 8px;
@@ -1996,8 +2001,11 @@ ul[style*="listStyle: none"] li button:hover {
 @keyframes spotlight-cell-reveal {
   0%,
   82% {
-    background: rgba(255, 255, 255, 0.04);
-    color: #94a3b8;
+    /* Match the dimmed resting state so the winner cell hides among
+       the others until the spotlight locks on. Keep in sync with
+       `.spotlight-grid-cell` base bg + color. */
+    background: rgba(255, 255, 255, 0.015);
+    color: #475569;
     transform: scale(1);
     box-shadow: none;
   }
