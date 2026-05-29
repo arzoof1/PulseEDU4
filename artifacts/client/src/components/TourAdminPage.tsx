@@ -943,16 +943,53 @@ function BragEditor() {
           gap: 10,
         }}
       >
-        <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <input
-            type="checkbox"
-            checked={data.published}
-            onChange={(e) => set({ published: e.target.checked })}
-          />
-          <span style={{ fontWeight: 600 }}>
-            {data.published ? "Published (live)" : "Draft (hidden)"}
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <button
+            type="button"
+            role="switch"
+            aria-checked={data.published}
+            aria-label={
+              data.published
+                ? "Page is live — click to hide"
+                : "Page is hidden — click to publish"
+            }
+            onClick={() => set({ published: !data.published })}
+            style={{
+              position: "relative",
+              width: 52,
+              height: 28,
+              borderRadius: 999,
+              border: "none",
+              cursor: "pointer",
+              padding: 0,
+              flexShrink: 0,
+              background: data.published ? "#16a34a" : "#cbd5e1",
+              transition: "background 0.15s ease",
+            }}
+          >
+            <span
+              style={{
+                position: "absolute",
+                top: 3,
+                left: data.published ? 27 : 3,
+                width: 22,
+                height: 22,
+                borderRadius: "50%",
+                background: "#fff",
+                boxShadow: "0 1px 3px rgba(0,0,0,0.3)",
+                transition: "left 0.15s ease",
+              }}
+            />
+          </button>
+          <span
+            style={{
+              fontWeight: 600,
+              color: data.published ? "#16a34a" : "#64748b",
+            }}
+          >
+            {data.published ? "🟢 Live" : "⚪ Hidden"}
           </span>
-        </label>
+        </div>
         <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
           <a
             href={publicUrl}
