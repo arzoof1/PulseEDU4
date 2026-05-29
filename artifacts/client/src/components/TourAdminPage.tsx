@@ -910,17 +910,40 @@ function BragEditor() {
     })();
   }, []);
 
+  const persist = async (payload: PageData) => {
+    const res = await authFetch("/api/tours/page", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    return res.ok;
+  };
+
   const save = async () => {
     if (!data) return;
     setBusy(true);
     setSaved(false);
     try {
-      const res = await authFetch("/api/tours/page", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
-      if (res.ok) setSaved(true);
+      if (await persist(data)) setSaved(true);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // The Live/Hidden toggle saves immediately so flipping it actually
+  // publishes (or hides) the page right away — no separate Save needed.
+  const togglePublished = async () => {
+    if (!data || busy) return;
+    const next = { ...data, published: !data.published };
+    setData(next);
+    setBusy(true);
+    setSaved(false);
+    try {
+      const ok = await persist(next);
+      if (ok) setSaved(true);
+      else setData(data); // revert on failure
+    } catch {
+      setData(data);
     } finally {
       setBusy(false);
     }
@@ -953,16 +976,18 @@ function BragEditor() {
                 ? "Page is live — click to hide"
                 : "Page is hidden — click to publish"
             }
-            onClick={() => set({ published: !data.published })}
+            onClick={() => void togglePublished()}
+            disabled={busy}
             style={{
               position: "relative",
               width: 52,
               height: 28,
               borderRadius: 999,
               border: "none",
-              cursor: "pointer",
+              cursor: busy ? "wait" : "pointer",
               padding: 0,
               flexShrink: 0,
+              opacity: busy ? 0.6 : 1,
               background: data.published ? "#16a34a" : "#cbd5e1",
               transition: "background 0.15s ease",
             }}
