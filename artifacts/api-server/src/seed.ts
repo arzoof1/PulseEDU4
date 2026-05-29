@@ -2384,6 +2384,101 @@ export async function ensureBenchmarkReteachLogSchema(): Promise<void> {
   );
 }
 
+// School Tours — public brag page + lead pipeline. Idempotent CREATE TABLE
+// IF NOT EXISTS at boot (same pattern as the rest of the module schemas).
+export async function ensureToursSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_pages (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      published BOOLEAN NOT NULL DEFAULT FALSE,
+      headline TEXT NOT NULL DEFAULT 'Come See Our School',
+      subheadline TEXT NOT NULL DEFAULT '',
+      intro TEXT NOT NULL DEFAULT '',
+      sections JSONB NOT NULL DEFAULT '[]'::jsonb,
+      programs JSONB NOT NULL DEFAULT '[]'::jsonb,
+      electives JSONB NOT NULL DEFAULT '[]'::jsonb,
+      proud_of JSONB NOT NULL DEFAULT '[]'::jsonb,
+      photos JSONB NOT NULL DEFAULT '[]'::jsonb,
+      cta_text TEXT NOT NULL DEFAULT 'Request Your Tour',
+      accent_color TEXT NOT NULL DEFAULT '#0ea5a4',
+      contact_email TEXT,
+      contact_phone TEXT,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_pages_school_id_unique ON tour_pages (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_requests (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      family_name TEXT NOT NULL,
+      phone TEXT NOT NULL,
+      email TEXT,
+      children JSONB NOT NULL DEFAULT '[]'::jsonb,
+      interests TEXT NOT NULL DEFAULT '',
+      source TEXT,
+      preferred_language TEXT NOT NULL DEFAULT 'en',
+      status TEXT NOT NULL DEFAULT 'new',
+      outcome TEXT,
+      outcome_reason TEXT,
+      assigned_staff_id INTEGER,
+      tour_scheduled_at TIMESTAMPTZ,
+      first_contacted_at TIMESTAMPTZ,
+      survey_token TEXT NOT NULL,
+      survey_submitted_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_requests_survey_token_unique ON tour_requests (survey_token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_requests_school_status_idx ON tour_requests (school_id, status)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_request_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      staff_id INTEGER,
+      event_type TEXT NOT NULL,
+      channel TEXT,
+      body TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tour_request_events_request_idx ON tour_request_events (tour_request_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tour_surveys (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      tour_request_id INTEGER NOT NULL,
+      rating INTEGER,
+      liked TEXT NOT NULL DEFAULT '',
+      questions TEXT NOT NULL DEFAULT '',
+      comments TEXT NOT NULL DEFAULT '',
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tour_surveys_request_unique ON tour_surveys (tour_request_id)`,
+  );
+
+  // Notify-group capability on staff (assignable in Staff & Roles).
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
@@ -2400,6 +2495,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseFootageRequestsSchema();
   await ensureCaseOutcomeCatalogSchema();
   await ensureAlgebraPlacementOverridesSchema();
+  await ensureToursSchema();
   // FAST history visibility window (Phase 1 of Historical FAST work).
   // Default 3 years, hard-capped 2..5 by the route validator.
   await db.execute(

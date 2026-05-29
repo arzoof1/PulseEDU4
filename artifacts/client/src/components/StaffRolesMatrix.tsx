@@ -63,6 +63,7 @@ const PAGES: { key: BoolKey; label: string; group: string }[] = [
   { group: "Admin", key: "capManageRoles", label: "Manage Roles" },
   { group: "Admin", key: "capManageDisplays", label: "Manage Displays" },
   { group: "Admin", key: "capManageDismissal", label: "Set Dismissal Mode" },
+  { group: "Admin", key: "capTourNotify", label: "Tour Alerts" },
 ];
 
 const TEACHER_BASELINE: BoolKey[] = [

@@ -27,6 +27,7 @@ import WatchlistCaseDetail from "./components/WatchlistCaseDetail";
 import ClassPhotoDayPage from "./components/ClassPhotoDayPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
+import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
@@ -4394,6 +4395,7 @@ function App() {
     capManageRoles?: boolean;
     capManageDisplays?: boolean;
     capManageDismissal?: boolean;
+    capTourNotify?: boolean;
     canApproveAst?: boolean;
     canApproveCompTime?: boolean;
     exemptStatus?: string | null;
@@ -8072,6 +8074,21 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.capManageDismissal === true ||
     authUser?.canApproveAst === true;
+  // School Tours management gate — mirrors canManageTours() in
+  // lib/coreTeam.ts. Admin / Core Team / counselors / confidential
+  // secretary, plus anyone flagged via capTourNotify. Drives the
+  // app-wide new-lead banner and the Settings tile visibility.
+  const canManageTours =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCounselor === true ||
+    authUser?.isGuidanceCounselor === true ||
+    authUser?.canApproveAst === true ||
+    authUser?.capTourNotify === true;
   // Fetch onboarding progress whenever the admin lands on the Settings
   // hub (and after each return from a tile — settingsTile flipping from
   // a value back to null retriggers the effect). This is what powers the
@@ -10122,6 +10139,15 @@ function App() {
           kiosk token (if any) so a teacher who flipped to the staff app
           can find their way back without losing the waiting line. */}
       <KioskBanner />
+
+      {/* New tour-request alert — links straight into the pipeline. */}
+      <TourLeadBanner
+        visible={canManageTours}
+        onOpen={() => {
+          setActiveSection("settings");
+          setSettingsTile("school-tours");
+        }}
+      />
 
       {activeSection === "spotlight" && (
         <SpotlightPanel
@@ -20342,6 +20368,10 @@ function App() {
         <PickupSettingsPage />
       )}
 
+      {activeSection === "settings" && canManageTours && settingsTile === "school-tours" && (
+        <TourAdminPage />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "class-photo-day" && (
         <ClassPhotoDayPage
           defaultTeacherId={authUser?.id ?? null}
@@ -20593,6 +20623,19 @@ function App() {
                 "Reconciliation cutoff, teacher release scope, kiosk URLs.",
               group: "family-signage",
             });
+            // School Tours — enrollment lead pipeline + public brag-page
+            // editor. Visible to tour-notify staff (admin / Core Team /
+            // counselors / confidential secretary / capTourNotify).
+            if (canManageTours) {
+              tiles.push({
+                id: "school-tours",
+                icon: "🎒",
+                title: "School Tours",
+                subtitle:
+                  "Enrollment lead pipeline, public brag page, post-tour surveys.",
+                group: "family-signage",
+              });
+            }
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV
             // screens (Heartbeat, Houses, Student Timeline). One-click open
             // and copy-link helpers live inside the tile.

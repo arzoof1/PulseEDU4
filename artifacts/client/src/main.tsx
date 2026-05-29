@@ -5,6 +5,7 @@ import KioskViewer from "./KioskViewer";
 import ParentApp from "./parent/ParentApp";
 import SignageApp from "./signage/SignageApp";
 import PickupApp from "./pickup/PickupApp";
+import TourApp from "./tour/TourApp";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -16,6 +17,9 @@ const isKiosk = !isKioskViewer && path.includes("/kiosk");
 const isParent = path.includes("/parent");
 const isSignage = path.includes("/signage");
 const isPickup = path.includes("/pickup");
+// Public, unauthenticated School Tours surface (brag page + request form +
+// post-tour survey). Dispatched before the staff <App/>.
+const isTour = path.includes("/tour");
 
 createRoot(document.getElementById("root")!).render(
   isSignage ? <SignageApp />
@@ -23,5 +27,6 @@ createRoot(document.getElementById("root")!).render(
     : isKiosk ? <Kiosk />
     : isParent ? <ParentApp />
     : isPickup ? <PickupApp />
+    : isTour ? <TourApp />
     : <App />,
 );

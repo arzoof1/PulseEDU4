@@ -197,6 +197,38 @@ export function canSubmitCompTime(staff: {
   return staff.exemptStatus === "non_exempt";
 }
 
+// School Tours management + notify gate. Per product spec the audience is
+// Admin, Behavior Specialist, MTSS Coordinator, Confidential Secretary, and
+// School Counselors — plus anyone an admin explicitly opts in via the
+// assignable `capTourNotify` flag in Staff & Roles. Confidential secretary
+// has no dedicated column; per the AST module it's represented by
+// `canApproveAst`, so we admit that here (mirrors canManagePickup). Members
+// of this gate can see the lead pipeline, edit the brag page, and are on the
+// new-lead alert audience. School Psychologist / District tiers come in free
+// via isCoreTeam.
+export function canManageTours(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+  canApproveAst?: boolean | null;
+  capTourNotify?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(
+      staff.isCounselor ||
+        staff.isGuidanceCounselor ||
+        staff.canApproveAst ||
+        staff.capTourNotify,
+    )
+  );
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a

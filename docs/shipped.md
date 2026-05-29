@@ -3,6 +3,26 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours (Enrollment Leads) — new module. Public per-school
+  bilingual (EN/ES) "brag page" (`/tour/:schoolId`) with admin
+  editor + publish toggle and a sibling-aware "Request Your Tour"
+  form. Submissions become leads in a sales pipeline
+  (New→Contacted→Scheduled→Toured→Closed, outcome Enrolled/
+  Deciding/Chose elsewhere) with assignable owner, append-only
+  timeline (`tour_request_events`), response-time clock + >24h
+  overdue flag, family auto-ack, email + in-app notify to the
+  tour-notify audience (per-staff `capTourNotify`), app-wide red
+  new-lead banner, brag-sheet + QR leave-behind PDFs (QR →
+  post-tour survey `/tour/survey/:token` tied to the lead), and an
+  outcome/source conversion report. Schema in
+  `lib/db/src/schema/tours.ts` (tour_pages, tour_requests,
+  tour_request_events, tour_surveys); routes in `routes/tours.ts`;
+  client in `tour/TourApp.tsx` (public) + `components/
+  TourAdminPage.tsx` (staff). SMS stubbed via reusable env-gated
+  AWS SNS helper `lib/sms.ts`. Deviations: bespoke module uses
+  `authFetch` directly (not OpenAPI codegen); brag-page photos are
+  URLs — image upload is a noted follow-up.
+
 - Class Composer — Skill-cluster mode + PM-refresh workflow.
   Fourth composer mode "Skill-cluster (focus standards)" alongside
   Intensive / Regular / Cusp. Groups built from per-student benchmark

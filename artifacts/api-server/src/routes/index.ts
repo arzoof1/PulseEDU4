@@ -97,6 +97,7 @@ import districtOverviewRouter from "./districtOverview";
 import intensiveGroupsRouter from "./intensiveGroups";
 import algebraPlacementRouter from "./algebraPlacement";
 import helpAssistantRouter from "./helpAssistant";
+import toursRouter from "./tours";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -256,5 +257,6 @@ router.use(districtOverviewRouter);
 router.use(intensiveGroupsRouter);
 router.use(algebraPlacementRouter);
 router.use(helpAssistantRouter);
+router.use(toursRouter);
 
 export default router;

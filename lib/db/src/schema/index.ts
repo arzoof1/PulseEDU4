@@ -109,3 +109,4 @@ export * from "./benchmarkDeliveries";
 export * from "./benchmarkReteachLog";
 export * from "./classComposerPlans";
 export * from "./algebraPlacementOverrides";
+export * from "./tours";

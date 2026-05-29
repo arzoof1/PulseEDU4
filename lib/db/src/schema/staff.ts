@@ -160,6 +160,14 @@ export const staffTable = pgTable("staff", {
   // the admin role. Route gates check admin OR this flag.
   canApproveAst: boolean("can_approve_ast").notNull().default(false),
 
+  // School Tours — when true, this staff member is on the notify group for
+  // new tour-request leads (big admin banner + email + the AWS SMS stub).
+  // Admin / Core Team / counselor / confidential secretary already qualify
+  // via the `canManageTours` route gate; this flag lets an admin add anyone
+  // else (e.g. a front-office tour coordinator) to the alert audience and
+  // the lead pipeline without granting the rest of the admin surface.
+  capTourNotify: boolean("cap_tour_notify").notNull().default(false),
+
   // Comp Time (FLSA compensatory time) per-staff capabilities. Mirrors
   // the AST gate above so the role-management UI can sit them side by
   // side under "Time Tracking."
