@@ -18,6 +18,7 @@ import {
   TOUR_OUTCOMES,
   type TourChild,
   type TourPageSection,
+  type TourFlyer,
   type TourStatus,
   type TourOutcome,
 } from "@workspace/db";
@@ -25,6 +26,11 @@ import { and, eq, desc, asc, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
 import { requireSchool } from "../lib/scope.js";
 import { canManageTours } from "../lib/coreTeam.js";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "../lib/objectStorage.js";
+import { bindObjectToSchool } from "./storage.js";
 import {
   sendNewLeadNotifyEmail,
   sendFamilyAckEmail,
@@ -34,6 +40,97 @@ import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 
 const router: IRouter = Router();
+const objectStorageService = new ObjectStorageService();
+
+// Content-types we are willing to serve *inline* over the unauthenticated
+// public path. Anything outside this allowlist (e.g. text/html, svg, js) is
+// forced to download as an opaque octet-stream so it can never execute as
+// first-party content — these routes are reachable without auth and flyers
+// open via top-level navigation.
+const PUBLIC_IMAGE_TYPES = new Set([
+  "image/png",
+  "image/jpeg",
+  "image/jpg",
+  "image/gif",
+  "image/webp",
+]);
+const PUBLIC_FLYER_TYPES = new Set([...PUBLIC_IMAGE_TYPES, "application/pdf"]);
+
+// Pipe a fetch-style Response (from object storage) to an Express Response.
+// Content-type is NOT trusted from upstream: it is coerced against `allowed`,
+// and anything else is served as a forced download. `X-Content-Type-Options:
+// nosniff` is always set so browsers won't MIME-sniff the bytes back into an
+// executable type.
+async function pipeStorageResponse(
+  src: globalThis.Response,
+  dest: Response,
+  allowed: Set<string>,
+): Promise<void> {
+  const rawType = (src.headers.get("content-type") ?? "")
+    .split(";")[0]
+    .trim()
+    .toLowerCase();
+  const safe = allowed.has(rawType);
+
+  const cacheControl = src.headers.get("cache-control");
+  const contentLength = src.headers.get("content-length");
+  if (cacheControl) dest.setHeader("Cache-Control", cacheControl);
+  if (contentLength) dest.setHeader("Content-Length", contentLength);
+  dest.setHeader("X-Content-Type-Options", "nosniff");
+  if (safe) {
+    dest.setHeader("Content-Type", rawType);
+    dest.setHeader("Content-Disposition", "inline");
+  } else {
+    dest.setHeader("Content-Type", "application/octet-stream");
+    dest.setHeader("Content-Disposition", "attachment");
+  }
+
+  if (!src.body) {
+    dest.end();
+    return;
+  }
+  const reader = src.body.getReader();
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    dest.write(Buffer.from(value));
+  }
+  dest.end();
+}
+
+// Stream a tour asset (photo or flyer) to an unauthenticated public visitor.
+// The caller has already verified the asset belongs to a *published* page, so
+// we serve the bytes directly (bypassing the school-ACL gate on
+// /storage/objects, which the public has no token for). Legacy external URLs
+// are passed through via redirect. `allowed` constrains which content-types may
+// render inline (see PUBLIC_*_TYPES).
+async function streamTourAsset(
+  key: string,
+  req: Request,
+  res: Response,
+  allowed: Set<string>,
+): Promise<void> {
+  if (/^https?:\/\//i.test(key)) {
+    res.redirect(302, key);
+    return;
+  }
+  if (!key.startsWith("/objects/")) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  try {
+    const file = await objectStorageService.getObjectEntityFile(key);
+    const r = await objectStorageService.downloadObject(file);
+    await pipeStorageResponse(r, res, allowed);
+  } catch (err) {
+    if (err instanceof ObjectNotFoundError) {
+      res.status(404).json({ error: "Not found" });
+      return;
+    }
+    req.log.error({ err }, "[tours] asset stream failed");
+    res.status(500).json({ error: "Failed to read asset" });
+  }
+}
 
 // =============================================================================
 // School Tours — public brag page + lead pipeline.
@@ -100,6 +197,25 @@ function sanitizeStrings(input: unknown, max: number): string[] {
     .map((s) => s.trim())
     .filter((s) => s.length > 0)
     .slice(0, max);
+}
+
+// Flyers: array of { key, label, kind }. Keys must be object-storage paths
+// (uploaded via the presigned flow) — anything else is dropped.
+function sanitizeFlyers(input: unknown): TourFlyer[] {
+  if (!Array.isArray(input)) return [];
+  const out: TourFlyer[] = [];
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const key = typeof r.key === "string" ? r.key.trim() : "";
+    if (!key.startsWith("/objects/")) continue;
+    const label =
+      typeof r.label === "string" ? r.label.trim().slice(0, 120) : "";
+    const kind: TourFlyer["kind"] = r.kind === "pdf" ? "pdf" : "image";
+    out.push({ key, label, kind });
+    if (out.length >= 12) break;
+  }
+  return out;
 }
 
 function sanitizeSections(input: unknown): TourPageSection[] {
@@ -259,12 +375,76 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     programs: page.programs,
     electives: page.electives,
     proudOf: page.proudOf,
-    photos: page.photos,
+    // Serve photos/flyers through the public streaming routes by index so
+    // unauthenticated families never touch the school-ACL object path. Keys
+    // are never exposed to the client.
+    photos: page.photos.map(
+      (_, i) => `/api/tours/public/${schoolId}/photo/${i}`,
+    ),
+    textPlacement: page.textPlacement === "bottom" ? "bottom" : "top",
+    flyers: (page.flyers ?? []).map((f, i) => ({
+      label: f.label,
+      kind: f.kind,
+      url: `/api/tours/public/${schoolId}/flyer/${i}`,
+    })),
     ctaText: page.ctaText,
     accentColor: page.accentColor,
     contactEmail: page.contactEmail,
     contactPhone: page.contactPhone,
   });
+});
+
+// GET /tours/public/:schoolId/photo/:idx — stream a published page's Nth photo
+// to an unauthenticated visitor.
+router.get("/tours/public/:schoolId/photo/:idx", async (req, res) => {
+  const schoolId = Number(req.params.schoolId);
+  const idx = Number(req.params.idx);
+  if (
+    !Number.isInteger(schoolId) ||
+    schoolId <= 0 ||
+    !Number.isInteger(idx) ||
+    idx < 0
+  ) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+  const page = await loadTourPage(schoolId);
+  if (!page || !page.published) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const key = page.photos[idx];
+  if (!key) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  await streamTourAsset(key, req, res, PUBLIC_IMAGE_TYPES);
+});
+
+// GET /tours/public/:schoolId/flyer/:idx — stream a published page's Nth flyer.
+router.get("/tours/public/:schoolId/flyer/:idx", async (req, res) => {
+  const schoolId = Number(req.params.schoolId);
+  const idx = Number(req.params.idx);
+  if (
+    !Number.isInteger(schoolId) ||
+    schoolId <= 0 ||
+    !Number.isInteger(idx) ||
+    idx < 0
+  ) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+  const page = await loadTourPage(schoolId);
+  if (!page || !page.published) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const flyer = (page.flyers ?? [])[idx];
+  if (!flyer) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  await streamTourAsset(flyer.key, req, res, PUBLIC_FLYER_TYPES);
 });
 
 // POST /tours/public/:schoolId/request — create a lead from the public form.
@@ -411,6 +591,8 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     electives: page?.electives ?? [],
     proudOf: page?.proudOf ?? [],
     photos: page?.photos ?? [],
+    textPlacement: page?.textPlacement === "bottom" ? "bottom" : "top",
+    flyers: page?.flyers ?? [],
     ctaText: page?.ctaText ?? "Request Your Tour",
     accentColor: page?.accentColor ?? "#0ea5a4",
     contactEmail: page?.contactEmail ?? null,
@@ -447,6 +629,10 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     electives: sanitizeStrings(body.electives, 40),
     proudOf: sanitizeStrings(body.proudOf, 40),
     photos: sanitizeStrings(body.photos, 24),
+    textPlacement: (body.textPlacement === "bottom" ? "bottom" : "top") as
+      | "top"
+      | "bottom",
+    flyers: sanitizeFlyers(body.flyers),
     ctaText:
       typeof body.ctaText === "string" && body.ctaText.trim()
         ? body.ctaText.trim().slice(0, 80)
@@ -463,6 +649,25 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     updatedAt: new Date(),
   };
 
+  // Claim ownership of every freshly-uploaded object (photos + flyers) for
+  // this school before persisting. `bindObjectToSchool` is idempotent for
+  // objects already owned by the same school, so re-saving an unchanged page
+  // is a no-op. External http(s) photo URLs are skipped (not object paths).
+  const objectKeys = [
+    ...values.photos.filter((p) => p.startsWith("/objects/")),
+    ...values.flyers.map((f) => f.key),
+  ];
+  for (const key of objectKeys) {
+    const bound = await bindObjectToSchool(key, schoolId);
+    if (!bound) {
+      res.status(400).json({
+        error:
+          "An uploaded file could not be verified. Please re-upload it and try again.",
+      });
+      return;
+    }
+  }
+
   await db
     .insert(tourPagesTable)
     .values(values)
@@ -478,6 +683,8 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
         electives: values.electives,
         proudOf: values.proudOf,
         photos: values.photos,
+        textPlacement: values.textPlacement,
+        flyers: values.flyers,
         ctaText: values.ctaText,
         accentColor: values.accentColor,
         contactEmail: values.contactEmail,

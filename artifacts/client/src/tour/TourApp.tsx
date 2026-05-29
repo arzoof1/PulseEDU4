@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 // =============================================================================
 // TourApp — public, UNAUTHENTICATED enrollment surface for School Tours.
@@ -40,6 +40,8 @@ const T = {
     programs: "Programs",
     electives: "Electives",
     proudOf: "What we're proud of",
+    flyers: "School Flyers",
+    viewFlyer: "View flyer",
     required: "Please add your name, a phone number, and at least one student.",
     error: "Something went wrong. Please try again.",
     contact: "Questions? Reach us at",
@@ -76,6 +78,8 @@ const T = {
     programs: "Programas",
     electives: "Materias optativas",
     proudOf: "De lo que estamos orgullosos",
+    flyers: "Folletos de la escuela",
+    viewFlyer: "Ver folleto",
     required:
       "Agregue su nombre, un teléfono y al menos un estudiante.",
     error: "Algo salió mal. Inténtelo de nuevo.",
@@ -104,6 +108,8 @@ type TourPage = {
   electives: string[];
   proudOf: string[];
   photos: string[];
+  textPlacement: "top" | "bottom";
+  flyers: { label: string; kind: "image" | "pdf"; url: string }[];
   ctaText: string;
   accentColor: string;
   contactEmail: string | null;
@@ -186,6 +192,139 @@ function LangToggle({
 }
 
 // ---------------------------------------------------------------------------
+// Swipeable photo carousel — native scroll-snap (swipe on touch), with arrow
+// controls + dots for desktop.
+// ---------------------------------------------------------------------------
+function PhotoCarousel({
+  photos,
+  accent,
+}: {
+  photos: string[];
+  accent: string;
+}) {
+  const scrollerRef = useRef<HTMLDivElement>(null);
+  const [idx, setIdx] = useState(0);
+
+  const goTo = (i: number) => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    const n = Math.max(0, Math.min(photos.length - 1, i));
+    el.scrollTo({ left: n * el.clientWidth, behavior: "smooth" });
+  };
+  const onScroll = () => {
+    const el = scrollerRef.current;
+    if (!el) return;
+    setIdx(Math.round(el.scrollLeft / el.clientWidth));
+  };
+
+  const multi = photos.length > 1;
+
+  return (
+    <div style={{ position: "relative", marginTop: 20 }}>
+      <div
+        ref={scrollerRef}
+        onScroll={onScroll}
+        style={{
+          display: "flex",
+          overflowX: "auto",
+          scrollSnapType: "x mandatory",
+          borderRadius: 16,
+          boxShadow: "0 1px 3px rgba(0,0,0,0.08)",
+          background: "#e2e8f0",
+          scrollbarWidth: "none",
+        }}
+      >
+        {photos.map((u, i) => (
+          <img
+            key={i}
+            src={u}
+            alt=""
+            style={{
+              flex: "0 0 100%",
+              width: "100%",
+              height: 380,
+              objectFit: "cover",
+              scrollSnapAlign: "center",
+              display: "block",
+            }}
+          />
+        ))}
+      </div>
+
+      {multi && (
+        <>
+          <button
+            type="button"
+            aria-label="Previous photo"
+            onClick={() => goTo(idx - 1)}
+            style={arrowBtn("left", idx === 0)}
+          >
+            ‹
+          </button>
+          <button
+            type="button"
+            aria-label="Next photo"
+            onClick={() => goTo(idx + 1)}
+            style={arrowBtn("right", idx === photos.length - 1)}
+          >
+            ›
+          </button>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "center",
+              gap: 7,
+              marginTop: 12,
+            }}
+          >
+            {photos.map((_, i) => (
+              <button
+                key={i}
+                type="button"
+                aria-label={`Go to photo ${i + 1}`}
+                onClick={() => goTo(i)}
+                style={{
+                  width: i === idx ? 22 : 8,
+                  height: 8,
+                  borderRadius: 999,
+                  border: "none",
+                  background: i === idx ? accent : "#cbd5e1",
+                  cursor: "pointer",
+                  transition: "width 0.2s",
+                  padding: 0,
+                }}
+              />
+            ))}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+function arrowBtn(side: "left" | "right", disabled: boolean): React.CSSProperties {
+  return {
+    position: "absolute",
+    top: 190,
+    transform: "translateY(-50%)",
+    [side]: 10,
+    width: 40,
+    height: 40,
+    borderRadius: 999,
+    border: "none",
+    background: "rgba(255,255,255,0.92)",
+    color: "#1f2937",
+    fontSize: 24,
+    lineHeight: 1,
+    cursor: disabled ? "default" : "pointer",
+    opacity: disabled ? 0.4 : 1,
+    boxShadow: "0 2px 8px rgba(0,0,0,0.2)",
+    display: "grid",
+    placeItems: "center",
+  } as React.CSSProperties;
+}
+
+// ---------------------------------------------------------------------------
 // Brag page + request form
 // ---------------------------------------------------------------------------
 function BragPage({ schoolId }: { schoolId: number }) {
@@ -208,6 +347,11 @@ function BragPage({ schoolId }: { schoolId: number }) {
         const res = await fetch(`/api/tours/public/${schoolId}/page`);
         if (!res.ok) throw new Error("missing");
         const json = (await res.json()) as TourPage;
+        // Defensive defaults so an older/partial API response can never crash
+        // the render (the carousel + flyers section read these directly).
+        json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
+        json.photos = Array.isArray(json.photos) ? json.photos : [];
+        json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         if (!cancelled) {
           setData(json);
           setStatus("ok");
@@ -291,39 +435,28 @@ function BragPage({ schoolId }: { schoolId: number }) {
       </div>
 
       <div style={{ ...wrap, marginTop: -32 }}>
-        {data.intro && (
-          <div style={card}>
-            <p style={{ fontSize: 16, lineHeight: 1.6, margin: 0 }}>
-              {data.intro}
-            </p>
-          </div>
-        )}
-
-        {data.photos.length > 0 && (
-          <div
-            style={{
-              marginTop: 20,
-              display: "grid",
-              gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))",
-              gap: 12,
-            }}
-          >
-            {data.photos.map((url, i) => (
-              <img
-                key={i}
-                src={url}
-                alt=""
-                style={{
-                  width: "100%",
-                  height: 160,
-                  objectFit: "cover",
-                  borderRadius: 12,
-                  background: "#e2e8f0",
-                }}
+        {(() => {
+          const intro = data.intro ? (
+            <div style={card} key="intro">
+              <p style={{ fontSize: 16, lineHeight: 1.6, margin: 0 }}>
+                {data.intro}
+              </p>
+            </div>
+          ) : null;
+          const gallery =
+            data.photos.length > 0 ? (
+              <PhotoCarousel
+                key="gallery"
+                photos={data.photos}
+                accent={accent}
               />
-            ))}
-          </div>
-        )}
+            ) : null;
+          // textPlacement controls whether the intro verbiage sits above the
+          // photos (default) or below them.
+          return data.textPlacement === "bottom"
+            ? [gallery, intro]
+            : [intro, gallery];
+        })()}
 
         {data.sections.map((s, i) => (
           <div key={i} style={card}>
@@ -363,6 +496,85 @@ function BragPage({ schoolId }: { schoolId: number }) {
               </div>
             ))}
         </div>
+
+        {data.flyers.length > 0 && (
+          <div style={{ ...card, marginTop: 20 }}>
+            <h2 style={{ fontSize: 20, margin: "0 0 14px", color: accent }}>
+              {t.flyers}
+            </h2>
+            <div
+              style={{
+                display: "grid",
+                gridTemplateColumns:
+                  "repeat(auto-fill, minmax(150px, 1fr))",
+                gap: 14,
+              }}
+            >
+              {data.flyers.map((f, i) => (
+                <a
+                  key={i}
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  style={{
+                    textDecoration: "none",
+                    color: "inherit",
+                    border: "1px solid #e2e8f0",
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    display: "flex",
+                    flexDirection: "column",
+                    background: "#fff",
+                  }}
+                >
+                  {f.kind === "image" ? (
+                    <img
+                      src={f.url}
+                      alt={f.label || `Flyer ${i + 1}`}
+                      style={{
+                        width: "100%",
+                        height: 180,
+                        objectFit: "cover",
+                        background: "#e2e8f0",
+                        display: "block",
+                      }}
+                    />
+                  ) : (
+                    <div
+                      style={{
+                        width: "100%",
+                        height: 180,
+                        background: "#fef2f2",
+                        display: "grid",
+                        placeItems: "center",
+                        gap: 6,
+                      }}
+                    >
+                      <div
+                        style={{
+                          fontSize: 26,
+                          fontWeight: 800,
+                          color: "#dc2626",
+                        }}
+                      >
+                        PDF
+                      </div>
+                    </div>
+                  )}
+                  <div
+                    style={{
+                      padding: "10px 12px",
+                      fontSize: 14,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {f.label || t.viewFlyer}
+                  </div>
+                </a>
+              ))}
+            </div>
+          </div>
+        )}
 
         <div style={{ textAlign: "center", marginTop: 28 }}>
           <button

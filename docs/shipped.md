@@ -3,6 +3,29 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — school-side photo + flyer uploads on the brag
+  page (replaces the old "Photo URLs" text box). Admin editor:
+  drag-drop/tap multi-photo upload with reorder / delete /
+  pick-cover (index 0 = cover) + a per-school text-placement
+  toggle (headline & intro above/below photos, default above) +
+  multiple labeled flyers (PNG/JPG/PDF ≤10MB). Public page: a
+  swipeable photo carousel (touch swipe + desktop arrows/dots)
+  and a tap-to-view/download/print flyers section lower on the
+  page (image thumb or PDF card). Schema: `tour_pages.text_placement`
+  ('top'|'bottom') + `flyers` jsonb (`TourFlyer[]` = `{key,label,kind}`);
+  seed `ensureToursSchema` ALTERs both in. Uploads use the existing
+  presigned-URL flow (`/api/storage/uploads/request-url` → direct
+  PUT) and are claimed for the school via `bindObjectToSchool` on
+  PUT `/tours/page` (400 if any object fails to bind). Families are
+  unauthenticated, so the public page never sees object keys —
+  photos/flyers stream by index through new public routes
+  `/api/tours/public/:schoolId/photo|flyer/:idx` (`streamTourAsset`
+  redirects legacy http URLs, else streams `/objects/` bytes;
+  ACL-bypass is by-design since only published pages stream).
+  Admin previews use an `AuthImage` (authFetch blob → object URL).
+  Bilingual flyer labels (EN/ES). Legacy http(s) photo URLs still
+  render everywhere.
+
 - School Tours (Enrollment Leads) — new module. Public per-school
   bilingual (EN/ES) "brag page" (`/tour/:schoolId`) with admin
   editor + publish toggle and a sibling-aware "Request Your Tour"

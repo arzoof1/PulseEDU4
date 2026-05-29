@@ -2477,6 +2477,14 @@ export async function ensureToursSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS cap_tour_notify BOOLEAN NOT NULL DEFAULT FALSE`,
   );
+
+  // Photo/flyer uploads + layout toggle (additive).
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS text_placement TEXT NOT NULL DEFAULT 'top'`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS flyers JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
 }
 
 export async function seedFastScoresIfEmpty() {

@@ -837,11 +837,15 @@ type PageData = {
   electives: string[];
   proudOf: string[];
   photos: string[];
+  textPlacement: "top" | "bottom";
+  flyers: TourFlyerItem[];
   ctaText: string;
   accentColor: string;
   contactEmail: string | null;
   contactPhone: string | null;
 };
+
+type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
 
 function ListEditor({
   label,
@@ -893,6 +897,429 @@ function ListEditor({
   );
 }
 
+// Upload a file via the presigned-URL flow. Returns the object path to store
+// on the record, or null on failure.
+async function uploadTourFile(file: File): Promise<string | null> {
+  try {
+    const reqRes = await authFetch("/api/storage/uploads/request-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: file.name,
+        size: file.size,
+        contentType: file.type,
+      }),
+    });
+    if (!reqRes.ok) return null;
+    const { uploadURL, objectPath } = (await reqRes.json()) as {
+      uploadURL: string;
+      objectPath: string;
+    };
+    // Direct PUT to storage — plain fetch, no auth header (it's a signed URL).
+    const putRes = await fetch(uploadURL, {
+      method: "PUT",
+      headers: { "Content-Type": file.type || "application/octet-stream" },
+      body: file,
+    });
+    if (!putRes.ok) return null;
+    return objectPath;
+  } catch {
+    return null;
+  }
+}
+
+// Private object-storage assets can't be loaded via a bare <img src> (the
+// read route requires an Authorization header), so fetch the bytes via
+// authFetch and render a blob URL. External http(s) URLs are passed through.
+function AuthImage({
+  src,
+  alt,
+  style,
+}: {
+  src: string;
+  alt?: string;
+  style?: React.CSSProperties;
+}) {
+  const [url, setUrl] = useState("");
+  const passthrough = /^https?:\/\//i.test(src);
+  useEffect(() => {
+    if (passthrough) {
+      setUrl(src);
+      return;
+    }
+    let revoked = false;
+    let objUrl = "";
+    void (async () => {
+      try {
+        const res = await authFetch(`/api/storage${src}`);
+        if (!res.ok) return;
+        const blob = await res.blob();
+        objUrl = URL.createObjectURL(blob);
+        if (!revoked) setUrl(objUrl);
+      } catch {
+        /* leave placeholder */
+      }
+    })();
+    return () => {
+      revoked = true;
+      if (objUrl) URL.revokeObjectURL(objUrl);
+    };
+  }, [src, passthrough]);
+  return <img src={url || undefined} alt={alt ?? ""} style={style} />;
+}
+
+function PhotoUploader({
+  photos,
+  onChange,
+}: {
+  photos: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [dragOver, setDragOver] = useState(false);
+
+  const onPick = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const added: string[] = [];
+      for (const file of Array.from(files)) {
+        if (!file.type.startsWith("image/")) continue;
+        if (file.size > 10 * 1024 * 1024) {
+          setErr(`"${file.name}" is over 10 MB and was skipped.`);
+          continue;
+        }
+        const key = await uploadTourFile(file);
+        if (key) added.push(key);
+        else setErr(`"${file.name}" failed to upload.`);
+      }
+      if (added.length > 0) onChange([...photos, ...added]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= photos.length) return;
+    const next = [...photos];
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+  const makeCover = (i: number) => {
+    if (i === 0) return;
+    const next = [...photos];
+    const [picked] = next.splice(i, 1);
+    next.unshift(picked);
+    onChange(next);
+  };
+  const remove = (i: number) => onChange(photos.filter((_, j) => j !== i));
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+        Photos — drag the order with the arrows; the first photo is the cover
+        families see first.
+      </div>
+      {photos.length > 0 && (
+        <div
+          style={{
+            display: "grid",
+            gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))",
+            gap: 10,
+            marginBottom: 10,
+          }}
+        >
+          {photos.map((p, i) => (
+            <div
+              key={`${p}-${i}`}
+              style={{
+                position: "relative",
+                border: "1px solid #334155",
+                borderRadius: 10,
+                overflow: "hidden",
+                background: "#0f172a",
+              }}
+            >
+              <AuthImage
+                src={p}
+                style={{
+                  width: "100%",
+                  height: 110,
+                  objectFit: "cover",
+                  display: "block",
+                  background: "#1e293b",
+                }}
+              />
+              {i === 0 && (
+                <div
+                  style={{
+                    position: "absolute",
+                    top: 6,
+                    left: 6,
+                    background: "rgba(16,185,129,0.95)",
+                    color: "#fff",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    padding: "2px 8px",
+                    borderRadius: 999,
+                  }}
+                >
+                  Cover
+                </div>
+              )}
+              <div
+                style={{
+                  display: "flex",
+                  gap: 4,
+                  padding: 6,
+                  justifyContent: "space-between",
+                  alignItems: "center",
+                }}
+              >
+                <div style={{ display: "flex", gap: 4 }}>
+                  <button
+                    type="button"
+                    title="Move earlier"
+                    onClick={() => move(i, -1)}
+                    disabled={i === 0}
+                    style={miniBtn(i === 0)}
+                  >
+                    ←
+                  </button>
+                  <button
+                    type="button"
+                    title="Move later"
+                    onClick={() => move(i, 1)}
+                    disabled={i === photos.length - 1}
+                    style={miniBtn(i === photos.length - 1)}
+                  >
+                    →
+                  </button>
+                  {i !== 0 && (
+                    <button
+                      type="button"
+                      title="Make cover"
+                      onClick={() => makeCover(i)}
+                      style={miniBtn(false)}
+                    >
+                      ★
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  title="Remove"
+                  onClick={() => remove(i)}
+                  style={{ ...miniBtn(false), color: "#fca5a5" }}
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <label
+        onDragOver={(e) => {
+          e.preventDefault();
+          if (!busy) setDragOver(true);
+        }}
+        onDragLeave={() => setDragOver(false)}
+        onDrop={(e) => {
+          e.preventDefault();
+          setDragOver(false);
+          if (!busy) void onPick(e.dataTransfer.files);
+        }}
+        style={{
+          display: "block",
+          textAlign: "center",
+          padding: "18px 16px",
+          borderRadius: 12,
+          border: `2px dashed ${dragOver ? "var(--accent, #2563eb)" : "#475569"}`,
+          background: dragOver ? "rgba(37,99,235,0.08)" : "#0f172a",
+          color: "#cbd5e1",
+          cursor: busy ? "wait" : "pointer",
+          opacity: busy ? 0.7 : 1,
+          fontSize: 14,
+        }}
+      >
+        {busy
+          ? "Uploading…"
+          : "＋ Drag photos here, or tap to choose files"}
+        <input
+          type="file"
+          accept="image/*"
+          multiple
+          disabled={busy}
+          onChange={(e) => {
+            void onPick(e.target.files);
+            e.target.value = "";
+          }}
+          style={{ display: "none" }}
+        />
+      </label>
+      {err && (
+        <div style={{ color: "#fca5a5", fontSize: 13, marginTop: 6 }}>{err}</div>
+      )}
+    </div>
+  );
+}
+
+function FlyerUploader({
+  flyers,
+  onChange,
+}: {
+  flyers: TourFlyerItem[];
+  onChange: (next: TourFlyerItem[]) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+
+  const onPick = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setErr("");
+    setBusy(true);
+    try {
+      const added: TourFlyerItem[] = [];
+      for (const file of Array.from(files)) {
+        const isPdf = file.type === "application/pdf";
+        const isImg = file.type.startsWith("image/");
+        if (!isPdf && !isImg) {
+          setErr(`"${file.name}" must be a PNG, JPG, or PDF.`);
+          continue;
+        }
+        if (file.size > 10 * 1024 * 1024) {
+          setErr(`"${file.name}" is over 10 MB and was skipped.`);
+          continue;
+        }
+        const key = await uploadTourFile(file);
+        if (key)
+          added.push({ key, label: "", kind: isPdf ? "pdf" : "image" });
+        else setErr(`"${file.name}" failed to upload.`);
+      }
+      if (added.length > 0) onChange([...flyers, ...added]);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const remove = (i: number) => onChange(flyers.filter((_, j) => j !== i));
+  const setLabel = (i: number, label: string) =>
+    onChange(flyers.map((f, j) => (j === i ? { ...f, label } : f)));
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+        Flyers (PNG, JPG, or PDF — up to 10 MB each). Shown in their own
+        section lower on the page; families can tap to view, download, or print.
+      </div>
+      {flyers.length > 0 && (
+        <div style={{ marginBottom: 10 }}>
+          {flyers.map((f, i) => (
+            <div
+              key={`${f.key}-${i}`}
+              style={{
+                display: "flex",
+                gap: 10,
+                alignItems: "center",
+                marginBottom: 8,
+                padding: 8,
+                border: "1px solid #334155",
+                borderRadius: 10,
+                background: "#0f172a",
+              }}
+            >
+              {f.kind === "image" ? (
+                <AuthImage
+                  src={f.key}
+                  style={{
+                    width: 46,
+                    height: 60,
+                    objectFit: "cover",
+                    borderRadius: 6,
+                    background: "#1e293b",
+                    flex: "0 0 auto",
+                  }}
+                />
+              ) : (
+                <div
+                  style={{
+                    width: 46,
+                    height: 60,
+                    borderRadius: 6,
+                    background: "#1e293b",
+                    display: "grid",
+                    placeItems: "center",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    color: "#f87171",
+                    flex: "0 0 auto",
+                  }}
+                >
+                  PDF
+                </div>
+              )}
+              <input
+                style={{ ...inputStyle, flex: 1 }}
+                placeholder="Label (optional) — e.g. Band Program"
+                value={f.label}
+                onChange={(e) => setLabel(i, e.target.value)}
+              />
+              <button
+                type="button"
+                onClick={() => remove(i)}
+                style={{ ...btn("#334155"), padding: "0 12px" }}
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+      <label
+        style={{
+          ...btn("var(--accent, #2563eb)"),
+          display: "inline-block",
+          cursor: busy ? "wait" : "pointer",
+          opacity: busy ? 0.7 : 1,
+        }}
+      >
+        {busy ? "Uploading…" : "＋ Upload flyer"}
+        <input
+          type="file"
+          accept="image/png,image/jpeg,application/pdf"
+          multiple
+          disabled={busy}
+          onChange={(e) => {
+            void onPick(e.target.files);
+            e.target.value = "";
+          }}
+          style={{ display: "none" }}
+        />
+      </label>
+      {err && (
+        <div style={{ color: "#fca5a5", fontSize: 13, marginTop: 6 }}>{err}</div>
+      )}
+    </div>
+  );
+}
+
+function miniBtn(disabled: boolean): React.CSSProperties {
+  return {
+    border: "1px solid #475569",
+    background: "#1e293b",
+    color: disabled ? "#475569" : "#cbd5e1",
+    borderRadius: 6,
+    cursor: disabled ? "default" : "pointer",
+    fontSize: 13,
+    lineHeight: 1,
+    padding: "4px 8px",
+  };
+}
+
 function BragEditor() {
   const [data, setData] = useState<PageData | null>(null);
   const [busy, setBusy] = useState(false);
@@ -904,6 +1331,11 @@ function BragEditor() {
       const res = await authFetch("/api/tours/page");
       if (res.ok) {
         const json = (await res.json()) as PageData;
+        // Defensive defaults for the new fields so an older API response
+        // can't break the uploader UI.
+        json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
+        json.photos = Array.isArray(json.photos) ? json.photos : [];
+        json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         setData(json);
         setPublicUrl(`${window.location.origin}/tour/${json.schoolId}`);
       }
@@ -1081,10 +1513,49 @@ function BragEditor() {
           items={data.proudOf}
           onChange={(proudOf) => set({ proudOf })}
         />
-        <ListEditor
-          label="Photo URLs"
-          items={data.photos}
+        <PhotoUploader
+          photos={data.photos}
           onChange={(photos) => set({ photos })}
+        />
+
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+            Headline &amp; intro placement
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            {(
+              [
+                ["top", "Text above photos"],
+                ["bottom", "Text below photos"],
+              ] as const
+            ).map(([value, lbl]) => {
+              const active = data.textPlacement === value;
+              return (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => set({ textPlacement: value })}
+                  style={{
+                    padding: "8px 14px",
+                    borderRadius: 999,
+                    border: `1px solid ${active ? "var(--accent, #2563eb)" : "#334155"}`,
+                    background: active ? "var(--accent, #2563eb)" : "transparent",
+                    color: active ? "#fff" : "#cbd5e1",
+                    fontWeight: 600,
+                    fontSize: 13,
+                    cursor: "pointer",
+                  }}
+                >
+                  {lbl}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        <FlyerUploader
+          flyers={data.flyers}
+          onChange={(flyers) => set({ flyers })}
         />
 
         <div

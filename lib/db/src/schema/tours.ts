@@ -26,6 +26,11 @@ import {
 // change; richer "sections" are {title, body} blocks.
 export type TourPageSection = { title: string; body: string };
 
+// An uploaded flyer (object-storage key + display label). `kind` lets the
+// public page decide how to render it: image flyers show a tappable
+// thumbnail; pdf flyers show a download/view card.
+export type TourFlyer = { key: string; label: string; kind: "image" | "pdf" };
+
 export const tourPagesTable = pgTable(
   "tour_pages",
   {
@@ -46,8 +51,20 @@ export const tourPagesTable = pgTable(
     programs: jsonb("programs").$type<string[]>().notNull().default([]),
     electives: jsonb("electives").$type<string[]>().notNull().default([]),
     proudOf: jsonb("proud_of").$type<string[]>().notNull().default([]),
-    // Object-storage keys for uploaded photos (school-scoped ACL).
+    // Object-storage keys for uploaded photos (school-scoped ACL). Order =
+    // display order in the public carousel; index 0 is the cover. Legacy rows
+    // may still hold external http(s) URLs, which the public page passes
+    // through unchanged.
     photos: jsonb("photos").$type<string[]>().notNull().default([]),
+    // Where the headline/intro verbiage sits relative to the photo carousel
+    // on the public page: above ('top', default) or below ('bottom').
+    textPlacement: text("text_placement")
+      .$type<"top" | "bottom">()
+      .notNull()
+      .default("top"),
+    // Uploaded flyers (object-storage keys + labels), shown in their own
+    // section lower on the public page.
+    flyers: jsonb("flyers").$type<TourFlyer[]>().notNull().default([]),
     ctaText: text("cta_text").notNull().default("Request Your Tour"),
     accentColor: text("accent_color").notNull().default("#0ea5a4"),
     contactEmail: text("contact_email"),
