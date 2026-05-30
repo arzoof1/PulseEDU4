@@ -477,22 +477,23 @@ function LeadDrawer({
     }
   };
 
-  // Open the PDF in a new tab for viewing / printing. We deliberately do NOT
-  // call window.open(...).print() programmatically: inside the sandboxed
-  // preview iframe a popup that retains a window.opener reference and is then
-  // told to print() can deadlock the parent page (the home screen froze and
-  // required a browser restart). Using an anchor with rel="noopener" fully
-  // detaches the new tab, so the user prints from the PDF viewer's own toolbar
-  // (Ctrl/⌘+P) without ever blocking the app.
-  const openPdf = async (which: "brag-sheet" | "leave-behind") => {
+  // Download the PDF to disk, then the user opens it to print. We must NOT
+  // open it in a new tab or call window.print(): the PDF route is fetched with
+  // a Bearer token (the session cookie is blocked inside the Replit preview
+  // iframe), so a plain new-tab navigation can't authenticate, and a blob URL
+  // opened in a top-level tab renders blank because the blob belongs to the
+  // iframe's opaque origin. An earlier window.open(...).print() also deadlocked
+  // and froze the whole app. A blob download triggered from THIS document is
+  // the only path that works reliably in both the preview and production.
+  const downloadPdf = async (which: "brag-sheet" | "leave-behind") => {
     const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
     if (!res.ok) return;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.target = "_blank";
-    a.rel = "noopener noreferrer";
+    a.download =
+      which === "brag-sheet" ? "brag-sheet.pdf" : "post-tour-document.pdf";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -722,21 +723,21 @@ function LeadDrawer({
               )}
             </div>
 
-            {/* PDFs — open in a new tab; print from the PDF viewer (Ctrl/⌘+P) */}
+            {/* PDFs — download the file, then open it to print */}
             <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
-                onClick={() => void openPdf("brag-sheet")}
+                onClick={() => void downloadPdf("brag-sheet")}
                 style={btn("#2563eb")}
               >
-                🖨️ Print brag sheet
+                ⬇️ Brag sheet (PDF)
               </button>
               <button
                 type="button"
-                onClick={() => void openPdf("leave-behind")}
+                onClick={() => void downloadPdf("leave-behind")}
                 style={btn("#7c3aed")}
               >
-                🖨️ Print post-tour document
+                ⬇️ Post-tour document (PDF)
               </button>
             </div>
             <div
@@ -746,8 +747,8 @@ function LeadDrawer({
                 marginBottom: 16,
               }}
             >
-              Opens in a new tab — use your browser's print (Ctrl/⌘+P) or the
-              viewer's download button to save.
+              Downloads the PDF — open it from your downloads to print
+              (Ctrl/⌘+P).
             </div>
 
             {/* survey */}
