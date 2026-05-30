@@ -421,11 +421,16 @@ function LeadDrawer({
   const [noteKind, setNoteKind] = useState<"note" | "contact">("note");
   const [channel, setChannel] = useState("call");
   const [outcomeReason, setOutcomeReason] = useState("");
+  const [schedDraft, setSchedDraft] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     const res = await authFetch(`/api/tours/requests/${id}`);
-    if (res.ok) setDetail((await res.json()) as LeadDetail);
+    if (res.ok) {
+      const data = (await res.json()) as LeadDetail;
+      setDetail(data);
+      setSchedDraft(toLocalDatetimeInput(data.lead.tourScheduledAt));
+    }
   }, [id]);
 
   useEffect(() => {
@@ -685,14 +690,17 @@ function LeadDrawer({
                 <input
                   type="datetime-local"
                   style={inputStyle}
-                  value={toLocalDatetimeInput(lead.tourScheduledAt)}
-                  onChange={(e) =>
+                  value={schedDraft}
+                  onChange={(e) => setSchedDraft(e.target.value)}
+                  onBlur={() => {
+                    const original = toLocalDatetimeInput(lead.tourScheduledAt);
+                    if (schedDraft === original) return;
                     void patch({
-                      tourScheduledAt: e.target.value
-                        ? new Date(e.target.value).toISOString()
+                      tourScheduledAt: schedDraft
+                        ? new Date(schedDraft).toISOString()
                         : null,
-                    })
-                  }
+                    });
+                  }}
                 />
               </div>
             </div>

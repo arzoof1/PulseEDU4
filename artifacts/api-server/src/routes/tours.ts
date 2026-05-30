@@ -1018,10 +1018,16 @@ router.patch(
           return;
         }
         updates.tourScheduledAt = d;
-        events.push({
-          eventType: "scheduled",
-          body: `Tour scheduled for ${d.toLocaleString("en-US")}.`,
-        });
+        // Only log a timeline event when the scheduled time actually
+        // changes, so re-saving the same value (or the client committing
+        // an unchanged field) does not spam duplicate "scheduled" entries.
+        const prev = lead.tourScheduledAt?.getTime() ?? null;
+        if (prev !== d.getTime()) {
+          events.push({
+            eventType: "scheduled",
+            body: `Tour scheduled for ${d.toLocaleString("en-US")}.`,
+          });
+        }
         // Scheduling also counts as first contact if not yet set.
         if (!lead.firstContactedAt) updates.firstContactedAt = new Date();
       }
