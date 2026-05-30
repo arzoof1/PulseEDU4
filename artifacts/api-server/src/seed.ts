@@ -2402,6 +2402,7 @@ export async function ensureToursSchema(): Promise<void> {
       photos JSONB NOT NULL DEFAULT '[]'::jsonb,
       cta_text TEXT NOT NULL DEFAULT 'Request Your Tour',
       accent_color TEXT NOT NULL DEFAULT '#0ea5a4',
+      header_text_color TEXT NOT NULL DEFAULT '#ffffff',
       contact_email TEXT,
       contact_phone TEXT,
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -2484,6 +2485,9 @@ export async function ensureToursSchema(): Promise<void> {
   );
   await db.execute(
     sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS flyers JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS header_text_color TEXT NOT NULL DEFAULT '#ffffff'`,
   );
 }
 

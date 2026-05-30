@@ -3,6 +3,20 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — header font color + post-tour document print.
+  (1) Per-school `tour_pages.header_text_color` (text, default
+  `#ffffff`, hex-validated server + client) with a "Header font
+  color" picker in the brag-page editor. Applied INLINE on the
+  hero `<h1>` / subheadline `<p>` / school-name `<div>` in
+  `TourApp.tsx` — a global `h1` CSS rule was overriding the
+  inherited hero color, which is why a dark-purple accent showed
+  a black (unreadable) headline. Seed `ensureToursSchema` ALTERs
+  the column in additively. (2) Renamed the "QR leave-behind"
+  lead-drawer button + PDF filename to "Post-tour document".
+  (3) Added a "Print post-tour document" button that prints the
+  PDF via a hidden iframe (`contentWindow.print()`) with a
+  new-tab fallback. No changes to the QR/survey flow itself.
+
 - School Tours — school-side photo + flyer uploads on the brag
   page (replaces the old "Photo URLs" text box). Admin editor:
   drag-drop/tap multi-photo upload with reorder / delete /

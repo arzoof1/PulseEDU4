@@ -112,12 +112,17 @@ type TourPage = {
   flyers: { label: string; kind: "image" | "pdf"; url: string }[];
   ctaText: string;
   accentColor: string;
+  headerTextColor: string;
   contactEmail: string | null;
   contactPhone: string | null;
 };
 
 function useAccent(hex: string | undefined): string {
   return hex && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : "#0ea5a4";
+}
+
+function safeColor(hex: string | undefined, fallback: string): string {
+  return hex && /^#[0-9a-fA-F]{6}$/.test(hex) ? hex : fallback;
 }
 
 const page: React.CSSProperties = {
@@ -388,7 +393,7 @@ function BragPage({ schoolId }: { schoolId: number }) {
       <div
         style={{
           background: `linear-gradient(135deg, ${accent} 0%, #1e293b 140%)`,
-          color: "#fff",
+          color: safeColor(data.headerTextColor, "#fff"),
           padding: "28px 20px 56px",
         }}
       >
@@ -401,15 +406,38 @@ function BragPage({ schoolId }: { schoolId: number }) {
             alignItems: "center",
           }}
         >
-          <div style={{ fontWeight: 700, opacity: 0.9 }}>{data.schoolName}</div>
+          <div
+            style={{
+              fontWeight: 700,
+              opacity: 0.9,
+              color: safeColor(data.headerTextColor, "#fff"),
+            }}
+          >
+            {data.schoolName}
+          </div>
           <LangToggle lang={lang} setLang={setLang} accent={accent} />
         </div>
         <div style={{ maxWidth: 880, margin: "24px auto 0" }}>
-          <h1 style={{ fontSize: 40, fontWeight: 800, margin: 0, lineHeight: 1.1 }}>
+          <h1
+            style={{
+              fontSize: 40,
+              fontWeight: 800,
+              margin: 0,
+              lineHeight: 1.1,
+              color: safeColor(data.headerTextColor, "#fff"),
+            }}
+          >
             {data.headline}
           </h1>
           {data.subheadline && (
-            <p style={{ fontSize: 19, opacity: 0.92, marginTop: 12 }}>
+            <p
+              style={{
+                fontSize: 19,
+                opacity: 0.92,
+                marginTop: 12,
+                color: safeColor(data.headerTextColor, "#fff"),
+              }}
+            >
               {data.subheadline}
             </p>
           )}

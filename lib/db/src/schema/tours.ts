@@ -67,6 +67,10 @@ export const tourPagesTable = pgTable(
     flyers: jsonb("flyers").$type<TourFlyer[]>().notNull().default([]),
     ctaText: text("cta_text").notNull().default("Request Your Tour"),
     accentColor: text("accent_color").notNull().default("#0ea5a4"),
+    // Font color for the public hero/header text (headline, subheadline,
+    // school name). Defaults to white, which reads well on the accent-colored
+    // hero gradient; admins can override when their accent needs darker text.
+    headerTextColor: text("header_text_color").notNull().default("#ffffff"),
     contactEmail: text("contact_email"),
     contactPhone: text("contact_phone"),
     updatedAt: timestamp("updated_at", { withTimezone: true })

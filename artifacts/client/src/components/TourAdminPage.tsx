@@ -480,6 +480,37 @@ function LeadDrawer({
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
+  // Open the PDF in a hidden iframe and trigger the browser's print dialog
+  // directly. Falls back to opening in a new tab if the in-frame print is
+  // blocked (some browsers restrict programmatic print on blob PDFs).
+  const printPdf = async (which: "brag-sheet" | "leave-behind") => {
+    const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const frame = document.createElement("iframe");
+    frame.style.position = "fixed";
+    frame.style.right = "0";
+    frame.style.bottom = "0";
+    frame.style.width = "0";
+    frame.style.height = "0";
+    frame.style.border = "0";
+    frame.src = url;
+    frame.onload = () => {
+      try {
+        frame.contentWindow?.focus();
+        frame.contentWindow?.print();
+      } catch {
+        window.open(url, "_blank");
+      }
+    };
+    document.body.appendChild(frame);
+    setTimeout(() => {
+      URL.revokeObjectURL(url);
+      frame.remove();
+    }, 60000);
+  };
+
   const lead = detail?.lead;
 
   return (
@@ -714,7 +745,14 @@ function LeadDrawer({
                 onClick={() => void downloadPdf("leave-behind")}
                 style={btn("#7c3aed")}
               >
-                📄 QR leave-behind
+                📄 Post-tour document
+              </button>
+              <button
+                type="button"
+                onClick={() => void printPdf("leave-behind")}
+                style={btn("#7c3aed")}
+              >
+                🖨️ Print post-tour document
               </button>
             </div>
 
@@ -841,6 +879,7 @@ type PageData = {
   flyers: TourFlyerItem[];
   ctaText: string;
   accentColor: string;
+  headerTextColor: string;
   contactEmail: string | null;
   contactPhone: string | null;
 };
@@ -1336,6 +1375,9 @@ function BragEditor() {
         json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
         json.photos = Array.isArray(json.photos) ? json.photos : [];
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
+        json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
+          ? json.headerTextColor
+          : "#ffffff";
         setData(json);
         setPublicUrl(`${window.location.origin}/tour/${json.schoolId}`);
       }
@@ -1561,7 +1603,7 @@ function BragEditor() {
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "1fr 1fr",
+            gridTemplateColumns: "1fr 1fr 1fr",
             gap: 10,
             marginBottom: 14,
           }}
@@ -1586,6 +1628,21 @@ function BragEditor() {
               value={data.accentColor}
               onChange={(e) => set({ accentColor: e.target.value })}
             />
+          </div>
+          <div>
+            <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 6 }}>
+              Header font color
+            </div>
+            <input
+              type="color"
+              style={{ ...inputStyle, padding: 4, height: 40 }}
+              value={data.headerTextColor}
+              onChange={(e) => set({ headerTextColor: e.target.value })}
+            />
+            <div style={{ fontSize: 11, color: "#64748b", marginTop: 4 }}>
+              Color of the headline &amp; intro text in the header. Pick a darker
+              shade if your accent color is light, or keep white for dark accents.
+            </div>
           </div>
         </div>
         <div

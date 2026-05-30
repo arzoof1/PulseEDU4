@@ -389,6 +389,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     })),
     ctaText: page.ctaText,
     accentColor: page.accentColor,
+    headerTextColor: page.headerTextColor ?? "#ffffff",
     contactEmail: page.contactEmail,
     contactPhone: page.contactPhone,
   });
@@ -595,6 +596,7 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     flyers: page?.flyers ?? [],
     ctaText: page?.ctaText ?? "Request Your Tour",
     accentColor: page?.accentColor ?? "#0ea5a4",
+    headerTextColor: page?.headerTextColor ?? "#ffffff",
     contactEmail: page?.contactEmail ?? null,
     contactPhone: page?.contactPhone ?? null,
   });
@@ -611,6 +613,12 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     /^#[0-9a-fA-F]{6}$/.test(body.accentColor)
       ? body.accentColor
       : "#0ea5a4";
+
+  const headerTextColor =
+    typeof body.headerTextColor === "string" &&
+    /^#[0-9a-fA-F]{6}$/.test(body.headerTextColor)
+      ? body.headerTextColor
+      : "#ffffff";
 
   const values = {
     schoolId,
@@ -638,6 +646,7 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
         ? body.ctaText.trim().slice(0, 80)
         : "Request Your Tour",
     accentColor: accent,
+    headerTextColor,
     contactEmail:
       typeof body.contactEmail === "string" && body.contactEmail.trim()
         ? body.contactEmail.trim().slice(0, 200)
@@ -687,6 +696,7 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
         flyers: values.flyers,
         ctaText: values.ctaText,
         accentColor: values.accentColor,
+        headerTextColor: values.headerTextColor,
         contactEmail: values.contactEmail,
         contactPhone: values.contactPhone,
         updatedAt: values.updatedAt,
@@ -1232,7 +1242,7 @@ router.get(
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
       "Content-Disposition",
-      `inline; filename="tour-leave-behind-${id}.pdf"`,
+      `inline; filename="tour-post-tour-document-${id}.pdf"`,
     );
     res.send(pdf);
   },
