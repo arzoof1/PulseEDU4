@@ -2513,6 +2513,14 @@ export async function ensureToursSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS header_text_color TEXT NOT NULL DEFAULT '#ffffff'`,
   );
+
+  // Tour checkpoints (admin-configured stops) + family selections (additive).
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS checkpoints JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
+  await db.execute(
+    sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
+  );
 }
 
 export async function seedFastScoresIfEmpty() {

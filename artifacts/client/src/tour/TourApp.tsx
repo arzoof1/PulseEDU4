@@ -29,7 +29,9 @@ const T = {
     studentName: "Student name",
     grade: "Incoming grade",
     addStudent: "+ Add another student",
-    interests: "What are you most interested in?",
+    checkpointsHeading: "What would you like to see on your tour?",
+    checkpointsHint: "Pick any that interest you — we'll build your tour around them.",
+    interests: "Anything else? (optional)",
     interestsPh:
       "Programs, electives, sports, after-school care, anything on your mind…",
     submit: "Request my tour",
@@ -70,7 +72,10 @@ const T = {
     studentName: "Nombre del estudiante",
     grade: "Grado de ingreso",
     addStudent: "+ Agregar otro estudiante",
-    interests: "¿Qué le interesa más?",
+    checkpointsHeading: "¿Qué le gustaría ver en su recorrido?",
+    checkpointsHint:
+      "Elija las que le interesen — organizaremos su recorrido en torno a ellas.",
+    interests: "¿Algo más? (opcional)",
     interestsPh:
       "Programas, materias optativas, deportes, cuidado después de clases…",
     submit: "Solicitar mi recorrido",
@@ -110,6 +115,7 @@ type TourPage = {
   subheadline: string;
   intro: string;
   sections: { title: string; body: string }[];
+  checkpoints: { key: string; label: string }[];
   programs: string[];
   electives: string[];
   proudOf: string[];
@@ -370,6 +376,9 @@ function BragPage({ schoolId }: { schoolId: number }) {
         // the render (the carousel + flyers section read these directly).
         json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
         json.photos = Array.isArray(json.photos) ? json.photos : [];
+        json.checkpoints = Array.isArray(json.checkpoints)
+          ? json.checkpoints
+          : [];
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         if (!cancelled) {
           setData(json);
@@ -815,6 +824,7 @@ function BragPage({ schoolId }: { schoolId: number }) {
           accent={accent}
           source={source}
           schoolName={data.schoolName}
+          checkpoints={data.checkpoints}
           onClose={() => setShowForm(false)}
         />
       )}
@@ -829,6 +839,7 @@ function RequestForm({
   accent,
   source,
   schoolName,
+  checkpoints,
   onClose,
 }: {
   schoolId: number;
@@ -837,6 +848,7 @@ function RequestForm({
   accent: string;
   source: string;
   schoolName: string;
+  checkpoints: { key: string; label: string }[];
   onClose: () => void;
 }) {
   const t = T[lang];
@@ -847,6 +859,7 @@ function RequestForm({
     { name: "", grade: "" },
   ]);
   const [interests, setInterests] = useState("");
+  const [selected, setSelected] = useState<string[]>([]);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState(false);
@@ -871,6 +884,7 @@ function RequestForm({
           email: email.trim() || undefined,
           children: cleanChildren,
           interests: interests.trim(),
+          interestSelections: selected,
           source: source || undefined,
           preferredLanguage: lang,
         }),
@@ -1068,6 +1082,56 @@ function RequestForm({
               >
                 {t.addStudent}
               </button>
+
+              {checkpoints.length > 0 && (
+                <div style={{ marginBottom: 16 }}>
+                  <label style={label}>{t.checkpointsHeading}</label>
+                  <div
+                    style={{
+                      fontSize: 13,
+                      color: "#64748b",
+                      marginBottom: 8,
+                    }}
+                  >
+                    {t.checkpointsHint}
+                  </div>
+                  <div style={{ display: "grid", gap: 8 }}>
+                    {checkpoints.map((c) => {
+                      const on = selected.includes(c.key);
+                      return (
+                        <label
+                          key={c.key}
+                          style={{
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 10,
+                            padding: "10px 12px",
+                            borderRadius: 10,
+                            border: `1px solid ${on ? accent : "#e2e8f0"}`,
+                            background: on ? `${accent}14` : "#fff",
+                            cursor: "pointer",
+                            fontSize: 15,
+                          }}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() =>
+                              setSelected((prev) =>
+                                prev.includes(c.key)
+                                  ? prev.filter((k) => k !== c.key)
+                                  : [...prev, c.key],
+                              )
+                            }
+                            style={{ width: 18, height: 18, accentColor: accent }}
+                          />
+                          <span>{c.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
 
               <div style={{ marginBottom: 16 }}>
                 <label style={label}>{t.interests}</label>

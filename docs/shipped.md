@@ -3,6 +3,29 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — admin-configured **Tour Checkpoints** + a both-in-one
+  **Tour Roadmap PDF**. Admins define stops per-school in the Tour page
+  editor (`CheckpointEditor` in `TourAdminPage.tsx`): each checkpoint has
+  a family-facing `label` plus staff-only `location`, `talkingPoints`,
+  and `minutes`. Stored as `checkpoints` jsonb on `tour_pages`
+  (`TourCheckpoint` type in `lib/db/src/schema/tours.ts`); keys are
+  minted server-side by `sanitizeCheckpoints` (stable 12-char keys, max
+  30) so reorders/relabels never orphan a family's selection. The public
+  brag page (`TourApp.tsx`) renders checkpoints as checkboxes on the
+  Request-a-Tour form ("What would you like to see on your tour?",
+  EN/ES); the old free-text box stays as an optional "Anything else?".
+  Selections post as `interestSelections` (validated against current page
+  keys, page-order, deduped) and store as `interest_selections` jsonb on
+  `tour_requests`. The lead drawer shows the selected stops as chips and
+  resolves keys→current labels server-side (`selectedCheckpoints`). New
+  route `GET /tours/requests/:id/roadmap.pdf` builds the roadmap via
+  `lib/tourRoadmapPdf.ts` (pdfkit): prep block at top (family / children
+  / grades / language / scheduled time / assigned staff / contact + the
+  free-text note) then the family's selected stops as a check-off
+  checklist (location, talking points, minutes + blank note lines staff
+  fill during the tour). Downloads to disk like the other lead-drawer
+  PDFs (preview-iframe blob gotcha). Module still uses `authFetch`
+  directly (no OpenAPI codegen); schema added via additive `ALTER TABLE`.
 - School Tours — flyers as full inline documents on the public brag
   page, **moved to the top** of the content; photo gallery moved to the
   **bottom**. Replaced the small cropped flyer thumbnail grid with a

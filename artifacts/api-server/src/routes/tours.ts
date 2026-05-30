@@ -20,6 +20,7 @@ import {
   type TourChild,
   type TourPageSection,
   type TourFlyer,
+  type TourCheckpoint,
   type TourStatus,
   type TourOutcome,
 } from "@workspace/db";
@@ -39,6 +40,7 @@ import {
 import { sendSmsBatch } from "../lib/sms.js";
 import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
+import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -215,6 +217,50 @@ function sanitizeFlyers(input: unknown): TourFlyer[] {
     const kind: TourFlyer["kind"] = r.kind === "pdf" ? "pdf" : "image";
     out.push({ key, label, kind });
     if (out.length >= 12) break;
+  }
+  return out;
+}
+
+// Tour checkpoints: array of { key?, label, location, talkingPoints, minutes }.
+// A label is required (rows with no label are dropped). Keys are stable opaque
+// ids — preserved if the client sends one back, otherwise assigned here — so a
+// family's stored selections keep pointing at the same stop across label edits.
+function sanitizeCheckpoints(input: unknown): TourCheckpoint[] {
+  if (!Array.isArray(input)) return [];
+  const out: TourCheckpoint[] = [];
+  const seen = new Set<string>();
+  for (const raw of input) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const label =
+      typeof r.label === "string" ? r.label.trim().slice(0, 120) : "";
+    if (!label) continue;
+    let key =
+      typeof r.key === "string" && /^[a-z0-9]{6,}$/.test(r.key.trim())
+        ? r.key.trim()
+        : "";
+    if (!key || seen.has(key)) {
+      do {
+        key = randomUUID().replace(/-/g, "").slice(0, 12);
+      } while (seen.has(key));
+    }
+    seen.add(key);
+    const location =
+      typeof r.location === "string" ? r.location.trim().slice(0, 160) : "";
+    const talkingPoints =
+      typeof r.talkingPoints === "string"
+        ? r.talkingPoints.trim().slice(0, 1000)
+        : "";
+    const minutesRaw =
+      typeof r.minutes === "number"
+        ? r.minutes
+        : Number.parseInt(String(r.minutes ?? ""), 10);
+    const minutes =
+      Number.isFinite(minutesRaw) && minutesRaw > 0
+        ? Math.min(Math.round(minutesRaw), 240)
+        : 0;
+    out.push({ key, label, location, talkingPoints, minutes });
+    if (out.length >= 30) break;
   }
   return out;
 }
@@ -430,6 +476,12 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     subheadline: page.subheadline,
     intro: page.intro,
     sections: page.sections,
+    // Public form only needs key + label — location / talking points / minutes
+    // are staff-facing and stay server-side.
+    checkpoints: (page.checkpoints ?? []).map((c) => ({
+      key: c.key,
+      label: c.label,
+    })),
     programs: page.programs,
     electives: page.electives,
     proudOf: page.proudOf,
@@ -585,6 +637,28 @@ router.post("/tours/public/:schoolId/request", async (req, res) => {
   const children = sanitizeChildren(body.children);
   const interests =
     typeof body.interests === "string" ? body.interests.slice(0, 2000) : "";
+  // Keep only selections that match a real checkpoint key on the page; de-dup
+  // and preserve the page's checkpoint order so the roadmap reads top-to-bottom.
+  const validKeys = new Set((page.checkpoints ?? []).map((c) => c.key));
+  const requested = new Set(
+    Array.isArray(body.interestSelections)
+      ? body.interestSelections.filter(
+          (k): k is string => typeof k === "string",
+        )
+      : [],
+  );
+  const interestSelections = (page.checkpoints ?? [])
+    .map((c) => c.key)
+    .filter((k) => validKeys.has(k) && requested.has(k));
+  // Human-readable summary (selected stop labels + free text) for the staff
+  // notification email.
+  const selectedLabels = (page.checkpoints ?? [])
+    .filter((c) => interestSelections.includes(c.key))
+    .map((c) => c.label);
+  const interestsForEmail =
+    [selectedLabels.join(", "), interests.trim()]
+      .filter((s) => s.length > 0)
+      .join(" — ") || interests;
   const source =
     typeof body.source === "string" && body.source.trim()
       ? body.source.trim().slice(0, 80)
@@ -608,6 +682,7 @@ router.post("/tours/public/:schoolId/request", async (req, res) => {
       email,
       children,
       interests,
+      interestSelections,
       source,
       preferredLanguage,
       surveyToken,
@@ -651,7 +726,7 @@ router.post("/tours/public/:schoolId/request", async (req, res) => {
           familyName,
           phone,
           childrenSummary: childrenSummary || "—",
-          interests,
+          interests: interestsForEmail,
           source,
           pipelineUrl: pipelineUrlFor(),
         });
@@ -700,6 +775,7 @@ router.get("/tours/page", requireStaff, requireTourManager, async (req, res) => 
     subheadline: page?.subheadline ?? "",
     intro: page?.intro ?? "",
     sections: page?.sections ?? [],
+    checkpoints: page?.checkpoints ?? [],
     programs: page?.programs ?? [],
     electives: page?.electives ?? [],
     proudOf: page?.proudOf ?? [],
@@ -745,6 +821,7 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
         : "",
     intro: typeof body.intro === "string" ? body.intro.slice(0, 4000) : "",
     sections: sanitizeSections(body.sections),
+    checkpoints: sanitizeCheckpoints(body.checkpoints),
     programs: sanitizeStrings(body.programs, 40),
     electives: sanitizeStrings(body.electives, 40),
     proudOf: sanitizeStrings(body.proudOf, 40),
@@ -800,6 +877,7 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
         subheadline: values.subheadline,
         intro: values.intro,
         sections: values.sections,
+        checkpoints: values.checkpoints,
         programs: values.programs,
         electives: values.electives,
         proudOf: values.proudOf,
@@ -1017,6 +1095,15 @@ router.get(
       lead.status === "new" &&
       Date.now() - lead.createdAt.getTime() > 24 * 60 * 60 * 1000;
 
+    // Resolve the family's checkpoint selections to their current labels, in
+    // the page's checkpoint order. Stops deleted since they were selected fall
+    // away naturally (their key no longer matches a configured checkpoint).
+    const detailPage = await loadTourPage(schoolId);
+    const selectedSet = new Set(lead.interestSelections ?? []);
+    const selectedCheckpoints = (detailPage?.checkpoints ?? [])
+      .filter((c) => selectedSet.has(c.key))
+      .map((c) => c.label);
+
     res.json({
       lead: {
         ...lead,
@@ -1025,6 +1112,7 @@ router.get(
           : null,
         responseMs,
         overdue,
+        selectedCheckpoints,
         surveyUrl: surveyUrlFor(lead.surveyToken),
       },
       events: events.map((e) => ({
@@ -1379,6 +1467,78 @@ router.get(
     res.setHeader(
       "Content-Disposition",
       `inline; filename="tour-post-tour-document-${id}.pdf"`,
+    );
+    res.send(pdf);
+  },
+);
+
+// GET /tours/requests/:id/roadmap.pdf — staff-facing tour plan: prep info +
+// a check-off list of the family's selected stops with note lines.
+router.get(
+  "/tours/requests/:id/roadmap.pdf",
+  requireStaff,
+  requireTourManager,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const lead = await loadLeadForPdf(schoolId, id);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    let assignedTo: string | null = null;
+    if (lead.assignedStaffId) {
+      const [a] = await db
+        .select({ name: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.id, lead.assignedStaffId),
+            eq(staffTable.schoolId, schoolId),
+          ),
+        );
+      assignedTo = a?.name ?? null;
+    }
+    const page = await loadTourPage(schoolId);
+    // Resolve the family's selected keys to full checkpoints, in page order.
+    const selectedSet = new Set(lead.interestSelections ?? []);
+    const stops = (page?.checkpoints ?? [])
+      .filter((c) => selectedSet.has(c.key))
+      .map((c) => ({
+        label: c.label,
+        location: c.location,
+        talkingPoints: c.talkingPoints,
+        minutes: c.minutes,
+      }));
+    const docBranding = await loadDistrictDocumentBranding(schoolId);
+    const pdf = await buildTourRoadmapPdf({
+      schoolName: await schoolName(schoolId),
+      familyName: lead.familyName,
+      phone: lead.phone,
+      email: lead.email,
+      preferredLanguage: lead.preferredLanguage,
+      children: lead.children,
+      status: lead.status,
+      assignedTo,
+      requestedAt: lead.createdAt,
+      tourScheduledAt: lead.tourScheduledAt,
+      contactEmail: page?.contactEmail ?? null,
+      contactPhone: page?.contactPhone ?? null,
+      notes: lead.interests,
+      stops,
+      accentColor: page?.accentColor ?? "#0ea5a4",
+      districtLogo: docBranding?.logo ?? null,
+      districtTagline: docBranding?.tagline ?? null,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="tour-roadmap-${id}.pdf"`,
     );
     res.send(pdf);
   },

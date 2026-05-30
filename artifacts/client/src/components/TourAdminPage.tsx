@@ -39,6 +39,8 @@ type Lead = {
   createdAt: string;
   responseMs: number;
   overdue: boolean;
+  // Family's selected tour checkpoints, resolved to current labels.
+  selectedCheckpoints?: string[];
 };
 
 type TimelineEvent = {
@@ -485,7 +487,9 @@ function LeadDrawer({
   // iframe's opaque origin. An earlier window.open(...).print() also deadlocked
   // and froze the whole app. A blob download triggered from THIS document is
   // the only path that works reliably in both the preview and production.
-  const downloadPdf = async (which: "brag-sheet" | "leave-behind") => {
+  const downloadPdf = async (
+    which: "brag-sheet" | "leave-behind" | "roadmap",
+  ) => {
     const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
     if (!res.ok) return;
     const blob = await res.blob();
@@ -493,7 +497,11 @@ function LeadDrawer({
     const a = document.createElement("a");
     a.href = url;
     a.download =
-      which === "brag-sheet" ? "brag-sheet.pdf" : "post-tour-document.pdf";
+      which === "brag-sheet"
+        ? "brag-sheet.pdf"
+        : which === "roadmap"
+          ? "tour-roadmap.pdf"
+          : "post-tour-document.pdf";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -595,6 +603,38 @@ function LeadDrawer({
                   .map((c) => `${c.name}${c.grade ? ` (Grade ${c.grade})` : ""}`)
                   .join(", ")}
               </div>
+              {lead.selectedCheckpoints &&
+                lead.selectedCheckpoints.length > 0 && (
+                  <>
+                    <div
+                      style={{
+                        fontSize: 13,
+                        color: "#94a3b8",
+                        margin: "10px 0 4px",
+                      }}
+                    >
+                      Tour stops selected
+                    </div>
+                    <div
+                      style={{ display: "flex", gap: 6, flexWrap: "wrap" }}
+                    >
+                      {lead.selectedCheckpoints.map((c, i) => (
+                        <span
+                          key={i}
+                          style={{
+                            fontSize: 12,
+                            background: "rgba(37,99,235,0.18)",
+                            color: "#bfdbfe",
+                            borderRadius: 6,
+                            padding: "3px 9px",
+                          }}
+                        >
+                          {c}
+                        </span>
+                      ))}
+                    </div>
+                  </>
+                )}
               {lead.interests && (
                 <>
                   <div
@@ -604,7 +644,7 @@ function LeadDrawer({
                       margin: "10px 0 4px",
                     }}
                   >
-                    Interested in
+                    Anything else
                   </div>
                   <div>{lead.interests}</div>
                 </>
@@ -731,6 +771,13 @@ function LeadDrawer({
                 style={btn("#2563eb")}
               >
                 ⬇️ Brag sheet (PDF)
+              </button>
+              <button
+                type="button"
+                onClick={() => void downloadPdf("roadmap")}
+                style={btn("#0ea5a4")}
+              >
+                ⬇️ Tour roadmap (PDF)
               </button>
               <button
                 type="button"
@@ -866,6 +913,7 @@ type PageData = {
   subheadline: string;
   intro: string;
   sections: { title: string; body: string }[];
+  checkpoints: TourCheckpointItem[];
   programs: string[];
   electives: string[];
   proudOf: string[];
@@ -880,6 +928,14 @@ type PageData = {
 };
 
 type TourFlyerItem = { key: string; label: string; kind: "image" | "pdf" };
+
+type TourCheckpointItem = {
+  key: string;
+  label: string;
+  location: string;
+  talkingPoints: string;
+  minutes: number;
+};
 
 function ListEditor({
   label,
@@ -926,6 +982,147 @@ function ListEditor({
         }}
       >
         + Add
+      </button>
+    </div>
+  );
+}
+
+// Editor for the admin-configured tour checkpoints. Each row is a stop on the
+// campus tour: label (shown to families as a checkbox on the public form),
+// plus staff-facing location, talking points, and an estimated duration that
+// flow into the printed Tour Roadmap. Keys are assigned server-side; new rows
+// send an empty key and the server mints one on save.
+function CheckpointEditor({
+  items,
+  onChange,
+}: {
+  items: TourCheckpointItem[];
+  onChange: (next: TourCheckpointItem[]) => void;
+}) {
+  const update = (i: number, patch: Partial<TourCheckpointItem>) =>
+    onChange(items.map((x, j) => (j === i ? { ...x, ...patch } : x)));
+  const move = (i: number, dir: -1 | 1) => {
+    const j = i + dir;
+    if (j < 0 || j >= items.length) return;
+    const next = items.slice();
+    [next[i], next[j]] = [next[j], next[i]];
+    onChange(next);
+  };
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 13, color: "#94a3b8", marginBottom: 4 }}>
+        Tour checkpoints
+      </div>
+      <div style={{ fontSize: 12, color: "#64748b", marginBottom: 8 }}>
+        Stops families can pick on the request form. Location, talking points,
+        and minutes are staff-only and print on the Tour Roadmap.
+      </div>
+      {items.map((c, i) => (
+        <div
+          key={c.key || i}
+          style={{
+            border: "1px solid #334155",
+            borderRadius: 10,
+            padding: 12,
+            marginBottom: 10,
+          }}
+        >
+          <div style={{ display: "flex", gap: 6, marginBottom: 8 }}>
+            <input
+              style={{ ...inputStyle, fontWeight: 600 }}
+              placeholder="Checkpoint label (e.g. STEM / Robotics Lab)"
+              value={c.label}
+              onChange={(e) => update(i, { label: e.target.value })}
+            />
+            <button
+              type="button"
+              onClick={() => move(i, -1)}
+              disabled={i === 0}
+              title="Move up"
+              style={{ ...btn("#334155"), padding: "0 10px", opacity: i === 0 ? 0.4 : 1 }}
+            >
+              ↑
+            </button>
+            <button
+              type="button"
+              onClick={() => move(i, 1)}
+              disabled={i === items.length - 1}
+              title="Move down"
+              style={{
+                ...btn("#334155"),
+                padding: "0 10px",
+                opacity: i === items.length - 1 ? 0.4 : 1,
+              }}
+            >
+              ↓
+            </button>
+            <button
+              type="button"
+              onClick={() => onChange(items.filter((_, j) => j !== i))}
+              title="Remove"
+              style={{ ...btn("#7f1d1d"), padding: "0 12px" }}
+            >
+              ✕
+            </button>
+          </div>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "2fr 1fr",
+              gap: 6,
+              marginBottom: 8,
+            }}
+          >
+            <input
+              style={inputStyle}
+              placeholder="Location (e.g. Building B, Room 204)"
+              value={c.location}
+              onChange={(e) => update(i, { location: e.target.value })}
+            />
+            <input
+              style={inputStyle}
+              type="number"
+              min={0}
+              max={240}
+              placeholder="Minutes"
+              value={c.minutes ? String(c.minutes) : ""}
+              onChange={(e) =>
+                update(i, {
+                  minutes: Math.max(
+                    0,
+                    Math.min(240, Number.parseInt(e.target.value, 10) || 0),
+                  ),
+                })
+              }
+            />
+          </div>
+          <textarea
+            style={{ ...inputStyle, minHeight: 56, resize: "vertical" }}
+            placeholder="Talking points for the guide (what to highlight at this stop)"
+            value={c.talkingPoints}
+            onChange={(e) => update(i, { talkingPoints: e.target.value })}
+          />
+        </div>
+      ))}
+      <button
+        type="button"
+        onClick={() =>
+          onChange([
+            ...items,
+            { key: "", label: "", location: "", talkingPoints: "", minutes: 0 },
+          ])
+        }
+        style={{
+          border: "none",
+          background: "none",
+          color: "var(--accent, #2563eb)",
+          fontWeight: 600,
+          cursor: "pointer",
+          padding: 0,
+        }}
+      >
+        + Add checkpoint
       </button>
     </div>
   );
@@ -1369,6 +1566,9 @@ function BragEditor() {
         // can't break the uploader UI.
         json.flyers = Array.isArray(json.flyers) ? json.flyers : [];
         json.photos = Array.isArray(json.photos) ? json.photos : [];
+        json.checkpoints = Array.isArray(json.checkpoints)
+          ? json.checkpoints
+          : [];
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
         json.headerTextColor = /^#[0-9a-fA-F]{6}$/.test(json.headerTextColor)
           ? json.headerTextColor
@@ -1549,6 +1749,10 @@ function BragEditor() {
           label="What we're proud of"
           items={data.proudOf}
           onChange={(proudOf) => set({ proudOf })}
+        />
+        <CheckpointEditor
+          items={data.checkpoints}
+          onChange={(checkpoints) => set({ checkpoints })}
         />
         <PhotoUploader
           photos={data.photos}

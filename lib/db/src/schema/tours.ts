@@ -31,6 +31,20 @@ export type TourPageSection = { title: string; body: string };
 // thumbnail; pdf flyers show a download/view card.
 export type TourFlyer = { key: string; label: string; kind: "image" | "pdf" };
 
+// An admin-configured "tour checkpoint" (a stop on a campus tour). Families
+// pick the ones they care about as checkboxes on the public request form
+// (`tour_requests.interest_selections` stores the selected `key`s), and the
+// staff-facing Tour Roadmap PDF turns the selected stops into a check-off
+// route with location, talking points, and an estimated duration. `key` is a
+// stable opaque id assigned server-side so selections survive label edits.
+export type TourCheckpoint = {
+  key: string;
+  label: string;
+  location: string;
+  talkingPoints: string;
+  minutes: number;
+};
+
 export const tourPagesTable = pgTable(
   "tour_pages",
   {
@@ -45,6 +59,12 @@ export const tourPagesTable = pgTable(
     // [{title, body}] narrative blocks.
     sections: jsonb("sections")
       .$type<TourPageSection[]>()
+      .notNull()
+      .default([]),
+    // Admin-configured tour checkpoints (stops families can request on the
+    // public form; staff print them as a roadmap). Order = display order.
+    checkpoints: jsonb("checkpoints")
+      .$type<TourCheckpoint[]>()
       .notNull()
       .default([]),
     // Simple bullet lists.
@@ -105,7 +125,14 @@ export const tourRequestsTable = pgTable(
     email: text("email"),
     // Sibling-aware: [{name, grade}], at least one.
     children: jsonb("children").$type<TourChild[]>().notNull().default([]),
+    // Free-text "anything else?" note from the family (optional).
     interests: text("interests").notNull().default(""),
+    // Keys of the admin-configured tour checkpoints the family ticked on the
+    // public form. Validated against the page's checkpoint keys at submit time.
+    interestSelections: jsonb("interest_selections")
+      .$type<string[]>()
+      .notNull()
+      .default([]),
     // Marketing source tag from the public link (e.g. "facebook", "flyer").
     source: text("source"),
     // 'en' | 'es' — which language the family submitted in.
