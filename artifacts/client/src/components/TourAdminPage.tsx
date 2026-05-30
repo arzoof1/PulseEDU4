@@ -477,44 +477,25 @@ function LeadDrawer({
     }
   };
 
-  const downloadPdf = async (which: "brag-sheet" | "leave-behind") => {
+  // Open the PDF in a new tab for viewing / printing. We deliberately do NOT
+  // call window.open(...).print() programmatically: inside the sandboxed
+  // preview iframe a popup that retains a window.opener reference and is then
+  // told to print() can deadlock the parent page (the home screen froze and
+  // required a browser restart). Using an anchor with rel="noopener" fully
+  // detaches the new tab, so the user prints from the PDF viewer's own toolbar
+  // (Ctrl/⌘+P) without ever blocking the app.
+  const openPdf = async (which: "brag-sheet" | "leave-behind") => {
     const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
     if (!res.ok) return;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
-    window.open(url, "_blank");
-    setTimeout(() => URL.revokeObjectURL(url), 60000);
-  };
-
-  // Open the PDF in a real browser tab and trigger its native print dialog.
-  // A hidden iframe prints blank for PDFs because the browser renders the
-  // PDF in a plugin that contentWindow.print() can't reach — opening a tab
-  // uses the built-in PDF viewer, whose print works reliably (incl. Safari).
-  const printPdf = async (which: "brag-sheet" | "leave-behind") => {
-    const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const win = window.open(url, "_blank");
-    // Popup blocked: fall back to a same-tab navigation so the doc still opens.
-    if (!win) {
-      window.location.href = url;
-      setTimeout(() => URL.revokeObjectURL(url), 60000);
-      return;
-    }
-    // Attempt to auto-open the print dialog once the viewer has rendered.
-    // If the browser blocks programmatic print, the tab stays open with the
-    // viewer's own print button, so the user can always print manually.
-    const tryPrint = () => {
-      try {
-        win.focus();
-        win.print();
-      } catch {
-        /* user prints from the viewer toolbar */
-      }
-    };
-    win.addEventListener("load", tryPrint);
-    setTimeout(tryPrint, 1200);
+    const a = document.createElement("a");
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
@@ -741,29 +722,32 @@ function LeadDrawer({
               )}
             </div>
 
-            {/* PDFs */}
-            <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+            {/* PDFs — open in a new tab; print from the PDF viewer (Ctrl/⌘+P) */}
+            <div style={{ display: "flex", gap: 8, marginBottom: 8, flexWrap: "wrap" }}>
               <button
                 type="button"
-                onClick={() => void downloadPdf("brag-sheet")}
+                onClick={() => void openPdf("brag-sheet")}
                 style={btn("#2563eb")}
               >
-                🖨️ Brag sheet
+                🖨️ Print brag sheet
               </button>
               <button
                 type="button"
-                onClick={() => void downloadPdf("leave-behind")}
-                style={btn("#7c3aed")}
-              >
-                📄 Post-tour document
-              </button>
-              <button
-                type="button"
-                onClick={() => void printPdf("leave-behind")}
+                onClick={() => void openPdf("leave-behind")}
                 style={btn("#7c3aed")}
               >
                 🖨️ Print post-tour document
               </button>
+            </div>
+            <div
+              style={{
+                fontSize: 12,
+                color: "#94a3b8",
+                marginBottom: 16,
+              }}
+            >
+              Opens in a new tab — use your browser's print (Ctrl/⌘+P) or the
+              viewer's download button to save.
             </div>
 
             {/* survey */}
