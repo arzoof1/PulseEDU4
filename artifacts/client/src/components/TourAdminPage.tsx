@@ -486,35 +486,36 @@ function LeadDrawer({
     setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
-  // Open the PDF in a hidden iframe and trigger the browser's print dialog
-  // directly. Falls back to opening in a new tab if the in-frame print is
-  // blocked (some browsers restrict programmatic print on blob PDFs).
+  // Open the PDF in a real browser tab and trigger its native print dialog.
+  // A hidden iframe prints blank for PDFs because the browser renders the
+  // PDF in a plugin that contentWindow.print() can't reach — opening a tab
+  // uses the built-in PDF viewer, whose print works reliably (incl. Safari).
   const printPdf = async (which: "brag-sheet" | "leave-behind") => {
     const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
     if (!res.ok) return;
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
-    const frame = document.createElement("iframe");
-    frame.style.position = "fixed";
-    frame.style.right = "0";
-    frame.style.bottom = "0";
-    frame.style.width = "0";
-    frame.style.height = "0";
-    frame.style.border = "0";
-    frame.src = url;
-    frame.onload = () => {
+    const win = window.open(url, "_blank");
+    // Popup blocked: fall back to a same-tab navigation so the doc still opens.
+    if (!win) {
+      window.location.href = url;
+      setTimeout(() => URL.revokeObjectURL(url), 60000);
+      return;
+    }
+    // Attempt to auto-open the print dialog once the viewer has rendered.
+    // If the browser blocks programmatic print, the tab stays open with the
+    // viewer's own print button, so the user can always print manually.
+    const tryPrint = () => {
       try {
-        frame.contentWindow?.focus();
-        frame.contentWindow?.print();
+        win.focus();
+        win.print();
       } catch {
-        window.open(url, "_blank");
+        /* user prints from the viewer toolbar */
       }
     };
-    document.body.appendChild(frame);
-    setTimeout(() => {
-      URL.revokeObjectURL(url);
-      frame.remove();
-    }, 60000);
+    win.addEventListener("load", tryPrint);
+    setTimeout(tryPrint, 1200);
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const lead = detail?.lead;
