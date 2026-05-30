@@ -3,6 +3,20 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — flyers as full inline documents on the public brag
+  page. Replaced the small cropped flyer thumbnail grid with a vertical
+  stack of full-width cards "where the complete document lives": image
+  flyers render at full width (no crop), PDF flyers embed in an inline
+  `<iframe>` viewer on desktop with a tappable view/download fallback
+  card on phones (UA sniff `/Mobi|Android|iPhone|iPod/`, because some
+  mobile browsers blank out embedded PDFs). Each card header carries the
+  flyer label plus an "Open in new tab" link and an explicit "Download"
+  button (same-origin `<a download>` against the existing public
+  `/api/tours/public/:schoolId/flyer/:idx` stream; PDF filenames get a
+  `.pdf` extension unless the label already has one). New EN/ES i18n keys
+  `downloadFlyer` / `openFlyer` / `pdfMobileHint`. Public page only — no
+  server, schema, or PDF-generation changes.
+
 - School Tours — district-level branding (logo + tagline). Set
   ONCE by a SuperUser via the Edit-district modal; every school
   in the district inherits identical branding and schools cannot

@@ -42,6 +42,9 @@ const T = {
     proudOf: "What we're proud of",
     flyers: "School Flyers",
     viewFlyer: "View flyer",
+    downloadFlyer: "Download",
+    openFlyer: "Open in new tab",
+    pdfMobileHint: "Tap to view or download this document.",
     required: "Please add your name, a phone number, and at least one student.",
     error: "Something went wrong. Please try again.",
     contact: "Questions? Reach us at",
@@ -80,6 +83,9 @@ const T = {
     proudOf: "De lo que estamos orgullosos",
     flyers: "Folletos de la escuela",
     viewFlyer: "Ver folleto",
+    downloadFlyer: "Descargar",
+    openFlyer: "Abrir en pestaña nueva",
+    pdfMobileHint: "Toque para ver o descargar este documento.",
     required:
       "Agregue su nombre, un teléfono y al menos un estudiante.",
     error: "Algo salió mal. Inténtelo de nuevo.",
@@ -379,6 +385,11 @@ function BragPage({ schoolId }: { schoolId: number }) {
   }, [schoolId]);
 
   const accent = useAccent(data?.accentColor);
+  // Some mobile browsers won't render an embedded PDF inline (blank frame), so
+  // on phones we swap the inline viewer for a tappable view/download card.
+  const isMobile =
+    typeof navigator !== "undefined" &&
+    /Mobi|Android|iPhone|iPod/i.test(navigator.userAgent);
 
   if (status === "loading") {
     return (
@@ -598,75 +609,134 @@ function BragPage({ schoolId }: { schoolId: number }) {
               {t.flyers}
             </h2>
             <div
-              style={{
-                display: "grid",
-                gridTemplateColumns:
-                  "repeat(auto-fill, minmax(150px, 1fr))",
-                gap: 14,
-              }}
+              style={{ display: "flex", flexDirection: "column", gap: 20 }}
             >
-              {data.flyers.map((f, i) => (
-                <a
-                  key={i}
-                  href={f.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  style={{
-                    textDecoration: "none",
-                    color: "inherit",
-                    border: "1px solid #e2e8f0",
-                    borderRadius: 12,
-                    overflow: "hidden",
-                    display: "flex",
-                    flexDirection: "column",
-                    background: "#fff",
-                  }}
-                >
-                  {f.kind === "image" ? (
-                    <img
-                      src={f.url}
-                      alt={f.label || `Flyer ${i + 1}`}
-                      style={{
-                        width: "100%",
-                        height: 180,
-                        objectFit: "cover",
-                        background: "#e2e8f0",
-                        display: "block",
-                      }}
-                    />
-                  ) : (
+              {data.flyers.map((f, i) => {
+                const title = f.label || `${t.viewFlyer} ${i + 1}`;
+                const baseName = (f.label || `flyer-${i + 1}`).replace(
+                  /[^\w.-]+/g,
+                  "_",
+                );
+                const downloadName =
+                  f.kind === "pdf" && !/\.pdf$/i.test(baseName)
+                    ? `${baseName}.pdf`
+                    : baseName;
+                return (
+                  <div
+                    key={i}
+                    style={{
+                      border: "1px solid #e2e8f0",
+                      borderRadius: 12,
+                      overflow: "hidden",
+                      background: "#fff",
+                    }}
+                  >
+                    {/* Header: label + actions */}
                     <div
                       style={{
-                        width: "100%",
-                        height: 180,
-                        background: "#fef2f2",
-                        display: "grid",
-                        placeItems: "center",
-                        gap: 6,
+                        display: "flex",
+                        justifyContent: "space-between",
+                        alignItems: "center",
+                        gap: 12,
+                        flexWrap: "wrap",
+                        padding: "12px 16px",
+                        borderBottom: "1px solid #f1f5f9",
                       }}
                     >
                       <div
+                        style={{ fontSize: 16, fontWeight: 700, color: "#1f2937" }}
+                      >
+                        {title}
+                      </div>
+                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                        <a
+                          href={f.url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          style={{
+                            textDecoration: "none",
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: accent,
+                            border: `1px solid ${accent}`,
+                            borderRadius: 8,
+                            padding: "7px 12px",
+                          }}
+                        >
+                          ↗ {t.openFlyer}
+                        </a>
+                        <a
+                          href={f.url}
+                          download={downloadName}
+                          style={{
+                            textDecoration: "none",
+                            fontSize: 14,
+                            fontWeight: 700,
+                            color: "#fff",
+                            background: accent,
+                            borderRadius: 8,
+                            padding: "8px 14px",
+                          }}
+                        >
+                          ⬇️ {t.downloadFlyer}
+                        </a>
+                      </div>
+                    </div>
+
+                    {/* Body: full inline document */}
+                    {f.kind === "image" ? (
+                      <img
+                        src={f.url}
+                        alt={title}
                         style={{
-                          fontSize: 26,
-                          fontWeight: 800,
+                          width: "100%",
+                          display: "block",
+                          background: "#f1f5f9",
+                        }}
+                      />
+                    ) : isMobile ? (
+                      <a
+                        href={f.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        style={{
+                          textDecoration: "none",
+                          display: "grid",
+                          placeItems: "center",
+                          gap: 10,
+                          padding: "44px 16px",
+                          background: "#fef2f2",
                           color: "#dc2626",
                         }}
                       >
-                        PDF
-                      </div>
-                    </div>
-                  )}
-                  <div
-                    style={{
-                      padding: "10px 12px",
-                      fontSize: 14,
-                      fontWeight: 600,
-                    }}
-                  >
-                    {f.label || t.viewFlyer}
+                        <div style={{ fontSize: 30, fontWeight: 800 }}>PDF</div>
+                        <div
+                          style={{
+                            fontSize: 14,
+                            fontWeight: 600,
+                            color: "#7f1d1d",
+                            textAlign: "center",
+                          }}
+                        >
+                          {t.pdfMobileHint}
+                        </div>
+                      </a>
+                    ) : (
+                      <iframe
+                        src={f.url}
+                        title={title}
+                        style={{
+                          width: "100%",
+                          height: 680,
+                          border: "none",
+                          display: "block",
+                          background: "#f8fafc",
+                        }}
+                      />
+                    )}
                   </div>
-                </a>
-              ))}
+                );
+              })}
             </div>
           </div>
         )}
