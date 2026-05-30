@@ -895,12 +895,24 @@ router.get(
       for (const r of rows) names.set(r.id, r.name);
     }
 
+    // Response clock: ms from creation to first contact (or to now if
+    // still un-contacted). Mirrors the list endpoint so the drawer shows
+    // the same value instead of NaN.
+    const responseMs = lead.firstContactedAt
+      ? lead.firstContactedAt.getTime() - lead.createdAt.getTime()
+      : Date.now() - lead.createdAt.getTime();
+    const overdue =
+      lead.status === "new" &&
+      Date.now() - lead.createdAt.getTime() > 24 * 60 * 60 * 1000;
+
     res.json({
       lead: {
         ...lead,
         assignedTo: lead.assignedStaffId
           ? names.get(lead.assignedStaffId) ?? null
           : null,
+        responseMs,
+        overdue,
         surveyUrl: surveyUrlFor(lead.surveyToken),
       },
       events: events.map((e) => ({

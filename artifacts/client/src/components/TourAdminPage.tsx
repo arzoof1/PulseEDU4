@@ -92,6 +92,7 @@ const OUTCOME_LABEL: Record<Outcome, string> = {
 };
 
 function fmtDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "—";
   const mins = Math.floor(ms / 60000);
   if (mins < 60) return `${mins}m`;
   const hrs = Math.floor(mins / 60);
