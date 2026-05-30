@@ -9,6 +9,7 @@ import {
   db,
   schoolsTable,
   staffTable,
+  districtsTable,
   schoolSettingsTable,
   tourPagesTable,
   tourRequestsTable,
@@ -24,7 +25,7 @@ import {
 } from "@workspace/db";
 import { and, eq, desc, asc, sql } from "drizzle-orm";
 import { randomUUID } from "crypto";
-import { requireSchool } from "../lib/scope.js";
+import { requireSchool, getDistrictIdForSchool } from "../lib/scope.js";
 import { canManageTours } from "../lib/coreTeam.js";
 import {
   ObjectStorageService,
@@ -266,6 +267,62 @@ async function schoolName(schoolId: number): Promise<string> {
   return row?.name ?? "Our School";
 }
 
+// Resolve the district-level branding for a school's brag page. Branding is
+// district-owned (set once by a SuperUser) — every school in the district
+// inherits the same logo, tagline, and placement toggles. Returns null when
+// the school has no district.
+type DistrictBranding = {
+  districtId: number;
+  tagline: string | null;
+  logoObjectKey: string | null;
+  brandHeroTop: boolean;
+  brandDocuments: boolean;
+  brandFooter: boolean;
+  brandWatermark: boolean;
+};
+async function loadDistrictBranding(
+  schoolId: number,
+): Promise<DistrictBranding | null> {
+  const districtId = await getDistrictIdForSchool(schoolId);
+  if (districtId === null) return null;
+  const [d] = await db
+    .select({
+      tagline: districtsTable.tagline,
+      logoObjectKey: districtsTable.logoObjectKey,
+      brandHeroTop: districtsTable.brandHeroTop,
+      brandDocuments: districtsTable.brandDocuments,
+      brandFooter: districtsTable.brandFooter,
+      brandWatermark: districtsTable.brandWatermark,
+    })
+    .from(districtsTable)
+    .where(eq(districtsTable.id, districtId));
+  if (!d) return null;
+  return { districtId, ...d };
+}
+
+// Resolve the district branding to embed in a printed document (brag sheet /
+// post-tour). Returns null unless the district's "printed documents" toggle is
+// on. Downloads the logo bytes into a Buffer for pdfkit; a missing/unreadable
+// logo degrades gracefully to tagline-only.
+async function loadDistrictDocumentBranding(
+  schoolId: number,
+): Promise<{ logo: Buffer | null; tagline: string | null } | null> {
+  const branding = await loadDistrictBranding(schoolId);
+  if (!branding || !branding.brandDocuments) return null;
+  let logo: Buffer | null = null;
+  const key = branding.logoObjectKey;
+  if (key && key.startsWith("/objects/")) {
+    try {
+      const file = await objectStorageService.getObjectEntityFile(key);
+      const [buf] = await file.download();
+      logo = buf;
+    } catch {
+      logo = null;
+    }
+  }
+  return { logo, tagline: branding.tagline };
+}
+
 // =============================================================================
 // PUBLIC ROUTES (no auth)
 // =============================================================================
@@ -366,6 +423,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     res.status(404).json({ error: "Tour page not available" });
     return;
   }
+  const branding = await loadDistrictBranding(schoolId);
   res.json({
     schoolName: await schoolName(schoolId),
     headline: page.headline,
@@ -392,7 +450,61 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     headerTextColor: page.headerTextColor ?? "#ffffff",
     contactEmail: page.contactEmail,
     contactPhone: page.contactPhone,
+    // District-level branding (set once by the district, inherited by every
+    // school). The logo streams by a stable index-free public URL — the
+    // object key is never exposed to the unauthenticated client.
+    district: branding
+      ? {
+          tagline: branding.tagline,
+          hasLogo: !!branding.logoObjectKey,
+          logoUrl: branding.logoObjectKey
+            ? `/api/tours/public/${schoolId}/district-logo`
+            : null,
+          placements: {
+            heroTop: branding.brandHeroTop,
+            footer: branding.brandFooter,
+            watermark: branding.brandWatermark,
+          },
+        }
+      : null,
   });
+});
+
+// GET /tours/public/:schoolId/district-logo — stream the school's district
+// logo to an unauthenticated visitor (ACL-bypass, like brag photos). Only
+// served when the page is published.
+router.get("/tours/public/:schoolId/district-logo", async (req, res) => {
+  const schoolId = Number(req.params.schoolId);
+  if (!Number.isInteger(schoolId) || schoolId <= 0) {
+    res.status(400).json({ error: "Invalid request" });
+    return;
+  }
+  const page = await loadTourPage(schoolId);
+  if (!page || !page.published) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  const branding = await loadDistrictBranding(schoolId);
+  if (!branding?.logoObjectKey) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  await streamTourAsset(branding.logoObjectKey, req, res, PUBLIC_IMAGE_TYPES);
+});
+
+// GET /tours/admin/district-logo — stream the caller's district logo for the
+// admin editor preview. Resolved by the caller's district (not object ACL),
+// so any SuperUser in the district previews the same logo regardless of which
+// school originally uploaded it.
+router.get("/tours/admin/district-logo", requireStaff, async (req, res) => {
+  const schoolId = requireSchool(req, res);
+  if (!schoolId) return;
+  const branding = await loadDistrictBranding(schoolId);
+  if (!branding?.logoObjectKey) {
+    res.status(404).json({ error: "Not found" });
+    return;
+  }
+  await streamTourAsset(branding.logoObjectKey, req, res, PUBLIC_IMAGE_TYPES);
 });
 
 // GET /tours/public/:schoolId/photo/:idx — stream a published page's Nth photo
@@ -1207,6 +1319,7 @@ router.get(
         );
       assignedTo = a?.name ?? null;
     }
+    const docBranding = await loadDistrictDocumentBranding(schoolId);
     const pdf = await buildTourBragSheetPdf({
       schoolName: await schoolName(schoolId),
       familyName: lead.familyName,
@@ -1220,6 +1333,8 @@ router.get(
       assignedTo,
       requestedAt: lead.createdAt,
       tourScheduledAt: lead.tourScheduledAt,
+      districtLogo: docBranding?.logo ?? null,
+      districtTagline: docBranding?.tagline ?? null,
     });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(
@@ -1249,6 +1364,7 @@ router.get(
       return;
     }
     const page = await loadTourPage(schoolId);
+    const docBranding = await loadDistrictDocumentBranding(schoolId);
     const pdf = await buildTourLeaveBehindPdf({
       schoolName: await schoolName(schoolId),
       familyName: lead.familyName,
@@ -1256,6 +1372,8 @@ router.get(
       contactEmail: page?.contactEmail ?? null,
       contactPhone: page?.contactPhone ?? null,
       accentColor: page?.accentColor ?? "#0ea5a4",
+      districtLogo: docBranding?.logo ?? null,
+      districtTagline: docBranding?.tagline ?? null,
     });
     res.setHeader("Content-Type", "application/pdf");
     res.setHeader(

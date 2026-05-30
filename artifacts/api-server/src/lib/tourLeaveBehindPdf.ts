@@ -13,6 +13,10 @@ export interface LeaveBehindInput {
   contactEmail: string | null;
   contactPhone: string | null;
   accentColor: string;
+  // District branding (set once by SuperUser). Only passed through when the
+  // district's "printed documents" toggle is on.
+  districtLogo?: Buffer | null;
+  districtTagline?: string | null;
 }
 
 const INK = "#1f2937";
@@ -55,6 +59,27 @@ export function buildTourLeaveBehindPdf(
     .text(input.schoolName, left, 70, { width, align: "center" });
 
   doc.y = 170;
+
+  // District logo + tagline below the band, centered.
+  if (input.districtLogo) {
+    try {
+      doc.image(input.districtLogo, centerX - 40, doc.y, {
+        fit: [80, 40],
+        align: "center",
+      });
+      doc.y += 48;
+    } catch {
+      /* bad/unsupported image bytes — skip silently */
+    }
+  }
+  if (input.districtTagline) {
+    doc
+      .fillColor(MUTED)
+      .font("Helvetica-Oblique")
+      .fontSize(11)
+      .text(input.districtTagline, left, doc.y, { width, align: "center" });
+    doc.moveDown(0.6);
+  }
   doc
     .fillColor(INK)
     .font("Helvetica")

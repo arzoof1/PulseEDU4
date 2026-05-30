@@ -17,6 +17,11 @@ export interface BragSheetInput {
   assignedTo: string | null;
   requestedAt: Date;
   tourScheduledAt: Date | null;
+  // District branding (set once by SuperUser). Rendered at the top when
+  // present and the district's "printed documents" toggle is on; the route
+  // only passes these through when that toggle is enabled.
+  districtLogo?: Buffer | null;
+  districtTagline?: string | null;
 }
 
 const ACCENT = "#0ea5a4";
@@ -59,8 +64,31 @@ export function buildTourBragSheetPdf(input: BragSheetInput): Promise<Buffer> {
     .font("Helvetica-Bold")
     .text(input.schoolName, left, 50, { width });
 
+  // District logo, top-right within the header band.
+  if (input.districtLogo) {
+    try {
+      doc.image(input.districtLogo, doc.page.width - left - 96, 24, {
+        fit: [96, 48],
+        align: "right",
+      });
+    } catch {
+      /* bad/unsupported image bytes — skip silently */
+    }
+  }
+
   doc.y = 130;
   doc.fillColor(INK);
+
+  // District tagline, just under the band.
+  if (input.districtTagline) {
+    doc
+      .font("Helvetica-Oblique")
+      .fontSize(10)
+      .fillColor(MUTED)
+      .text(input.districtTagline, left, 104, { width });
+    doc.y = 130;
+    doc.fillColor(INK);
+  }
 
   // Family block
   doc.font("Helvetica-Bold").fontSize(18).text(input.familyName, left);

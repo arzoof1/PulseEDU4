@@ -3,6 +3,31 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — district-level branding (logo + tagline). Set
+  ONCE by a SuperUser via the Edit-district modal; every school
+  in the district inherits identical branding and schools cannot
+  change it. Four independent placement toggles, each on/off:
+  hero-top strip (default ON), printed documents (default ON),
+  footer band (default OFF), hero corner watermark (default OFF).
+  Six additive columns on `districts` (`logo_object_key`,
+  `tagline`, `brand_hero_top`/`_documents`/`_footer`/`_watermark`)
+  ALTERed in by `seedTenancy` BEFORE the district insert (the
+  drizzle-generated INSERT references the new columns, so the
+  ALTERs must precede it or the seed throws "column does not
+  exist"). Logo is stored in object storage and streamed publicly
+  by ACL-bypass like tour photos: public page reads
+  `/api/tours/public/:schoolId/district-logo`, admin previews via
+  `/api/tours/admin/district-logo`. PATCH `/tenancy/districts/:id`
+  validates tagline (≤200), the 4 bools, and `logoObjectPath`
+  (bound to the staff's school via `bindObjectToSchool`; `""`
+  clears). Branding fields also surface on the
+  `/api/superuser/overview` district rollup that feeds the modal.
+  Brag-sheet + post-tour PDFs embed the logo (downloaded to a
+  Buffer) + tagline only when the documents toggle is on; a
+  missing/unreadable logo degrades to tagline-only. Module uses
+  `authFetch` directly (not OpenAPI codegen), matching the rest
+  of the Tours module.
+
 - School Tours — header font color + post-tour document print.
   (1) Per-school `tour_pages.header_text_color` (text, default
   `#ffffff`, hex-validated server + client) with a "Header font

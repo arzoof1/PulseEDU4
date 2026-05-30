@@ -27,6 +27,12 @@ type DistrictSummary = {
   studentCount: number;
   staffCount: number;
   lastActivityAt: string | null;
+  tagline: string | null;
+  brandHasLogo: boolean;
+  brandHeroTop: boolean;
+  brandDocuments: boolean;
+  brandFooter: boolean;
+  brandWatermark: boolean;
 };
 
 type Overview = {

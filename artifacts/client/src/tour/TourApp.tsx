@@ -115,6 +115,14 @@ type TourPage = {
   headerTextColor: string;
   contactEmail: string | null;
   contactPhone: string | null;
+  // District-level branding (set once by SuperUser; every school in the
+  // district inherits it). null when the school has no district or no logo.
+  district: {
+    tagline: string | null;
+    hasLogo: boolean;
+    logoUrl: string | null;
+    placements: { heroTop: boolean; footer: boolean; watermark: boolean };
+  } | null;
 };
 
 function useAccent(hex: string | undefined): string {
@@ -392,13 +400,72 @@ function BragPage({ schoolId }: { schoolId: number }) {
       {/* Hero */}
       <div
         style={{
+          position: "relative",
           background: `linear-gradient(135deg, ${accent} 0%, #1e293b 140%)`,
           color: safeColor(data.headerTextColor, "#fff"),
           padding: "28px 20px 56px",
+          overflow: "hidden",
         }}
       >
+        {/* District corner watermark (faint, decorative) */}
+        {data.district?.placements.watermark && data.district.logoUrl && (
+          <img
+            src={data.district.logoUrl}
+            alt=""
+            aria-hidden="true"
+            style={{
+              position: "absolute",
+              top: 12,
+              right: 12,
+              width: 120,
+              maxHeight: 120,
+              objectFit: "contain",
+              opacity: 0.12,
+              pointerEvents: "none",
+            }}
+          />
+        )}
+        {/* District hero-top strip (logo + tagline above the school name) */}
+        {data.district?.placements.heroTop &&
+          (data.district.logoUrl || data.district.tagline) && (
+            <div
+              style={{
+                position: "relative",
+                maxWidth: 880,
+                margin: "0 auto 16px",
+                display: "flex",
+                alignItems: "center",
+                gap: 12,
+              }}
+            >
+              {data.district.logoUrl && (
+                <img
+                  src={data.district.logoUrl}
+                  alt="District logo"
+                  style={{
+                    height: 40,
+                    maxWidth: 160,
+                    objectFit: "contain",
+                  }}
+                />
+              )}
+              {data.district.tagline && (
+                <span
+                  style={{
+                    fontSize: 14,
+                    fontWeight: 600,
+                    opacity: 0.92,
+                    color: safeColor(data.headerTextColor, "#fff"),
+                  }}
+                >
+                  {data.district.tagline}
+                </span>
+              )}
+            </div>
+          )}
         <div
           style={{
+            position: "relative",
             maxWidth: 880,
             margin: "0 auto",
             display: "flex",
@@ -631,6 +698,44 @@ function BragPage({ schoolId }: { schoolId: number }) {
           )}
         </div>
       </div>
+
+      {/* District footer band */}
+      {data.district?.placements.footer &&
+        (data.district.logoUrl || data.district.tagline) && (
+          <div
+            style={{
+              background: "#0f172a",
+              color: "#fff",
+              padding: "24px 20px",
+            }}
+          >
+            <div
+              style={{
+                maxWidth: 880,
+                margin: "0 auto",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 14,
+                flexWrap: "wrap",
+                textAlign: "center",
+              }}
+            >
+              {data.district.logoUrl && (
+                <img
+                  src={data.district.logoUrl}
+                  alt="District logo"
+                  style={{ height: 44, maxWidth: 180, objectFit: "contain" }}
+                />
+              )}
+              {data.district.tagline && (
+                <span style={{ fontSize: 14, opacity: 0.9 }}>
+                  {data.district.tagline}
+                </span>
+              )}
+            </div>
+          </div>
+        )}
 
       {showForm && (
         <RequestForm

@@ -177,6 +177,15 @@ router.get("/superuser/overview", async (req, res) => {
       studentCount: dStudents,
       staffCount: dStaff,
       lastActivityAt: dLast,
+      // District-level School Tours branding (SuperUser-managed). The logo
+      // object key stays server-side; the admin previews via the streaming
+      // route, so we surface only a boolean here.
+      tagline: d.tagline,
+      brandHasLogo: !!d.logoObjectKey,
+      brandHeroTop: d.brandHeroTop,
+      brandDocuments: d.brandDocuments,
+      brandFooter: d.brandFooter,
+      brandWatermark: d.brandWatermark,
     };
   });
 

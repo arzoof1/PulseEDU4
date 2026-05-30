@@ -240,6 +240,30 @@ function pick<T>(rng: () => number, arr: T[]): T {
 // seedTenancy: idempotent. Districts + schools.
 // -----------------------------------------------------------------------------
 export async function seedTenancy() {
+  // Additive district-branding columns (School Tours). Direct ALTERs to
+  // avoid drizzle-kit's interactive rename prompts; safe to re-run. These
+  // MUST run before the district insert below, because the drizzle schema
+  // now references these columns and the generated INSERT would otherwise
+  // fail on a DB that predates them.
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS logo_object_key TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS tagline TEXT`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_hero_top BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_documents BOOLEAN NOT NULL DEFAULT TRUE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_footer BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+  await db.execute(
+    sql`ALTER TABLE districts ADD COLUMN IF NOT EXISTS brand_watermark BOOLEAN NOT NULL DEFAULT FALSE`,
+  );
+
   for (const d of DISTRICTS) {
     await db
       .insert(districtsTable)

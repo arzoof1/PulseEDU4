@@ -12,6 +12,7 @@ import { sql } from "drizzle-orm";
 import { getDistrictIdForSchool } from "../lib/scope";
 import { generateAndHashTempPassword } from "../lib/tempPassword";
 import { applyPlanToSchool } from "../lib/featureLicensing";
+import { bindObjectToSchool } from "./storage";
 
 const router: IRouter = Router();
 
@@ -406,6 +407,15 @@ router.get("/tenancy/status", async (req, res) => {
       stateDistrictCode: d.stateDistrictCode,
       timezone: d.timezone,
       active: d.active,
+      // District-level School Tours branding (SuperUser-managed). We expose
+      // a boolean for the logo rather than the object key — the key stays
+      // server-side; the admin previews via the streaming route.
+      tagline: d.tagline,
+      brandHasLogo: !!d.logoObjectKey,
+      brandHeroTop: d.brandHeroTop,
+      brandDocuments: d.brandDocuments,
+      brandFooter: d.brandFooter,
+      brandWatermark: d.brandWatermark,
     })),
     schools: schools.map((s) => ({
       id: s.id,
@@ -1022,6 +1032,12 @@ router.patch("/tenancy/districts/:id", async (req, res) => {
     stateDistrictCode?: unknown;
     timezone?: unknown;
     active?: unknown;
+    tagline?: unknown;
+    logoObjectPath?: unknown;
+    brandHeroTop?: unknown;
+    brandDocuments?: unknown;
+    brandFooter?: unknown;
+    brandWatermark?: unknown;
   };
 
   const patch: {
@@ -1030,6 +1046,12 @@ router.patch("/tenancy/districts/:id", async (req, res) => {
     stateDistrictCode?: string | null;
     timezone?: string;
     active?: boolean;
+    tagline?: string | null;
+    logoObjectKey?: string | null;
+    brandHeroTop?: boolean;
+    brandDocuments?: boolean;
+    brandFooter?: boolean;
+    brandWatermark?: boolean;
   } = {};
 
   if (body.name !== undefined) {
@@ -1079,7 +1101,52 @@ router.patch("/tenancy/districts/:id", async (req, res) => {
     }
     patch.active = body.active;
   }
-  if (Object.keys(patch).length === 0) {
+
+  // --- District-level School Tours branding -----------------------------
+  if (body.tagline !== undefined) {
+    if (body.tagline === null || body.tagline === "") {
+      patch.tagline = null;
+    } else if (typeof body.tagline === "string") {
+      patch.tagline = body.tagline.trim().slice(0, 200) || null;
+    } else {
+      res.status(400).json({ error: "tagline must be a string or null" });
+      return;
+    }
+  }
+  for (const flag of [
+    "brandHeroTop",
+    "brandDocuments",
+    "brandFooter",
+    "brandWatermark",
+  ] as const) {
+    if (body[flag] !== undefined) {
+      if (typeof body[flag] !== "boolean") {
+        res.status(400).json({ error: `${flag} must be a boolean` });
+        return;
+      }
+      patch[flag] = body[flag] as boolean;
+    }
+  }
+  // Logo path is validated here but bound (claimed against the uploader's
+  // school ACL) only after the ownership pre-flight below.
+  let logoToBind: string | null | undefined;
+  if (body.logoObjectPath !== undefined) {
+    if (typeof body.logoObjectPath !== "string") {
+      res.status(400).json({ error: "logoObjectPath must be a string" });
+      return;
+    }
+    const trimmed = body.logoObjectPath.trim();
+    if (trimmed === "") {
+      logoToBind = null;
+    } else if (trimmed.startsWith("/objects/")) {
+      logoToBind = trimmed;
+    } else {
+      res.status(400).json({ error: "Logo path must start with /objects/" });
+      return;
+    }
+  }
+
+  if (Object.keys(patch).length === 0 && logoToBind === undefined) {
     res.status(400).json({ error: "no editable fields supplied" });
     return;
   }
@@ -1104,6 +1171,23 @@ router.patch("/tenancy/districts/:id", async (req, res) => {
   }
 
   try {
+    // Bind / clear the district logo. Binding claims the freshly-uploaded
+    // object against the SuperUser's own school ACL (there is no district
+    // ACL owner); the logo is later streamed publicly by key via ACL-bypass.
+    if (logoToBind !== undefined) {
+      if (logoToBind === null) {
+        patch.logoObjectKey = null;
+      } else {
+        const ok = await bindObjectToSchool(logoToBind, staff.schoolId);
+        if (!ok) {
+          res
+            .status(403)
+            .json({ error: "Logo upload not authorized for this district" });
+          return;
+        }
+        patch.logoObjectKey = logoToBind;
+      }
+    }
     const [updated] = await db
       .update(districtsTable)
       .set(patch)
@@ -1117,6 +1201,12 @@ router.patch("/tenancy/districts/:id", async (req, res) => {
         stateDistrictCode: updated.stateDistrictCode,
         timezone: updated.timezone,
         active: updated.active,
+        tagline: updated.tagline,
+        brandHasLogo: !!updated.logoObjectKey,
+        brandHeroTop: updated.brandHeroTop,
+        brandDocuments: updated.brandDocuments,
+        brandFooter: updated.brandFooter,
+        brandWatermark: updated.brandWatermark,
       },
     });
   } catch (err: any) {
