@@ -85,6 +85,32 @@ For active follow-ups, see the **Open work** section in `replit.md`.
   `authFetch` directly (not OpenAPI codegen); brag-page photos are
   URLs — image upload is a noted follow-up.
 
+- Reteach log — parent-portal surfacing. Counts-only rollup on the
+  Parent HeartBEAT dashboard + PDF ("Extra Support — Focused
+  Reteach"), grouped by benchmark with 1:1 and small-group counts.
+  Gated by three independent flags ALL of which must be true:
+  school-wide `school_heartbeat_settings.show_reteach` (admin),
+  per-parent `parent_heartbeat_prefs.show_reteach` (parent), and
+  per-student `students.reteach_logs_parent_visible` (admin via
+  `PATCH /api/students/:studentId/reteach-visibility`, modeled on
+  the photo-consent toggle). Server payload is a strict whitelist
+  (benchmarkCode / format / createdAt) so teacher notes, strategy,
+  and teacher_staff_id can never leak. Scoped to current school
+  year, soft-deleted rows excluded.
+
+- Reteach Activity school-wide rollup (Insights → 🔁 Reteach
+  Activity, admin / Core Team / counselor) — 30-day summary tiles
+  (🔁 1:1, 👥 small-group, students reached, benchmarks targeted),
+  top loggers + top benchmarks, full filterable detail table (date
+  range, teacher, grade, benchmark, format) with CSV export. Backed
+  by `GET /api/reteach-activity/summary` + `GET /api/reteach-activity`
+  in `routes/reteachActivity.ts`. Insights hub entry gate
+  (`canAccessInsightsHub`) broadened to include counselor / guidance
+  / school-psych so the new tile (and Algebra Placement) are
+  reachable. Per-teacher view: indigo "Reteach activity on this
+  roster" footer banner on the Benchmark Progress Report modal
+  showing per-roster totals.
+
 - Class Composer — Skill-cluster mode + PM-refresh workflow.
   Fourth composer mode "Skill-cluster (focus standards)" alongside
   Intensive / Regular / Cusp. Groups built from per-student benchmark
