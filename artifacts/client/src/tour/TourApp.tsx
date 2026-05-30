@@ -406,6 +406,154 @@ function BragPage({ schoolId }: { schoolId: number }) {
     );
   }
 
+  const introBlock = data.intro ? (
+    <div style={card} key="intro">
+      <p style={{ fontSize: 16, lineHeight: 1.6, margin: 0 }}>{data.intro}</p>
+    </div>
+  ) : null;
+
+  const galleryBlock =
+    data.photos.length > 0 ? (
+      <PhotoCarousel key="gallery" photos={data.photos} accent={accent} />
+    ) : null;
+
+  const flyersBlock =
+    data.flyers.length > 0 ? (
+      <div style={{ ...card, marginTop: 20 }} key="flyers">
+        <h2 style={{ fontSize: 20, margin: "0 0 14px", color: accent }}>
+          {t.flyers}
+        </h2>
+        <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
+          {data.flyers.map((f, i) => {
+            const title = f.label || `${t.viewFlyer} ${i + 1}`;
+            const baseName = (f.label || `flyer-${i + 1}`).replace(
+              /[^\w.-]+/g,
+              "_",
+            );
+            const downloadName =
+              f.kind === "pdf" && !/\.pdf$/i.test(baseName)
+                ? `${baseName}.pdf`
+                : baseName;
+            return (
+              <div
+                key={i}
+                style={{
+                  border: "1px solid #e2e8f0",
+                  borderRadius: 12,
+                  overflow: "hidden",
+                  background: "#fff",
+                }}
+              >
+                {/* Header: label + actions */}
+                <div
+                  style={{
+                    display: "flex",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                    gap: 12,
+                    flexWrap: "wrap",
+                    padding: "12px 16px",
+                    borderBottom: "1px solid #f1f5f9",
+                  }}
+                >
+                  <div
+                    style={{ fontSize: 16, fontWeight: 700, color: "#1f2937" }}
+                  >
+                    {title}
+                  </div>
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+                    <a
+                      href={f.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      style={{
+                        textDecoration: "none",
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: accent,
+                        border: `1px solid ${accent}`,
+                        borderRadius: 8,
+                        padding: "7px 12px",
+                      }}
+                    >
+                      ↗ {t.openFlyer}
+                    </a>
+                    <a
+                      href={f.url}
+                      download={downloadName}
+                      style={{
+                        textDecoration: "none",
+                        fontSize: 14,
+                        fontWeight: 700,
+                        color: "#fff",
+                        background: accent,
+                        borderRadius: 8,
+                        padding: "8px 14px",
+                      }}
+                    >
+                      ⬇️ {t.downloadFlyer}
+                    </a>
+                  </div>
+                </div>
+
+                {/* Body: full inline document */}
+                {f.kind === "image" ? (
+                  <img
+                    src={f.url}
+                    alt={title}
+                    style={{
+                      width: "100%",
+                      display: "block",
+                      background: "#f1f5f9",
+                    }}
+                  />
+                ) : isMobile ? (
+                  <a
+                    href={f.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    style={{
+                      textDecoration: "none",
+                      display: "grid",
+                      placeItems: "center",
+                      gap: 10,
+                      padding: "44px 16px",
+                      background: "#fef2f2",
+                      color: "#dc2626",
+                    }}
+                  >
+                    <div style={{ fontSize: 30, fontWeight: 800 }}>PDF</div>
+                    <div
+                      style={{
+                        fontSize: 14,
+                        fontWeight: 600,
+                        color: "#7f1d1d",
+                        textAlign: "center",
+                      }}
+                    >
+                      {t.pdfMobileHint}
+                    </div>
+                  </a>
+                ) : (
+                  <iframe
+                    src={f.url}
+                    title={title}
+                    style={{
+                      width: "100%",
+                      height: 680,
+                      border: "none",
+                      display: "block",
+                      background: "#f8fafc",
+                    }}
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    ) : null;
+
   return (
     <div style={page}>
       {/* Hero */}
@@ -541,28 +689,12 @@ function BragPage({ schoolId }: { schoolId: number }) {
       </div>
 
       <div style={{ ...wrap, marginTop: -32 }}>
-        {(() => {
-          const intro = data.intro ? (
-            <div style={card} key="intro">
-              <p style={{ fontSize: 16, lineHeight: 1.6, margin: 0 }}>
-                {data.intro}
-              </p>
-            </div>
-          ) : null;
-          const gallery =
-            data.photos.length > 0 ? (
-              <PhotoCarousel
-                key="gallery"
-                photos={data.photos}
-                accent={accent}
-              />
-            ) : null;
-          // textPlacement controls whether the intro verbiage sits above the
-          // photos (default) or below them.
-          return data.textPlacement === "bottom"
-            ? [gallery, intro]
-            : [intro, gallery];
-        })()}
+        {/* Flyers — pinned to the top of the content. */}
+        {flyersBlock}
+
+        {/* Intro at the top unless the school chose "bottom" placement, in
+            which case it sits just above the photo gallery further down. */}
+        {data.textPlacement !== "bottom" && introBlock}
 
         {data.sections.map((s, i) => (
           <div key={i} style={card}>
@@ -603,143 +735,11 @@ function BragPage({ schoolId }: { schoolId: number }) {
             ))}
         </div>
 
-        {data.flyers.length > 0 && (
-          <div style={{ ...card, marginTop: 20 }}>
-            <h2 style={{ fontSize: 20, margin: "0 0 14px", color: accent }}>
-              {t.flyers}
-            </h2>
-            <div
-              style={{ display: "flex", flexDirection: "column", gap: 20 }}
-            >
-              {data.flyers.map((f, i) => {
-                const title = f.label || `${t.viewFlyer} ${i + 1}`;
-                const baseName = (f.label || `flyer-${i + 1}`).replace(
-                  /[^\w.-]+/g,
-                  "_",
-                );
-                const downloadName =
-                  f.kind === "pdf" && !/\.pdf$/i.test(baseName)
-                    ? `${baseName}.pdf`
-                    : baseName;
-                return (
-                  <div
-                    key={i}
-                    style={{
-                      border: "1px solid #e2e8f0",
-                      borderRadius: 12,
-                      overflow: "hidden",
-                      background: "#fff",
-                    }}
-                  >
-                    {/* Header: label + actions */}
-                    <div
-                      style={{
-                        display: "flex",
-                        justifyContent: "space-between",
-                        alignItems: "center",
-                        gap: 12,
-                        flexWrap: "wrap",
-                        padding: "12px 16px",
-                        borderBottom: "1px solid #f1f5f9",
-                      }}
-                    >
-                      <div
-                        style={{ fontSize: 16, fontWeight: 700, color: "#1f2937" }}
-                      >
-                        {title}
-                      </div>
-                      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-                        <a
-                          href={f.url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          style={{
-                            textDecoration: "none",
-                            fontSize: 14,
-                            fontWeight: 600,
-                            color: accent,
-                            border: `1px solid ${accent}`,
-                            borderRadius: 8,
-                            padding: "7px 12px",
-                          }}
-                        >
-                          ↗ {t.openFlyer}
-                        </a>
-                        <a
-                          href={f.url}
-                          download={downloadName}
-                          style={{
-                            textDecoration: "none",
-                            fontSize: 14,
-                            fontWeight: 700,
-                            color: "#fff",
-                            background: accent,
-                            borderRadius: 8,
-                            padding: "8px 14px",
-                          }}
-                        >
-                          ⬇️ {t.downloadFlyer}
-                        </a>
-                      </div>
-                    </div>
+        {/* Intro just above the gallery when the school chose "bottom". */}
+        {data.textPlacement === "bottom" && introBlock}
 
-                    {/* Body: full inline document */}
-                    {f.kind === "image" ? (
-                      <img
-                        src={f.url}
-                        alt={title}
-                        style={{
-                          width: "100%",
-                          display: "block",
-                          background: "#f1f5f9",
-                        }}
-                      />
-                    ) : isMobile ? (
-                      <a
-                        href={f.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        style={{
-                          textDecoration: "none",
-                          display: "grid",
-                          placeItems: "center",
-                          gap: 10,
-                          padding: "44px 16px",
-                          background: "#fef2f2",
-                          color: "#dc2626",
-                        }}
-                      >
-                        <div style={{ fontSize: 30, fontWeight: 800 }}>PDF</div>
-                        <div
-                          style={{
-                            fontSize: 14,
-                            fontWeight: 600,
-                            color: "#7f1d1d",
-                            textAlign: "center",
-                          }}
-                        >
-                          {t.pdfMobileHint}
-                        </div>
-                      </a>
-                    ) : (
-                      <iframe
-                        src={f.url}
-                        title={title}
-                        style={{
-                          width: "100%",
-                          height: 680,
-                          border: "none",
-                          display: "block",
-                          background: "#f8fafc",
-                        }}
-                      />
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          </div>
-        )}
+        {/* Photo gallery — pinned to the bottom of the content. */}
+        {galleryBlock}
 
         <div style={{ textAlign: "center", marginTop: 28 }}>
           <button

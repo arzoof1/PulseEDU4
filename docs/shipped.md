@@ -4,16 +4,23 @@ Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
 - School Tours — flyers as full inline documents on the public brag
-  page. Replaced the small cropped flyer thumbnail grid with a vertical
-  stack of full-width cards "where the complete document lives": image
-  flyers render at full width (no crop), PDF flyers embed in an inline
-  `<iframe>` viewer on desktop with a tappable view/download fallback
-  card on phones (UA sniff `/Mobi|Android|iPhone|iPod/`, because some
-  mobile browsers blank out embedded PDFs). Each card header carries the
-  flyer label plus an "Open in new tab" link and an explicit "Download"
-  button (same-origin `<a download>` against the existing public
-  `/api/tours/public/:schoolId/flyer/:idx` stream; PDF filenames get a
-  `.pdf` extension unless the label already has one). New EN/ES i18n keys
+  page, **moved to the top** of the content; photo gallery moved to the
+  **bottom**. Replaced the small cropped flyer thumbnail grid with a
+  vertical stack of full-width cards "where the complete document lives":
+  image flyers render at full width (no crop), PDF flyers embed in an
+  inline `<iframe>` viewer on desktop with a tappable view/download
+  fallback card on phones (UA sniff `/Mobi|Android|iPhone|iPod/`, because
+  some mobile browsers blank out embedded PDFs). Each card header carries
+  the flyer label plus an "Open in new tab" link and an explicit
+  "Download" button (same-origin `<a download>` against the existing
+  public `/api/tours/public/:schoolId/flyer/:idx` stream; PDF filenames
+  get a `.pdf` extension unless the label already has one). Multiple
+  flyers are fully supported — a school can upload one per program; they
+  stack vertically in upload order. New content order in `TourApp.tsx`:
+  flyers → intro → custom sections → programs/electives/proud-of grid →
+  photo gallery. The existing per-school `textPlacement` toggle still
+  works: default keeps the intro at the top under the flyers; "bottom"
+  moves the intro down to sit just above the gallery. New EN/ES i18n keys
   `downloadFlyer` / `openFlyer` / `pdfMobileHint`. Public page only — no
   server, schema, or PDF-generation changes.
 
