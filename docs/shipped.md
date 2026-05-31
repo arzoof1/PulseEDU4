@@ -3,6 +3,58 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Event Ticketing — **Phase 1 (free-ticket events, QR delivery, gate
+  scanning)**. Schools create FREE-ticket events (8th-grade promotion,
+  graduation, etc.), allocate a per-student quota by grade with
+  per-student overrides and excludes, and email each student's guardian
+  their QR tickets. **A separate email is sent per student** — siblings
+  get one email each, never a combined family email.
+  - **Data model** (`lib/db/src/schema/`, ensured additively in
+    `seed.ts`): `ticket_events` (name, date, optional start time +
+    location, capacity cap, status draft/published/closed, optional
+    event-day-only window), `ticket_grants` (one per student per event,
+    carries the quota + an email-status snapshot: sent/bounced/failed/
+    no_email + printed_at), `tickets` (one row per seat, unguessable
+    base64url token ~192 bits **not derived from any student id**, `seq`
+    X of N, status valid/used/void), append-only `ticket_scan_events`
+    audit (who/when/where/result), and no-login `ticket_scanner_links`
+    (token-scoped volunteer access). All composite-school-indexed and
+    tenant-scoped by `school_id`.
+  - **Delivery is all three**: inline QR images in the email body + a
+    printable **PDF attachment** + **Parent Portal** view/download. Every
+    surface carries the responsibility verbiage (scanning permanently
+    uses a ticket; the guardian owns not over-sharing). Shared copy +
+    short-code live in `lib/ticketCopy.ts`
+    (`TICKET_RESPONSIBILITY_HEADLINE/LINES`, `ticketShortCode`); email in
+    `lib/ticketEmail.ts` (Resend integration, env-gated), PDFs in
+    `lib/ticketPdf.ts`.
+  - **No-guardian-email students** get **both** a printable office
+    handout sheet AND a "couldn't send" report; the **front office can
+    print any family's tickets** on demand regardless of email status.
+    All authed PDFs **download to disk** (Content-Disposition) per the
+    preview-iframe blob gotcha, never open/print in a tab.
+  - **Scanning is both**: the staff app (logged-in, `/scan` dispatched in
+    `main.tsx` → `scan/ScannerApp.tsx`) AND a **no-login volunteer
+    "scanner link"** (token-scoped). First scan **admits**, rescans show
+    **"already used"**, via atomic first-scan-wins (single SQL
+    conditional `UPDATE ... WHERE status='valid'`) so concurrent scans
+    cannot double-admit. Results cover admitted / already_used / invalid
+    / void / wrong_event with who/when/where; manual name-lookup fallback
+    when a camera fails. Live **"X of Y admitted"** count + near-full
+    capacity warning. QR encodes the **bare token**.
+  - **Admin module** (`components/TicketingAdminPage.tsx`, Settings tile
+    `event-tickets`, group `family-signage`): events list/create,
+    allocation preview with overrides + excludes (grades as `number[]`,
+    K=0), send + delivery dashboard, per-family print, void/reissue,
+    attendee CSV (built client-side), scanner-link management. Uses
+    `authFetch` directly (not OpenAPI codegen), matching Displays/Tours.
+  - **Role gate** `canManageTickets` (`lib/coreTeam.ts`) admits admin +
+    Core Team + counselor + front-office; teachers excluded. Gate
+    scanning is any signed-in staff plus the no-login scanner links.
+    Gate scanning is **online-only** in Phase 1 (offline deferred).
+  - **Phase 2 room left** for paid tickets (Stripe), reserved seating,
+    transfer tracking, and waitlists.
+
 - Display Management — **live remote control for signage**. A presenter
   can drive every TV on a playlist PowerPoint-style without ever
   re-entering a URL — TVs keep their existing `/display/:id` URL and

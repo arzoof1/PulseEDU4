@@ -229,6 +229,38 @@ export function canManageTours(staff: {
   );
 }
 
+// Event Ticketing management gate (Phase 1). Per product spec the audience
+// that can create events, allocate tickets, send/print, manage scanner links,
+// and void/reissue is: admin + Core Team + counselor (school OR guidance) +
+// front-office secretary (the `capManageDismissal` capability — the same front
+// desk that runs pickup) + confidential secretary (represented by
+// `canApproveAst`, mirroring canManagePickup / canManageTours). Teachers are
+// excluded — ticketing is an office-side responsibility. Note: any signed-in
+// staff member can SCAN at the gate (a separate, lighter gate enforced by the
+// scan endpoints), this gate is only for the management surface.
+export function canManageTickets(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+  isCounselor?: boolean | null;
+  isGuidanceCounselor?: boolean | null;
+  capManageDismissal?: boolean | null;
+  canApproveAst?: boolean | null;
+}): boolean {
+  return (
+    isCoreTeam(staff) ||
+    Boolean(
+      staff.isCounselor ||
+        staff.isGuidanceCounselor ||
+        staff.capManageDismissal ||
+        staff.canApproveAst,
+    )
+  );
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a

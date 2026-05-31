@@ -2555,6 +2555,132 @@ export async function ensureDisplayLiveControlSchema(): Promise<void> {
   );
 }
 
+// -----------------------------------------------------------------------------
+// EVENT TICKETING (Phase 1): free-ticket events (8th-grade promotion,
+// graduation). Five additive tables — events, per-student grants (with email
+// delivery status), individual QR tickets (unguessable token, first-scan-wins),
+// an append-only scan audit, and no-login volunteer "scanner link" tokens
+// (only the SHA-256 hash is stored, like kiosk_activations). All idempotent
+// CREATE TABLE IF NOT EXISTS at boot.
+// -----------------------------------------------------------------------------
+export async function ensureTicketingSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      event_date TEXT,
+      start_time TEXT,
+      location TEXT,
+      capacity INTEGER,
+      status TEXT NOT NULL DEFAULT 'draft',
+      event_day_only BOOLEAN NOT NULL DEFAULT FALSE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_events_by_school ON ticket_events (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_grants (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      quota INTEGER NOT NULL DEFAULT 0,
+      guardian_email TEXT,
+      guardian_name TEXT,
+      email_status TEXT NOT NULL DEFAULT 'pending',
+      email_sent_at TIMESTAMPTZ,
+      email_to TEXT,
+      email_error TEXT,
+      printed_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS ticket_grants_event_student_unique ON ticket_grants (school_id, event_id, student_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_grants_by_event ON ticket_grants (school_id, event_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS tickets (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      grant_id INTEGER NOT NULL,
+      student_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      seq INTEGER NOT NULL,
+      status TEXT NOT NULL DEFAULT 'valid',
+      used_at TIMESTAMPTZ,
+      used_gate TEXT,
+      used_by_staff_id INTEGER,
+      used_via TEXT,
+      void_reason TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS tickets_token_unique ON tickets (school_id, token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tickets_by_event ON tickets (school_id, event_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS tickets_by_grant ON tickets (grant_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_scan_events (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      ticket_id INTEGER,
+      token_scanned TEXT NOT NULL,
+      result TEXT NOT NULL,
+      gate_label TEXT,
+      scanned_by_staff_id INTEGER,
+      scanner_link_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_scan_events_by_event_date ON ticket_scan_events (school_id, event_id, created_at)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_scan_events_by_ticket ON ticket_scan_events (ticket_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS ticket_scanner_links (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      event_id INTEGER NOT NULL,
+      label TEXT NOT NULL,
+      token_hash TEXT NOT NULL,
+      gate_label TEXT,
+      active BOOLEAN NOT NULL DEFAULT TRUE,
+      created_by_staff_id INTEGER,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      deactivated_at TIMESTAMPTZ
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS ticket_scanner_links_hash_unique ON ticket_scanner_links (token_hash)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS ticket_scanner_links_by_event ON ticket_scanner_links (school_id, event_id)`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
@@ -2573,6 +2699,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureAlgebraPlacementOverridesSchema();
   await ensureToursSchema();
   await ensureDisplayLiveControlSchema();
+  await ensureTicketingSchema();
   // FAST history visibility window (Phase 1 of Historical FAST work).
   // Default 3 years, hard-capped 2..5 by the route validator.
   await db.execute(

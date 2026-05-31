@@ -98,6 +98,8 @@ import intensiveGroupsRouter from "./intensiveGroups";
 import algebraPlacementRouter from "./algebraPlacement";
 import helpAssistantRouter from "./helpAssistant";
 import toursRouter from "./tours";
+import ticketingRouter from "./ticketing";
+import parentTicketsRouter from "./parentTickets";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -232,6 +234,7 @@ router.use(uiPrefsRouter);
 router.use(heartbeatSettingsRouter);
 router.use(parentHeartbeatPrefsRouter);
 router.use(parentSnapshotPdfRouter);
+router.use(parentTicketsRouter);
 router.use(displaysRouter);
 router.use(displayOverridesRouter);
 router.use(schoolPlansRouter);
@@ -258,5 +261,6 @@ router.use(intensiveGroupsRouter);
 router.use(algebraPlacementRouter);
 router.use(helpAssistantRouter);
 router.use(toursRouter);
+router.use(ticketingRouter);
 
 export default router;

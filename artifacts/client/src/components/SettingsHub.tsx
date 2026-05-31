@@ -25,6 +25,7 @@ export type SettingsTileId =
   | "iss-settings"
   | "pickup"
   | "school-tours"
+  | "event-tickets"
   | "staff-preview"
   | "separation-tags"
   | "staff-directory"

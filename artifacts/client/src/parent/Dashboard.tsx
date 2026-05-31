@@ -32,6 +32,8 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import QRCode from "qrcode";
+import { Ticket } from "lucide-react";
 import { parentFetch, setParentToken, navigate, type ParentMe } from "./api";
 
 interface Snapshot {
@@ -564,6 +566,12 @@ function SnapshotBody({ snapshot }: { snapshot: Snapshot }) {
           {onTrack ? "On track this week" : "Needs attention this week"}
         </Badge>
       </div>
+
+      {/* Event tickets — QR codes for published school events (8th-grade
+          promotion, graduation, etc.). Fetched separately from the snapshot;
+          the section renders only when the student actually has tickets, so
+          it stays invisible until a school issues them. */}
+      <TicketsSection studentId={snapshot.student.id} />
 
       {/* House affiliation tile — shows the student's PBIS house, its
           custom logo (or letter-bubble fallback), and the current
@@ -1322,6 +1330,184 @@ function PulseCard({
         )}
       </CardContent>
     </Card>
+  );
+}
+
+// -----------------------------------------------------------------------------
+// TicketsSection — event tickets for a single student. Fetches from
+// /parent/tickets?studentId= (published events only; the family's own tickets,
+// ownership enforced server-side). Renders one QR per ticket with a short code,
+// the same responsibility verbiage families see on the email + PDF, and a
+// "Download tickets (PDF)" button per event. Used tickets are greyed out.
+// Renders nothing when the student has no tickets, so it stays invisible until
+// a school issues them.
+// -----------------------------------------------------------------------------
+interface TicketItem {
+  token: string;
+  seq: number;
+  total: number;
+  status: string;
+  shortCode: string;
+}
+interface TicketEventRow {
+  grantId: number;
+  eventId: number;
+  eventName: string;
+  eventDate: string | null;
+  startTime: string | null;
+  location: string | null;
+  tickets: TicketItem[];
+}
+interface TicketsResponse {
+  responsibility: { headline: string; lines: string[] };
+  events: TicketEventRow[];
+}
+
+function TicketsSection({ studentId }: { studentId: number }) {
+  const [data, setData] = useState<TicketsResponse | null>(null);
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await parentFetch(
+          `/parent/tickets?studentId=${studentId}`,
+        );
+        if (!res.ok) return;
+        const json = (await res.json()) as TicketsResponse;
+        if (!cancelled) setData(json);
+      } catch {
+        /* portal stays quiet if tickets can't load */
+      } finally {
+        if (!cancelled) setLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [studentId]);
+
+  if (!loaded || !data || data.events.length === 0) return null;
+
+  const downloadPdf = async (grantId: number) => {
+    const res = await parentFetch(`/parent/tickets/${grantId}.pdf`);
+    if (!res.ok) return;
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tickets.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <Section
+      title="Event Tickets"
+      icon={<Ticket className="h-4 w-4 text-violet-600" />}
+    >
+      {/* Responsibility verbiage — identical wording to the email + PDF. */}
+      <div className="mb-4 rounded-lg border border-violet-200 bg-violet-50 p-3">
+        <div className="text-sm font-semibold text-violet-800">
+          {data.responsibility.headline}
+        </div>
+        <ul className="mt-1 list-disc pl-5 text-xs text-violet-900/80 space-y-0.5">
+          {data.responsibility.lines.map((l, i) => (
+            <li key={i}>{l}</li>
+          ))}
+        </ul>
+      </div>
+
+      <div className="space-y-6">
+        {data.events.map((ev) => (
+          <div key={ev.grantId}>
+            <div className="flex items-center justify-between gap-3 flex-wrap mb-3">
+              <div>
+                <div className="text-sm font-semibold text-slate-800">
+                  {ev.eventName}
+                </div>
+                <div className="text-xs text-slate-500">
+                  {ev.eventDate ? fmtDate(ev.eventDate) : "Date TBA"}
+                  {ev.startTime ? ` · ${ev.startTime}` : ""}
+                  {ev.location ? ` · ${ev.location}` : ""}
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => downloadPdf(ev.grantId)}
+              >
+                <Download className="h-4 w-4 mr-1.5" />
+                Download tickets (PDF)
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+              {ev.tickets.map((t) => (
+                <TicketCard key={t.token} ticket={t} />
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  );
+}
+
+function TicketCard({ ticket }: { ticket: TicketItem }) {
+  const [qr, setQr] = useState<string | null>(null);
+  const used = ticket.status === "used";
+
+  useEffect(() => {
+    let cancelled = false;
+    QRCode.toDataURL(ticket.token, { margin: 1, width: 240 })
+      .then((url) => {
+        if (!cancelled) setQr(url);
+      })
+      .catch(() => {
+        /* leave placeholder */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [ticket.token]);
+
+  return (
+    <div
+      className={
+        "rounded-lg border p-3 flex flex-col items-center text-center " +
+        (used
+          ? "border-slate-200 bg-slate-50 opacity-60"
+          : "border-slate-200 bg-white")
+      }
+    >
+      <div className="relative">
+        {qr ? (
+          <img
+            src={qr}
+            alt={`Ticket ${ticket.shortCode}`}
+            className="w-full max-w-[140px] aspect-square"
+          />
+        ) : (
+          <div className="w-[140px] h-[140px] bg-slate-100 rounded" />
+        )}
+        {used && (
+          <div className="absolute inset-0 flex items-center justify-center">
+            <span className="bg-slate-800 text-white text-[10px] font-bold uppercase tracking-wide px-2 py-1 rounded -rotate-12">
+              Already used
+            </span>
+          </div>
+        )}
+      </div>
+      <div className="mt-2 text-xs font-mono font-semibold text-slate-700">
+        {ticket.shortCode}
+      </div>
+      <div className="text-[11px] text-slate-500">
+        Ticket {ticket.seq} of {ticket.total}
+      </div>
+    </div>
   );
 }
 

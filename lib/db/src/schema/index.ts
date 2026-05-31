@@ -111,3 +111,8 @@ export * from "./benchmarkReteachLog";
 export * from "./classComposerPlans";
 export * from "./algebraPlacementOverrides";
 export * from "./tours";
+export * from "./ticketEvents";
+export * from "./ticketGrants";
+export * from "./tickets";
+export * from "./ticketScanEvents";
+export * from "./ticketScannerLinks";

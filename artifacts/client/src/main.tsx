@@ -6,6 +6,7 @@ import ParentApp from "./parent/ParentApp";
 import SignageApp from "./signage/SignageApp";
 import PickupApp from "./pickup/PickupApp";
 import TourApp from "./tour/TourApp";
+import ScannerApp from "./scan/ScannerApp";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -20,6 +21,10 @@ const isPickup = path.includes("/pickup");
 // Public, unauthenticated School Tours surface (brag page + request form +
 // post-tour survey). Dispatched before the staff <App/>.
 const isTour = path.includes("/tour");
+// Gate admission scanner for Event Ticketing. Two modes off the URL:
+//   /scan             — staff scanner (requires staff session)
+//   /scan/<linkToken> — no-login volunteer scanner
+const isScan = path.includes("/scan");
 
 createRoot(document.getElementById("root")!).render(
   isSignage ? <SignageApp />
@@ -28,5 +33,6 @@ createRoot(document.getElementById("root")!).render(
     : isParent ? <ParentApp />
     : isPickup ? <PickupApp />
     : isTour ? <TourApp />
+    : isScan ? <ScannerApp />
     : <App />,
 );

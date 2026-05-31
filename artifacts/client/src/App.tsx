@@ -28,6 +28,7 @@ import ClassPhotoDayPage from "./components/ClassPhotoDayPage";
 import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
+import TicketingAdminPage from "./components/TicketingAdminPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
@@ -8089,6 +8090,21 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.canApproveAst === true ||
     authUser?.capTourNotify === true;
+  // Event Tickets management gate — mirrors canManageTickets() in
+  // lib/coreTeam.ts (Core Team + counselor/guidance + front-office via
+  // capManageDismissal + canApproveAst; teachers excluded). Drives the
+  // Settings tile. Any signed-in staff can still SCAN at the gate.
+  const canManageTickets =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true ||
+    authUser?.isCounselor === true ||
+    authUser?.isGuidanceCounselor === true ||
+    authUser?.capManageDismissal === true ||
+    authUser?.canApproveAst === true;
   // Fetch onboarding progress whenever the admin lands on the Settings
   // hub (and after each return from a tile — settingsTile flipping from
   // a value back to null retriggers the effect). This is what powers the
@@ -20372,6 +20388,10 @@ function App() {
         <TourAdminPage />
       )}
 
+      {activeSection === "settings" && canManageTickets && settingsTile === "event-tickets" && (
+        <TicketingAdminPage />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "class-photo-day" && (
         <ClassPhotoDayPage
           defaultTeacherId={authUser?.id ?? null}
@@ -20633,6 +20653,19 @@ function App() {
                 title: "School Tours",
                 subtitle:
                   "Enrollment lead pipeline, public brag page, post-tour surveys.",
+                group: "family-signage",
+              });
+            }
+            // Event Tickets — free-ticket events (8th-grade promotion,
+            // graduation): allocate a per-student quota by grade, email
+            // guardians QR tickets, and scan at the gate. Office-side gate.
+            if (canManageTickets) {
+              tiles.push({
+                id: "event-tickets",
+                icon: "🎟️",
+                title: "Event Tickets",
+                subtitle:
+                  "Free-ticket events · allocate by grade, email QR tickets, scan at the gate.",
                 group: "family-signage",
               });
             }
