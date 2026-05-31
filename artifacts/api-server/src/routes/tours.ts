@@ -49,6 +49,7 @@ import {
 import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
+import { buildTourNoteCatcherPdf } from "../lib/tourNoteCatcherPdf.js";
 import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
@@ -1523,6 +1524,11 @@ router.get(
         );
       assignedTo = a?.name ?? null;
     }
+    const page = await loadTourPage(schoolId);
+    const selectedSet = new Set(lead.interestSelections ?? []);
+    const selectedStops = (page?.checkpoints ?? [])
+      .filter((c) => selectedSet.has(c.key))
+      .map((c) => c.label);
     const docBranding = await loadDistrictDocumentBranding(schoolId);
     const pdf = await buildTourBragSheetPdf({
       schoolName: await schoolName(schoolId),
@@ -1531,6 +1537,7 @@ router.get(
       email: lead.email,
       preferredLanguage: lead.preferredLanguage,
       children: lead.children,
+      selectedStops,
       interests: lead.interests,
       source: lead.source,
       status: lead.status,
@@ -1655,6 +1662,51 @@ router.get(
     res.setHeader(
       "Content-Disposition",
       `inline; filename="tour-roadmap-${id}.pdf"`,
+    );
+    res.send(pdf);
+  },
+);
+
+// GET /tours/requests/:id/note-catcher.pdf — family-facing take-along sheet:
+// general tour info + note space for each stop the family selected.
+router.get(
+  "/tours/requests/:id/note-catcher.pdf",
+  requireStaff,
+  requireTourManager,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (!schoolId) return;
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const lead = await loadLeadForPdf(schoolId, id);
+    if (!lead) {
+      res.status(404).json({ error: "Lead not found" });
+      return;
+    }
+    const page = await loadTourPage(schoolId);
+    const selectedSet = new Set(lead.interestSelections ?? []);
+    const stops = (page?.checkpoints ?? [])
+      .filter((c) => selectedSet.has(c.key))
+      .map((c) => ({ label: c.label }));
+    const docBranding = await loadDistrictDocumentBranding(schoolId);
+    const pdf = await buildTourNoteCatcherPdf({
+      schoolName: await schoolName(schoolId),
+      familyName: lead.familyName,
+      tourScheduledAt: lead.tourScheduledAt,
+      contactEmail: page?.contactEmail ?? null,
+      contactPhone: page?.contactPhone ?? null,
+      stops,
+      accentColor: page?.accentColor ?? "#0ea5a4",
+      districtLogo: docBranding?.logo ?? null,
+      districtTagline: docBranding?.tagline ?? null,
+    });
+    res.setHeader("Content-Type", "application/pdf");
+    res.setHeader(
+      "Content-Disposition",
+      `inline; filename="tour-note-catcher-${id}.pdf"`,
     );
     res.send(pdf);
   },

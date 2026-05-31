@@ -11,6 +11,10 @@ export interface BragSheetInput {
   email: string | null;
   preferredLanguage: string;
   children: { name: string; grade: string }[];
+  // The checkpoint stops the family ticked on the request form, resolved to
+  // their current labels in page order.
+  selectedStops: string[];
+  // Free-text "anything else?" note from the family (optional).
   interests: string;
   source: string | null;
   status: string;
@@ -126,28 +130,77 @@ export function buildTourBragSheetPdf(input: BragSheetInput): Promise<Buffer> {
 
   doc.moveDown(0.6);
 
-  // Interests highlight box
+  // Interests highlight box — the checkpoints they ticked (structured) plus any
+  // free-text note. Height is measured from the content so longer lists never
+  // clip.
+  const padX = 16;
+  const innerW = width - padX * 2;
+  const stopLines = input.selectedStops.map((s) => `•  ${s}`);
+  const freeText = input.interests.trim();
+  const hasStops = stopLines.length > 0;
+  const hasFree = freeText.length > 0;
+
+  doc.font("Helvetica").fontSize(12);
+  let contentH = 0;
+  for (const line of stopLines) {
+    contentH += doc.heightOfString(line, { width: innerW }) + 3;
+  }
+  if (hasFree) {
+    if (hasStops) contentH += 8;
+    contentH += 16; // "ANYTHING ELSE" label row
+    contentH += doc.heightOfString(freeText, { width: innerW });
+  }
+  if (!hasStops && !hasFree) {
+    contentH += doc.heightOfString("No specific interests noted.", {
+      width: innerW,
+    });
+  }
+  const headerH = 32;
+  const boxH = headerH + contentH + 18;
+
+  // Keep the box (plus room for the personalize prompt + footer) on one page;
+  // a long checkpoint list or note can otherwise overflow the page bottom.
+  const bottom = doc.page.height - doc.page.margins.bottom;
+  if (doc.y + boxH + 90 > bottom) {
+    doc.addPage();
+    doc.y = doc.page.margins.top;
+  }
+
   const boxY = doc.y;
-  doc
-    .roundedRect(left, boxY, width, 110, 10)
-    .fillAndStroke("#f0fdfa", "#99f6e4");
+  doc.roundedRect(left, boxY, width, boxH, 10).fillAndStroke("#f0fdfa", "#99f6e4");
   doc
     .fillColor(ACCENT)
     .font("Helvetica-Bold")
     .fontSize(11)
-    .text("WHAT THEY WANT TO SEE", left + 16, boxY + 14, {
+    .text("WHAT THEY WANT TO SEE", left + padX, boxY + 14, {
       characterSpacing: 1,
     });
-  doc
-    .fillColor(INK)
-    .font("Helvetica")
-    .fontSize(13)
-    .text(input.interests || "No specific interests noted.", left + 16, boxY + 34, {
-      width: width - 32,
-      height: 64,
-    });
 
-  doc.y = boxY + 130;
+  let cy = boxY + headerH;
+  doc.fillColor(INK).font("Helvetica").fontSize(12);
+  for (const line of stopLines) {
+    doc.text(line, left + padX, cy, { width: innerW });
+    cy = doc.y + 3;
+  }
+  if (hasFree) {
+    if (hasStops) cy += 5;
+    doc
+      .font("Helvetica-Bold")
+      .fontSize(9)
+      .fillColor(MUTED)
+      .text("ANYTHING ELSE", left + padX, cy, { characterSpacing: 1 });
+    cy = doc.y + 2;
+    doc
+      .font("Helvetica")
+      .fontSize(12)
+      .fillColor(INK)
+      .text(freeText, left + padX, cy, { width: innerW });
+  }
+  if (!hasStops && !hasFree) {
+    doc.text("No specific interests noted.", left + padX, cy, { width: innerW });
+  }
+
+  doc.y = boxY + boxH;
   doc.moveDown(0.5);
 
   // Personalize prompt

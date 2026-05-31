@@ -488,7 +488,7 @@ function LeadDrawer({
   // and froze the whole app. A blob download triggered from THIS document is
   // the only path that works reliably in both the preview and production.
   const downloadPdf = async (
-    which: "brag-sheet" | "leave-behind" | "roadmap",
+    which: "brag-sheet" | "leave-behind" | "roadmap" | "note-catcher",
   ) => {
     const res = await authFetch(`/api/tours/requests/${id}/${which}.pdf`);
     if (!res.ok) return;
@@ -501,7 +501,9 @@ function LeadDrawer({
         ? "brag-sheet.pdf"
         : which === "roadmap"
           ? "tour-roadmap.pdf"
-          : "post-tour-document.pdf";
+          : which === "note-catcher"
+            ? "tour-note-catcher.pdf"
+            : "post-tour-document.pdf";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -778,6 +780,13 @@ function LeadDrawer({
                 style={btn("#0ea5a4")}
               >
                 ⬇️ Tour roadmap (PDF)
+              </button>
+              <button
+                type="button"
+                onClick={() => void downloadPdf("note-catcher")}
+                style={btn("#0891b2")}
+              >
+                ⬇️ Family note catcher (PDF)
               </button>
               <button
                 type="button"
