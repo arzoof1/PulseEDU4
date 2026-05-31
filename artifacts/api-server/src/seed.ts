@@ -2518,6 +2518,11 @@ export async function ensureToursSchema(): Promise<void> {
   await db.execute(
     sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS checkpoints JSONB NOT NULL DEFAULT '[]'::jsonb`,
   );
+  // Machine-translation cache for the public brag page (additive). Keyed by
+  // target language; regenerated when source content changes.
+  await db.execute(
+    sql`ALTER TABLE tour_pages ADD COLUMN IF NOT EXISTS translations JSONB NOT NULL DEFAULT '{}'::jsonb`,
+  );
   await db.execute(
     sql`ALTER TABLE tour_requests ADD COLUMN IF NOT EXISTS interest_selections JSONB NOT NULL DEFAULT '[]'::jsonb`,
   );

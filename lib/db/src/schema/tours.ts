@@ -45,6 +45,28 @@ export type TourCheckpoint = {
   minutes: number;
 };
 
+// A machine-translated cache of the admin-authored brag-page content for one
+// target language. The English columns above are always the source of truth
+// and are served raw; when a family views the page in another language
+// (currently only Spanish) the server generates this payload once and caches
+// it on the row, keyed by language. `sourceHash` is a hash of the source
+// strings the translation was produced from — when an admin edits content the
+// hash changes and the cache is regenerated on the next non-English view.
+// Checkpoint `key`s are preserved (selections are stored by key); only the
+// `label` is translated.
+export type TourTranslation = {
+  sourceHash: string;
+  headline: string;
+  subheadline: string;
+  intro: string;
+  sections: TourPageSection[];
+  checkpoints: { key: string; label: string }[];
+  programs: string[];
+  electives: string[];
+  proudOf: string[];
+  ctaText: string;
+};
+
 export const tourPagesTable = pgTable(
   "tour_pages",
   {
@@ -67,6 +89,15 @@ export const tourPagesTable = pgTable(
       .$type<TourCheckpoint[]>()
       .notNull()
       .default([]),
+    // Machine-translated cache of the admin-authored content, keyed by target
+    // language (e.g. {"es": {...}}). Generated on demand when a family views
+    // the page in a non-English language and regenerated when the source
+    // content changes (see TourTranslation.sourceHash). English is always
+    // served raw from the columns above; this is purely a cache.
+    translations: jsonb("translations")
+      .$type<Record<string, TourTranslation>>()
+      .notNull()
+      .default({}),
     // Simple bullet lists.
     programs: jsonb("programs").$type<string[]>().notNull().default([]),
     electives: jsonb("electives").$type<string[]>().notNull().default([]),

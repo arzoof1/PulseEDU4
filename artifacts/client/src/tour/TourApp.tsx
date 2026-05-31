@@ -60,6 +60,7 @@ const T = {
     surveyThanks: "Thanks for sharing — we're grateful you visited!",
     surveyDone: "This survey has already been submitted. Thank you!",
     notFound: "We couldn't find that page.",
+    translating: "Translating…",
   },
   es: {
     requestTour: "Solicite su recorrido",
@@ -106,6 +107,7 @@ const T = {
     surveyThanks: "¡Gracias por compartir y por visitarnos!",
     surveyDone: "Esta encuesta ya fue enviada. ¡Gracias!",
     notFound: "No encontramos esa página.",
+    translating: "Traduciendo…",
   },
 } as const;
 
@@ -360,16 +362,35 @@ function BragPage({ schoolId }: { schoolId: number }) {
     "loading",
   );
   const [showForm, setShowForm] = useState(false);
+  // True while the page is being (machine-)translated into the selected
+  // language for the first time — admin free text is translated server-side on
+  // demand, which can take a moment on the first non-English view.
+  const [translating, setTranslating] = useState(false);
   const source = useMemo(
     () => new URLSearchParams(window.location.search).get("source") || "",
     [],
   );
+  // Cache the fetched page per language so toggling EN<->ES is instant after
+  // the first load and we never re-hit the translation endpoint needlessly.
+  const pageCache = useRef<Record<string, TourPage>>({});
 
   useEffect(() => {
     let cancelled = false;
+    const cached = pageCache.current[lang];
+    if (cached) {
+      setData(cached);
+      setStatus("ok");
+      setTranslating(false);
+      return;
+    }
+    // Only show the "translating" hint for non-English first loads; the very
+    // first English load uses the normal full-page loading state.
+    if (lang !== "en") setTranslating(true);
     (async () => {
       try {
-        const res = await fetch(`/api/tours/public/${schoolId}/page`);
+        const res = await fetch(
+          `/api/tours/public/${schoolId}/page?lang=${encodeURIComponent(lang)}`,
+        );
         if (!res.ok) throw new Error("missing");
         const json = (await res.json()) as TourPage;
         // Defensive defaults so an older/partial API response can never crash
@@ -380,18 +401,21 @@ function BragPage({ schoolId }: { schoolId: number }) {
           ? json.checkpoints
           : [];
         json.textPlacement = json.textPlacement === "bottom" ? "bottom" : "top";
+        pageCache.current[lang] = json;
         if (!cancelled) {
           setData(json);
           setStatus("ok");
         }
       } catch {
         if (!cancelled) setStatus("missing");
+      } finally {
+        if (!cancelled) setTranslating(false);
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [schoolId]);
+  }, [schoolId, lang]);
 
   const accent = useAccent(data?.accentColor);
   // Some mobile browsers won't render an embedded PDF inline (blank frame), so
@@ -650,7 +674,26 @@ function BragPage({ schoolId }: { schoolId: number }) {
           >
             {data.schoolName}
           </div>
-          <LangToggle lang={lang} setLang={setLang} accent={accent} />
+          <div
+            style={{ display: "flex", alignItems: "center", gap: 8 }}
+          >
+            {translating && (
+              <span
+                style={{
+                  fontSize: 12,
+                  fontWeight: 600,
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: "rgba(255,255,255,0.22)",
+                  color: safeColor(data.headerTextColor, "#fff"),
+                  whiteSpace: "nowrap",
+                }}
+              >
+                {t.translating}
+              </span>
+            )}
+            <LangToggle lang={lang} setLang={setLang} accent={accent} />
+          </div>
         </div>
         <div style={{ maxWidth: 880, margin: "24px auto 0" }}>
           <h1

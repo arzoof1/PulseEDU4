@@ -3,6 +3,27 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — **auto-translated public brag page (EN→ES)**. When a
+  family toggles the public page (`/tour/:schoolId`, `TourApp.tsx`) to
+  Spanish, the admin-authored free text (headline, subheadline, intro,
+  sections, programs, electives, proudOf, ctaText, checkpoint labels) is
+  machine-translated server-side, not just the static UI strings. EN is
+  always the source of truth, served raw; ES is generated on demand and
+  cached on a new `translations` jsonb column on `tour_pages`
+  (`TourTranslation` type in `lib/db/src/schema/tours.ts`), keyed by
+  language with a `sourceHash` so an admin edit transparently
+  invalidates the cache. Translation runs through the existing Anthropic
+  AI integration (`claude-sonnet-4-6`, `lib/tourTranslate.ts`) — the
+  source strings are collected into a flat ordered list, translated as a
+  JSON array, and reassembled (checkpoint `key`s preserved so family
+  selections survive). The public GET `/tours/public/:schoolId/page` now
+  takes `?lang=es`; a translation failure or unsupported language
+  transparently falls back to the English source so the page never
+  breaks. Client caches each language in-memory and shows a brief
+  "Translating…" badge on the first non-English view. Only Spanish is
+  wired today (`SUPPORTED_TARGET_LANGS`); adding a language is a one-line
+  change plus a prompt name.
+
 - School Tours — admin-configured **Tour Checkpoints** + a both-in-one
   **Tour Roadmap PDF**. Admins define stops per-school in the Tour page
   editor (`CheckpointEditor` in `TourAdminPage.tsx`): each checkpoint has

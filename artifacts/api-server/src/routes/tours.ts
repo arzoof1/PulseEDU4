@@ -21,6 +21,7 @@ import {
   type TourPageSection,
   type TourFlyer,
   type TourCheckpoint,
+  type TourTranslation,
   type TourStatus,
   type TourOutcome,
 } from "@workspace/db";
@@ -38,9 +39,17 @@ import {
   sendFamilyAckEmail,
 } from "../lib/tourEmails.js";
 import { sendSmsBatch } from "../lib/sms.js";
+import {
+  translateTourContent,
+  isSupportedTargetLang,
+  hashTourContent,
+  type TranslatableTourContent,
+  type SupportedTargetLang,
+} from "../lib/tourTranslate.js";
 import { buildTourBragSheetPdf } from "../lib/tourBragSheetPdf.js";
 import { buildTourLeaveBehindPdf } from "../lib/tourLeaveBehindPdf.js";
 import { buildTourRoadmapPdf } from "../lib/tourRoadmapPdf.js";
+import { logger } from "../lib/logger.js";
 
 const router: IRouter = Router();
 const objectStorageService = new ObjectStorageService();
@@ -457,7 +466,110 @@ router.post("/tours/public/survey/:token", async (req, res) => {
   res.status(201).json({ ok: true });
 });
 
-// GET /tours/public/:schoolId/page — the published brag page.
+// Build the translatable subset of a tour page row from its source columns.
+function translatableFromPage(
+  page: NonNullable<Awaited<ReturnType<typeof loadTourPage>>>,
+): TranslatableTourContent {
+  return {
+    headline: page.headline,
+    subheadline: page.subheadline,
+    intro: page.intro,
+    sections: page.sections ?? [],
+    checkpoints: (page.checkpoints ?? []).map((c) => ({
+      key: c.key,
+      label: c.label,
+    })),
+    programs: page.programs ?? [],
+    electives: page.electives ?? [],
+    proudOf: page.proudOf ?? [],
+    ctaText: page.ctaText,
+  };
+}
+
+// In-process singleflight: the public page GET is unauthenticated, so a burst
+// of concurrent cold-miss views (e.g. right after an admin edit) would each
+// fire an Anthropic call. We dedupe by `schoolId:lang:hash` so only the first
+// request does the work and the rest await its result — capping LLM cost/fan-
+// out without needing a shared lock.
+const inflightTranslations = new Map<
+  string,
+  Promise<TourTranslation | null>
+>();
+
+// Generate + persist a translation under the singleflight guard. Returns the
+// cache payload (or null on failure). Persists best-effort; a write failure
+// still returns the translation so the current request renders correctly.
+async function generateAndCacheTranslation(
+  schoolId: number,
+  existingTranslations: Record<string, TourTranslation>,
+  source: TranslatableTourContent,
+  hash: string,
+  lang: SupportedTargetLang,
+): Promise<TourTranslation | null> {
+  const key = `${schoolId}:${lang}:${hash}`;
+  const existing = inflightTranslations.get(key);
+  if (existing) return existing;
+  const work = (async () => {
+    const translated = await translateTourContent(source, lang);
+    if (!translated) return null;
+    try {
+      await db
+        .update(tourPagesTable)
+        .set({ translations: { ...existingTranslations, [lang]: translated } })
+        .where(eq(tourPagesTable.schoolId, schoolId));
+    } catch (err) {
+      logger.error({ err, schoolId, lang }, "tour translation cache write failed");
+    }
+    return translated;
+  })();
+  const tracked = work.finally(() => inflightTranslations.delete(key));
+  inflightTranslations.set(key, tracked);
+  return tracked;
+}
+
+// Resolve the brag-page content for the requested language. English (or any
+// unsupported language) returns the raw source. For a supported target
+// language we serve the cached translation when its source hash matches, else
+// translate once and persist the result back onto the row. A translation
+// failure transparently falls back to the English source so the public page
+// never breaks.
+async function resolveTranslatedContent(
+  schoolId: number,
+  page: NonNullable<Awaited<ReturnType<typeof loadTourPage>>>,
+  lang: string,
+): Promise<TranslatableTourContent | null> {
+  if (!isSupportedTargetLang(lang)) return null;
+  const source = translatableFromPage(page);
+  const hash = hashTourContent(source);
+  const existingTranslations = page.translations ?? {};
+  const cached = existingTranslations[lang];
+  const payload =
+    cached && cached.sourceHash === hash
+      ? cached
+      : await generateAndCacheTranslation(
+          schoolId,
+          existingTranslations,
+          source,
+          hash,
+          lang,
+        );
+  if (!payload) return null;
+  return {
+    headline: payload.headline,
+    subheadline: payload.subheadline,
+    intro: payload.intro,
+    sections: payload.sections ?? [],
+    checkpoints: payload.checkpoints ?? [],
+    programs: payload.programs ?? [],
+    electives: payload.electives ?? [],
+    proudOf: payload.proudOf ?? [],
+    ctaText: payload.ctaText,
+  };
+}
+
+// GET /tours/public/:schoolId/page — the published brag page. Accepts an
+// optional `?lang=` to serve machine-translated content (English is the
+// source; only Spanish is supported today).
 router.get("/tours/public/:schoolId/page", async (req, res) => {
   const schoolId = Number(req.params.schoolId);
   if (!Number.isInteger(schoolId) || schoolId <= 0) {
@@ -470,21 +582,25 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
     return;
   }
   const branding = await loadDistrictBranding(schoolId);
+  const lang = typeof req.query.lang === "string" ? req.query.lang : "en";
+  const tr = await resolveTranslatedContent(schoolId, page, lang);
   res.json({
     schoolName: await schoolName(schoolId),
-    headline: page.headline,
-    subheadline: page.subheadline,
-    intro: page.intro,
-    sections: page.sections,
+    // When a translation is available `tr` carries the localized strings;
+    // otherwise we serve the raw English source columns.
+    headline: tr?.headline ?? page.headline,
+    subheadline: tr?.subheadline ?? page.subheadline,
+    intro: tr?.intro ?? page.intro,
+    sections: tr?.sections ?? page.sections,
     // Public form only needs key + label — location / talking points / minutes
     // are staff-facing and stay server-side.
-    checkpoints: (page.checkpoints ?? []).map((c) => ({
+    checkpoints: (tr?.checkpoints ?? page.checkpoints ?? []).map((c) => ({
       key: c.key,
       label: c.label,
     })),
-    programs: page.programs,
-    electives: page.electives,
-    proudOf: page.proudOf,
+    programs: tr?.programs ?? page.programs,
+    electives: tr?.electives ?? page.electives,
+    proudOf: tr?.proudOf ?? page.proudOf,
     // Serve photos/flyers through the public streaming routes by index so
     // unauthenticated families never touch the school-ACL object path. Keys
     // are never exposed to the client.
@@ -497,7 +613,7 @@ router.get("/tours/public/:schoolId/page", async (req, res) => {
       kind: f.kind,
       url: `/api/tours/public/${schoolId}/flyer/${i}`,
     })),
-    ctaText: page.ctaText,
+    ctaText: tr?.ctaText ?? page.ctaText,
     accentColor: page.accentColor,
     headerTextColor: page.headerTextColor ?? "#ffffff",
     contactEmail: page.contactEmail,
