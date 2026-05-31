@@ -54,6 +54,21 @@ interface PublicItem {
   url: string | null;
 }
 
+// Live remote-control state for this playlist, polled every ~2s from
+// the public live endpoint. `mode === "auto"` (or a missing row) means
+// the normal cycler runs. "manual" steps THIS playlist's items at the
+// presenter-chosen position; "presentation" temporarily shows a deck
+// playlist or a single live URL. `revision` lets us cheaply ignore
+// unchanged polls (every server-side change bumps it).
+interface LiveControl {
+  mode: "auto" | "manual" | "presentation";
+  itemIndex: number;
+  pageIndex: number;
+  presentationPlaylistId: number | null;
+  presentationUrl: string | null;
+  revision: number;
+}
+
 interface HouseTotals {
   id: number;
   name: string;
@@ -283,6 +298,34 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
   const [playlist, setPlaylist] = useState<PublicPlaylist | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [slideIdx, setSlideIdx] = useState(0);
+  const [live, setLive] = useState<LiveControl | null>(null);
+
+  // Poll the live remote-control state fast (~2s) so a presenter's
+  // clicks land on every TV near-instantly. We keep the last known
+  // state on a failed poll (a transient blip shouldn't blank the wall)
+  // and only re-render when `revision` actually changed — every
+  // server-side change bumps it, and the "no row" default holds at 0,
+  // so an idle auto-mode TV never churns.
+  useEffect(() => {
+    let cancelled = false;
+    async function poll() {
+      try {
+        const r = await fetch(`/api/displays/public/live/${playlistId}`);
+        if (!r.ok) return;
+        const j = (await r.json()) as LiveControl;
+        if (cancelled) return;
+        setLive((prev) => (prev && prev.revision === j.revision ? prev : j));
+      } catch {
+        // Keep the last known live state on a network blip.
+      }
+    }
+    void poll();
+    const t = window.setInterval(poll, 2_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, [playlistId]);
 
   // Refresh the playlist on first render and every 60s thereafter,
   // so admin edits show up without bouncing the TV.
@@ -419,6 +462,21 @@ export default function DisplayShow({ playlistId }: { playlistId: number }) {
       <div style={{ ...fullBleed, padding: 32, opacity: 0.7 }}>Loading…</div>
     );
   }
+
+  // Live remote-control short-circuit. When a presenter is driving this
+  // playlist (manual) or running a presentation session, bypass the
+  // normal cycler entirely: no timers, no synthetic slides, no schedule
+  // gate, no overrides — just the exact slide the controller selected.
+  if (live && live.mode !== "auto") {
+    return (
+      <LiveControlledView
+        live={live}
+        baseItems={playlist.items}
+        playlistName={playlist.playlist.name}
+      />
+    );
+  }
+
   if (slides.length === 0) {
     return (
       <div
@@ -557,6 +615,347 @@ function ItemSlide({
     return <UrlSlide item={item} defaultDuration={defaultDuration} onDone={onDone} />;
   }
   return null;
+}
+
+// ===================================================================
+// Live remote-control rendering.
+//
+// When a presenter is driving the wall, we render exactly the slide the
+// controller picked — no timers, no auto-advance. This same view backs
+// both the TV (DisplayShow) and the controller's live preview, so the
+// presenter sees precisely what the room sees.
+// ===================================================================
+
+const liveCentered: CSSProperties = {
+  width: "100%",
+  height: "100%",
+  display: "flex",
+  alignItems: "center",
+  justifyContent: "center",
+  flexDirection: "column",
+  gap: 12,
+  background: "black",
+  color: "white",
+  textAlign: "center",
+  padding: 24,
+  boxSizing: "border-box",
+};
+
+// Resolves the live mode into a single controlled slide. Used by the TV
+// short-circuit above. Handles fetching a presentation deck and the
+// ad-hoc-URL presentation case.
+function LiveControlledView({
+  live,
+  baseItems,
+  playlistName,
+}: {
+  live: LiveControl;
+  baseItems: PublicItem[];
+  playlistName: string;
+}) {
+  const [deck, setDeck] = useState<PublicItem[] | null>(null);
+  const [deckError, setDeckError] = useState(false);
+
+  const deckId =
+    live.mode === "presentation" ? live.presentationPlaylistId : null;
+
+  // Fetch the presentation deck's items when presenting a deck playlist.
+  useEffect(() => {
+    if (deckId == null) {
+      setDeck(null);
+      setDeckError(false);
+      return;
+    }
+    let cancelled = false;
+    setDeck(null);
+    setDeckError(false);
+    (async () => {
+      try {
+        const r = await fetch(`/api/displays/public/playlists/${deckId}`);
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = (await r.json()) as PublicPlaylist;
+        if (!cancelled) setDeck(j.items);
+      } catch {
+        if (!cancelled) setDeckError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [deckId]);
+
+  // Presentation via a single live URL (e.g. Google Slides / Canva
+  // present link). One slide, no paging.
+  if (live.mode === "presentation" && live.presentationUrl) {
+    return (
+      <div style={fullBleed}>
+        <iframe
+          src={live.presentationUrl}
+          title="Presentation"
+          sandbox="allow-scripts allow-forms allow-popups allow-same-origin"
+          referrerPolicy="no-referrer"
+          style={{ width: "100%", height: "100%", border: 0, background: "white" }}
+        />
+      </div>
+    );
+  }
+
+  if (deckId != null && deckError) {
+    return (
+      <div style={fullBleed}>
+        <div style={liveCentered}>
+          <div style={{ fontSize: 24, opacity: 0.85 }}>
+            Couldn't load the presentation.
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (deckId != null && deck === null) {
+    return (
+      <div style={fullBleed}>
+        <div style={{ ...liveCentered, opacity: 0.7 }}>Loading…</div>
+      </div>
+    );
+  }
+
+  const items = live.mode === "manual" ? baseItems : deck ?? [];
+
+  if (items.length === 0) {
+    return (
+      <div style={fullBleed}>
+        <div style={liveCentered}>
+          <div style={{ fontSize: 28, opacity: 0.85 }}>{playlistName}</div>
+          <div style={{ opacity: 0.6 }}>Nothing to present yet.</div>
+        </div>
+      </div>
+    );
+  }
+
+  const idx = Math.max(0, Math.min(live.itemIndex, items.length - 1));
+  const item = items[idx];
+
+  return (
+    <div style={fullBleed}>
+      <ControlledItemSlide
+        item={item}
+        pageIndex={live.pageIndex}
+        // Remount on item change so video/audio/pdf reset cleanly.
+        key={`${item.id}-${idx}`}
+      />
+    </div>
+  );
+}
+
+// A single item rendered statically at a fixed position (no
+// auto-advance). PDFs render the controller-selected page and report
+// their page count via `onPdfMeta` so the controller can offer per-page
+// navigation. Exported so the controller's live preview reuses it.
+export function ControlledItemSlide({
+  item,
+  pageIndex,
+  onPdfMeta,
+}: {
+  item: PublicItem;
+  pageIndex: number;
+  onPdfMeta?: (numPages: number) => void;
+}) {
+  if (item.kind === "image") {
+    return (
+      <img
+        src={item.mediaUrl}
+        alt=""
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          background: "black",
+        }}
+      />
+    );
+  }
+  if (item.kind === "video") {
+    return (
+      <video
+        src={item.mediaUrl}
+        autoPlay
+        muted
+        playsInline
+        loop
+        style={{
+          width: "100%",
+          height: "100%",
+          objectFit: "contain",
+          background: "black",
+        }}
+      />
+    );
+  }
+  if (item.kind === "audio") {
+    return (
+      <div
+        style={{
+          width: "100%",
+          height: "100%",
+          background: "linear-gradient(135deg, #1e3a8a 0%, #1e40af 100%)",
+          display: "flex",
+          flexDirection: "column",
+          alignItems: "center",
+          justifyContent: "center",
+          gap: 24,
+          color: "white",
+        }}
+      >
+        <div style={{ fontSize: 96 }}>🔊</div>
+        <div style={{ fontSize: 28, opacity: 0.85 }}>Now playing</div>
+        <audio src={item.mediaUrl} autoPlay loop />
+      </div>
+    );
+  }
+  if (item.kind === "url") {
+    if (!item.url) return null;
+    return (
+      <iframe
+        src={item.url}
+        title="Embedded URL slide"
+        sandbox="allow-scripts allow-forms allow-popups"
+        referrerPolicy="no-referrer"
+        style={{ width: "100%", height: "100%", border: 0, background: "white" }}
+      />
+    );
+  }
+  if (item.kind === "pdf") {
+    return (
+      <ControlledPdfSlide
+        item={item}
+        pageIndex={pageIndex}
+        onPdfMeta={onPdfMeta}
+      />
+    );
+  }
+  return null;
+}
+
+// PDF rendered at an externally-controlled page. Loads the doc once,
+// reports its page count, and renders the clamped `pageIndex`.
+function ControlledPdfSlide({
+  item,
+  pageIndex,
+  onPdfMeta,
+}: {
+  item: PublicItem;
+  pageIndex: number;
+  onPdfMeta?: (numPages: number) => void;
+}) {
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const [pageCount, setPageCount] = useState<number | null>(null);
+  const docRef = useRef<unknown>(null);
+  const [loadError, setLoadError] = useState(false);
+  // Keep the latest callback in a ref so the load effect doesn't depend
+  // on its identity (avoids re-fetching the doc when the parent
+  // re-renders with a fresh closure).
+  const onPdfMetaRef = useRef(onPdfMeta);
+  onPdfMetaRef.current = onPdfMeta;
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const task = pdfjsLib.getDocument({ url: item.mediaUrl });
+        const doc = await task.promise;
+        if (cancelled) {
+          await doc.destroy?.();
+          return;
+        }
+        docRef.current = doc;
+        setPageCount(doc.numPages);
+        onPdfMetaRef.current?.(doc.numPages);
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[display] controlled pdf load failed", e);
+        if (!cancelled) setLoadError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+      const d = docRef.current as { destroy?: () => Promise<void> } | null;
+      void d?.destroy?.();
+      docRef.current = null;
+    };
+  }, [item.mediaUrl]);
+
+  useEffect(() => {
+    if (pageCount === null) return;
+    const doc = docRef.current as {
+      getPage?: (n: number) => Promise<unknown>;
+    } | null;
+    const canvas = canvasRef.current;
+    if (!doc || !canvas || !doc.getPage) return;
+    const getPage = doc.getPage;
+    const clamped = Math.max(0, Math.min(pageIndex, pageCount - 1));
+    let cancelled = false;
+    (async () => {
+      try {
+        const page = (await getPage(clamped + 1)) as {
+          getViewport: (opts: { scale: number }) => {
+            width: number;
+            height: number;
+          };
+          render: (opts: {
+            canvasContext: CanvasRenderingContext2D;
+            viewport: unknown;
+            canvas: HTMLCanvasElement;
+          }) => { promise: Promise<void> };
+        };
+        const baseViewport = page.getViewport({ scale: 1 });
+        const targetW = window.innerWidth;
+        const targetH = window.innerHeight;
+        const scale = Math.min(
+          targetW / baseViewport.width,
+          targetH / baseViewport.height,
+        );
+        const viewport = page.getViewport({ scale });
+        canvas.width = viewport.width;
+        canvas.height = viewport.height;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        const renderTask = page.render({ canvasContext: ctx, viewport, canvas });
+        await renderTask.promise;
+        if (cancelled) return;
+      } catch (e) {
+        // eslint-disable-next-line no-console
+        console.error("[display] controlled pdf render failed", e);
+        if (!cancelled) setLoadError(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pageIndex, pageCount]);
+
+  if (loadError) {
+    return (
+      <div style={liveCentered}>
+        <div style={{ fontSize: 22, opacity: 0.85 }}>Couldn't load this PDF.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div
+      style={{
+        width: "100%",
+        height: "100%",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        background: "black",
+      }}
+    >
+      <canvas ref={canvasRef} style={{ maxWidth: "100%", maxHeight: "100%" }} />
+    </div>
+  );
 }
 
 // URL slide — embeds the page in a sandboxed iframe and advances after

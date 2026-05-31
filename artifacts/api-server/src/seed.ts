@@ -2528,6 +2528,33 @@ export async function ensureToursSchema(): Promise<void> {
   );
 }
 
+// -----------------------------------------------------------------------------
+// DISPLAY LIVE CONTROL: per-playlist remote-control state for digital signage.
+// One row per playlist (playlist_id is the PK). The public /display/<id> cycler
+// polls this so a presenter can manually advance slides / run a presentation
+// session across every TV on that playlist without re-entering any URLs.
+// Idempotent CREATE TABLE IF NOT EXISTS at boot (same pattern as houses / MTSS).
+// -----------------------------------------------------------------------------
+export async function ensureDisplayLiveControlSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS display_live_control (
+      playlist_id INTEGER PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      mode TEXT NOT NULL DEFAULT 'auto',
+      item_index INTEGER NOT NULL DEFAULT 0,
+      page_index INTEGER NOT NULL DEFAULT 0,
+      presentation_playlist_id INTEGER,
+      presentation_url TEXT,
+      revision INTEGER NOT NULL DEFAULT 0,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_by_staff_id INTEGER
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS display_live_control_school_idx ON display_live_control (school_id)`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
@@ -2545,6 +2572,7 @@ export async function seedFastScoresIfEmpty() {
   await ensureCaseOutcomeCatalogSchema();
   await ensureAlgebraPlacementOverridesSchema();
   await ensureToursSchema();
+  await ensureDisplayLiveControlSchema();
   // FAST history visibility window (Phase 1 of Historical FAST work).
   // Default 3 years, hard-capped 2..5 by the route validator.
   await db.execute(

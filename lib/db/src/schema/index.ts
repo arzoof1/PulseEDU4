@@ -65,6 +65,7 @@ export * from "./teacherWatchlistGroups";
 export * from "./displayPlaylists";
 export * from "./displayPlaylistOverrides";
 export * from "./displayPlaylistItems";
+export * from "./displayLiveControl";
 export * from "./tier2InterventionEntries";
 export * from "./tier3Goals";
 export * from "./tier3WeeklyRecords";

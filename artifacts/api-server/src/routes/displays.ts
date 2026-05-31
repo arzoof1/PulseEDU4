@@ -37,6 +37,7 @@ import {
   displayPlaylistsTable,
   displayPlaylistItemsTable,
   displayPlaylistOverridesTable,
+  displayLiveControlTable,
   classSectionsTable,
   sectionRosterTable,
   pickupQueueEventsTable,
@@ -345,6 +346,133 @@ router.get("/displays/playlists/:id", async (req, res) => {
     // eslint-disable-next-line no-console
     console.error("[displays] get failed", e);
     res.status(500).json({ error: "Failed to load playlist" });
+  }
+});
+
+// ---------- PUT: live remote-control state -------------------------
+//
+// Sets the live-control row for a playlist so every TV on /display/<id>
+// follows the presenter. Body:
+//   { mode: "auto"|"manual"|"presentation",
+//     itemIndex?: number, pageIndex?: number,
+//     presentationPlaylistId?: number|null, presentationUrl?: string|null }
+// Each successful write bumps `revision` so TVs detect the change on
+// their next ~2s poll.
+router.put("/displays/playlists/:id/live", async (req, res) => {
+  try {
+    const staff = await loadStaff(req, res);
+    if (!staff) return;
+    if (!canManageDisplays(staff)) {
+      res.status(403).json({ error: "Not authorized" });
+      return;
+    }
+    const pl = await loadPlaylistForEdit(req, res, staff);
+    if (!pl) return;
+
+    const mode = String(req.body?.mode ?? "");
+    if (mode !== "auto" && mode !== "manual" && mode !== "presentation") {
+      res.status(400).json({ error: "mode must be auto, manual, or presentation" });
+      return;
+    }
+
+    const itemIndex = Math.max(
+      0,
+      Number.parseInt(String(req.body?.itemIndex ?? 0), 10) || 0,
+    );
+    const pageIndex = Math.max(
+      0,
+      Number.parseInt(String(req.body?.pageIndex ?? 0), 10) || 0,
+    );
+
+    let presentationPlaylistId: number | null = null;
+    let presentationUrl: string | null = null;
+
+    if (mode === "presentation") {
+      const rawUrl =
+        typeof req.body?.presentationUrl === "string"
+          ? req.body.presentationUrl.trim()
+          : "";
+      const rawDeck = req.body?.presentationPlaylistId;
+      if (rawUrl) {
+        if (!isValidEmbedUrl(rawUrl)) {
+          res.status(400).json({ error: "presentationUrl is not a valid public URL" });
+          return;
+        }
+        presentationUrl = rawUrl;
+      } else if (rawDeck !== undefined && rawDeck !== null && rawDeck !== "") {
+        const deckId = Number.parseInt(String(rawDeck), 10);
+        if (!Number.isFinite(deckId)) {
+          res.status(400).json({ error: "Invalid presentationPlaylistId" });
+          return;
+        }
+        // The deck must be a real playlist at the same school (tenant
+        // isolation — never let a presenter point a TV at another
+        // school's playlist).
+        const [deck] = await db
+          .select()
+          .from(displayPlaylistsTable)
+          .where(eq(displayPlaylistsTable.id, deckId));
+        if (!deck || deck.schoolId !== pl.schoolId) {
+          res.status(404).json({ error: "Deck playlist not found" });
+          return;
+        }
+        presentationPlaylistId = deckId;
+      } else {
+        res
+          .status(400)
+          .json({ error: "Presentation needs a deck playlist or a live URL" });
+        return;
+      }
+    }
+
+    const now = new Date();
+    // Bump the revision atomically in SQL (`revision + 1`) rather than
+    // read-then-write — TVs use `revision` as the sole change detector,
+    // so two concurrent PUTs computing the next value in app code could
+    // write the same revision with different state and one update would
+    // become permanently invisible. RETURNING gives us the true stored
+    // revision to echo back to the controller.
+    const [saved] = await db
+      .insert(displayLiveControlTable)
+      .values({
+        playlistId: pl.id,
+        schoolId: pl.schoolId,
+        mode,
+        itemIndex,
+        pageIndex,
+        presentationPlaylistId,
+        presentationUrl,
+        revision: 1,
+        updatedAt: now,
+        updatedByStaffId: staff.id,
+      })
+      .onConflictDoUpdate({
+        target: displayLiveControlTable.playlistId,
+        set: {
+          mode,
+          itemIndex,
+          pageIndex,
+          presentationPlaylistId,
+          presentationUrl,
+          revision: sql`${displayLiveControlTable.revision} + 1`,
+          updatedAt: now,
+          updatedByStaffId: staff.id,
+        },
+      })
+      .returning();
+
+    res.json({
+      mode: saved.mode,
+      itemIndex: saved.itemIndex,
+      pageIndex: saved.pageIndex,
+      presentationPlaylistId: saved.presentationPlaylistId,
+      presentationUrl: saved.presentationUrl,
+      revision: saved.revision,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] set live control failed", e);
+    res.status(500).json({ error: "Failed to update live control" });
   }
 });
 
@@ -974,6 +1102,47 @@ async function loadActiveHallPasses(schoolId: number) {
 }
 
 // ---------- PUBLIC endpoints (no auth) --------------------------------
+
+// ---------- PUBLIC: live remote-control state (no auth) ------------
+//
+// Polled every ~2s by every TV on /display/<id>. Tiny payload so the
+// poll is cheap. Missing row = "auto" (normal cycler behavior).
+router.get("/displays/public/live/:id", async (req, res) => {
+  try {
+    const id = Number.parseInt(req.params.id, 10);
+    if (!Number.isFinite(id)) {
+      res.status(400).json({ error: "Invalid id" });
+      return;
+    }
+    const [row] = await db
+      .select()
+      .from(displayLiveControlTable)
+      .where(eq(displayLiveControlTable.playlistId, id));
+    if (!row) {
+      res.json({
+        mode: "auto",
+        itemIndex: 0,
+        pageIndex: 0,
+        presentationPlaylistId: null,
+        presentationUrl: null,
+        revision: 0,
+      });
+      return;
+    }
+    res.json({
+      mode: row.mode,
+      itemIndex: row.itemIndex,
+      pageIndex: row.pageIndex,
+      presentationPlaylistId: row.presentationPlaylistId,
+      presentationUrl: row.presentationUrl,
+      revision: row.revision,
+    });
+  } catch (e) {
+    // eslint-disable-next-line no-console
+    console.error("[displays] public live failed", e);
+    res.status(500).json({ error: "Failed to load live control" });
+  }
+});
 
 // Returns playlist + enabled items, with `mediaUrl` rewritten to the
 // public media route below. `houseData` is hydrated only when the

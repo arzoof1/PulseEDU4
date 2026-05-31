@@ -1,1 +1,1 @@
-- [docx Word generation](docx-generation.md) — use `docx` npm lib (no pandoc); restart numbered lists via per-group `instance`; TOC isn't a Paragraph.
+- [Display live remote control](display-live-control.md) — revision must bump atomically in SQL (sole TV change-detector); public signage endpoints are unauthenticated-by-id by design, don't "fix" with a token.

@@ -3,6 +3,33 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- Display Management — **live remote control for signage**. A presenter
+  can drive every TV on a playlist PowerPoint-style without ever
+  re-entering a URL — TVs keep their existing `/display/:id` URL and
+  poll a tiny live-control endpoint (~2s). State is **per-playlist**
+  (keyed by `playlist_id`) in a new `display_live_control` table
+  (`mode`, `item_index`, `page_index`, `presentation_playlist_id`,
+  `presentation_url`, `revision`, `updated_by_staff_id`). Three modes:
+  `auto` (existing timed cycling), `manual` (step THIS playlist's items
+  only, timers off), and `presentation` (take the same TVs over with a
+  chosen **deck playlist** OR an ad-hoc **live URL** — Google
+  Slides/Canva present link — then "End session" reverts to Auto).
+  Position model is `{itemIndex, pageIndex}` + monotonic `revision`;
+  PDF items are page-controllable (the cycler drives `PdfSlide`
+  externally and reports `numPages` back to the controller via an
+  `onPdfMeta` callback; non-PDF items are 1 page). Public
+  `GET /displays/public/live/:id` (no auth, defaults to auto/revision 0
+  when no row) feeds the TVs; staff `PUT /displays/playlists/:id/live`
+  (`canManageDisplays` + `loadPlaylistForEdit`) upserts and bumps the
+  revision, validating mode, that the deck belongs to the same school,
+  and the URL via `isValidEmbedUrl`. Controller is a mobile-friendly
+  **Remote / Present** panel per playlist card in `Displays.tsx`
+  (Auto/Manual/Present tabs, deck picker, live-URL input, First/Prev/
+  Next, "slide x of y", live preview reusing `ControlledItemSlide`).
+  TV cycler short-circuits to a `LiveControlledView` when mode ≠ auto.
+  WebRTC screen mirroring deferred. Module uses `authFetch` directly
+  (not OpenAPI codegen), matching the rest of Displays.
+
 - School Tours — **fixed dead post-tour survey QR code**. The
   post-tour PDF's QR (and the brag-page link + lead-notify email
   link) is built by `publicAppOrigin()` in `routes/tours.ts`, which
