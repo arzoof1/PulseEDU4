@@ -8,6 +8,7 @@
     "demo-guide": "tsx ./src/generateDemoGuide.ts",
     "overview": "tsx ./src/generateOverviewOnePager.ts",
     "user-guide": "tsx ./src/generateUserGuide.ts",
+    "user-guide-docx": "tsx ./src/generateUserGuideDocx.ts",
     "workflow-guide": "tsx ./src/generateWorkflowGuide.ts",
     "seed-pickup-badges": "tsx ./src/seedPickupBadges.ts",
     "reseed-dsp": "tsx ./src/dspParrottReseed.ts",
@@ -17,6 +18,7 @@
   },
   "devDependencies": {
     "@types/node": "catalog:",
+    "docx": "^9.7.1",
     "puppeteer": "^25.0.2",
     "tsx": "catalog:"
   },

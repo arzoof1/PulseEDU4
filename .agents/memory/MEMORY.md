@@ -1,0 +1,1 @@
+- [docx Word generation](docx-generation.md) — use `docx` npm lib (no pandoc); restart numbered lists via per-group `instance`; TOC isn't a Paragraph.
