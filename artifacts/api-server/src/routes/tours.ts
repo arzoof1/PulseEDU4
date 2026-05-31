@@ -158,20 +158,45 @@ async function streamTourAsset(
 
 // ---- shared helpers --------------------------------------------------------
 
-function publicAppOrigin(): string {
+// Public-facing origin for links/QR codes that families open OUTSIDE the
+// workspace (post-tour survey QR, brag-page link, lead-notify email). We trust
+// the first $REPLIT_DOMAINS host (the published production domain in prod, the
+// dev/preview host in dev) so the URL is always externally reachable; then fall
+// back to the inbound request host, and only finally to localhost. NOTE:
+// $REPLIT_DEV_DOMAIN is the *development* host and is often unset in production,
+// so it must never be the primary source — relying on it makes published QR
+// codes point at the dev URL (or localhost) and land on a dead page.
+function publicAppOrigin(req?: Request): string {
   const explicit = process.env.PUBLIC_APP_URL;
   if (explicit && explicit.length > 0) return explicit.replace(/\/+$/, "");
+  const replitDomains = (process.env.REPLIT_DOMAINS ?? "").trim();
+  if (replitDomains) {
+    const first = replitDomains.split(",")[0]?.trim();
+    if (first) return `https://${first}`;
+  }
+  if (req) {
+    const rawProto = (req.headers["x-forwarded-proto"] as string | undefined)
+      ?.split(",")[0]
+      ?.trim()
+      .toLowerCase();
+    const proto = rawProto === "http" || rawProto === "https" ? rawProto : "https";
+    const rawHost = (req.headers["x-forwarded-host"] ?? req.headers.host) as
+      | string
+      | undefined;
+    const host = rawHost?.split(",")[0]?.trim();
+    if (host) return `${proto}://${host}`;
+  }
   const replit = process.env.REPLIT_DEV_DOMAIN;
   if (replit && replit.length > 0) return `https://${replit}`;
   return "http://localhost:5000";
 }
 
-function surveyUrlFor(token: string): string {
-  return `${publicAppOrigin()}/tour/survey/${encodeURIComponent(token)}`;
+function surveyUrlFor(token: string, req?: Request): string {
+  return `${publicAppOrigin(req)}/tour/survey/${encodeURIComponent(token)}`;
 }
 
-function pipelineUrlFor(): string {
-  return `${publicAppOrigin()}/?settingsTile=school-tours`;
+function pipelineUrlFor(req?: Request): string {
+  return `${publicAppOrigin(req)}/?settingsTile=school-tours`;
 }
 
 type StaffRow = typeof staffTable.$inferSelect;
@@ -845,7 +870,7 @@ router.post("/tours/public/:schoolId/request", async (req, res) => {
           childrenSummary: childrenSummary || "—",
           interests: interestsForEmail,
           source,
-          pipelineUrl: pipelineUrlFor(),
+          pipelineUrl: pipelineUrlFor(req),
         });
       }
       // SMS is stubbed (AWS SNS) — logs only until SMS_ENABLED + creds set.
@@ -1010,7 +1035,7 @@ router.put("/tours/page", requireStaff, requireTourManager, async (req, res) => 
       },
     });
 
-  res.json({ ok: true, publicUrl: `${publicAppOrigin()}/tour/${schoolId}` });
+  res.json({ ok: true, publicUrl: `${publicAppOrigin(req)}/tour/${schoolId}` });
 });
 
 // ---- lead pipeline ---------------------------------------------------------
@@ -1230,7 +1255,7 @@ router.get(
         responseMs,
         overdue,
         selectedCheckpoints,
-        surveyUrl: surveyUrlFor(lead.surveyToken),
+        surveyUrl: surveyUrlFor(lead.surveyToken, req),
       },
       events: events.map((e) => ({
         ...e,
@@ -1579,7 +1604,7 @@ router.get(
     const pdf = await buildTourLeaveBehindPdf({
       schoolName: await schoolName(schoolId),
       familyName: lead.familyName,
-      surveyUrl: surveyUrlFor(lead.surveyToken),
+      surveyUrl: surveyUrlFor(lead.surveyToken, req),
       contactEmail: page?.contactEmail ?? null,
       contactPhone: page?.contactPhone ?? null,
       accentColor: page?.accentColor ?? "#0ea5a4",

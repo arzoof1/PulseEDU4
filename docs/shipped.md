@@ -3,6 +3,20 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Tours — **fixed dead post-tour survey QR code**. The
+  post-tour PDF's QR (and the brag-page link + lead-notify email
+  link) is built by `publicAppOrigin()` in `routes/tours.ts`, which
+  previously used only `$REPLIT_DEV_DOMAIN` — the *development* host,
+  which is often unset in production and made published QR codes point
+  at the dev URL or fall back to `http://localhost:5000`, landing
+  families on a dead page. Rewrote it to mirror `kioskBaseUrl`: prefer
+  `PUBLIC_APP_URL`, then the first `$REPLIT_DOMAINS` host (the
+  published production domain in prod, the dev/preview host in dev),
+  then the inbound request's forwarded host, and only finally
+  localhost. `surveyUrlFor`/`pipelineUrlFor`/`publicAppOrigin` now take
+  the request so the resolved origin is always externally reachable
+  (including custom domains).
+
 - School Tours — **family checkpoints on the Brag-sheet PDF + new
   Tour Note Catcher PDF**. (1) The Brag-sheet PDF
   (`lib/tourBragSheetPdf.ts`) now lists the family's selected checkpoint
