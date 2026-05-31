@@ -246,10 +246,10 @@ export function buildTourRoadmapPdf(input: RoadmapInput): Promise<Buffer> {
     // Location
     if (stop.location) {
       doc
-        .font("Helvetica")
+        .font("Helvetica-Oblique")
         .fontSize(10)
         .fillColor(MUTED)
-        .text(`📍 ${stop.location}`, left + 24, doc.y + 1, {
+        .text(stop.location, left + 24, doc.y + 1, {
           width: width - 24,
         });
     }
