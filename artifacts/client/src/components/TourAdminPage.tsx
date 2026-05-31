@@ -503,7 +503,7 @@ function LeadDrawer({
           ? "tour-roadmap.pdf"
           : which === "note-catcher"
             ? "tour-note-catcher.pdf"
-            : "post-tour-document.pdf";
+            : "share-your-feedback.pdf";
     document.body.appendChild(a);
     a.click();
     a.remove();
@@ -793,7 +793,7 @@ function LeadDrawer({
                 onClick={() => void downloadPdf("leave-behind")}
                 style={btn("#7c3aed")}
               >
-                ⬇️ Post-tour document (PDF)
+                ⬇️ Share Your Feedback page (PDF)
               </button>
             </div>
             <div
