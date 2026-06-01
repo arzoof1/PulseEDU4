@@ -56,9 +56,9 @@
     <g transform="translate(200,1430)">
       <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
       <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
-      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Digital Signage</text>
-      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Per-school TV playlists with live,</text>
-      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">PowerPoint-style remote control.</text>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Passes, Tardies &amp; Pickup</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Digital hall passes, tardy tracking,</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">and parent pickup queue.</text>
     </g>
 
     <g transform="translate(1345,1430)">
