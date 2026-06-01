@@ -1653,10 +1653,9 @@ const input: CSSProperties = {
   width: "100%",
   padding: "0.5rem 0.6rem",
   borderRadius: 8,
-  border: "1px solid var(--border, #334155)",
-  background: "var(--input-bg, #0f172a)",
+  border: "1px solid var(--border, #cbd5e1)",
+  background: "var(--input-bg, #fff)",
   color: "inherit",
-  colorScheme: "dark",
   font: "inherit",
 };
 const primaryBtn: CSSProperties = {
