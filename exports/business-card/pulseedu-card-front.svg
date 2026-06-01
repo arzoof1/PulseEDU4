@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1125" height="675" viewBox="0 0 1125 675" role="img" aria-label="PulseEDU business card front">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0%" stop-color="#0b1322"/>
+      <stop offset="55%" stop-color="#0d1a2e"/>
+      <stop offset="100%" stop-color="#0a1120"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="46%" r="55%">
+      <stop offset="0%" stop-color="#155e63" stop-opacity="0.55"/>
+      <stop offset="45%" stop-color="#0e2a3e" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#0a1120" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(40 0.5 0.5)">
+      <stop offset="0%" stop-color="#2dd4bf"/>
+      <stop offset="52%" stop-color="#22b8d6"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-200%" width="140%" height="500%">
+      <feGaussianBlur stdDeviation="3.2" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .wm{font-family:'Helvetica Neue',Arial,'DejaVu Sans',sans-serif;fill:url(#wm)}
+      .tag{font-family:'Helvetica Neue',Arial,'DejaVu Sans',sans-serif;fill:#9fb3c8}
+      .url{font-family:'Helvetica Neue',Arial,'DejaVu Sans',sans-serif;fill:#5a7088}
+    </style>
+  </defs>
+
+  <rect width="1125" height="675" fill="url(#bg)"/>
+  <rect width="1125" height="675" fill="url(#halo)"/>
+
+  <!-- faint full-width EKG baseline -->
+  <path d="M0 372 H612 L628 372 L642 352 L654 396 L668 286 L682 430 L696 352 L710 372 H1125"
+        fill="none" stroke="#dc2626" stroke-opacity="0.28" stroke-width="3"
+        stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- bright glowing pulse blip -->
+  <path d="M598 372 H612 L628 372 L642 352 L654 396 L668 286 L682 430 L696 352 L710 372 H742"
+        fill="none" stroke="#ef4444" stroke-width="4.5"
+        stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- wordmark -->
+  <text x="562.5" y="332" text-anchor="middle" class="wm" letter-spacing="-3">
+    <tspan font-weight="800" font-size="140">Pulse</tspan><tspan font-weight="900" font-style="italic" font-size="140" dx="2">EDU</tspan>
+  </text>
+
+  <!-- tagline -->
+  <text x="562.5" y="468" text-anchor="middle" class="tag" font-size="27" font-weight="600" letter-spacing="9">THE HEARTBEAT OF SCHOOL OPERATIONS</text>
+
+  <!-- footer url -->
+  <text x="562.5" y="616" text-anchor="middle" class="url" font-size="23" font-weight="600" letter-spacing="4">pulsekinetics.us</text>
+</svg>

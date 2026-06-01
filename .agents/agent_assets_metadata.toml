@@ -246,3 +246,21 @@ id = "MYnd0WvQ1_QoPS5lpptsG"
 uri = "file://attached_assets/PulseEDU_User_Guide.docx"
 type = "word_document"
 title = "PulseEDU User's Guide (Word)"
+
+[[outputs]]
+id = "ESd8oe85Py2nQ5PPw5eKc"
+uri = "file://exports/business-card/pulseedu-card-front.png"
+type = "image"
+title = "Card Front (PNG, 300 DPI)"
+
+[[outputs]]
+id = "sn4Drtt88XE78wP5KATqL"
+uri = "file://exports/business-card/pulseedu-card-back.png"
+type = "image"
+title = "Card Back (PNG, 300 DPI)"
+
+[[outputs]]
+id = "N2JvIHSHIhqWJ4nbusJ-I"
+uri = "file://exports/business-card/pulseedu-business-card-print.pdf"
+type = "pdf"
+title = "Print-Ready PDF (2-page, front + back)"
