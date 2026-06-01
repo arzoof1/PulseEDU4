@@ -509,6 +509,19 @@ function ScanSurface({
       <CountBar res={result} />
       <ResultBanner res={result} />
 
+      {result && (
+        <button
+          onClick={() => {
+            setResult(null);
+            setPaused(false);
+            lastTokenRef.current = null;
+          }}
+          style={clearBtn}
+        >
+          Clear · ready for next
+        </button>
+      )}
+
       {gateControl && <div style={{ marginTop: 12 }}>{gateControl}</div>}
 
       <div style={{ marginTop: 12 }}>
@@ -735,6 +748,18 @@ const goBtn: React.CSSProperties = {
   border: "none",
   background: "#2563eb",
   color: "#fff",
+  fontWeight: 700,
+  fontSize: 16,
+  cursor: "pointer",
+};
+const clearBtn: React.CSSProperties = {
+  marginTop: 10,
+  width: "100%",
+  padding: "12px 18px",
+  borderRadius: 10,
+  border: "1px solid #334155",
+  background: "#1e293b",
+  color: "#e2e8f0",
   fontWeight: 700,
   fontSize: 16,
   cursor: "pointer",

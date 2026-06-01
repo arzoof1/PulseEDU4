@@ -390,6 +390,187 @@ router.get(
   },
 );
 
+// GET /ticketing/events/:id/scan-history — append-only audit of every scan at
+// the gate (admits, rescans, rejects). Read-only; school + event scoped. Pass
+// ?format=csv to download, ?result= / ?gate= to filter.
+router.get(
+  "/ticketing/events/:id/scan-history",
+  requireStaff,
+  requireTicketManager,
+  async (req, res) => {
+    const schoolId = requireSchool(req, res);
+    if (schoolId === null) return;
+    const eventId = Number(req.params.id);
+    const ev = await loadEvent(schoolId, eventId, res);
+    if (!ev) return;
+
+    const resultFilter =
+      typeof req.query.result === "string" && req.query.result.trim()
+        ? req.query.result.trim()
+        : null;
+    const gateFilter =
+      typeof req.query.gate === "string" && req.query.gate.trim()
+        ? req.query.gate.trim()
+        : null;
+    const isCsv = req.query.format === "csv";
+
+    const conds = [
+      eq(ticketScanEventsTable.schoolId, schoolId),
+      eq(ticketScanEventsTable.eventId, ev.id),
+    ];
+    if (resultFilter)
+      conds.push(eq(ticketScanEventsTable.result, resultFilter));
+    if (gateFilter) conds.push(eq(ticketScanEventsTable.gateLabel, gateFilter));
+
+    const rows = await db
+      .select({
+        id: ticketScanEventsTable.id,
+        createdAt: ticketScanEventsTable.createdAt,
+        result: ticketScanEventsTable.result,
+        gateLabel: ticketScanEventsTable.gateLabel,
+        scannedByStaffId: ticketScanEventsTable.scannedByStaffId,
+        scannerLinkId: ticketScanEventsTable.scannerLinkId,
+        seq: ticketsTable.seq,
+        firstName: studentsTable.firstName,
+        lastName: studentsTable.lastName,
+        grade: studentsTable.grade,
+      })
+      .from(ticketScanEventsTable)
+      .leftJoin(
+        ticketsTable,
+        and(
+          eq(ticketsTable.id, ticketScanEventsTable.ticketId),
+          eq(ticketsTable.schoolId, schoolId),
+        ),
+      )
+      .leftJoin(
+        studentsTable,
+        and(
+          eq(studentsTable.id, ticketsTable.studentId),
+          eq(studentsTable.schoolId, schoolId),
+        ),
+      )
+      .where(and(...conds))
+      .orderBy(desc(ticketScanEventsTable.createdAt))
+      .limit(isCsv ? 5000 : 500);
+
+    // Resolve scanned-by display names (staff or volunteer link) in one pass.
+    const staffIds = new Set<number>();
+    const linkIds = new Set<number>();
+    for (const r of rows) {
+      if (r.scannedByStaffId != null) staffIds.add(r.scannedByStaffId);
+      if (r.scannerLinkId != null) linkIds.add(r.scannerLinkId);
+    }
+    const staffNames = new Map<number, string>();
+    if (staffIds.size) {
+      const sr = await db
+        .select({ id: staffTable.id, name: staffTable.displayName })
+        .from(staffTable)
+        .where(
+          and(
+            eq(staffTable.schoolId, schoolId),
+            inArray(staffTable.id, [...staffIds]),
+          ),
+        );
+      for (const s of sr) staffNames.set(s.id, s.name);
+    }
+    const linkLabels = new Map<number, string>();
+    if (linkIds.size) {
+      const lr = await db
+        .select({
+          id: ticketScannerLinksTable.id,
+          label: ticketScannerLinksTable.label,
+        })
+        .from(ticketScannerLinksTable)
+        .where(
+          and(
+            eq(ticketScannerLinksTable.schoolId, schoolId),
+            inArray(ticketScannerLinksTable.id, [...linkIds]),
+          ),
+        );
+      for (const l of lr) linkLabels.set(l.id, l.label);
+    }
+
+    const scannedByOf = (r: (typeof rows)[number]): string => {
+      if (r.scannedByStaffId != null)
+        return staffNames.get(r.scannedByStaffId) ?? "Staff";
+      if (r.scannerLinkId != null) {
+        const lbl = linkLabels.get(r.scannerLinkId);
+        return lbl ? `Volunteer link · ${lbl}` : "Volunteer link";
+      }
+      return "—";
+    };
+
+    const items = rows.map((r) => ({
+      id: r.id,
+      createdAt: r.createdAt,
+      result: r.result,
+      gateLabel: r.gateLabel,
+      studentName: r.firstName ? `${r.firstName} ${r.lastName}` : null,
+      grade: r.grade ?? null,
+      seq: r.seq ?? null,
+      scannedBy: scannedByOf(r),
+    }));
+
+    if (isCsv) {
+      const esc = (v: unknown) => {
+        let s = v == null ? "" : String(v);
+        // Neutralize spreadsheet formula injection: a cell that begins with
+        // =, +, -, @, or a tab/CR can execute when opened in Excel/Sheets.
+        if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`;
+        return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const header = [
+        "When",
+        "Result",
+        "Student",
+        "Grade",
+        "Ticket #",
+        "Gate",
+        "Scanned by",
+      ];
+      const lines = [header.join(",")];
+      for (const it of items) {
+        lines.push(
+          [
+            esc(new Date(it.createdAt).toISOString()),
+            esc(it.result),
+            esc(it.studentName ?? ""),
+            esc(it.grade ?? ""),
+            esc(it.seq ?? ""),
+            esc(it.gateLabel ?? ""),
+            esc(it.scannedBy),
+          ].join(","),
+        );
+      }
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader(
+        "Content-Disposition",
+        `attachment; filename="scan-history-event-${ev.id}.csv"`,
+      );
+      res.send(lines.join("\n"));
+      return;
+    }
+
+    // Distinct gate labels (unfiltered) for the filter dropdown.
+    const gateRows = await db
+      .selectDistinct({ gateLabel: ticketScanEventsTable.gateLabel })
+      .from(ticketScanEventsTable)
+      .where(
+        and(
+          eq(ticketScanEventsTable.schoolId, schoolId),
+          eq(ticketScanEventsTable.eventId, ev.id),
+        ),
+      );
+    const gates = gateRows
+      .map((g) => g.gateLabel)
+      .filter((g): g is string => Boolean(g))
+      .sort();
+
+    res.json({ items, gates });
+  },
+);
+
 // PATCH /ticketing/events/:id — update mutable fields.
 router.patch(
   "/ticketing/events/:id",

@@ -54,6 +54,20 @@ For active follow-ups, see the **Open work** section in `replit.md`.
     Gate scanning is **online-only** in Phase 1 (offline deferred).
   - **Phase 2 room left** for paid tickets (Stripe), reserved seating,
     transfer tracking, and waitlists.
+  - **Gate-scanner follow-ups (shipped after Phase 1).** (1) A
+    "Clear · ready for next" button on the gate `ScannerApp` —
+    volunteers release the last scan result on demand, which resets the
+    result, resumes the camera, and clears the dedupe token so the next
+    ticket scans immediately. (2) A read-only **Scan history** gate-audit
+    view in the admin module (`GET /ticketing/events/:id/scan-history`,
+    `ScanHistoryPanel` in `TicketingAdminPage.tsx`) — collapsible,
+    result + gate filters, CSV export (blob + `a.download` per the
+    iframe gotcha). School + event scoped, `requireTicketManager`;
+    joins to `tickets`/`students` carry explicit `school_id` predicates
+    for tenant defense-in-depth and the CSV serializer neutralizes
+    spreadsheet formula-injection (leading `= + - @` / tab / CR). The
+    volunteer-name prompt was declined — named gate links + staff login
+    already attribute each scan.
 
 - Display Management — **live remote control for signage**. A presenter
   can drive every TV on a playlist PowerPoint-style without ever

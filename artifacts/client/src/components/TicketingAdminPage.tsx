@@ -620,6 +620,233 @@ function EventDetail({
       {grants.length > 0 && (
         <GrantsTable eventId={eventId} grants={grants} event={ev} onChanged={load} />
       )}
+
+      {/* Scan history (gate audit) */}
+      <ScanHistoryPanel eventId={eventId} />
+    </div>
+  );
+}
+
+type ScanHistoryItem = {
+  id: number;
+  createdAt: string;
+  result: string;
+  gateLabel: string | null;
+  studentName: string | null;
+  grade: number | null;
+  seq: number | null;
+  scannedBy: string;
+};
+
+const SCAN_RESULT_META: Record<string, { label: string; color: string }> = {
+  admitted: { label: "Admitted", color: "#16a34a" },
+  already_used: { label: "Already used", color: "#dc2626" },
+  invalid: { label: "Invalid code", color: "#64748b" },
+  void: { label: "Voided", color: "#b45309" },
+  wrong_event: { label: "Wrong event", color: "#b45309" },
+  outside_window: { label: "Not today", color: "#b45309" },
+};
+
+function ScanHistoryPanel({ eventId }: { eventId: number }) {
+  const [open, setOpen] = useState(false);
+  const [items, setItems] = useState<ScanHistoryItem[]>([]);
+  const [gates, setGates] = useState<string[]>([]);
+  const [resultFilter, setResultFilter] = useState("");
+  const [gateFilter, setGateFilter] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setErr(null);
+    try {
+      const qs = new URLSearchParams();
+      if (resultFilter) qs.set("result", resultFilter);
+      if (gateFilter) qs.set("gate", gateFilter);
+      const res = await authFetch(
+        `/api/ticketing/events/${eventId}/scan-history${qs.toString() ? `?${qs}` : ""}`,
+      );
+      if (!res.ok) {
+        setErr(`Could not load scan history (${res.status})`);
+        return;
+      }
+      const data = (await res.json()) as {
+        items: ScanHistoryItem[];
+        gates: string[];
+      };
+      setItems(data.items);
+      setGates(data.gates);
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, [eventId, resultFilter, gateFilter]);
+
+  useEffect(() => {
+    if (open) void load();
+  }, [open, load]);
+
+  const exportCsv = async () => {
+    const qs = new URLSearchParams({ format: "csv" });
+    if (resultFilter) qs.set("result", resultFilter);
+    if (gateFilter) qs.set("gate", gateFilter);
+    const res = await authFetch(
+      `/api/ticketing/events/${eventId}/scan-history?${qs}`,
+    );
+    if (!res.ok) {
+      alert(`Export failed (${res.status})`);
+      return;
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `scan-history-event-${eventId}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  return (
+    <div style={panel}>
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 8,
+          flexWrap: "wrap",
+        }}
+      >
+        <div style={{ fontWeight: 700 }}>Scan history</div>
+        <button
+          type="button"
+          style={secondaryBtn}
+          onClick={() => setOpen((o) => !o)}
+        >
+          {open ? "Hide" : "Show"}
+        </button>
+      </div>
+
+      {open && (
+        <div style={{ marginTop: 10 }}>
+          <div
+            style={{
+              display: "flex",
+              gap: 8,
+              flexWrap: "wrap",
+              alignItems: "center",
+              marginBottom: 10,
+            }}
+          >
+            <select
+              value={resultFilter}
+              onChange={(e) => setResultFilter(e.target.value)}
+              style={{ ...input, width: "auto" }}
+            >
+              <option value="">All results</option>
+              <option value="admitted">Admitted</option>
+              <option value="already_used">Already used</option>
+              <option value="invalid">Invalid code</option>
+              <option value="void">Voided</option>
+              <option value="wrong_event">Wrong event</option>
+              <option value="outside_window">Not today</option>
+            </select>
+            <select
+              value={gateFilter}
+              onChange={(e) => setGateFilter(e.target.value)}
+              style={{ ...input, width: "auto" }}
+            >
+              <option value="">All gates</option>
+              {gates.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+            <button type="button" style={miniBtn} onClick={() => void load()}>
+              Refresh
+            </button>
+            <button
+              type="button"
+              style={miniBtn}
+              onClick={() => void exportCsv()}
+              disabled={items.length === 0}
+            >
+              Export CSV
+            </button>
+          </div>
+
+          {err && <div style={errBox}>{err}</div>}
+          {loading && (
+            <div style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+              Loading…
+            </div>
+          )}
+          {!loading && items.length === 0 && (
+            <div style={{ color: "var(--text-subtle)", fontSize: 13 }}>
+              No scans recorded yet.
+            </div>
+          )}
+          {items.length > 0 && (
+            <div style={{ maxHeight: 360, overflowY: "auto" }}>
+              <table style={table}>
+                <thead>
+                  <tr>
+                    <th style={th}>WHEN</th>
+                    <th style={th}>RESULT</th>
+                    <th style={th}>STUDENT</th>
+                    <th style={th}>TICKET</th>
+                    <th style={th}>GATE</th>
+                    <th style={th}>SCANNED BY</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {items.map((it) => {
+                    const meta =
+                      SCAN_RESULT_META[it.result] ?? {
+                        label: it.result,
+                        color: "#64748b",
+                      };
+                    return (
+                      <tr key={it.id}>
+                        <td style={td}>
+                          {new Date(it.createdAt).toLocaleString([], {
+                            month: "short",
+                            day: "numeric",
+                            hour: "numeric",
+                            minute: "2-digit",
+                          })}
+                        </td>
+                        <td style={td}>
+                          <span
+                            style={{
+                              color: meta.color,
+                              fontWeight: 600,
+                            }}
+                          >
+                            {meta.label}
+                          </span>
+                        </td>
+                        <td style={td}>
+                          {it.studentName
+                            ? `${it.studentName}${it.grade !== null ? ` · Gr ${it.grade}` : ""}`
+                            : "—"}
+                        </td>
+                        <td style={td}>{it.seq !== null ? `#${it.seq}` : "—"}</td>
+                        <td style={td}>{it.gateLabel || "—"}</td>
+                        <td style={td}>{it.scannedBy}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
