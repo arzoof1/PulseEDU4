@@ -1656,6 +1656,7 @@ const input: CSSProperties = {
   border: "1px solid var(--border, #334155)",
   background: "var(--input-bg, #0f172a)",
   color: "inherit",
+  colorScheme: "dark",
   font: "inherit",
 };
 const primaryBtn: CSSProperties = {
