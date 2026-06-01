@@ -39,7 +39,7 @@
     <text x="200" y="882" class="desc">Period-aware line for student passes.</text>
     <text x="200" y="952" class="feat">Bell Schedules</text>
     <text x="200" y="996" class="desc">Configurable per-school day timing.</text>
-    <text x="200" y="1066" class="feat">Parent Pick-Up</text>
+    <text x="200" y="1066" class="feat">Parent Pickup Queue</text>
     <text x="200" y="1110" class="desc">Curb keypad, walker gate, reconcile.</text>
     <text x="200" y="1180" class="feat">Event Ticketing</text>
     <text x="200" y="1224" class="desc">Free QR tickets, scanning, capacity.</text>
@@ -50,15 +50,13 @@
     <text x="200" y="1484" class="desc">Points, recognition, reward catalogs.</text>
     <text x="200" y="1554" class="feat">Spotlight</text>
     <text x="200" y="1598" class="desc">Fair, tiered student point rewards.</text>
-    <text x="200" y="1668" class="feat">AST Recognition</text>
-    <text x="200" y="1712" class="desc">Staff appreciation point ledger.</text>
 
     <!-- Family & Enrollment -->
-    <text x="200" y="1858" class="cat">Family &amp; Enrollment</text>
-    <text x="200" y="1928" class="feat">Parent Portal</text>
-    <text x="200" y="1972" class="desc">Secure HeartBEAT data for families.</text>
-    <text x="200" y="2042" class="feat">School Tours</text>
-    <text x="200" y="2086" class="desc">Bilingual brag pages + lead pipeline.</text>
+    <text x="200" y="1744" class="cat">Family &amp; Enrollment</text>
+    <text x="200" y="1814" class="feat">Parent Portal</text>
+    <text x="200" y="1858" class="desc">Secure HeartBEAT data for families.</text>
+    <text x="200" y="1928" class="feat">School Tours</text>
+    <text x="200" y="1972" class="desc">Enrollment CRM — schedule, track, follow up.</text>
   </g>
 
   <!-- RIGHT COLUMN x=1345..2425 -->
@@ -69,30 +67,32 @@
     <text x="1345" y="654" class="desc">Per-student behavioral checklists.</text>
     <text x="1345" y="724" class="feat">MTSS Intervention Plans</text>
     <text x="1345" y="768" class="desc">Tier 2/3 goals &amp; progress monitoring.</text>
-    <text x="1345" y="838" class="feat">AI Consistency Check</text>
-    <text x="1345" y="882" class="desc">Guardrailed review of case findings.</text>
+    <text x="1345" y="838" class="feat">BIP Reporting</text>
+    <text x="1345" y="882" class="desc">Behavior intervention plan reporting.</text>
+    <text x="1345" y="952" class="feat">AI Consistency Check</text>
+    <text x="1345" y="996" class="desc">Guardrailed review of case findings.</text>
 
     <!-- Insights & Data -->
-    <text x="1345" y="1028" class="cat">Insights &amp; Data</text>
-    <text x="1345" y="1098" class="feat">Insights Dashboards</text>
-    <text x="1345" y="1142" class="desc">Engagement, behavior, equity, EWS.</text>
-    <text x="1345" y="1212" class="feat">Teacher Roster</text>
-    <text x="1345" y="1256" class="desc">FAST scores, program flags, safety.</text>
-    <text x="1345" y="1326" class="feat">Intensive Group Insights</text>
-    <text x="1345" y="1370" class="desc">Class Composer &amp; section profiles.</text>
-    <text x="1345" y="1440" class="feat">Multi-year FAST History</text>
-    <text x="1345" y="1484" class="desc">Longitudinal score trajectories.</text>
-    <text x="1345" y="1554" class="feat">Data Importer</text>
-    <text x="1345" y="1598" class="desc">CSV uploads with preview &amp; rollback.</text>
+    <text x="1345" y="1142" class="cat">Insights &amp; Data</text>
+    <text x="1345" y="1212" class="feat">Insights Dashboards</text>
+    <text x="1345" y="1256" class="desc">Engagement, behavior, equity, EWS.</text>
+    <text x="1345" y="1326" class="feat">Teacher Roster</text>
+    <text x="1345" y="1370" class="desc">FAST scores, program flags, safety.</text>
+    <text x="1345" y="1440" class="feat">Intensive Group Insights</text>
+    <text x="1345" y="1484" class="desc">Class Composer &amp; section profiles.</text>
+    <text x="1345" y="1554" class="feat">Multi-year FAST History</text>
+    <text x="1345" y="1598" class="desc">Longitudinal score trajectories.</text>
+    <text x="1345" y="1668" class="feat">Data Importer</text>
+    <text x="1345" y="1712" class="desc">CSV uploads with preview &amp; rollback.</text>
 
     <!-- Administration -->
-    <text x="1345" y="1744" class="cat">Administration</text>
-    <text x="1345" y="1814" class="feat">Feature Licensing</text>
-    <text x="1345" y="1858" class="desc">Per-school module &amp; seat controls.</text>
-    <text x="1345" y="1928" class="feat">Logo Generator</text>
-    <text x="1345" y="1972" class="desc">Brand mark assets for sister apps.</text>
-    <text x="1345" y="2042" class="feat">Multi-Tenancy</text>
-    <text x="1345" y="2086" class="desc">School-scoped data isolation built in.</text>
+    <text x="1345" y="1858" class="cat">Administration</text>
+    <text x="1345" y="1928" class="feat">AST &amp; Comp Time Tracking</text>
+    <text x="1345" y="1972" class="desc">Digital ledger of accrued comp time.</text>
+    <text x="1345" y="2042" class="feat">Feature Licensing</text>
+    <text x="1345" y="2086" class="desc">Per-school module &amp; seat controls.</text>
+    <text x="1345" y="2156" class="feat">Multi-Tenancy</text>
+    <text x="1345" y="2200" class="desc">School-scoped data isolation built in.</text>
   </g>
 
   <!-- closing callout -->
