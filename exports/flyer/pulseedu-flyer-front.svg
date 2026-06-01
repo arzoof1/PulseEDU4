@@ -1,0 +1,108 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2625" height="3375" viewBox="0 0 2625 3375" role="img" aria-label="PulseEDU flyer front">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.3" y2="1">
+      <stop offset="0%" stop-color="#0b1322"/>
+      <stop offset="55%" stop-color="#0d1a2e"/>
+      <stop offset="100%" stop-color="#0a1120"/>
+    </linearGradient>
+    <radialGradient id="halo" cx="50%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#155e63" stop-opacity="0.5"/>
+      <stop offset="45%" stop-color="#0e2a3e" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#0a1120" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="wm" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(40 0.5 0.5)">
+      <stop offset="0%" stop-color="#2dd4bf"/>
+      <stop offset="52%" stop-color="#22b8d6"/>
+      <stop offset="100%" stop-color="#a78bfa"/>
+    </linearGradient>
+    <linearGradient id="wmtile" x1="0" y1="0" x2="1" y2="1" gradientTransform="rotate(40 0.5 0.5)">
+      <stop offset="0%" stop-color="#0f766e"/>
+      <stop offset="55%" stop-color="#0e7490"/>
+      <stop offset="100%" stop-color="#7c3aed"/>
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-200%" width="140%" height="500%">
+      <feGaussianBlur stdDeviation="4" result="b"/>
+      <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+    <style>
+      .f{font-family:'Helvetica Neue',Arial,'DejaVu Sans',sans-serif;}
+    </style>
+  </defs>
+
+  <rect width="2625" height="3375" fill="url(#bg)"/>
+  <rect width="2625" height="3375" fill="url(#halo)"/>
+
+  <!-- header -->
+  <rect x="200" y="170" width="150" height="150" rx="34" fill="url(#wmtile)"/>
+  <text x="275" y="278" text-anchor="middle" class="f" font-weight="900" font-style="italic" font-size="84" letter-spacing="-5" fill="#ffffff">PE</text>
+  <text x="385" y="290" class="f" font-weight="800" font-size="84" letter-spacing="-3" fill="url(#wm)">Pulse<tspan font-weight="900" font-style="italic">EDU</tspan></text>
+
+  <!-- headline -->
+  <text x="200" y="760" class="f" font-weight="800" font-size="158" letter-spacing="-5" fill="#f1f5f9">One platform for</text>
+  <text x="200" y="930" class="f" font-weight="800" font-size="158" letter-spacing="-5" fill="url(#wm)">the whole school day.</text>
+  <text x="200" y="1060" class="f" font-weight="500" font-size="52" letter-spacing="0" fill="#9fb3c8">Operations, student support, behavior, insights, and</text>
+  <text x="200" y="1130" class="f" font-weight="500" font-size="52" letter-spacing="0" fill="#9fb3c8">family engagement — unified for every campus.</text>
+
+  <!-- EKG accent -->
+  <path d="M200 1270 H1180 L1210 1270 L1238 1228 L1262 1330 L1290 1110 L1318 1410 L1346 1228 L1374 1270 H2425"
+        fill="none" stroke="#ef4444" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" filter="url(#glow)"/>
+
+  <!-- pillars 2x3 -->
+  <g class="f">
+    <!-- row helper: each card 1080 wide, 410 tall -->
+    <!-- col x: 200 and 1345 ; row y: 1430, 1880, 2330 -->
+
+    <g transform="translate(200,1430)">
+      <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
+      <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Digital Signage</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Per-school TV playlists with live,</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">PowerPoint-style remote control.</text>
+    </g>
+
+    <g transform="translate(1345,1430)">
+      <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
+      <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">PBIS &amp; Recognition</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Points, reward stores, house</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">standings, and Spotlight.</text>
+    </g>
+
+    <g transform="translate(200,1880)">
+      <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
+      <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Support &amp; Safety</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Safety plans, MTSS intervention</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">tracking, and staff recognition.</text>
+    </g>
+
+    <g transform="translate(1345,1880)">
+      <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
+      <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Insights</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Dashboards across behavior,</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">academics, equity, early warning.</text>
+    </g>
+
+    <g transform="translate(200,2330)">
+      <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
+      <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Family &amp; Enrollment</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Parent portal, school tours,</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">pickup, and event ticketing.</text>
+    </g>
+
+    <g transform="translate(1345,2330)">
+      <rect width="1080" height="410" rx="28" fill="#ffffff" fill-opacity="0.05" stroke="#ffffff" stroke-opacity="0.10"/>
+      <circle cx="70" cy="80" r="14" fill="url(#wm)"/>
+      <text x="56" y="180" font-weight="800" font-size="60" letter-spacing="-1" fill="#f1f5f9">Data &amp; Rosters</text>
+      <text x="56" y="265" font-weight="500" font-size="40" fill="#9fb3c8">Importer, teacher roster, and</text>
+      <text x="56" y="320" font-weight="500" font-size="40" fill="#9fb3c8">intensive-group Class Composer.</text>
+    </g>
+  </g>
+
+  <!-- footer -->
+  <text x="200" y="3240" class="f" font-weight="700" font-size="46" letter-spacing="1" fill="#cbd5e1">The heartbeat of school operations</text>
+  <text x="2425" y="3240" text-anchor="end" class="f" font-weight="700" font-size="46" letter-spacing="2" fill="#5a7088">pulsekinetics.us</text>
+</svg>

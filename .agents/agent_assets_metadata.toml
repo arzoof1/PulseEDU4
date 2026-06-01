@@ -264,3 +264,21 @@ id = "N2JvIHSHIhqWJ4nbusJ-I"
 uri = "file://exports/business-card/pulseedu-business-card-print.pdf"
 type = "pdf"
 title = "Print-Ready PDF (2-page, front + back)"
+
+[[outputs]]
+id = "yPMywNUSysNw60qxfI-1d"
+uri = "file://exports/flyer/pulseedu-flyer-front.png"
+type = "image"
+title = "Flyer Front (PNG, 300 DPI)"
+
+[[outputs]]
+id = "C3LoYZDt4p7Iwjep_Vrqp"
+uri = "file://exports/flyer/pulseedu-flyer-back.png"
+type = "image"
+title = "Flyer Back — Feature Catalog (PNG, 300 DPI)"
+
+[[outputs]]
+id = "9OXwCRAKOrN_wrNBqU9i8"
+uri = "file://exports/flyer/pulseedu-feature-flyer-print.pdf"
+type = "pdf"
+title = "Print-Ready Flyer PDF (2-page)"
