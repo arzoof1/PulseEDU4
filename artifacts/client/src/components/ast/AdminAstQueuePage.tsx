@@ -7,6 +7,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { authFetch } from "../../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "../HowToUseHelp";
 
 // Mirror of lib/db/src/schema/staffAst.ts AST_CATEGORIES — kept in sync
 // manually so this module doesn't pull in a server-side import. The
@@ -303,6 +309,31 @@ export default function AdminAstQueuePage() {
   return (
     <div style={{ padding: 16, maxWidth: 1100, margin: "0 auto" }}>
       <h1 style={{ marginTop: 0, fontSize: "1.5rem" }}>AST Approval Queue</h1>
+      <HowToUseHelp title="How to use the AST Approval Queue">
+        <HowToSection title="What this page is">
+          The approval inbox for Alternate Schedule Time. Work through staff
+          earn pre-approvals, completion confirmations, and use requests.
+        </HowToSection>
+        <HowToSection title="The three request types">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Earn pre-approval</strong> — approve before the extra work
+              happens.
+            </li>
+            <li>
+              <strong>Completion</strong> — confirm the work was done; this
+              credits the staff member's bank.
+            </li>
+            <li>
+              <strong>Use request</strong> — approve drawing a balance down.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Denials need a reason">
+          Every denial requires a note so the staff member can correct and
+          re-request. Balances follow the HCTA contract.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "#475569", marginTop: -8, fontSize: "0.9rem" }}>
         Alternate Schedule Time per HCTA contract. Approve / deny earn
         pre-approvals, completion confirmations, and use requests. Denials

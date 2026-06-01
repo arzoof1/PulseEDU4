@@ -16,6 +16,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { authFetch } from "../../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "../HowToUseHelp";
 
 type CompRequest = {
   id: number;
@@ -510,6 +516,33 @@ export default function StaffCompPage() {
   return (
     <div style={{ padding: 16, maxWidth: 980, margin: "0 auto" }}>
       <h1 style={{ marginTop: 0, fontSize: "1.5rem" }}>Comp Time</h1>
+      <HowToUseHelp title="How to use Comp Time">
+        <HowToSection title="What this page is">
+          Your FLSA compensatory-time bank. Hours worked over 40 in a single
+          workweek accrue at <strong>1.5×</strong> to use as paid time off
+          later.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Request to earn</strong> — enter the workweek and hours
+              worked; overtime is calculated for you.
+            </li>
+            <li>
+              <strong>Request to use</strong> — draw your balance down as time
+              off.
+            </li>
+            <li>
+              <strong>Track status</strong> — each request shows its approval
+              state and next step.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["teacher"]} title="The 240-hour cap">
+          The bank caps at 240 hours — excess is paid out via payroll. Exempt
+          staff are referred to AST instead.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "#475569", marginTop: -8, fontSize: "0.9rem" }}>
         FLSA compensatory time for non-exempt staff. Hours worked OVER 40 in
         a single workweek accrue at <strong>1.5×</strong>. Workweek starts{" "}

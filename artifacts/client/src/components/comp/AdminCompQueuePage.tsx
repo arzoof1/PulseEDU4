@@ -5,6 +5,12 @@
 import { useCallback, useEffect, useState } from "react";
 import type { CSSProperties } from "react";
 import { authFetch } from "../../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "../HowToUseHelp";
 
 type CompRequest = {
   id: number;
@@ -265,6 +271,27 @@ export default function AdminCompQueuePage() {
       <h1 style={{ marginTop: 0, fontSize: "1.5rem" }}>
         Comp Time Approvals
       </h1>
+      <HowToUseHelp title="How to use Comp Time Approvals">
+        <HowToSection title="What this page is">
+          The approval inbox for FLSA compensatory time — earn credits and use
+          requests from non-exempt staff.
+        </HowToSection>
+        <HowToSection title="The two request types">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Earn</strong> — verify the overtime week before crediting
+              the bank.
+            </li>
+            <li>
+              <strong>Use</strong> — approve drawing a balance down as time off.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="240-hour cap">
+          Credits that would push a bank over 240 hours are rejected — pay the
+          excess via payroll. Non-exempt staff only.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "#475569", marginTop: -8, fontSize: "0.9rem" }}>
         FLSA-non-exempt staff only. The bank caps at 240 h — credits that
         would push it over are rejected (pay the excess via payroll).

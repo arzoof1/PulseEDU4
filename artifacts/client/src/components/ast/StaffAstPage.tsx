@@ -9,6 +9,12 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { authFetch } from "../../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "../HowToUseHelp";
 
 type AstRequest = {
   id: number;
@@ -384,6 +390,33 @@ export default function StaffAstPage() {
       <h1 style={{ marginTop: 0, fontSize: "1.5rem" }}>
         Alternate Schedule Time (AST)
       </h1>
+      <HowToUseHelp title="How to use Alternate Schedule Time">
+        <HowToSection title="What this page is">
+          Your AST bank, tracked in ¼-hour increments. Earn AST for approved
+          work beyond your contracted day, then spend it during
+          non-student-contact time.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Request to earn</strong> — log approved extra work; an
+              admin pre-approves, then you confirm completion.
+            </li>
+            <li>
+              <strong>Request to use</strong> — draw your balance down for time
+              during non-contact periods.
+            </li>
+            <li>
+              <strong>Track status</strong> — each request shows a state pill
+              and the next action you need to take.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["teacher"]} title="Before your balance lapses">
+          Unused balance lapses on June 30. Denied requests include a note so
+          you can correct and re-submit.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "#475569", marginTop: -8, fontSize: "0.9rem" }}>
         Per HCTA contract. Earn AST for approved work performed beyond your
         contracted day, then use it during non-student-contact time. ¼-hour

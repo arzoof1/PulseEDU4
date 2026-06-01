@@ -7,6 +7,12 @@ import {
   type CSSProperties,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 // =============================================================================
 // TicketingAdminPage — front-office admin module for the Event Ticketing
@@ -170,6 +176,34 @@ export default function TicketingAdminPage() {
         per-student quota by grade, email each guardian their QR tickets, and
         scan at the gate.
       </p>
+      <HowToUseHelp title="How to use Event Tickets">
+        <HowToSection title="The flow">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Create an event</strong> and set a per-student quota by
+              grade (with per-student overrides or excludes).
+            </li>
+            <li>
+              <strong>Email tickets</strong> — each student's guardian gets a
+              separate email with inline QR, a printable PDF, and Parent Portal
+              access.
+            </li>
+            <li>
+              <strong>Scan at the gate</strong> — the staff app or a no-login
+              volunteer scanner link; first scan admits, rescans flag
+              "already used".
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection
+          for={["admin", "coreTeam", "counselor"]}
+          title="No-email families & on-demand printing"
+        >
+          Students without a guardian email get a printable office handout plus
+          a "couldn't send" report. The front office can print any family's
+          tickets on demand — they download to disk.
+        </RoleSection>
+      </HowToUseHelp>
 
       <ResponsibilityCard />
 

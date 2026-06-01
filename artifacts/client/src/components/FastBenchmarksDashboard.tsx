@@ -15,6 +15,12 @@
 
 import { useEffect, useMemo, useState, type CSSProperties } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 type SubjectKey = "ela" | "math" | "algebra1" | "geometry";
 type WindowKey = "pm1" | "pm2" | "pm3";
@@ -312,6 +318,32 @@ export default function FastBenchmarksDashboard({
         benchmarks, outlier teachers on any benchmark, and year-over-year
         cohort comparison (prior PM3 vs current PM1, grade-aligned).
       </p>
+      <HowToUseHelp title="How to use FAST Benchmarks">
+        <HowToSection title="What this page is">
+          The building-level read on each FAST benchmark window — where to focus
+          after scores land.
+        </HowToSection>
+        <HowToSection title="What it shows">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Mastery grid</strong> — grade × category performance at a
+              glance.
+            </li>
+            <li>
+              <strong>Weakest benchmarks</strong> — the school-wide bottom three
+              (suppressed under n=5).
+            </li>
+            <li>
+              <strong>Outlier teachers</strong> and <strong>year-over-year</strong>{" "}
+              cohort comparison (prior PM3 vs current PM1).
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Reading it fairly">
+          Small cells are suppressed to protect privacy. Treat outliers as a
+          starting point for conversation, not a verdict.
+        </RoleSection>
+      </HowToUseHelp>
 
       {/* Filter bar */}
       <div

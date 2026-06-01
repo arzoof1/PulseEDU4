@@ -25,6 +25,12 @@ import {
   CartesianGrid,
 } from "recharts";
 import { authFetch } from "../../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "../HowToUseHelp";
 
 type Insights = {
   schoolYearLabel: string;
@@ -205,6 +211,23 @@ export default function AstInsightsPage() {
   return (
     <div style={{ padding: 16, maxWidth: 1100, margin: "0 auto" }}>
       <h1 style={{ marginTop: 0, fontSize: "1.5rem" }}>AST Insights</h1>
+      <HowToUseHelp title="How to use AST Insights">
+        <HowToSection title="What this page is">
+          A read-only rollup of Alternate Schedule Time activity — balances,
+          accrual, and usage across staff.
+        </HowToSection>
+        <HowToSection title="What to look for">
+          <ul style={howtoListStyle}>
+            <li>Outstanding balances ahead of the June 30 lapse.</li>
+            <li>Accrual or usage patterns by staff group.</li>
+            <li>Inputs for budgeting and bargaining-unit reporting.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Read-only">
+          This page reports on AST — approvals still happen in the AST Approval
+          Queue.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "#475569", marginTop: -8, fontSize: "0.9rem" }}>
         Alternate Schedule Time — school year {data.schoolYearLabel}. All
         figures are admin-only. Earned / Used totals span the current

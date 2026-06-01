@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { authFetch } from "../lib/authToken";
 import StudentPhoto from "./StudentPhoto";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 // ClassPhotoDayPage
 // -----------------
@@ -438,6 +444,25 @@ export default function ClassPhotoDayPage({
           </button>
         )}
       </div>
+      <HowToUseHelp title="How to use Class Photo Day">
+        <HowToSection title="What this page is">
+          A fast capture flow for picture day — work through a class and take
+          one photo per student, saved straight to each profile.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>Pick the class, then tap a student to capture or retake.</li>
+            <li>
+              Saved photos appear on the student profile and anywhere avatars
+              show (rosters, PBIS cards).
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Good to know">
+          Photos are stored school-private and staff-only. Use a retake any time
+          a shot doesn't land.
+        </RoleSection>
+      </HowToUseHelp>
 
       {/* Picker row */}
       <div

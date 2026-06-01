@@ -11,6 +11,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { authFetch } from "../../lib/authToken";
 import { refreshFeatures } from "../../lib/features";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "../HowToUseHelp";
 
 type FeatureSpec = {
   key: string;
@@ -134,6 +140,27 @@ export default function FeatureLicensingAdminPage() {
   return (
     <div className="card" style={{ marginBottom: "1rem" }}>
       <h2 style={{ marginTop: 0 }}>Feature Licensing</h2>
+      <HowToUseHelp title="How to use Feature Licensing">
+        <HowToSection title="What this page is">
+          The SuperUser control for which features each school can access —
+          plans on top, per-school assignment and overrides below.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Plans</strong> — define reusable feature bundles.
+            </li>
+            <li>
+              <strong>Schools</strong> — assign a plan, or open a school's
+              drawer to override individual features and seat quotas.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["superUser"]} title="District-wide impact">
+          Changes take effect immediately for every user at the affected
+          school. Override sparingly — plans keep things consistent.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "var(--text-subtle, #555)", marginTop: 0 }}>
         SuperUser surface for managing Plans (bundles of features) and
         per-school Overrides. Phase 1 — quotas are plumbing only, no

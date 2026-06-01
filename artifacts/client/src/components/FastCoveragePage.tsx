@@ -1,4 +1,10 @@
 import { useEffect, useState } from "react";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 // FAST Coverage telemetry — surfaces per-(subject, grade) score
 // loading status so an admin can see at a glance which grades need
@@ -125,6 +131,25 @@ export default function FastCoveragePage() {
   return (
     <div style={{ padding: 24, maxWidth: 980 }}>
       <h2 style={{ marginTop: 0 }}>FAST Score Coverage</h2>
+      <HowToUseHelp title="How to use FAST Coverage">
+        <HowToSection title="What this page is">
+          A completeness check — how many students have FAST scores loaded per
+          window, so you can catch import gaps before they skew reports.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>
+              Look for grades or windows with low coverage — usually a missing
+              or partial import.
+            </li>
+            <li>Fix gaps in Data Imports, then re-check here.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam"]} title="Check before you share">
+          Run this before opening the Teacher Roster to staff — grades flagged
+          Missing PM3 render blank Learning-Gain buckets.
+        </RoleSection>
+      </HowToUseHelp>
       <p style={{ color: "#4b5563", marginTop: 4 }}>
         Per-grade snapshot of FAST score loading. Use this before
         sharing the Teacher Roster with staff — grades flagged{" "}

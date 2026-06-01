@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 // =============================================================================
 // TourAdminPage — staff-facing School Tours pipeline + brag-page editor.
@@ -155,6 +161,34 @@ export default function TourAdminPage() {
   const [tab, setTab] = useState<"pipeline" | "page" | "report">("pipeline");
   return (
     <div style={{ padding: "0 4px" }}>
+      <HowToUseHelp title="How to use School Tours">
+        <HowToSection title="The three tabs">
+          <ul style={howtoListStyle}>
+            <li>
+              <strong>Lead Pipeline</strong> — work tour requests through
+              New → Contacted → Scheduled → Toured → Closed, with owners and a
+              response-time clock.
+            </li>
+            <li>
+              <strong>Brag Page</strong> — edit your public tour page: text,
+              flyers, photos, checkpoints, and font color. English text
+              auto-translates to Spanish.
+            </li>
+            <li>
+              <strong>Outcomes</strong> — the enrollment conversion report by
+              outcome.
+            </li>
+          </ul>
+        </HowToSection>
+        <RoleSection
+          for={["admin", "coreTeam"]}
+          title="PDFs download to disk"
+        >
+          Brag-sheet, roadmap, and note-catcher PDFs download rather than open
+          in a tab — that's intentional, since printing in the preview can
+          freeze the app.
+        </RoleSection>
+      </HowToUseHelp>
       <div
         style={{ display: "flex", gap: 8, marginBottom: 18, flexWrap: "wrap" }}
       >

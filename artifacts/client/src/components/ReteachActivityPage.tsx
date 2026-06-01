@@ -12,6 +12,12 @@ import {
   type ReactElement,
 } from "react";
 import { authFetch } from "../lib/authToken";
+import {
+  HowToUseHelp,
+  HowToSection,
+  RoleSection,
+  howtoListStyle,
+} from "./HowToUseHelp";
 
 interface SummaryResponse {
   days: number;
@@ -259,6 +265,22 @@ export default function ReteachActivityPage({ onBack }: Props): ReactElement {
         Benchmarks heatmap. Read-only — teachers see their own
         roster's totals on the progress report.
       </p>
+      <HowToUseHelp title="How to use Reteach Activity">
+        <HowToSection title="What this page is">
+          A school-wide rollup of reteach logged from the Teacher Roster
+          Benchmarks heatmap.
+        </HowToSection>
+        <HowToSection title="Day-to-day">
+          <ul style={howtoListStyle}>
+            <li>Scan which benchmarks are being retaught and by whom.</li>
+            <li>Export to CSV for grade-level or PLC conversations.</li>
+          </ul>
+        </HowToSection>
+        <RoleSection for={["admin", "coreTeam", "counselor"]} title="Read-only">
+          Reteach is logged from the Teacher Roster — this page only reports it.
+          Teachers see their own totals on the progress report.
+        </RoleSection>
+      </HowToUseHelp>
 
       {/* 30-day summary tiles */}
       {summary && (
