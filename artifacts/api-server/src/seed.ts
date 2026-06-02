@@ -347,6 +347,11 @@ export async function ensureHousesSchema() {
   await db.execute(
     sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS house_id INTEGER`,
   );
+  // staff.department — optional academic department (admin-set via the
+  // Staff & Roles dropdown), surfaced in the staff CSV export.
+  await db.execute(
+    sql`ALTER TABLE staff ADD COLUMN IF NOT EXISTS department TEXT`,
+  );
   // student_house_changes — append-only audit of every house move.
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS student_house_changes (

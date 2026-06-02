@@ -19,6 +19,18 @@ type CustomRole = {
   capabilities: string[];
 };
 
+// Fixed academic departments — kept in sync with DEPARTMENTS in the
+// adminStaff route (the server validates writes against the same set).
+const DEPARTMENTS = [
+  "ELA",
+  "Math",
+  "Science",
+  "Social Studies",
+  "CTE",
+  "Elective",
+  "Other",
+] as const;
+
 type HouseOption = {
   id: number;
   name: string;
@@ -258,6 +270,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
   const [houses, setHouses] = useState<HouseOption[]>([]);
   const [filter, setFilter] = useState("");
   const [savingId, setSavingId] = useState<number | null>(null);
+  const [exporting, setExporting] = useState(false);
   const [error, setError] = useState("");
   const [showAddStaff, setShowAddStaff] = useState(false);
   const [showAddRole, setShowAddRole] = useState(false);
@@ -440,6 +453,33 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
     }
   }
 
+  async function exportCsv() {
+    setExporting(true);
+    setError("");
+    try {
+      const res = await authFetch("/api/admin/staff/export.csv");
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        throw new Error(j.error || `Export failed (${res.status})`);
+      }
+      // Download to disk (a blob opened in a new tab renders blank inside the
+      // Replit preview iframe — see PDFs/blobs gotcha).
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `staff-roster-${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function applyPreset(staffId: number, capabilities: BoolKey[]) {
     const body: Record<string, boolean> = {};
     for (const cap of PAGES.map((p) => p.key)) {
@@ -512,6 +552,15 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
               + Add Role
             </button>
           )}
+          <button
+            type="button"
+            className="ghost"
+            onClick={exportCsv}
+            disabled={exporting}
+            title="Download the full staff roster (name, email, role, department, and contact details) as a CSV you can open in Excel."
+          >
+            {exporting ? "Exporting…" : "Export staff (CSV)"}
+          </button>
         </div>
       </div>
 
@@ -584,6 +633,17 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                 title="PBIS house affiliation. Prints on the kiosk activation card and shows in any 'your house' surfaces. The smallest house is recommended so the picker keeps teams balanced."
               >
                 House
+              </th>
+              <th
+                style={{
+                  ...stickyTh,
+                  zIndex: 4,
+                  minWidth: 150,
+                  textAlign: "left",
+                }}
+                title="Academic department. Included in the staff CSV export."
+              >
+                Department
               </th>
               {PAGES.map((p) => (
                 <th
@@ -771,6 +831,31 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
                       }
                     />
                   </td>
+                  <td
+                    style={{
+                      padding: "4px 6px",
+                      borderBottom: "1px solid #f1f5f9",
+                      minWidth: 150,
+                    }}
+                  >
+                    <select
+                      value={(s["department"] as string | null) ?? ""}
+                      disabled={isSaving}
+                      onChange={(e) =>
+                        patchStaff(s.id, {
+                          department: e.target.value === "" ? null : e.target.value,
+                        })
+                      }
+                      style={{ width: "100%" }}
+                    >
+                      <option value="">—</option>
+                      {DEPARTMENTS.map((d) => (
+                        <option key={d} value={d}>
+                          {d}
+                        </option>
+                      ))}
+                    </select>
+                  </td>
                   {PAGES.map((p) => {
                     const checked = Boolean(s[p.key]);
                     return (
@@ -797,7 +882,7 @@ export default function StaffRolesMatrix({ currentUser }: Props) {
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={PAGES.length + 2} style={{ padding: 16 }}>
+                <td colSpan={PAGES.length + 5} style={{ padding: 16 }}>
                   No staff match.
                 </td>
               </tr>

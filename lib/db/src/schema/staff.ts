@@ -220,6 +220,13 @@ export const staffTable = pgTable("staff", {
   workExtension: text("work_extension"),
   cellPhone: text("cell_phone"),
 
+  // Optional academic department, set by an admin on Staff & Roles via a
+  // fixed dropdown (ELA / Math / Science / Social Studies / CTE / Elective /
+  // Other) and surfaced in the staff CSV export. Nullable — most staff
+  // (non-teaching, or unclassified) leave it blank. Stored as free text but
+  // the API constrains writes to the known set.
+  department: text("department"),
+
   externalId: text("external_id"),
   ssoProvider: text("sso_provider"),
   active: boolean("active").notNull().default(true),
