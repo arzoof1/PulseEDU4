@@ -3397,7 +3397,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
     const flagRes = await db.execute<FlagRow>(sql`
       SELECT student_id, ese, is_504
       FROM students
-      WHERE school_id = ${schoolId} AND student_id = ANY(${visibleIds})
+      WHERE school_id = ${schoolId} AND ${inArray(studentsTable.studentId, visibleIds)}
     `);
     const flagMap = new Map<string, FlagRow>();
     for (const r of flagRes.rows) flagMap.set(r.student_id, r);
@@ -3408,7 +3408,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       FROM student_mtss_plans
       WHERE school_id = ${schoolId}
         AND closed_at IS NULL
-        AND student_id = ANY(${visibleIds})
+        AND ${inArray(studentMtssPlansTable.studentId, visibleIds)}
       GROUP BY student_id
     `);
     const tierMap = new Map<string, number>();
@@ -3421,7 +3421,7 @@ router.get("/insights/academics/trajectory/students", async (req, res) => {
       WHERE school_id = ${schoolId}
         AND subject IN ('ela','math')
         AND prior_year_bq = true
-        AND student_id = ANY(${visibleIds})
+        AND ${inArray(studentFastScoresTable.studentId, visibleIds)}
     `);
     const bqEla = new Set<string>();
     const bqMath = new Set<string>();
