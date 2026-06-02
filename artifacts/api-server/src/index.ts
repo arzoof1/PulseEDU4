@@ -41,6 +41,7 @@ import {
   seedBenchmarkDeliveriesOnce,
   remapBenchmarkDeliveriesToRealTeachersOnce,
   matchDemoEmailsToNamesOnce,
+  ensureDemoAdminAccountOnce,
   fillStudentSchedulesAtParrottOnce,
   rebalanceFlagsAtParrottOnce,
   ensureFeaturePlansColumns,
@@ -264,6 +265,14 @@ async function runSeed(): Promise<void> {
     await matchDemoEmailsToNamesOnce();
   } catch (err) {
     logger.error({ err }, "[boot] demo email/password backfill failed");
+  }
+  // Ensure the demo admin handout account on the Parrott demo school.
+  // Self-healing via ON CONFLICT (email). Own try/catch so a failure can't
+  // block later backfills.
+  try {
+    await ensureDemoAdminAccountOnce();
+  } catch (err) {
+    logger.error({ err }, "[boot] demo admin account ensure failed");
   }
   try {
     await ensureStudentAccommodationsBackfill();

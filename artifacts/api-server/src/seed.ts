@@ -7125,6 +7125,70 @@ export async function matchDemoEmailsToNamesOnce(): Promise<void> {
   );
 }
 
+// Ensure a ready-to-hand-out demo ADMIN login on the Parrott demo school
+// (school_id = 1). Prospective admins from other schools use this to explore
+// the FULL admin experience on fake data — they can create and log
+// interventions, hall passes, PBIS, accommodations, etc. without ever touching
+// a real school's data. is_admin grants implicit access to every admin route
+// gate; the cap_* flags below are set true as well so the client surfaces all
+// the management buttons. Self-healing: ON CONFLICT (email) keeps the role,
+// school, password, and active flag correct on every boot, so the handout
+// credentials stay predictable even if the account is poked at. Runs per
+// environment — dev on a workflow restart, prod on Publish.
+const DEMO_ADMIN_EMAIL = "admin@pulsedemo.com";
+const DEMO_ADMIN_PASSWORD = "PulseDemo26";
+const DEMO_ADMIN_SCHOOL_ID = 1;
+// Belt-and-suspenders: the demo school is school_id 1 in this deployment (the
+// same convention the other Parrott one-shots use), but because this routine
+// creates an account with KNOWN credentials, we additionally require the school
+// at that id to actually be the named demo school before doing anything. If id 1
+// is ever something else, we refuse rather than inject a known admin login into
+// a real tenant.
+const DEMO_ADMIN_SCHOOL_NAME = "D. S. Parrott Middle School";
+const DEMO_ADMIN_DISPLAY_NAME = "Demo Admin";
+
+export async function ensureDemoAdminAccountOnce(): Promise<void> {
+  const school = await db.execute<{ id: number }>(sql`
+    SELECT id FROM schools
+    WHERE id = ${DEMO_ADMIN_SCHOOL_ID} AND name = ${DEMO_ADMIN_SCHOOL_NAME}
+  `);
+  if (school.rows.length === 0) {
+    logger.warn(
+      { schoolId: DEMO_ADMIN_SCHOOL_ID, expectedName: DEMO_ADMIN_SCHOOL_NAME },
+      "[seed] skipping demo admin account — demo school not found at expected id (refusing to inject a known admin into a real tenant)",
+    );
+    return;
+  }
+  const passwordHash = await bcrypt.hash(DEMO_ADMIN_PASSWORD, 10);
+  await db.execute(sql`
+    INSERT INTO staff (
+      school_id, email, password_hash, display_name,
+      is_admin, active,
+      cap_pbis_manage, cap_accommodation_manage, cap_intervention_manage,
+      cap_hall_passes_view_all, cap_staff_roles, cap_manage_roles,
+      cap_manage_locations, cap_manage_displays, cap_iss_dashboard,
+      cap_pullouts_verify, cap_pullouts_review, cap_manage_dismissal
+    ) VALUES (
+      ${DEMO_ADMIN_SCHOOL_ID}, ${DEMO_ADMIN_EMAIL}, ${passwordHash}, ${DEMO_ADMIN_DISPLAY_NAME},
+      true, true,
+      true, true, true,
+      true, true, true,
+      true, true, true,
+      true, true, true
+    )
+    ON CONFLICT (email) DO UPDATE SET
+      school_id = EXCLUDED.school_id,
+      password_hash = EXCLUDED.password_hash,
+      display_name = EXCLUDED.display_name,
+      is_admin = true,
+      active = true
+  `);
+  logger.info(
+    { email: DEMO_ADMIN_EMAIL, schoolId: DEMO_ADMIN_SCHOOL_ID },
+    "[seed] demo admin account ensured",
+  );
+}
+
 // Remap fictional demo-teacher deliveries onto the real Parrott teacher roster,
 // matched by grade. Idempotent: no-op once the fictional staff own zero rows.
 export async function remapBenchmarkDeliveriesToRealTeachersOnce(): Promise<void> {

@@ -28,3 +28,15 @@ data rows. A boot one-shot is the established pattern here (see
 - Fail fast: if any in-scope row can't be processed, throw BEFORE writing the
   marker so a later boot retries instead of leaving a partial backfill.
 - Verify on dev first (restart the api-server workflow), then Publish for prod.
+
+## Known-credential demo accounts
+
+A boot one-shot that creates an account with KNOWN/hardcoded credentials (e.g.
+the `admin@pulsedemo.com` demo admin) must verify its target school by a stable
+identifier BEFORE writing — match `schools.id` AND `schools.name`, and return
+early (log a warning) if it doesn't match. `school_id = 1` = "D. S. Parrott
+Middle School" is the demo school in this deployment (same convention the other
+Parrott one-shots use), but never inject a known login on the bare numeric id —
+if id 1 were ever a real tenant you'd hand out an admin to real student data.
+Use `INSERT ... ON CONFLICT (email) DO UPDATE` so the account self-heals to the
+right role/school/password each boot.
