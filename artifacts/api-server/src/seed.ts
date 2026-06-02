@@ -6987,6 +6987,139 @@ export async function seedBenchmarkDeliveriesOnce(): Promise<void> {
   );
 }
 
+// One-shot: rewrite every demo staff email to match their display name on the
+// @pulsedemo.com domain, and reset their password to the demo password. Scope
+// is exactly the @hcsb.k12.fl.us accounts EXCEPT the two real superusers
+// (chris.clifford@ and brandon.wright@), who are left fully untouched. The
+// third superuser (brandon.wright2@hcsd.k12.fl.us) is on a different domain
+// and so is naturally outside the @hcsb scope. Touches ONLY staff.email and
+// staff.password_hash — no names, students, passes, or PBIS data. Idempotent
+// via a one-shot marker row, and atomic via a transaction (two-phase rename
+// so we never trip the unique(email) constraint mid-flight). Runs once per
+// environment on boot — safe to leave in place; a second boot is a cheap
+// marker lookup. Delete after it has run in production if desired.
+const DEMO_EMAIL_PASSWORD = "PulseDemo26";
+const DEMO_EMAIL_DOMAIN = "pulsedemo.com";
+const DEMO_EMAIL_MARKER = "match_demo_emails_pulsedemo_v1";
+const DEMO_EMAIL_KEEP = new Set([
+  "chris.clifford@hcsb.k12.fl.us",
+  "brandon.wright@hcsb.k12.fl.us",
+]);
+
+// "Kathleen Taylor - ELA G6" -> "kathleen.taylor"; "M. Brown" -> "m.brown".
+// Strips the " - Subject Grade" suffix and any "(...)" note, lowercases, and
+// keeps only a-z per token. Returns null if no usable token remains.
+function deriveEmailLocalPart(displayName: string): string | null {
+  let s = displayName;
+  const dashIdx = s.indexOf(" - ");
+  if (dashIdx >= 0) s = s.slice(0, dashIdx);
+  s = s.replace(/\([^)]*\)/g, " ");
+  const tokens = s
+    .split(/\s+/)
+    .map((t) => t.toLowerCase().replace(/[^a-z]/g, ""))
+    .filter(Boolean);
+  if (tokens.length === 0) return null;
+  const first = tokens[0]!;
+  const last = tokens[tokens.length - 1]!;
+  return tokens.length === 1 ? first : `${first}.${last}`;
+}
+
+export async function matchDemoEmailsToNamesOnce(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const marker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${DEMO_EMAIL_MARKER}`,
+  );
+  if (marker.rows.length > 0) return; // already applied in this environment
+
+  // Reserve every email that is NOT being changed so we never collide with a
+  // kept account or a different-domain account.
+  const allRows = await db.execute<{
+    id: number;
+    email: string | null;
+    display_name: string;
+  }>(sql`SELECT id, email, display_name FROM staff ORDER BY id`);
+
+  const reserved = new Set<string>();
+  type Target = { id: number; newEmail: string };
+  const targets: Target[] = [];
+  const pending: Array<{ id: number; displayName: string }> = [];
+
+  for (const r of allRows.rows) {
+    const email = (r.email ?? "").toLowerCase();
+    const isTarget =
+      email.endsWith("@hcsb.k12.fl.us") && !DEMO_EMAIL_KEEP.has(email);
+    if (isTarget) {
+      pending.push({ id: r.id, displayName: r.display_name });
+    } else if (email) {
+      reserved.add(email);
+    }
+  }
+
+  let skipped = 0;
+  for (const p of pending) {
+    const local = deriveEmailLocalPart(p.displayName);
+    if (!local) {
+      skipped++;
+      continue;
+    }
+    let candidate = `${local}@${DEMO_EMAIL_DOMAIN}`;
+    let n = 1;
+    while (reserved.has(candidate)) {
+      n++;
+      candidate = `${local}${n}@${DEMO_EMAIL_DOMAIN}`;
+    }
+    reserved.add(candidate);
+    targets.push({ id: p.id, newEmail: candidate });
+  }
+
+  // Fail fast on any in-scope account whose display name yields no usable
+  // email — abort WITHOUT writing the marker so a later boot can retry once
+  // the data is corrected, rather than silently leaving a partial backfill.
+  if (skipped > 0) {
+    throw new Error(
+      `[seed] demo email backfill aborted: ${skipped} in-scope staff have non-derivable display names`,
+    );
+  }
+
+  if (targets.length === 0) {
+    await db.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${DEMO_EMAIL_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+    return;
+  }
+
+  const passwordHash = await bcrypt.hash(DEMO_EMAIL_PASSWORD, 10);
+
+  await db.transaction(async (tx) => {
+    // Phase 1: park every target on a unique throwaway email so the final
+    // assignment can't transiently collide with another target's old email.
+    for (const t of targets) {
+      await tx.execute(
+        sql`UPDATE staff SET email = ${`__demo_pending_${t.id}@pulsedemo.invalid`} WHERE id = ${t.id}`,
+      );
+    }
+    // Phase 2: set the real derived email + demo password.
+    for (const t of targets) {
+      await tx.execute(
+        sql`UPDATE staff SET email = ${t.newEmail}, password_hash = ${passwordHash} WHERE id = ${t.id}`,
+      );
+    }
+    await tx.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${DEMO_EMAIL_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  });
+
+  logger.info(
+    { updated: targets.length, skipped },
+    "[seed] demo email/password one-shot backfill complete",
+  );
+}
+
 // Remap fictional demo-teacher deliveries onto the real Parrott teacher roster,
 // matched by grade. Idempotent: no-op once the fictional staff own zero rows.
 export async function remapBenchmarkDeliveriesToRealTeachersOnce(): Promise<void> {

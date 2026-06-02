@@ -1,1 +1,2 @@
 - [Display live remote control](display-live-control.md) — revision must bump atomically in SQL (sole TV change-detector); public signage endpoints are unauthenticated-by-id by design, don't "fix" with a token.
+- [Mutating production data](prod-data-mutation.md) — agent tools are read-only on prod; change prod rows via an idempotent boot one-shot (marker in `app_one_shot_markers`) that runs on Publish.

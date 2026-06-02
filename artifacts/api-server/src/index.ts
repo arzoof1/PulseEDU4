@@ -40,6 +40,7 @@ import {
   ensureSchoolBenchmarksCatalogBackfill,
   seedBenchmarkDeliveriesOnce,
   remapBenchmarkDeliveriesToRealTeachersOnce,
+  matchDemoEmailsToNamesOnce,
   fillStudentSchedulesAtParrottOnce,
   rebalanceFlagsAtParrottOnce,
   ensureFeaturePlansColumns,
@@ -255,6 +256,14 @@ async function runSeed(): Promise<void> {
     await rebalanceFlagsAtParrottOnce();
   } catch (err) {
     logger.error({ err }, "[boot] benchmark catalog ensure failed");
+  }
+  // One-shot: align demo staff emails to @pulsedemo.com (derived from their
+  // display names) + reset demo passwords. Runs once per environment, guarded
+  // by a marker. Wrapped separately so a benchmark failure can't block it.
+  try {
+    await matchDemoEmailsToNamesOnce();
+  } catch (err) {
+    logger.error({ err }, "[boot] demo email/password backfill failed");
   }
   try {
     await ensureStudentAccommodationsBackfill();
