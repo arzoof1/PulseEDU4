@@ -72,7 +72,7 @@ import benchmarkDeliveriesSeedJson from "./seedData/benchmarkDeliveriesSeed.json
 // principals logged in without any manual SQL or curl steps.
 // =============================================================================
 
-const TEMP_PASSWORD = "PulseDemo26";
+const TEMP_PASSWORD = "PulseDemo!";
 
 interface SchoolSpec {
   district: "hernando" | "pasco";
@@ -104,7 +104,7 @@ const SCHOOL_SPECS: SchoolSpec[] = [
     superUser: {
       email: "chris.clifford@hcsb.k12.fl.us",
       displayName: "Chris Clifford",
-      password: "PulseDemo26",
+      password: "@Leopards",
     },
   },
   {
@@ -116,7 +116,7 @@ const SCHOOL_SPECS: SchoolSpec[] = [
     superUser: {
       email: "brandon.wright@hcsb.k12.fl.us",
       displayName: "Brandon Wright",
-      password: "PulseDemo26",
+      password: "@GoEagles",
     },
   },
   {
@@ -4459,29 +4459,9 @@ export async function seedIfEmpty() {
 
   const tempHash = await bcrypt.hash(TEMP_PASSWORD, 10);
 
-  // Track every staff email handed out so a generated teacher address derives
-  // cleanly from the person's name (first.last@…) and only gains a numeric
-  // suffix on an actual collision. Keeps email ↔ display name matching instead
-  // of bolting a running counter onto every address.
-  const usedEmails = new Set<string>();
-  // Reserve every fixed SuperUser/admin address up front so a teacher generated
-  // for an earlier school can never collide with a later school's fixed identity
-  // (the staff.email unique constraint would otherwise fail the seed).
-  for (const spec of SCHOOL_SPECS) {
-    if (spec.superUser) usedEmails.add(spec.superUser.email);
-    if (spec.admin) usedEmails.add(spec.admin.email);
-  }
-  const uniqueStaffEmail = (first: string, last: string): string => {
-    const base = `${first.toLowerCase()}.${last.toLowerCase()}`;
-    let candidate = `${base}@hcsb.k12.fl.us`;
-    let n = 1;
-    while (usedEmails.has(candidate)) {
-      n += 1;
-      candidate = `${base}${n}@hcsb.k12.fl.us`;
-    }
-    usedEmails.add(candidate);
-    return candidate;
-  };
+  // Global teacher counter so generated emails are globally unique even when
+  // two schools happen to draw the same first/last pair.
+  let globalTeacherSeq = 0;
 
   // Insert per-school data in deterministic order.
   let totalStaff = 0;
@@ -4515,7 +4495,6 @@ export async function seedIfEmpty() {
 
     if (spec.superUser) {
       const suHash = await bcrypt.hash(spec.superUser.password, 10);
-      usedEmails.add(spec.superUser.email);
       staffRows.push({
         schoolId,
         email: spec.superUser.email,
@@ -4527,7 +4506,6 @@ export async function seedIfEmpty() {
     }
 
     if (spec.admin) {
-      usedEmails.add(spec.admin.email);
       staffRows.push({
         schoolId,
         email: spec.admin.email,
@@ -4540,7 +4518,8 @@ export async function seedIfEmpty() {
     for (let t = 0; t < TEACHERS_PER_SCHOOL; t++) {
       const first = pick(rng, TEACHER_FIRST);
       const last = pick(rng, TEACHER_LAST);
-      const email = uniqueStaffEmail(first, last);
+      globalTeacherSeq += 1;
+      const email = `${first.toLowerCase()}.${last.toLowerCase()}${globalTeacherSeq}@hcsb.k12.fl.us`;
       staffRows.push({
         schoolId,
         email,
