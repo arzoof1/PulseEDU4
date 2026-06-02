@@ -282,3 +282,15 @@ id = "9OXwCRAKOrN_wrNBqU9i8"
 uri = "file://exports/flyer/pulseedu-feature-flyer-print.pdf"
 type = "pdf"
 title = "Print-Ready Flyer PDF (2-page)"
+
+[[outputs]]
+id = "xXmVbc2rEjC75PwrrZNdA"
+uri = "file://exports/PulseEDU-Demo-Guide.pdf"
+type = "pdf"
+title = "PulseEDU Demo Guide (PDF — print-ready)"
+
+[[outputs]]
+id = "o7YgSAMdJIif3yst07vsI"
+uri = "file://exports/PulseEDU-Demo-Guide.docx"
+type = "word_document"
+title = "PulseEDU Demo Guide (Word — editable)"
