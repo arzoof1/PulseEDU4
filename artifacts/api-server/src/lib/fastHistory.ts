@@ -70,7 +70,11 @@ export async function loadFastHistoryYearsVisible(
     .from(schoolSettingsTable)
     .where(eq(schoolSettingsTable.schoolId, schoolId));
   const raw = row?.years ?? DEFAULT_YEARS_VISIBLE;
-  return Math.min(MAX_YEARS_VISIBLE, Math.max(1, raw));
+  // Contract is 2..5 (default 3): FAST launched in FL in 22-23, so a
+  // 1-year window can never show a prior-year comparison. Clamp the
+  // lower bound to 2 to match the server validation and prevent a
+  // manually-edited DB value of 1 from yielding an empty history.
+  return Math.min(MAX_YEARS_VISIBLE, Math.max(2, raw));
 }
 
 export interface LoadFastHistoryArgs {
