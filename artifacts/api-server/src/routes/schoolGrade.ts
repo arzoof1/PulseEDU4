@@ -57,6 +57,16 @@ const router: IRouter = Router();
 type StaffRow = typeof staffTable.$inferSelect;
 const WINDOWS = new Set(["pm1", "pm2", "pm3"]);
 const SURVEYS = new Set(["survey2", "survey3"]);
+// PM3 end-of-year result uploads (Civics / Science / Algebra I / Geometry).
+// Stored in the same school_grade_surveys ledger as placeholders (Phase 1):
+// the file + raw CSV are retained, but not yet parsed into the calculation.
+const PM3_UPLOADS = new Set([
+  "pm3_civics",
+  "pm3_science",
+  "pm3_algebra",
+  "pm3_geometry",
+]);
+const UPLOAD_KINDS = new Set([...SURVEYS, ...PM3_UPLOADS]);
 const SCHOOL_TYPE: SchoolGradeType = "middle"; // Phase 1
 
 async function requireStaff(
@@ -592,8 +602,11 @@ router.post(
       byteSize?: unknown;
       rawCsv?: unknown;
     };
-    if (!body.survey || !SURVEYS.has(body.survey)) {
-      res.status(400).json({ error: "survey must be survey2 or survey3" });
+    if (!body.survey || !UPLOAD_KINDS.has(body.survey)) {
+      res.status(400).json({
+        error:
+          "survey must be survey2, survey3, or a PM3 result upload (pm3_civics, pm3_science, pm3_algebra, pm3_geometry)",
+      });
       return;
     }
     const filename =

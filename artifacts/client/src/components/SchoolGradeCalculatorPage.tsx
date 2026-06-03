@@ -117,6 +117,16 @@ const WINDOW_LABEL: Record<PmWindow, string> = {
   pm3: "PM3 (Spring)",
 };
 
+// PM3 end-of-year result uploads. These EOC / subject-area results only exist
+// at PM3 (end of year), so the upload request appears only when PM3 is the
+// selected window. Stored as placeholders for now (Phase 2 parses them).
+const PM3_UPLOAD_KINDS: { kind: string; label: string }[] = [
+  { kind: "pm3_civics", label: "Civics (Gr 7)" },
+  { kind: "pm3_science", label: "Science (Gr 8)" },
+  { kind: "pm3_algebra", label: "Algebra I (EOC)" },
+  { kind: "pm3_geometry", label: "Geometry (EOC)" },
+];
+
 const HISTORY_COMPONENT_KEYS: { key: keyof HistoryRow; label: string }[] = [
   { key: "elaAch", label: "ELA Ach" },
   { key: "mathAch", label: "Math Ach" },
@@ -284,7 +294,7 @@ export function SchoolGradeCalculatorPage() {
   };
 
   const handleSurveyUpload = async (
-    survey: "survey2" | "survey3",
+    survey: string,
     file: File,
   ) => {
     setError(null);
@@ -638,7 +648,7 @@ export function SchoolGradeCalculatorPage() {
         <p style={{ fontSize: 13, color: "var(--text-subtle)", marginTop: 0 }}>
           Science (Gr 8), Civics / Social Studies (Gr 7), and Acceleration are
           not in FAST. Enter the estimated 0–100 component score; leave blank to
-          mark pending. (PM3 result uploads land in Phase 2.)
+          mark pending. (At PM3, upload the actual result files below.)
         </p>
         <div
           style={{
@@ -681,6 +691,66 @@ export function SchoolGradeCalculatorPage() {
           </button>
         </div>
       </div>
+
+      {/* PM3 result uploads — only when PM3 is the selected window */}
+      {window_ === "pm3" && (
+        <div style={{ ...card, borderColor: "var(--accent, #3b82f6)" }}>
+          <h3 style={{ marginTop: 0 }}>PM3 result uploads</h3>
+          <p
+            style={{ fontSize: 13, color: "var(--text-subtle)", marginTop: 0 }}
+          >
+            PM3 is the end-of-year window. Upload the Civics, Science, Algebra I,
+            and Geometry result files so they are on record with this estimate.
+            Files are stored now and parsed into the official PM3 calculation in
+            Phase 2.
+          </p>
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
+              gap: "1rem",
+            }}
+          >
+            {PM3_UPLOAD_KINDS.map(({ kind, label }) => {
+              const existing = data.surveys.find((x) => x.survey === kind);
+              return (
+                <div key={kind}>
+                  <div style={{ fontWeight: 600, marginBottom: 4 }}>{label}</div>
+                  <input
+                    type="file"
+                    accept=".csv,text/csv"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void handleSurveyUpload(kind, f);
+                    }}
+                  />
+                  {existing ? (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "#16a34a",
+                        marginTop: 4,
+                      }}
+                    >
+                      ✓ {existing.filename} · {existing.status}
+                    </div>
+                  ) : (
+                    <div
+                      style={{
+                        fontSize: 12,
+                        color: "var(--text-subtle)",
+                        marginTop: 4,
+                      }}
+                    >
+                      No file uploaded yet
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Year-over-year history */}
       <HistorySection data={data} onChange={() => void loadOverview()} />

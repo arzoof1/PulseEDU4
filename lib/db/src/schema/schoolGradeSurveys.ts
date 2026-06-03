@@ -7,11 +7,15 @@ import {
   uniqueIndex,
 } from "drizzle-orm/pg-core";
 
-// school_grade_surveys — Survey 2 / Survey 3 enrollment-file uploads.
-// Phase 1 is a PLACEHOLDER: the file is accepted and its raw CSV text +
-// metadata are stored so nothing is lost, but it is NOT yet parsed or
-// applied to the matched-cohort calculation. Phase 2 parses `rawCsv`
-// into a matched student list and filters every component by it.
+// school_grade_surveys — file-upload ledger for the School Grade calculator.
+// Holds two upload families, both PLACEHOLDERS in Phase 1 (the file is
+// accepted and its raw CSV text + metadata are stored so nothing is lost,
+// but it is NOT yet parsed or applied to the calculation):
+//   • Survey 2 / Survey 3 enrollment files ('survey2' | 'survey3') — Phase 2
+//     parses `rawCsv` into a matched student list and filters components.
+//   • PM3 end-of-year result files ('pm3_civics' | 'pm3_science' |
+//     'pm3_algebra' | 'pm3_geometry'), surfaced only when PM3 is selected —
+//     Phase 2 parses them into the official PM3 calculation.
 //
 // One current row per (school, year, survey); re-uploading replaces it.
 export const schoolGradeSurveysTable = pgTable(

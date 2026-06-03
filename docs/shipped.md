@@ -3,6 +3,18 @@
 Reference only — no remaining action on items below. Most-recent first.
 For active follow-ups, see the **Open work** section in `replit.md`.
 
+- School Grade Estimated Calculator — **PM3 result-upload request**.
+  When PM3 is selected from the window dropdown, the calculator surfaces a
+  dedicated "PM3 result uploads" card requesting the Civics (Gr 7), Science
+  (Gr 8), Algebra I (EOC), and Geometry (EOC) result files. These are
+  stored as Phase-1 placeholders in the existing `school_grade_surveys`
+  ledger (no schema change — `survey` is free text; new kinds `pm3_civics`,
+  `pm3_science`, `pm3_algebra`, `pm3_geometry` validated by the
+  `UPLOAD_KINDS` union in `routes/schoolGrade.ts`) — accepted and retained
+  with raw CSV + metadata but not yet parsed into the calculation (Phase 2).
+  The card is hidden at PM1/PM2; existing Survey 2/3 uploads reuse the same
+  endpoint and are unchanged.
+
 - Event Ticketing — **Phase 1 (free-ticket events, QR delivery, gate
   scanning)**. Schools create FREE-ticket events (8th-grade promotion,
   graduation, etc.), allocate a per-student quota by grade with
