@@ -7532,3 +7532,97 @@ export async function ensureClassComposerPlansSchema(): Promise<void> {
     sql`CREATE INDEX IF NOT EXISTS class_composer_plan_groups_school_idx ON class_composer_plan_groups (school_id)`,
   );
 }
+
+// School Grade Estimated Calculator (Phase 1). Four tables: append-only
+// calculated runs, hand-entered prior-year history, the three manual
+// component inputs (Science / Social Studies / Acceleration), and Survey
+// 2/3 upload placeholders. Additive + idempotent (mirrors the rest of the
+// boot ensure* pattern; drizzle push hangs on interactive prompts).
+export async function ensureSchoolGradeSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_runs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      pm_window TEXT NOT NULL,
+      school_type TEXT NOT NULL DEFAULT 'middle',
+      status TEXT NOT NULL DEFAULT 'estimated',
+      detail JSONB NOT NULL,
+      total_points INTEGER NOT NULL,
+      total_possible INTEGER NOT NULL,
+      percent INTEGER NOT NULL,
+      letter TEXT NOT NULL,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_grade_runs_school_idx ON school_grade_runs (school_id)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_grade_runs_school_year_window_idx ON school_grade_runs (school_id, school_year, pm_window)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_history (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      year_label TEXT NOT NULL,
+      display_order INTEGER NOT NULL DEFAULT 0,
+      school_type TEXT NOT NULL DEFAULT 'middle',
+      ela_ach INTEGER,
+      math_ach INTEGER,
+      sci_ach INTEGER,
+      ss_ach INTEGER,
+      ela_lg INTEGER,
+      math_lg INTEGER,
+      ela_lg_l25 INTEGER,
+      math_lg_l25 INTEGER,
+      accel INTEGER,
+      total_override INTEGER,
+      letter_override TEXT,
+      created_by_staff_id INTEGER NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS school_grade_history_school_idx ON school_grade_history (school_id)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_manual_inputs (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      pm_window TEXT NOT NULL,
+      science INTEGER,
+      social_studies INTEGER,
+      acceleration INTEGER,
+      updated_by_staff_id INTEGER NOT NULL,
+      updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_grade_manual_inputs_school_year_window_unique ON school_grade_manual_inputs (school_id, school_year, pm_window)`,
+  );
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS school_grade_surveys (
+      id SERIAL PRIMARY KEY,
+      school_id INTEGER NOT NULL,
+      school_year TEXT NOT NULL,
+      survey TEXT NOT NULL,
+      filename TEXT NOT NULL,
+      byte_size INTEGER NOT NULL DEFAULT 0,
+      raw_csv TEXT,
+      row_count INTEGER,
+      status TEXT NOT NULL DEFAULT 'uploaded',
+      uploaded_by_staff_id INTEGER NOT NULL,
+      uploaded_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS school_grade_surveys_school_year_survey_unique ON school_grade_surveys (school_id, school_year, survey)`,
+  );
+}

@@ -1,2 +1,3 @@
 - [Display live remote control](display-live-control.md) — bump revision atomically in SQL (sole TV change-detector); public signage-by-id is unauthenticated by design.
 - [Mutating production data](prod-data-mutation.md) — agent tools are read-only on prod; change prod rows via an idempotent boot one-shot (marker in `app_one_shot_markers`) that runs on Publish.
+- [School Grade LG parity](school-grade-lg-parity.md) — learning-gain prior evidence must come from `loadFastHistory` historical PM3 (like Teacher Roster), never `priorYearScore`.

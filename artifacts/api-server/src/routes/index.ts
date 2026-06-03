@@ -100,6 +100,7 @@ import helpAssistantRouter from "./helpAssistant";
 import toursRouter from "./tours";
 import ticketingRouter from "./ticketing";
 import parentTicketsRouter from "./parentTickets";
+import schoolGradeRouter from "./schoolGrade";
 import {
   requireFeature,
   requireFeatureAllowingSignageSchool,
@@ -262,5 +263,6 @@ router.use(algebraPlacementRouter);
 router.use(helpAssistantRouter);
 router.use(toursRouter);
 router.use(ticketingRouter);
+router.use(schoolGradeRouter);
 
 export default router;

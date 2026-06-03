@@ -57,6 +57,7 @@ import {
   type Placement,
   type BucketInfo,
 } from "../lib/fastCutScores.js";
+import { decideLearningGain } from "../lib/learningGains.js";
 
 // Per-PM placement enriched with the gap-to-next-sublevel caption used
 // by the roster pills. Gap is computed on the CURRENT-grade chart (same
@@ -310,32 +311,14 @@ function buildSubjectBlock(
   //         FLDOE chart adds a Level-2 Upper third, extend the L2 ranges
   //         in `fastCutScores.ts` and this branch picks it up for free).
   //   - Dropped a level → NOT MET.
-  const learningGain: boolean | null = (() => {
-    const priorLevel = priorPm3?.placement?.level ?? null;
-    const currentLevel = pm3Placement?.level ?? null;
-    if (priorLevel == null || currentLevel == null) return null;
-    if (currentLevel > priorLevel) return true;
-    if (currentLevel === priorLevel) {
-      if (currentLevel === 5) return true;
-      if (currentLevel === 3 || currentLevel === 4) {
-        const priorScore = priorPm3?.pm3 ?? null;
-        const currentScore = row.pm3 ?? null;
-        if (priorScore == null || currentScore == null) return null;
-        return currentScore >= priorScore + 1;
-      }
-      if (currentLevel === 1 || currentLevel === 2) {
-        // Sub-tier order within L1/L2: "1.1" < "1.2" < "1.3"
-        // (and same for "2.1"/"2.2"/"2.3"). Lexicographic compare
-        // is safe because all sub-tier strings share the same
-        // "<digit>.<digit>" shape with identical lengths.
-        const priorSub = priorPm3?.placement?.subLevel ?? null;
-        const currentSub = pm3Placement?.subLevel ?? null;
-        if (priorSub == null || currentSub == null) return null;
-        return currentSub > priorSub;
-      }
-    }
-    return false;
-  })();
+  const learningGain: boolean | null = decideLearningGain({
+    priorLevel: priorPm3?.placement?.level ?? null,
+    currentLevel: pm3Placement?.level ?? null,
+    priorScore: priorPm3?.pm3 ?? null,
+    currentScore: row.pm3 ?? null,
+    priorSubLevel: priorPm3?.placement?.subLevel ?? null,
+    currentSubLevel: pm3Placement?.subLevel ?? null,
+  });
   return {
     pm1: row.pm1,
     pm2: row.pm2,

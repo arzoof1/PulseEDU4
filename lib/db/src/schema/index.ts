@@ -116,3 +116,7 @@ export * from "./ticketGrants";
 export * from "./tickets";
 export * from "./ticketScanEvents";
 export * from "./ticketScannerLinks";
+export * from "./schoolGradeRuns";
+export * from "./schoolGradeHistory";
+export * from "./schoolGradeManualInputs";
+export * from "./schoolGradeSurveys";

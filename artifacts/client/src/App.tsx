@@ -29,6 +29,7 @@ import IssSettingsPage from "./components/IssSettingsPage";
 import PickupSettingsPage from "./components/PickupSettingsPage";
 import TourAdminPage, { TourLeadBanner } from "./components/TourAdminPage";
 import TicketingAdminPage from "./components/TicketingAdminPage";
+import SchoolGradeCalculatorPage from "./components/SchoolGradeCalculatorPage";
 import PickupTagsPanel from "./components/PickupTagsPanel";
 import FastCoveragePage from "./components/FastCoveragePage";
 import CameraRegistryPage from "./components/CameraRegistryPage";
@@ -8105,6 +8106,16 @@ function App() {
     authUser?.isGuidanceCounselor === true ||
     authUser?.capManageDismissal === true ||
     authUser?.canApproveAst === true;
+  // School Grade Calculator gate — mirrors canManageSchoolGrade() in
+  // lib/coreTeam.ts (admin + Core Team only; this is an accountability
+  // planning tool, not a classroom one).
+  const canManageSchoolGrade =
+    isAdmin ||
+    authUser?.isDistrictAdmin === true ||
+    authUser?.isSuperUser === true ||
+    authUser?.isBehaviorSpecialist === true ||
+    authUser?.isMtssCoordinator === true ||
+    authUser?.isSchoolPsychologist === true;
   // Fetch onboarding progress whenever the admin lands on the Settings
   // hub (and after each return from a tile — settingsTile flipping from
   // a value back to null retriggers the effect). This is what powers the
@@ -20392,6 +20403,10 @@ function App() {
         <TicketingAdminPage />
       )}
 
+      {activeSection === "settings" && canManageSchoolGrade && settingsTile === "school-grade" && (
+        <SchoolGradeCalculatorPage />
+      )}
+
       {activeSection === "settings" && canManageSettings && settingsTile === "class-photo-day" && (
         <ClassPhotoDayPage
           defaultTeacherId={authUser?.id ?? null}
@@ -20667,6 +20682,19 @@ function App() {
                 subtitle:
                   "Free-ticket events · allocate by grade, email QR tickets, scan at the gate.",
                 group: "family-signage",
+              });
+            }
+            // School Grade Estimated Calculator — admin/Core-Team tool that
+            // estimates the Florida MS school grade from FAST + manual
+            // components per PM window. Phase 1 (PM1/PM2 estimate).
+            if (canManageSchoolGrade) {
+              tiles.push({
+                id: "school-grade",
+                icon: "🏫",
+                title: "School Grade Calculator",
+                subtitle:
+                  "Estimate the Florida school grade from FAST + manual components per PM window.",
+                group: "admin-tenancy",
               });
             }
             // Signage launcher — kiosk URLs for the three Pulse hallway-TV

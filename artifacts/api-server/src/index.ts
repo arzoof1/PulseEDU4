@@ -47,6 +47,7 @@ import {
   ensureFeaturePlansColumns,
   ensureFeaturePlansSchema,
   ensureClassComposerPlansSchema,
+  ensureSchoolGradeSchema,
   ensureClassComposerSkillClusterSchema,
 } from "./seed";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
@@ -226,6 +227,9 @@ async function runSeed(): Promise<void> {
   // FAST Phase 1 — per-item benchmark response storage for the Florida
   // xlsx parser. Idempotent.
   await ensureFastItemResponsesSchema();
+  // School Grade Estimated Calculator (Phase 1) — runs, history, manual
+  // inputs, and survey-upload placeholder tables. Idempotent.
+  await ensureSchoolGradeSchema();
   // Packet A — Per-school IANA timezone column on schools (pre-2026
   // tenants may be missing it). Idempotent.
   await ensureSchoolsTimezoneColumn();

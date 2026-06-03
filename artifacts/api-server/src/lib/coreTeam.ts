@@ -261,6 +261,24 @@ export function canManageTickets(staff: {
   );
 }
 
+// School Grade Calculator gate (Phase 1). Per product spec the audience is
+// administration + Core Team only — this is a school-accountability planning
+// tool, not a classroom one. isCoreTeam already admits SuperUser, District
+// Admin, school Admin, Behavior Specialist, MTSS Coordinator, and School
+// Psychologist, which is exactly the intended audience. Kept as a named
+// wrapper so the audience can widen later (e.g. an assistant principal
+// capability) without touching every route.
+export function canManageSchoolGrade(staff: {
+  isSuperUser?: boolean | null;
+  isDistrictAdmin?: boolean | null;
+  isAdmin?: boolean | null;
+  isBehaviorSpecialist?: boolean | null;
+  isMtssCoordinator?: boolean | null;
+  isSchoolPsychologist?: boolean | null;
+}): boolean {
+  return isCoreTeam(staff);
+}
+
 // Student photo manager gate. Per spec: admin / front-office staff /
 // core team (BS, MTSS, school psych, district admin, super user) /
 // counselor (school OR guidance) / social worker. We don't have a
