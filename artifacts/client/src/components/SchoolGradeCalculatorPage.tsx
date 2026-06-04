@@ -591,10 +591,7 @@ export function SchoolGradeCalculatorPage() {
                         color: "var(--text-subtle)",
                       }}
                     >
-                      {c.numerator != null && c.denominator != null
-                        ? `${c.numerator}/${c.denominator}`
-                        : ""}
-                      {c.note ? ` · ${c.note}` : ""}
+                      {componentDetail(c)}
                     </td>
                   </tr>
                 ))}
@@ -797,6 +794,33 @@ export function SchoolGradeCalculatorPage() {
       </div>
     </div>
   );
+}
+
+// Human-readable detail for a component-breakdown row. Achievement rows read
+// "299 of 644 scored Level 3+" plus the participation count so the
+// numerator/denominator can't be misread as the tested rate; learning-gain
+// rows read "X of Y made gains"; manual rows fall back to their note.
+function componentDetail(c: RunComponent): string {
+  const parts: string[] = [];
+  const isAch = c.key.includes("ach");
+  const isLg = c.key.includes("lg");
+  if (c.numerator != null && c.denominator != null) {
+    if (isAch) {
+      parts.push(`${c.numerator} of ${c.denominator} scored Level 3+`);
+    } else if (isLg) {
+      parts.push(`${c.numerator} of ${c.denominator} made gains`);
+    } else {
+      parts.push(`${c.numerator}/${c.denominator}`);
+    }
+  }
+  if (isAch && c.testedCount != null && c.eligibleCount != null) {
+    parts.push(
+      `${c.testedCount} of ${c.eligibleCount} tested` +
+        (c.testedPct != null ? ` (${c.testedPct}%)` : ""),
+    );
+  }
+  if (c.note) parts.push(c.note);
+  return parts.join(" · ");
 }
 
 function ParticipationStat({
