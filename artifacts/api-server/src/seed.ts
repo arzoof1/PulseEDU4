@@ -7159,17 +7159,17 @@ export async function matchDemoEmailsToNamesOnce(): Promise<void> {
 // SAFE TO DELETE (function + boot call + hash constant) once the SuperUser
 // confirms they are back in.
 const RECOVER_SU_EMAIL = "chris.clifford@hcsb.k12.fl.us";
-const RECOVER_SU_MARKER = "recover_superuser_password_v3";
-// Pre-computed bcrypt hash (cost 10) of the SuperUser's chosen recovery
-// password. Baked in deliberately: updating the SUPERUSER_RECOVERY_PASSWORD
-// workspace secret did NOT propagate to the published deployment, so the
-// secret-based reset stayed dormant in prod (no marker, no log). A one-way
-// hash here removes that dependency entirely — it runs on boot regardless of
-// secrets. This is NOT a plaintext credential. SAFE TO DELETE (this constant +
-// function + boot call) once the SuperUser confirms they are back in AND has
-// changed their password in-app.
+const RECOVER_SU_MARKER = "recover_superuser_password_v4";
+// Pre-computed bcrypt hash (cost 10) of a KNOWN temporary password handed to
+// the SuperUser directly ("PulseAccess-4827"). Baked in deliberately: the
+// secret-based reset never propagated to the published deployment, and the
+// prior baked hash depended on the SuperUser recalling exactly what they typed
+// into the secret prompt. Using a hash of a password we explicitly tell them
+// removes all guesswork. This is NOT a plaintext credential in code — it is a
+// one-way hash. SAFE TO DELETE (this constant + function + boot call) once the
+// SuperUser confirms they are back in AND has changed their password in-app.
 const RECOVER_SU_PASSWORD_HASH =
-  "$2b$10$Dla9iECzIpTmKOM7vKjyfumDXcSRQk2Z6/DNTI8GoQg76sYfh68fm";
+  "$2b$10$Y5kyUcQ7n5Fy5Co7XdE3ZuBN7OEendbVrxkbcbv0yve/2u9e6.KzG";
 
 export async function recoverSuperUserPasswordOnce(): Promise<void> {
   if (!RECOVER_SU_PASSWORD_HASH) return;
