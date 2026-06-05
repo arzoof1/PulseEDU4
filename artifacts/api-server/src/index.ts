@@ -274,15 +274,9 @@ async function runSeed(): Promise<void> {
   } catch (err) {
     logger.error({ err }, "[boot] demo email/password backfill failed");
   }
-  // One-shot SuperUser password recovery (locked-out sole SuperUser). Reads the
-  // SUPERUSER_RECOVERY_PASSWORD secret, hashes it, and resets the matching
-  // account once per environment. Dormant when the secret is absent. Own
-  // try/catch so a failure can't block later backfills.
-  try {
-    await recoverSuperUserPasswordOnce();
-  } catch (err) {
-    logger.error({ err }, "[boot] superuser password recovery failed");
-  }
+  // NOTE: SuperUser password recovery is intentionally NOT called here. It runs
+  // early and independently in startListening() so it never sits behind this
+  // long (occasionally fragile) seed chain — see the call site for rationale.
   // Ensure the demo admin handout account on the Parrott demo school.
   // Self-healing via ON CONFLICT (email). Own try/catch so a failure can't
   // block later backfills.
@@ -332,6 +326,22 @@ function startListening(): void {
       }
 
       logger.info({ port }, "Server listening");
+
+      // Locked-out SuperUser recovery. Runs IMMEDIATELY and independently of
+      // the background seed: it only touches `staff` + `app_one_shot_markers`
+      // (both already present in a live DB), so it must NOT sit behind the long
+      // runSeed() chain — a throw in any earlier (un-try/catched) seed step
+      // would otherwise stop it from ever running in production, which is
+      // exactly what stranded the earlier recovery attempts. Idempotent via its
+      // own marker row. SAFE TO DELETE with the rest of the recovery one-shot.
+      recoverSuperUserPasswordOnce()
+        .then(() => logger.info("[boot] superuser recovery one-shot checked"))
+        .catch((err) =>
+          logger.error(
+            { err },
+            "[boot] superuser password recovery failed (early)",
+          ),
+        );
 
       if (seedInBackground) {
         logger.info("Starting seed in background (post-listen)");
