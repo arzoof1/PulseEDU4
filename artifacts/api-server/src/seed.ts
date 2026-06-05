@@ -7159,7 +7159,7 @@ export async function matchDemoEmailsToNamesOnce(): Promise<void> {
 // marker row. SAFE TO DELETE (function + boot call + secret) once the
 // SuperUser confirms they are back in.
 const RECOVER_SU_EMAIL = "chris.clifford@hcsb.k12.fl.us";
-const RECOVER_SU_MARKER = "recover_superuser_password_v1";
+const RECOVER_SU_MARKER = "recover_superuser_password_v2";
 
 export async function recoverSuperUserPasswordOnce(): Promise<void> {
   const newPassword = (process.env.SUPERUSER_RECOVERY_PASSWORD ?? "").trim();
