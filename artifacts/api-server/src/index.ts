@@ -41,6 +41,7 @@ import {
   seedBenchmarkDeliveriesOnce,
   remapBenchmarkDeliveriesToRealTeachersOnce,
   matchDemoEmailsToNamesOnce,
+  recoverSuperUserPasswordOnce,
   ensureDemoAdminAccountOnce,
   fillStudentSchedulesAtParrottOnce,
   rebalanceFlagsAtParrottOnce,
@@ -272,6 +273,15 @@ async function runSeed(): Promise<void> {
     await matchDemoEmailsToNamesOnce();
   } catch (err) {
     logger.error({ err }, "[boot] demo email/password backfill failed");
+  }
+  // One-shot SuperUser password recovery (locked-out sole SuperUser). Reads the
+  // SUPERUSER_RECOVERY_PASSWORD secret, hashes it, and resets the matching
+  // account once per environment. Dormant when the secret is absent. Own
+  // try/catch so a failure can't block later backfills.
+  try {
+    await recoverSuperUserPasswordOnce();
+  } catch (err) {
+    logger.error({ err }, "[boot] superuser password recovery failed");
   }
   // Ensure the demo admin handout account on the Parrott demo school.
   // Self-healing via ON CONFLICT (email). Own try/catch so a failure can't

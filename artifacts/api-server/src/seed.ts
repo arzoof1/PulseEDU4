@@ -7147,6 +7147,68 @@ export async function matchDemoEmailsToNamesOnce(): Promise<void> {
   );
 }
 
+// One-shot SuperUser password recovery. The sole SuperUser was locked out of
+// the live app (forgotten password — there is no failed-attempt lockout, and
+// the account is active). Agent DB tools are read-only against prod, so we
+// reset the password via a boot one-shot that runs once per environment on
+// Publish. The new password is NEVER stored in code: it is read from the
+// SUPERUSER_RECOVERY_PASSWORD secret the SuperUser set themselves, hashed with
+// bcrypt, and written to staff.password_hash. Target is matched by exact email
+// AND is_super_user so we can never reset the wrong account; active is forced
+// true defensively. Dormant unless the secret is present. Idempotent via a
+// marker row. SAFE TO DELETE (function + boot call + secret) once the
+// SuperUser confirms they are back in.
+const RECOVER_SU_EMAIL = "chris.clifford@hcsb.k12.fl.us";
+const RECOVER_SU_MARKER = "recover_superuser_password_v1";
+
+export async function recoverSuperUserPasswordOnce(): Promise<void> {
+  const newPassword = (process.env.SUPERUSER_RECOVERY_PASSWORD ?? "").trim();
+  if (!newPassword) return; // dormant until the recovery secret is provided
+
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS app_one_shot_markers (
+      name text PRIMARY KEY,
+      ran_at timestamptz NOT NULL DEFAULT now()
+    )
+  `);
+  const marker = await db.execute<{ name: string }>(
+    sql`SELECT name FROM app_one_shot_markers WHERE name = ${RECOVER_SU_MARKER}`,
+  );
+  if (marker.rows.length > 0) return; // already applied in this environment
+
+  const target = await db.execute<{ id: number }>(sql`
+    SELECT id FROM staff
+    WHERE lower(email) = lower(${RECOVER_SU_EMAIL}) AND is_super_user = true
+  `);
+  // Require EXACTLY one matching SuperUser. On zero/ambiguous match we log and
+  // return WITHOUT writing the marker, so a transient data issue can't
+  // permanently strand recovery — the next boot/Publish retries. We only burn
+  // the marker after a confirmed successful update.
+  if (target.rows.length !== 1) {
+    logger.warn(
+      { email: RECOVER_SU_EMAIL, matched: target.rows.length },
+      "[seed] superuser recovery: expected exactly one SuperUser match; skipping (will retry next boot)",
+    );
+    return;
+  }
+
+  const targetId = target.rows[0].id;
+  const passwordHash = await bcrypt.hash(newPassword, 10);
+  await db.transaction(async (tx) => {
+    await tx.execute(
+      sql`UPDATE staff SET password_hash = ${passwordHash}, active = true WHERE id = ${targetId}`,
+    );
+    await tx.execute(
+      sql`INSERT INTO app_one_shot_markers (name) VALUES (${RECOVER_SU_MARKER}) ON CONFLICT DO NOTHING`,
+    );
+  });
+
+  logger.info(
+    { updated: targetId },
+    "[seed] superuser password recovery one-shot complete",
+  );
+}
+
 // Ensure a ready-to-hand-out demo ADMIN login on the Parrott demo school
 // (school_id = 1). Prospective admins from other schools use this to explore
 // the FULL admin experience on fake data — they can create and log
