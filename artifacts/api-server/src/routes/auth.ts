@@ -82,6 +82,51 @@ router.post("/auth/login", async (req: Request, res) => {
     .from(staffTable)
     .where(eq(staffTable.email, normalizedEmail));
 
+  // TEMP RECOVERY DIAGNOSTIC (remove after SuperUser login confirmed).
+  // Records what the REAL login request computes for the locked-out
+  // SuperUser only. Never logs the actual password (length only).
+  if (normalizedEmail === "chris.clifford@hcsb.k12.fl.us") {
+    try {
+      let probeBcrypt: boolean | null = null;
+      if (staff?.passwordHash) {
+        try {
+          probeBcrypt = await bcrypt.compare(password, staff.passwordHash);
+        } catch {
+          probeBcrypt = null;
+        }
+      }
+      let dbName: string | null = null;
+      try {
+        const r = await db.execute(
+          sql`SELECT current_database() AS d` as never,
+        );
+        dbName =
+          (r as unknown as { rows?: Array<{ d?: string }> }).rows?.[0]?.d ??
+          null;
+      } catch {
+        dbName = null;
+      }
+      await db.execute(
+        sql`INSERT INTO recover_diag (info) VALUES (${JSON.stringify({
+          stage: "login_handler",
+          db: dbName,
+          typeofEmail: typeof email,
+          typeofPassword: typeof password,
+          passwordLen: password.length,
+          normalizedEmail,
+          staffFound: !!staff,
+          staffId: staff?.id ?? null,
+          staffActive: staff?.active ?? null,
+          hashHead: staff?.passwordHash?.slice(0, 13) ?? null,
+          hashLen: staff?.passwordHash?.length ?? null,
+          bcryptOk: probeBcrypt,
+        })}::jsonb)` as never,
+      );
+    } catch {
+      // diagnostic must never break login
+    }
+  }
+
   if (!staff || !staff.active) {
     res.status(401).json({ error: GENERIC_LOGIN_ERROR });
     return;
