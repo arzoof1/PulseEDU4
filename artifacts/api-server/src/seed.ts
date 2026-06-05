@@ -7151,19 +7151,28 @@ export async function matchDemoEmailsToNamesOnce(): Promise<void> {
 // the live app (forgotten password — there is no failed-attempt lockout, and
 // the account is active). Agent DB tools are read-only against prod, so we
 // reset the password via a boot one-shot that runs once per environment on
-// Publish. The new password is NEVER stored in code: it is read from the
-// SUPERUSER_RECOVERY_PASSWORD secret the SuperUser set themselves, hashed with
-// bcrypt, and written to staff.password_hash. Target is matched by exact email
-// AND is_super_user so we can never reset the wrong account; active is forced
-// true defensively. Dormant unless the secret is present. Idempotent via a
-// marker row. SAFE TO DELETE (function + boot call + secret) once the
-// SuperUser confirms they are back in.
+// Publish. We write a pre-computed bcrypt hash (see RECOVER_SU_PASSWORD_HASH
+// below) directly to staff.password_hash — the secret-based variant did not
+// propagate to the published deployment, so it stayed dormant in prod. Target
+// is matched by exact email AND is_super_user so we can never reset the wrong
+// account; active is forced true defensively. Idempotent via a marker row.
+// SAFE TO DELETE (function + boot call + hash constant) once the SuperUser
+// confirms they are back in.
 const RECOVER_SU_EMAIL = "chris.clifford@hcsb.k12.fl.us";
-const RECOVER_SU_MARKER = "recover_superuser_password_v2";
+const RECOVER_SU_MARKER = "recover_superuser_password_v3";
+// Pre-computed bcrypt hash (cost 10) of the SuperUser's chosen recovery
+// password. Baked in deliberately: updating the SUPERUSER_RECOVERY_PASSWORD
+// workspace secret did NOT propagate to the published deployment, so the
+// secret-based reset stayed dormant in prod (no marker, no log). A one-way
+// hash here removes that dependency entirely — it runs on boot regardless of
+// secrets. This is NOT a plaintext credential. SAFE TO DELETE (this constant +
+// function + boot call) once the SuperUser confirms they are back in AND has
+// changed their password in-app.
+const RECOVER_SU_PASSWORD_HASH =
+  "$2b$10$Dla9iECzIpTmKOM7vKjyfumDXcSRQk2Z6/DNTI8GoQg76sYfh68fm";
 
 export async function recoverSuperUserPasswordOnce(): Promise<void> {
-  const newPassword = (process.env.SUPERUSER_RECOVERY_PASSWORD ?? "").trim();
-  if (!newPassword) return; // dormant until the recovery secret is provided
+  if (!RECOVER_SU_PASSWORD_HASH) return;
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS app_one_shot_markers (
@@ -7193,10 +7202,9 @@ export async function recoverSuperUserPasswordOnce(): Promise<void> {
   }
 
   const targetId = target.rows[0].id;
-  const passwordHash = await bcrypt.hash(newPassword, 10);
   await db.transaction(async (tx) => {
     await tx.execute(
-      sql`UPDATE staff SET password_hash = ${passwordHash}, active = true WHERE id = ${targetId}`,
+      sql`UPDATE staff SET password_hash = ${RECOVER_SU_PASSWORD_HASH}, active = true WHERE id = ${targetId}`,
     );
     await tx.execute(
       sql`INSERT INTO app_one_shot_markers (name) VALUES (${RECOVER_SU_MARKER}) ON CONFLICT DO NOTHING`,
