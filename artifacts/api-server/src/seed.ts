@@ -7174,36 +7174,60 @@ const RECOVER_SU_PASSWORD_HASH =
 export async function recoverSuperUserPasswordOnce(): Promise<void> {
   if (!RECOVER_SU_PASSWORD_HASH) return;
 
-  // TEMP DIAGNOSTIC (remove with the rest of recovery). Logs what THIS running
-  // process actually sees for the target account, BEFORE any update and
-  // independent of the marker gate, so we can tell whether the deployed app
-  // reads the same database/row our admin tooling does. login keeps returning
-  // 401 in prod even though admin tooling shows the correct hash + active=true.
+  // TEMP DIAGNOSTIC (remove with the rest of recovery). Persists what THIS
+  // running process sees to a recover_diag table (deployment logs were not
+  // surfacing the equivalent log line). Runs the EXACT login path inside the
+  // prod runtime — same normalization, same exact-email lookup, same
+  // bcryptjs.compare against a KNOWN temp password — so we can tell, via SQL we
+  // can read, whether the deployed process can authenticate the account that
+  // admin tooling shows as correct. login keeps returning 401 in prod even
+  // though admin tooling shows the right hash + active=true.
   try {
-    const diag = await db.execute<{
-      db: string;
-      id: number | null;
+    const RECOVER_DIAG_TEMP_PW = "PulseAccess-4827";
+    const normalizedEmail = RECOVER_SU_EMAIL.trim().toLowerCase();
+    const lookup = await db.execute<{
+      id: number;
       active: boolean | null;
-      is_super_user: boolean | null;
-      hash_head: string | null;
-      cmp: boolean | null;
+      password_hash: string | null;
+      email: string;
     }>(sql`
-      SELECT current_database() AS db,
-             s.id,
-             s.active,
-             s.is_super_user,
-             left(s.password_hash, 12) AS hash_head,
-             (s.password_hash = ${RECOVER_SU_PASSWORD_HASH}) AS cmp
-      FROM staff s
-      WHERE lower(s.email) = lower(${RECOVER_SU_EMAIL})
-      ORDER BY s.id
+      SELECT id, active, password_hash, email
+      FROM staff
+      WHERE email = ${normalizedEmail}
+      ORDER BY id
     `);
-    logger.warn(
-      { marker: RECOVER_SU_MARKER, rows: diag.rows },
-      "[recover-diag] deployed process view of target account",
+    const first = lookup.rows[0];
+    const bcryptCompare = first?.password_hash
+      ? await bcrypt.compare(RECOVER_DIAG_TEMP_PW, first.password_hash)
+      : null;
+    const meta = await db.execute<{ db: string }>(
+      sql`SELECT current_database() AS db`,
     );
+    const info = {
+      db: meta.rows[0]?.db ?? null,
+      normalizedEmail,
+      rowCount: lookup.rows.length,
+      firstId: first?.id ?? null,
+      firstActive: first?.active ?? null,
+      hashHead: first?.password_hash?.slice(0, 12) ?? null,
+      hashLen: first?.password_hash?.length ?? null,
+      sqlEqualsEmbedded: first?.password_hash === RECOVER_SU_PASSWORD_HASH,
+      bcryptCompareTemp: bcryptCompare,
+      marker: RECOVER_SU_MARKER,
+    };
+    await db.execute(sql`
+      CREATE TABLE IF NOT EXISTS recover_diag (
+        id serial PRIMARY KEY,
+        at timestamptz NOT NULL DEFAULT now(),
+        info jsonb NOT NULL
+      )
+    `);
+    await db.execute(
+      sql`INSERT INTO recover_diag (info) VALUES (${JSON.stringify(info)}::jsonb)`,
+    );
+    logger.warn({ info }, "[recover-diag] deployed process self-test");
   } catch (err) {
-    logger.warn({ err }, "[recover-diag] diagnostic select failed");
+    logger.warn({ err }, "[recover-diag] diagnostic self-test failed");
   }
 
   await db.execute(sql`
