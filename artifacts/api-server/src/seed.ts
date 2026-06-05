@@ -7159,7 +7159,7 @@ export async function matchDemoEmailsToNamesOnce(): Promise<void> {
 // SAFE TO DELETE (function + boot call + hash constant) once the SuperUser
 // confirms they are back in.
 const RECOVER_SU_EMAIL = "chris.clifford@hcsb.k12.fl.us";
-const RECOVER_SU_MARKER = "recover_superuser_password_v4";
+const RECOVER_SU_MARKER = "recover_superuser_password_v5";
 // Pre-computed bcrypt hash (cost 10) of a KNOWN temporary password handed to
 // the SuperUser directly ("PulseAccess-4827"). Baked in deliberately: the
 // secret-based reset never propagated to the published deployment, and the
@@ -7173,6 +7173,38 @@ const RECOVER_SU_PASSWORD_HASH =
 
 export async function recoverSuperUserPasswordOnce(): Promise<void> {
   if (!RECOVER_SU_PASSWORD_HASH) return;
+
+  // TEMP DIAGNOSTIC (remove with the rest of recovery). Logs what THIS running
+  // process actually sees for the target account, BEFORE any update and
+  // independent of the marker gate, so we can tell whether the deployed app
+  // reads the same database/row our admin tooling does. login keeps returning
+  // 401 in prod even though admin tooling shows the correct hash + active=true.
+  try {
+    const diag = await db.execute<{
+      db: string;
+      id: number | null;
+      active: boolean | null;
+      is_super_user: boolean | null;
+      hash_head: string | null;
+      cmp: boolean | null;
+    }>(sql`
+      SELECT current_database() AS db,
+             s.id,
+             s.active,
+             s.is_super_user,
+             left(s.password_hash, 12) AS hash_head,
+             (s.password_hash = ${RECOVER_SU_PASSWORD_HASH}) AS cmp
+      FROM staff s
+      WHERE lower(s.email) = lower(${RECOVER_SU_EMAIL})
+      ORDER BY s.id
+    `);
+    logger.warn(
+      { marker: RECOVER_SU_MARKER, rows: diag.rows },
+      "[recover-diag] deployed process view of target account",
+    );
+  } catch (err) {
+    logger.warn({ err }, "[recover-diag] diagnostic select failed");
+  }
 
   await db.execute(sql`
     CREATE TABLE IF NOT EXISTS app_one_shot_markers (
