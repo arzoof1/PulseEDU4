@@ -7,6 +7,7 @@ import SignageApp from "./signage/SignageApp";
 import PickupApp from "./pickup/PickupApp";
 import TourApp from "./tour/TourApp";
 import ScannerApp from "./scan/ScannerApp";
+import StaffResetApp from "./StaffResetApp";
 import "./index.css";
 
 const path = window.location.pathname;
@@ -16,6 +17,13 @@ const path = window.location.pathname;
 const isKioskViewer = path.includes("/kiosk-view");
 const isKiosk = !isKioskViewer && path.includes("/kiosk");
 const isParent = path.includes("/parent");
+// Public, unauthenticated staff self-service password reset pages
+// (/forgot-password, /reset-password/<token>). Checked AFTER isParent
+// because the parent portal owns its own /parent/...-prefixed variants
+// which contain these same substrings.
+const isStaffReset =
+  !isParent &&
+  (path.includes("/forgot-password") || path.includes("/reset-password"));
 const isSignage = path.includes("/signage");
 const isPickup = path.includes("/pickup");
 // Public, unauthenticated School Tours surface (brag page + request form +
@@ -31,6 +39,7 @@ createRoot(document.getElementById("root")!).render(
     : isKioskViewer ? <KioskViewer />
     : isKiosk ? <Kiosk />
     : isParent ? <ParentApp />
+    : isStaffReset ? <StaffResetApp />
     : isPickup ? <PickupApp />
     : isTour ? <TourApp />
     : isScan ? <ScannerApp />

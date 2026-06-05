@@ -143,6 +143,20 @@ export default function Login({
           {busy ? "Signing in…" : "Sign in"}
         </button>
 
+        <div style={{ textAlign: "center", marginTop: "-0.25rem" }}>
+          <a
+            href={`${import.meta.env.BASE_URL || "/"}forgot-password`}
+            style={{
+              color: "rgba(255,255,255,0.6)",
+              fontSize: "0.85rem",
+              textDecoration: "underline",
+              textUnderlineOffset: 2,
+            }}
+          >
+            Forgot password?
+          </a>
+        </div>
+
         {/* Parent-brand footer. PulseEDU is one of several school /
             organization apps offered under Pulse Kinetics; the link
             takes prospective customers (and anyone curious about the

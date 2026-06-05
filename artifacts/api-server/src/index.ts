@@ -49,6 +49,7 @@ import {
   ensureClassComposerPlansSchema,
   ensureSchoolGradeSchema,
   ensureClassComposerSkillClusterSchema,
+  ensureStaffPasswordResetsSchema,
 } from "./seed";
 import { backfillWitnessSequences } from "./lib/witnessStatementId";
 import cron from "node-cron";
@@ -230,6 +231,8 @@ async function runSeed(): Promise<void> {
   // School Grade Estimated Calculator (Phase 1) — runs, history, manual
   // inputs, and survey-upload placeholder tables. Idempotent.
   await ensureSchoolGradeSchema();
+  // Staff self-service password reset token store. Idempotent.
+  await ensureStaffPasswordResetsSchema();
   // Packet A — Per-school IANA timezone column on schools (pre-2026
   // tenants may be missing it). Idempotent.
   await ensureSchoolsTimezoneColumn();

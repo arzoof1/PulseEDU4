@@ -2686,6 +2686,28 @@ export async function ensureTicketingSchema(): Promise<void> {
   );
 }
 
+// Staff self-service password reset (mirrors parent_password_resets).
+// Additive CREATE TABLE IF NOT EXISTS per project convention.
+export async function ensureStaffPasswordResetsSchema(): Promise<void> {
+  await db.execute(sql`
+    CREATE TABLE IF NOT EXISTS staff_password_resets (
+      id SERIAL PRIMARY KEY,
+      staff_id INTEGER NOT NULL,
+      token TEXT NOT NULL,
+      expires_at TIMESTAMPTZ NOT NULL,
+      used_at TIMESTAMPTZ,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+      requested_ip TEXT
+    )
+  `);
+  await db.execute(
+    sql`CREATE UNIQUE INDEX IF NOT EXISTS staff_password_resets_token_unique ON staff_password_resets (token)`,
+  );
+  await db.execute(
+    sql`CREATE INDEX IF NOT EXISTS staff_password_resets_by_staff ON staff_password_resets (staff_id)`,
+  );
+}
+
 export async function seedFastScoresIfEmpty() {
   await ensureFastScoresSchema();
   await ensureBenchmarkReteachLogSchema();
