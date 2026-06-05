@@ -5,6 +5,9 @@
   "type": "module",
   "scripts": {
     "hello": "tsx ./src/hello.ts",
+    "launch-clarification-pdf": "tsx ./src/generateLaunchClarificationPdf.ts",
+    "launch-classlink-timeline-pdf": "tsx ./src/generateClassLinkTimelinePdf.ts",
+    "docs-pdf": "tsx ./src/generateLaunchDocsPdf.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "devDependencies": {
