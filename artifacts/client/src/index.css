@@ -230,7 +230,11 @@ strong {
 .app-shell {
   display: grid;
   grid-template-columns: 240px 1fr;
-  grid-template-rows: 64px 1fr;
+  /* Header row stays exactly 64px in the normal single-row case (so the
+     sticky sidebar's `top: 64px` offset keeps aligning), but is allowed to
+     grow if the controls ever wrap to a second line — instead of clipping
+     at a fixed 64px and letting the user pill spill over the content below. */
+  grid-template-rows: minmax(64px, auto) 1fr;
   min-height: 100vh;
 }
 
@@ -993,6 +997,35 @@ ul[style*="listStyle: none"] li button:hover {
   h3,
   h4 {
     color: #000 !important;
+  }
+}
+
+/* Laptop / narrow-desktop range: keep the header on a single row so the
+   controls never wrap and spill the user pill over the content below.
+   Reclaims width by trimming gaps, shrinking the brand, and dropping the
+   "Show" / "Staff" caption text (the selects stay fully labeled by their
+   options). Does NOT collapse to the mobile stacked layout — the sidebar
+   stays put. Scoped above 800px so it never fights the mobile block. */
+@media (min-width: 801px) and (max-width: 1100px) {
+  .app-header {
+    gap: 0.6rem;
+    padding: 0.5rem 1rem;
+  }
+  .app-header .brand {
+    width: 160px;
+  }
+  .app-header .brand .wordmark {
+    font-size: 1.2rem;
+  }
+  .app-header .header-controls {
+    gap: 0.6rem;
+  }
+  .app-header .header-controls > label {
+    font-size: 0;
+    gap: 0;
+  }
+  .app-header .header-controls > label > select {
+    font-size: 13px;
   }
 }
 
